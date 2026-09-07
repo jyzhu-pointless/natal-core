@@ -345,15 +345,13 @@ class TestChannelAgreementMultiLabel:
         # input to the derivation, not the Mendelian baseline).
         assert meiosis[:, 1, 2:].sum() > 0.0
 
-        # Drop the refresh sentinel so only the write's own marking is
-        # asserted, then round-trip the same table through the write
-        # channel: identical floats in, identical tensor out.
-        pop._rust_dirty.clear()
+        # Round-trip the same table through the write channel: identical
+        # floats in, identical tensor out (the value write pushes the
+        # recomputed tensor without disturbing the pending rebuild mark).
         pop.params.tensor_write("meiosis_map", pop.params.meiosis_map.array)
         np.testing.assert_array_equal(
             np.asarray(pop.config.offspring_tensor), refreshed
         )
-        assert pop._rust_dirty == {"meiosis_map", "offspring_tensor"}
 
 
 # ── Ownership: the wrapper owns its output ────────────────────────────────────

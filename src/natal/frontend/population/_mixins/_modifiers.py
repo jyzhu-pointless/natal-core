@@ -218,7 +218,7 @@ class ModifierPresetMixin(HookManagerMixin):
         )
         # Modifier maps are session structure for the Rust bridge: the maps
         # (and dimension counters) changed, so the session must be rebuilt.
-        self._rust_dirty.update({"meiosis_map", "offspring_tensor", "__hooks__"})
+        self._rust_needs_rebuild = True
 
     def add_gamete_modifier(
         self,

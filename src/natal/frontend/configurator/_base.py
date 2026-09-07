@@ -154,9 +154,6 @@ def set_param(
     config: ModelDraft,
     name: str,
     value: float | int | bool,
-    *,
-    _sync_equilibrium: bool = True,
-    _dirty: set[str] | None = None,
 ) -> ModelDraft:
     """Set a simulation parameter by its user-facing name.
 
@@ -191,11 +188,6 @@ def set_param(
         value: New value (scalar). For tensor, vector, and row
                parameters, use the Configurator methods or
                ``pop.params.tensor_write`` instead.
-        _sync_equilibrium: Refresh equilibrium caches for sensitive keys
-               (internal; callers that sync explicitly pass ``False``).
-        _dirty: Optional sink set receiving the corresponding contract
-               (Params) field name after a successful write — the Rust
-               dirty bridge. ``None`` skips marking entirely.
 
     Returns:
         The (possibly replaced) draft carrying the committed write.
@@ -223,8 +215,7 @@ def set_param(
             f"like {name!r}. Use the corresponding Configurator method "
             f"or pop.params.tensor_write instead."
         )
-    del _sync_equilibrium  # retired with the derived-cache sync (slice 2)
-    return dispatch(config, name, value, dirty_sink=_dirty)
+    return dispatch(config, name, value)
 
 
 # ── Helpers: fitness field writing ─────────────────────────────────────────────
@@ -503,22 +494,6 @@ class Configurator:
         """The wrapped ModelDraft (read-only accessor)."""
         return self._config
 
-    def _rust_dirty_sink(self) -> set[str] | None:
-        """Return the bound population's live rust-dirty set, if any.
-
-        Write paths add contract field names to this set; the population
-        drains it into the Rust session before the next run.  ``None``
-        means there is no live population (build path) and nothing needs
-        marking.
-
-        Returns:
-            The dirty set of ``_pop_ref`` when wired, else ``None``.
-        """
-        pop = self._pop_ref
-        if pop is None:
-            return None
-        # getattr guard: spatial _clone builds instances via __new__.
-        return getattr(pop, "_rust_dirty", None)
 
     # -- recipe-host surface (build-side candidate compile) ------------------
     # These three read-only properties complete the RecipeHost protocol
@@ -746,6 +721,11 @@ class Configurator:
         # Record the Population reference for write-back
         cfg._pop_ref = pop
 
+        # Runtime custom() calls accumulate with the build-time slots:
+        # seed the accumulator from the population's current custom dict.
+        cfg._custom_kwargs = (
+            dict(pop.config.custom) if hasattr(pop.config, "custom") else {}
+        )
         # Bind species and registry from the Population so recipe
         # factories and fitness() work against the live objects.
         cfg._species = pop.species
@@ -775,23 +755,27 @@ class Configurator:
             if self._pop_ref is not None:
                 self._pop_ref.set_config(draft)
 
-        sink = self._rust_dirty_sink()
         if self._pop_ref is not None:
             # getattr guard: the backend only exists on Rust-enabled
             # populations; reference-path populations pass None.  During an
             # active Rust run the session cannot be written (PyO3 borrow);
-            # writes defer to the next run through the dirty bridge.
+            # writes land in the draft only and the run boundary flushes
+            # them into the session afterwards.
             backend: object = None
             if not getattr(self._pop_ref, "_rust_run_active", False):
                 backend = getattr(self._pop_ref, "_rust_lifecycle_backend", None)
+            else:
+                # In-run write: the session holds its borrow, so the value
+                # lands in the draft and the run boundary flushes it.
+                object.__setattr__(self._pop_ref, "_rust_deferred_writes", True)
             return CoreConfigWriter(
-                self._config, sink, backend,
+                self._config, backend,
                 on_replace=_publish,
                 species=self._species, registry=self._registry,
                 param_log=self._pop_ref.log_param_change,
             )
         return DraftWriter(
-            self._config, sink,
+            self._config,
             on_replace=_publish,
             species=self._species, registry=self._registry,
         )
@@ -881,9 +865,7 @@ class Configurator:
                 self._pop_ref.set_config(self._config)
                 # Execution flags live on the frozen Blueprint contract, so
                 # a live session must be rebuilt, not value-refreshed.
-                sink = self._rust_dirty_sink()
-                if sink is not None:
-                    sink.add("__blueprint__")
+                getattr(self._pop_ref, "_mark_rust_dirty", lambda: None)()
         return self
 
     # -- domain methods --------------------------------------------------------
@@ -1302,8 +1284,8 @@ class Configurator:
         the Configurator and the Population's draft, so values are written
         in place and are immediately visible on both sides — no
         ``_replace`` or write-back round-trip is needed.  When called via
-        ``pop.update().custom(...)``, the ``_rust_dirty`` sink is marked
-        so the Rust session refreshes ``custom_slots`` before the next run.
+        ``pop.update().custom(...)``, the value lands in the shared draft and
+        the run boundary refreshes ``custom_slots`` in the session.
 
         Args:
             **kwargs: Name-value pairs for custom slots.  Values must be
@@ -1320,9 +1302,10 @@ class Configurator:
         # clear + update in place instead of rebinding the slot.
         self._config.custom.clear()
         self._config.custom.update(normalized)
-        sink = self._rust_dirty_sink()
-        if sink is not None:
-            sink.add("custom_slots")
+        if getattr(self._pop_ref, "_rust_run_active", False):
+            # In-run custom write: the session holds its borrow, so the
+            # value lands in the draft and the run boundary flushes it.
+            object.__setattr__(self._pop_ref, "_rust_deferred_writes", True)
         return self
 
     # -- presets / modifiers / fitness (immediate — applied directly to config) --
@@ -1359,9 +1342,9 @@ class Configurator:
             pop = self._pop_ref
             original_config = pop.config
             original_presets = pop.presets
+            original_needs_rebuild = pop._rust_needs_rebuild  # pyright: ignore[reportPrivateUsage]  # a failed transaction must not force a rebuild (RNG reset) on the next run
             original_gamete = pop.gamete_modifiers
             original_zygote = pop.zygote_modifiers
-            original_dirty = set(pop._rust_dirty)  # pyright: ignore[reportPrivateUsage]  # snapshot for the rollback (stale markers would reset the session RNG).
             original_fitness = tuple(
                 tensor.copy()
                 for tensor in (
@@ -1385,8 +1368,7 @@ class Configurator:
                 pop._gamete_modifiers = original_gamete  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived modifier metadata.
                 pop._zygote_modifiers = original_zygote  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived modifier metadata.
                 pop.set_config(original_config)
-                pop._rust_dirty.clear()  # pyright: ignore[reportPrivateUsage]  # restore the pre-transaction bridge state
-                pop._rust_dirty.update(original_dirty)  # pyright: ignore[reportPrivateUsage]  # restore the pre-transaction bridge state
+                pop._rust_needs_rebuild = original_needs_rebuild  # pyright: ignore[reportPrivateUsage]  # a failed transaction must not force a rebuild (RNG reset) on the next run
                 for tensor, saved in zip(
                     (
                         original_config.viability_fitness,
@@ -1803,12 +1785,12 @@ class Configurator:
         assert saved_config is not None  # a live population always has a config
         saved_gamete_modifiers = list(pop._gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
         saved_zygote_modifiers = list(pop._zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
-        # refresh_modifier_maps marks the Rust bridge mid-rebuild; leaving
-        # those markers behind would force a full session rebuild (and RNG
-        # reset) on the next run.  Pending markers the user created before
+        saved_needs_rebuild = getattr(pop, "_rust_needs_rebuild", False)
+        # refresh_modifier_maps marks the rebuild flag mid-rebuild; a
+        # failed transaction must restore it — leaving it set would force a
+        # full session rebuild (and RNG reset) on the next run.
         # the reconfigure must survive the restore, so snapshot-and-restore
         # rather than clear.
-        saved_dirty = set(pop._rust_dirty)  # pyright: ignore[reportPrivateUsage]
         # reapply_preset_fitness clears the shared fitness arrays in place,
         # so a failed run must restore their contents, not just the config
         # reference.
@@ -1829,12 +1811,11 @@ class Configurator:
             pop.refresh_modifiers()
             pop.reapply_preset_fitness()
         except BaseException:
+            pop._rust_needs_rebuild = saved_needs_rebuild  # pyright: ignore[reportPrivateUsage]  # a failed transaction must not force a rebuild (RNG reset) on the next run
             pop._presets = saved_presets  # pyright: ignore[reportPrivateUsage]
             pop._config = saved_config  # pyright: ignore[reportPrivateUsage]
             pop._gamete_modifiers[:] = saved_gamete_modifiers  # pyright: ignore[reportPrivateUsage]
             pop._zygote_modifiers[:] = saved_zygote_modifiers  # pyright: ignore[reportPrivateUsage]
-            pop._rust_dirty.clear()  # pyright: ignore[reportPrivateUsage]
-            pop._rust_dirty.update(saved_dirty)  # pyright: ignore[reportPrivateUsage]
             for tensor, saved in zip(
                 (
                     saved_config.viability_fitness,

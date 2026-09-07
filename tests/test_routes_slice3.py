@@ -111,10 +111,23 @@ class TestScalarShape:
             dispatch(live, "low_density_growth_rate", -1.0)
 
     def test_scalar_marks_contract_dirty(self):
-        cfg = _age_draft()
-        sink: set[str] = set()
-        dispatch(cfg, "sperm_displacement_rate", 0.4, dirty_sink=sink)
-        assert sink == {"sperm_displacement_rate"}
+        sent: dict[str, float] = {}
+
+        class FakeSession:
+            def apply(self, writes: dict[str, float]) -> None:
+                sent.update(dict(writes))
+
+            def tensor_write(self, field: str, values: np.ndarray) -> None:
+                raise AssertionError(
+                    f"scalar write must not use the tensor channel: {field}"
+                )
+
+        writer = CoreConfigWriter(_age_draft(), FakeSession())  # type: ignore[arg-type]  # structural fake of the runtime session protocol
+        writer.apply({"sperm_displacement_rate": 0.4})
+        # The scalar route resolves to the contract field name and the
+        # write flows into the session scalar channel immediately.
+        assert sent == {"sperm_displacement_rate": 0.4}
+        assert float(writer.draft.sperm_displacement_rate) == 0.4
 
     def test_scalar_rejects_non_numeric(self):
         cfg = _age_draft()
@@ -228,11 +241,25 @@ class TestSlotShape:
         assert float(live.age_based_mating_rates[0, 1]) == 0.85
 
     def test_slot_marks_whole_vector_dirty(self):
-        cfg = _age_draft()
-        sink: set[str] = set()
-        dispatch(cfg, "female_age0_survival", 0.5, dirty_sink=sink)
-        # The bridge refreshes the whole unified vector, not the cell.
-        assert sink == {"survival_rates"}
+        received: list[tuple[str, np.ndarray]] = []
+
+        class FakeSession:
+            def apply(self, writes: dict[str, float]) -> None:
+                raise AssertionError("slot writes must use the tensor channel")
+
+            def tensor_write(self, field: str, values: np.ndarray) -> None:
+                received.append((field, np.asarray(values).copy()))
+
+        writer = CoreConfigWriter(_age_draft(), FakeSession())  # type: ignore[arg-type]  # structural fake of the runtime session protocol
+        writer.apply({"female_age0_survival": 0.5})
+        # The slot cell write pushes the whole unified vector under the
+        # contract name, not the single cell.
+        assert [(field) for field, _ in received] == ["survival_rates"]
+        np.testing.assert_array_equal(
+            received[0][1],
+            np.asarray(writer.draft.age_based_survival_rates).ravel(),
+        )
+        assert float(writer.draft.age_based_survival_rates[0, 0]) == 0.5
 
 
 class TestBoolShape:
@@ -244,23 +271,23 @@ class TestBoolShape:
         assert live is not cfg  # NamedTuple slot replaced, not mutated
 
     def test_bool_marks_blueprint_sentinel(self):
-        cfg = _age_draft()
-        sink: set[str] = set()
-        dispatch(cfg, "fixed_egg_count", True, dirty_sink=sink)
-        assert sink == {"__blueprint__"}
+        pop = _age_pop()
+        pop.params.fixed_egg_count = True
+        # Boolean rows are frozen Blueprint flags: they never flow to the
+        # session as values; they schedule a session rebuild instead.
+        assert pop.params.fixed_egg_count is True
+        assert pop._rust_needs_rebuild is True
 
 
 class TestGenoTensorShape:
     def test_whole_tensor_write(self):
         cfg = _age_draft()
         fresh = np.zeros_like(np.asarray(cfg.fecundity_fitness)) + 0.25
-        sink: set[str] = set()
-        writer = DraftWriter(cfg, sink)
+        writer = DraftWriter(cfg)
         writer.apply({"fecundity": fresh})
         np.testing.assert_allclose(
             np.asarray(writer.draft.fecundity_fitness), fresh
         )
-        assert sink == {"fecundity_fitness"}
 
     def test_whole_tensor_rejects_wrong_shape(self):
         cfg = _age_draft()
@@ -316,42 +343,52 @@ class TestGenoTensorShape:
         )
 
     def test_meiosis_map_size_mismatch_is_zero_write(self):
-        """A bad-size meiosis write commits nothing and marks nothing.
+        """A bad-size meiosis write commits nothing and schedules nothing.
 
         Attack: a wrong-sized payload must raise before any draft cell,
-        dirty-bridge entry, or session push happens — a partial write
-        would leave the draft and the Rust session disagreeing.
+        rebuild mark, or session push happens — a partial write would
+        leave the draft and the Rust session disagreeing.
         """
         pop = _age_pop()
         before = np.asarray(pop.config.zygotes_to_gametes_map).copy()
-        dirty_before = set(pop._rust_dirty)
+        rebuild_before = pop._rust_needs_rebuild
         with pytest.raises(ValueError, match="expected"):
             pop.params.tensor_write("meiosis_map", np.ones(5))
         np.testing.assert_array_equal(
             np.asarray(pop.config.zygotes_to_gametes_map), before
         )
-        assert pop._rust_dirty == dirty_before
+        assert pop._rust_needs_rebuild == rebuild_before
 
-    def test_meiosis_map_write_marks_dirty_and_survives_run(self):
-        """A meiosis write marks the Rust bridge and survives the drain.
+    @pytest.mark.skipif(
+        not rust_backend_available(), reason="natal._engine_rs is not built"
+    )
+    def test_meiosis_map_write_consumed_by_run_and_survives(self):
+        """A meiosis write reaches the session and survives the run.
 
-        Attack: if the write forgot to mark ``_rust_dirty`` (or marked a
-        draft name the bridge does not know), the next ``run()`` would
-        drain nothing into the session; if the drain clobbered the
+        Attack: if the write forgot to push the draft table (or the
+        derived offspring tensor) into the live session, the next
+        ``run()`` would consume the stale table; if the run clobbered the
         draft, the written row would not survive the run.
         """
-        pop = _age_pop()
+        pop = _age_pop().enable_rust_backend(seed=0)
+        backend = pop._rust_lifecycle_backend
+        assert backend is not None
         table = pop.params.meiosis_map.array
         table[0, 0, :] = [0.25, 0.75]
         pop.params.tensor_write("meiosis_map", table)
-        # Contract-name markers — the same names the modifier refresh
-        # uses when marking rebuilt genetics tensors.  The
-        # derived offspring tensor is recomputed and marked in the same
-        # transaction, otherwise the engine would keep consuming the stale
-        # table (audit finding C3).
-        assert pop._rust_dirty == {"meiosis_map", "offspring_tensor"}
+        # The write pushed both the map and the recomputed derived tensor
+        # into the live session inside one transaction (audit finding C3).
+        np.testing.assert_allclose(
+            np.asarray(backend._session.get_tensor("meiosis_map")).reshape(  # noqa: SLF001 — readback channel
+                table.shape
+            )[0, 0, :],
+            [0.25, 0.75],
+        )
+        np.testing.assert_array_equal(
+            np.asarray(backend._session.get_tensor("offspring_tensor")),  # noqa: SLF001 — readback channel
+            np.asarray(pop.config.offspring_tensor, dtype=np.float64).ravel(),
+        )
         pop.run(1, record_every=1)
-        assert pop._rust_dirty == set()  # drained into the session
         np.testing.assert_allclose(
             pop.params.meiosis_map.array[0, 0, :], [0.25, 0.75]
         )
@@ -422,15 +459,15 @@ class TestGenoTensorShape:
         pop = _age_pop()
         table = pop.params.meiosis_map.array
         table[0, 1, :] = [0.6, 0.6]
-        dirty_before = set(pop._rust_dirty)
+        rebuild_before = pop._rust_needs_rebuild
 
         with pytest.raises(ValueError, match="must be probability distributions"):
             pop.params.tensor_write("meiosis_map", table)
 
-        # Zero writes: the live table, the derived tensor, and the dirty
-        # bridge are all untouched.
+        # Zero writes: the live table, the derived tensor, and the
+        # rebuild flag are all untouched.
         np.testing.assert_allclose(pop.params.meiosis_map.array[0, 1, :], [0.5, 0.5])
-        assert pop._rust_dirty == dirty_before
+        assert pop._rust_needs_rebuild == rebuild_before
 
     def test_meiosis_write_rejects_negative_entries(self):
         """A row summing to 1 through a negative entry is rejected atomically.
@@ -441,7 +478,7 @@ class TestGenoTensorShape:
         pop = _age_pop()
         table = pop.params.meiosis_map.array
         table[0, 1, :] = [-0.5, 1.5]
-        dirty_before = set(pop._rust_dirty)
+        rebuild_before = pop._rust_needs_rebuild
         offspring_before = np.asarray(pop.config.offspring_tensor).copy()
 
         with pytest.raises(ValueError, match="must be non-negative"):
@@ -451,7 +488,7 @@ class TestGenoTensorShape:
         np.testing.assert_array_equal(
             np.asarray(pop.config.offspring_tensor), offspring_before
         )
-        assert pop._rust_dirty == dirty_before
+        assert pop._rust_needs_rebuild == rebuild_before
 
 
 def _biased_meiosis_pop(species_name: str, initial: dict[str, dict[str, float]]):
@@ -609,15 +646,15 @@ class TestMeiosisDerivedRecompute:
 
         pop.refresh_modifier_maps()
         refreshed = np.asarray(pop.config.offspring_tensor).copy()
-        # The refresh itself marks __hooks__ (a rebuild sentinel); drop the
-        # bridge noise so the write's own marking is asserted exactly.
-        pop._rust_dirty.clear()
+        # The refresh itself marks a pending session rebuild; the value
+        # write below must not disturb that mark.
+        rebuild_marked = pop._rust_needs_rebuild
         # Round trip of the preset-produced table: accepted, and the
         # write-channel recompute equals the refresh-channel recompute
         # bit-for-bit (same floats in, same floats out).
         pop.params.tensor_write("meiosis_map", pop.params.meiosis_map.array)
         np.testing.assert_array_equal(np.asarray(pop.config.offspring_tensor), refreshed)
-        assert pop._rust_dirty == {"meiosis_map", "offspring_tensor"}
+        assert pop._rust_needs_rebuild == rebuild_marked
 
     @pytest.mark.skipif(
         not rust_backend_available(), reason="natal._engine_rs is not built"
@@ -644,12 +681,8 @@ class TestMeiosisDerivedRecompute:
             biased = pop.params.meiosis_map.array
             biased[:, 0, :] = [0.0, 1.0]
             pop.params.tensor_write("meiosis_map", biased)
-        # The derived table is marked in the same transaction on the
-        # session path too, then drained into the session by the run.
-        assert rst._rust_dirty == {"meiosis_map", "offspring_tensor"}
         ref.run(1)
         rst.run(1)
-        assert rst._rust_dirty == set()
         np.testing.assert_array_equal(
             rst.state.individual_count, ref.state.individual_count
         )
@@ -688,13 +721,13 @@ class TestMeiosisDerivedRecompute:
 
         Attack: validation that runs after the commit (or that only
         checks a summary statistic) leaves a half-written table; the
-        whole meiosis table, the derived tensor, and the dirty bridge
+        whole meiosis table, the derived tensor, and the rebuild flag
         must be bit-identical to their pre-call state.
         """
         pop = _age_pop()
         meiosis_before = np.asarray(pop.config.zygotes_to_gametes_map).copy()
         offspring_before = np.asarray(pop.config.offspring_tensor).copy()
-        dirty_before = set(pop._rust_dirty)
+        rebuild_before = pop._rust_needs_rebuild
 
         non_normalized = meiosis_before.copy()
         non_normalized[0, 1, :] = [0.6, 0.6]
@@ -714,15 +747,14 @@ class TestMeiosisDerivedRecompute:
         np.testing.assert_array_equal(
             np.asarray(pop.config.offspring_tensor), offspring_before
         )
-        assert pop._rust_dirty == dirty_before
+        assert pop._rust_needs_rebuild == rebuild_before
 
     def test_draft_writer_meiosis_write_recomputes_on_build_path(self):
-        """DraftWriter (no session) recomputes and marks both fields.
+        """DraftWriter (no session) recomputes the derived tensor.
 
         Attack: the recompute wired only into CoreConfigWriter would
-        leave build-path writes stale — the sink must carry both the
-        written field and the derived field, and the einsum identity
-        must hold without any session push.
+        leave build-path writes stale — the einsum identity must hold
+        without any session push.
         """
         from natal.frontend.data import build_population_config
 
@@ -740,14 +772,12 @@ class TestMeiosisDerivedRecompute:
         draft = draft._replace(
             zygotes_to_gametes_map=mendelian, gametes_to_zygotes_map=fusion
         )
-        sink: set[str] = set()
-        writer = DraftWriter(draft, sink)
+        writer = DraftWriter(draft)
 
         biased = mendelian.copy()
         biased[:, 0, :] = [0.0, 1.0]
         writer.tensor_write("meiosis_map", biased)
 
-        assert sink == {"meiosis_map", "offspring_tensor"}
         derived = np.asarray(writer.draft.offspring_tensor)
         reference = np.einsum(
             "ia,jb,abk->ijk",
@@ -759,8 +789,7 @@ class TestMeiosisDerivedRecompute:
 
         # Rejection on the build path is equally atomic.
         draft2 = draft._replace(zygotes_to_gametes_map=mendelian.copy())
-        sink2: set[str] = set()
-        writer2 = DraftWriter(draft2, sink2)
+        writer2 = DraftWriter(draft2)
         bad = mendelian.copy()
         bad[0, 1, :] = [0.6, 0.6]
         with pytest.raises(ValueError, match="must be probability distributions"):
@@ -768,7 +797,6 @@ class TestMeiosisDerivedRecompute:
         np.testing.assert_array_equal(
             np.asarray(writer2.draft.zygotes_to_gametes_map), mendelian
         )
-        assert sink2 == set()
 
     def test_spatial_container_params_rejects_genetics_tensor_write(self):
         """The spatial container surface exposes no meiosis write channel.
@@ -892,13 +920,14 @@ class TestWriterAtomicity:
         assert float(writer.draft.carrying_capacity) == before_comp
         assert float(writer.draft.eggs_per_female) == before_eggs
 
-    def test_core_writer_without_session_still_marks_bridge(self):
+    def test_core_writer_without_session_commits_to_draft(self):
         cfg = _age_draft()
-        sink: set[str] = set()
-        writer = CoreConfigWriter(cfg, sink, None)
+        writer = CoreConfigWriter(cfg, None)
         writer.apply({"carrying_capacity": 321.0, "eggs_per_female": 33.0})
-        assert sink == {"carrying_capacity", "eggs_per_female"}
+        # Without a live session the writer stays a draft channel: the
+        # committed values land on the draft and nothing raises.
         assert float(writer.draft.carrying_capacity) == 321.0
+        assert float(writer.draft.eggs_per_female) == 33.0
         # The derived metrics follow the write via the derive surface
         # (the stored copies retired with the slice-2 sync).
         from natal.frontend.data._engine import (

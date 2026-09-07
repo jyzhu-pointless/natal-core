@@ -250,14 +250,17 @@ class ParamsView:
 
         # Session-direct writes are impossible while the Rust run holds the
         # session borrow (PyO3 runtime borrow check).  During a run, writes
-        # land in the draft + dirty bridge only, and the next run() drains
-        # them into the session before its batch config is assembled.
+        # land in the draft only; the run boundary flushes them into the
+        # session afterwards.
         backend: object = None
         if not getattr(self._pop, "_rust_run_active", False):
             backend = getattr(self._pop, "_rust_lifecycle_backend", None)
+        else:
+            # In-run write: the session holds its borrow, so the value
+            # lands in the draft and the run boundary flushes it.
+            object.__setattr__(self._pop, "_rust_deferred_writes", True)
         return CoreConfigWriter(
             self._draft,
-            getattr(self._pop, "_rust_dirty", None),
             backend,
             on_replace=_publish,
             species=self._species(),
@@ -325,6 +328,11 @@ class ParamsView:
                 f"pop.update().<method>(...) or pop.params.tensor_write()"
             )
         self._writer().apply({name: value})
+        if entry.kind == "bool":
+            # Boolean rows are frozen Blueprint flags: they never flow to
+            # the session as values; they schedule a session rebuild
+            # instead (execution flags are session structure).
+            self._pop._mark_rust_dirty()  # pyright: ignore[reportPrivateUsage]  # model subclasses own the flag
 
     def __dir__(self) -> list[str]:
         """Expose the readable parameter names."""

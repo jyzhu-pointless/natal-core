@@ -69,7 +69,7 @@ class HookManagerMixin:
     Expects the host class (BasePopulation) to define these attributes:
     ``ALLOWED_EVENTS``, ``tick``, ``state``, ``config``,
     ``compiled_hook_descriptors``, ``hook_executor``, ``_hook_runner``,
-    ``_run_program``, and ``_rust_dirty``.
+    ``_run_program``, and the ``_rust_needs_rebuild`` flag.
     """
 
     # Declared here so pyright knows these come from the host class.
@@ -85,7 +85,7 @@ class HookManagerMixin:
     _hook_runner: Optional[HookRunner]
     _run_program: RunProgram
     # Rust dirty-set bridge owned by BasePopulation (contract field names).
-    _rust_dirty: set[str]
+    _rust_needs_rebuild: bool
 
     # ── Hook registration (the single entry) ─────────────────────────
 
@@ -272,7 +272,9 @@ class HookManagerMixin:
         # enable time; any post-enable registration must rebuild it before
         # the next run.  The sentinel routes _sync_rust_backend to a full
         # backend rebuild.
-        self._rust_dirty.add("__hooks__")
+        # Structural mutation: the live session must be rebuilt before
+        # the next run (the hook program moves into the session at build).
+        self._rust_needs_rebuild = True
         self._refresh_run_program()
 
     @staticmethod

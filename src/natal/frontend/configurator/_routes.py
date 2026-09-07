@@ -575,23 +575,18 @@ def dispatch(
     target: ModelDraft,
     name: str,
     value: object,
-    *,
-    dirty_sink: set[str] | None = None,
 ) -> ModelDraft:
     """Resolve, validate, and commit a single parameter write.
 
     The write path behind ``set_param``, the writers, and the params
     view: look up *name* in the route table, parse and validate *value*
-    according to its kind, commit it, mark the Rust dirty bridge with
-    the contract field name, and — for ``sensitive`` entries — refresh
-    the equilibrium caches.
+    according to its kind, commit it, and — for ``sensitive`` entries —
+    refresh the equilibrium caches.
 
     Args:
         target: The draft to write into.
         name: Parameter name (full key, short name, or alias).
         value: The new value; the accepted forms depend on the kind.
-        dirty_sink: Optional set receiving the contract field name
-            after a successful commit (the slice-2 dirty bridge).
 
     Returns:
         The draft to use going forward (``target`` or its replaced
@@ -604,7 +599,4 @@ def dispatch(
     """
     entry = lookup(name)
     plan = plan_write(target, entry, value)
-    live = commit_write(target, plan)
-    if dirty_sink is not None:
-        dirty_sink.add(entry.contract_field)
-    return live
+    return commit_write(target, plan)

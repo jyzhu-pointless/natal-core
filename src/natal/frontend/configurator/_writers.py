@@ -10,10 +10,10 @@ Configurator collapses to: parse kwargs -> build a writes dict -> one
 - :class:`CoreConfigWriter` — runtime path.  Writes the draft *and*
   pushes the same values straight into the live Rust session
   (``session.apply`` for scalars, ``session.tensor_write`` for
-  tensors); the dirty bridge keeps being marked so the existing
-  rebuild sentinels (``__blueprint__``/``__hooks__``) still work and
-  the next ``run()`` drain stays exact.  ``session=None`` degrades it
-  to bridge-marking only (reference-path populations).
+  tensors).  During an active run the session cannot be written (PyO3
+  borrow), so the write lands in the draft and the run boundary flushes
+  it.  ``session=None`` degrades it to draft-only writes
+  (reference-path populations).
 - :class:`HookConfigWriter` — in-hook path (slice 4 wiring).  Borrows
   the live session and writes it directly, bypassing locks and the
   draft.
@@ -196,7 +196,6 @@ class _DraftWriterBase:
     def __init__(
         self,
         draft: ModelDraft,
-        dirty_sink: set[str] | None = None,
         *,
         on_replace: Callable[[ModelDraft], None] | None = None,
         session: object = None,
@@ -208,7 +207,6 @@ class _DraftWriterBase:
 
         Args:
             draft: The draft to write into.
-            dirty_sink: Optional Rust dirty bridge set.
             on_replace: Optional callback fired when a ``_replace``
                 write swaps the draft identity.
             session: Optional live session channel (runtime path).
@@ -219,7 +217,6 @@ class _DraftWriterBase:
                 scalar change (the population's parameter log).
         """
         self._draft = draft
-        self._dirty = dirty_sink
         self._on_replace = on_replace
         self._session = _session_of(session)
         self._species = species
@@ -295,14 +292,10 @@ class _DraftWriterBase:
             ValueError: On a size mismatch (zero writes).
         """
         self._write_contract_tensor(field, values)
-        if self._dirty is not None:
-            self._dirty.add(field)
         if field == "meiosis_map":
             # The derived offspring tensor changed with the meiosis
-            # write: mark and push it inside the same transaction so the
-            # engine consumes the recomputed table.
-            if self._dirty is not None:
-                self._dirty.add("offspring_tensor")
+            # write: push it inside the same transaction so the engine
+            # consumes the recomputed table.
             if self._session is not None:
                 self._session.tensor_write(
                     "offspring_tensor",
@@ -320,8 +313,6 @@ class _DraftWriterBase:
     def _commit_plan(self, plan: ResolvedWrite) -> None:
         """Commit one resolved plan and run the bridge bookkeeping."""
         self._draft = commit_write(self._draft, plan)
-        if self._dirty is not None:
-            self._dirty.add(plan.entry.contract_field)
         if self._on_replace is not None:
             self._on_replace(self._draft)
 
@@ -379,7 +370,6 @@ class _DraftWriterBase:
             self._draft, entry.name, patch, mode,
             species=self._species, registry=self._registry,
             all_genotypes=self._registry.index_to_genotype,
-            _dirty=self._dirty,
         )
 
     def _write_contract_tensor(self, field: str, values: NDArray[np.float64]) -> None:
@@ -423,7 +413,6 @@ class DraftWriter(_DraftWriterBase):
     def __init__(
         self,
         draft: ModelDraft,
-        dirty_sink: set[str] | None = None,
         *,
         on_replace: Callable[[ModelDraft], None] | None = None,
         species: Species | None = None,
@@ -433,14 +422,13 @@ class DraftWriter(_DraftWriterBase):
 
         Args:
             draft: The draft to write into.
-            dirty_sink: Optional Rust dirty bridge set.
             on_replace: Optional callback fired when a ``_replace``
                 write swaps the draft identity.
             species: Optional species for pattern-dict fitness patches.
             registry: Optional index registry for the same purpose.
         """
         super().__init__(
-            draft, dirty_sink,
+            draft,
             on_replace=on_replace,
             species=species, registry=registry,
         )
@@ -452,7 +440,6 @@ class CoreConfigWriter(_DraftWriterBase):
     def __init__(
         self,
         draft: ModelDraft,
-        dirty_sink: set[str] | None,
         session: object,
         *,
         on_replace: Callable[[ModelDraft], None] | None = None,
@@ -464,11 +451,9 @@ class CoreConfigWriter(_DraftWriterBase):
 
         Args:
             draft: The population's current draft.
-            dirty_sink: The population's ``_rust_dirty`` set (required —
-                rebuild sentinels travel through it).
             session: The live Rust backend adapter exposing
                 ``apply``/``tensor_write``, or ``None`` for reference-path
-                populations (bridge marking still happens).
+                populations (draft-only writes still happen).
             on_replace: Optional callback fired when a ``_replace``
                 write swaps the draft identity.
             species: Optional species for pattern-dict fitness patches.
@@ -477,7 +462,7 @@ class CoreConfigWriter(_DraftWriterBase):
                 ``param_log(name, old, new)`` per committed scalar change.
         """
         super().__init__(
-            draft, dirty_sink,
+            draft,
             on_replace=on_replace,
             session=session,
             species=species, registry=registry,

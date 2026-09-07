@@ -573,7 +573,7 @@ def test_python_callback_observes_state_copies(age_species: Species) -> None:
 
 
 def test_population_bridge_end_to_end(age_species: Species) -> None:
-    """Population-level: update() marks dirty, run() syncs without rebuild.
+    """Population-level: update() pushes values, run() syncs without rebuild.
 
     The merged deterministic output must match the reference and the
     backend object must survive the update (no session rebuild, no reseed).
@@ -586,13 +586,11 @@ def test_population_bridge_end_to_end(age_species: Species) -> None:
 
     reference.update().competition(carrying_capacity=250.0)
     rust_pop.update().competition(carrying_capacity=250.0)
-    assert rust_pop._rust_dirty == {"carrying_capacity"}
 
     reference.run(5, record_every=1, clear_history_on_start=True)
     rust_pop.run(5, record_every=1, clear_history_on_start=True)
 
     assert rust_pop._rust_lifecycle_backend is backend_before
-    assert rust_pop._rust_dirty == set()
     # The Rust and reference kernels differ by float associativity at the 1e-14
     # level in LOGISTIC mode (present even with no update at all), so the
     # parity assertion is a tight tolerance, not bit equality.  Bit-exact

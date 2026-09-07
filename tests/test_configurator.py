@@ -1024,21 +1024,21 @@ class TestReconfigurePreset:
         assert list(pop.presets) == before["presets"]
         assert pop.presets[0] is drive  # registry identity restored
 
-    def test_reconfigure_failure_restores_rust_dirty_bridge(
+    def test_reconfigure_failure_restores_rust_rebuild_flag(
         self, simple_species: nt.Species, monkeypatch
     ) -> None:
-        """A failed reconfigure rolls the Rust dirty bridge back to its pre-call state.
+        """A failed reconfigure rolls the rebuild flag back to its pre-call state.
 
-        ``refresh_modifier_maps`` marks ``{meiosis_map, offspring_tensor,
-        __hooks__}`` after rebuilding the maps.  When the recipe then
-        fails, those marks must be rolled back together with the config:
-        a surviving ``__hooks__`` mark routes the next ``run()`` through a
-        full Rust session rebuild, which reseeds the session RNG — the
-        failure would then change the population's future stochastic
-        trajectory (plan 5.1: neither the declaration nor the session may
-        be polluted by a failed attempt).  Marks that were already pending
-        *before* the attempt (the user's own value update) must survive
-        the rollback — restore, not clear.
+        ``refresh_modifier_maps`` sets ``_rust_needs_rebuild`` after
+        rebuilding the maps.  When the recipe then fails, that mark must
+        be rolled back together with the config: a surviving mark routes
+        the next ``run()`` through a full Rust session rebuild, which
+        reseeds the session RNG — the failure would then change the
+        population's future stochastic trajectory (plan 5.1: neither the
+        declaration nor the session may be polluted by a failed attempt).
+        Marks that were already pending *before* the attempt (the user's
+        own structural update) must survive the rollback — restore, not
+        clear.
         """
         drive = nt.HomingDrive(
             name="__reconfigure_dirty_bridge__",
@@ -1057,10 +1057,10 @@ class TestReconfigurePreset:
             .presets(drive)
             .build()
         )
-        # A pending user update: its mark must outlive the failed attempt.
+        # A pending user update: value writes never touch the rebuild flag.
         pop.update().competition(carrying_capacity=400)
-        dirty_before = set(pop._rust_dirty)
-        assert dirty_before == {"carrying_capacity"}  # sanity: the bridge is marked
+        rebuild_before = pop._rust_needs_rebuild
+        assert rebuild_before is False  # sanity: value writes stay value-only
 
         def exploding_patch():
             raise RuntimeError("boom: dirty bridge")
@@ -1070,7 +1070,7 @@ class TestReconfigurePreset:
             pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
         monkeypatch.undo()
 
-        assert set(pop._rust_dirty) == dirty_before
+        assert pop._rust_needs_rebuild == rebuild_before
 
     def test_reconfigure_failure_mid_refresh_rolls_back(
         self, simple_species: nt.Species, monkeypatch
@@ -1083,7 +1083,7 @@ class TestReconfigurePreset:
         config instance and the fitness arrays are still untouched.  The
         rollback must restore the lists, preserve the config object
         identity (external holders keep their references), and leave the
-        dirty bridge empty.
+        rebuild flag untouched (no rebuild scheduled).
         """
         drive = nt.HomingDrive(
             name="__reconfigure_mid_failure__",
@@ -1123,7 +1123,7 @@ class TestReconfigurePreset:
         assert list(pop.gamete_modifiers) == gamete_mods_before
         assert list(pop.zygote_modifiers) == zygote_mods_before
         assert pop.presets[0] is drive
-        assert set(pop._rust_dirty) == set()
+        assert pop._rust_needs_rebuild is False
 
     def test_reconfigure_failure_preserves_rust_session_stream(
         self, simple_species: nt.Species, monkeypatch
@@ -1135,14 +1135,14 @@ class TestReconfigurePreset:
         """A failed reconfigure must not change the population's future trajectory.
 
         The Rust session's RNG stream is sequential (checkpoint tests
-        capture RNG words to resume it).  If the failed attempt leaves the
-        ``__hooks__`` dirty mark behind, the next ``run()`` rebuilds the
-        whole session from the original seed — restarting the RNG
-        mid-stream and diverging every later stochastic draw.  Control:
-        one fused ``run(6)``.  Treatment: ``run(3)``, failed reconfigure,
-        ``run(3)``.  Bitwise-equal histories plus a session object that
-        survives both the failure and the next run prove the failure was a
-        true no-op for the session.
+        capture RNG words to resume it).  If the failed attempt leaves
+        ``_rust_needs_rebuild`` set, the next ``run()`` rebuilds the whole
+        session from the original seed — restarting the RNG mid-stream and
+        diverging every later stochastic draw.  Control: one fused
+        ``run(6)``.  Treatment: ``run(3)``, failed reconfigure, ``run(3)``.
+        Bitwise-equal histories plus a session object that survives both
+        the failure and the next run prove the failure was a true no-op
+        for the session.
         """
         def build_viable_stochastic(name: str, drive: nt.HomingDrive):
             return (

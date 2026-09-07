@@ -18,7 +18,7 @@ one numerical or identity invariant:
    insensitively to canonical integers; integers pass through only
    inside ``[0, 4]``; bools and floats are type-rejected.
 4. ``pop.params`` **surface against a live session**: rejected setters
-   leave draft + session + dirty bridge untouched, pattern reads
+   leave draft + session + rebuild flag untouched, pattern reads
    aggregate exactly like a manual sum over the resolved ztype
    indices, reads are independent copies on both sides, and
    ``tensor_write`` is visible in the session immediately.
@@ -36,8 +36,8 @@ one numerical or identity invariant:
    Ricker recursion tick-by-tick, and mode 4 diverges from mode 3 —
    proving the Rust density kernel implements mode 4 end-to-end.
 8. **HookConfigWriter**: the in-hook writer talks to the session and to
-   nothing else — no refresh, no rebuild, no draft, no bridge marking —
-   and its direct writes survive into the next ``run()``.
+   nothing else — no refresh, no rebuild, no draft, no rebuild
+   scheduling — and its direct writes survive into the next ``run()``.
 9. **Slice-3 negative contracts**: frozen route records, replace-field
    classification, species-context guard for pattern patches, and
    pattern strings rejected outside the last axis.
@@ -53,10 +53,8 @@ import pytest
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.frontend.configurator import Configurator
-from natal.frontend.data import ModelDraft, build_population_config
 from natal.backends.rust.rust_backend import rust_backend_available
-from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
+from natal.frontend.configurator import Configurator
 from natal.frontend.configurator._routes import (
     ROUTES,
     commit_write,
@@ -70,6 +68,8 @@ from natal.frontend.configurator._writers import (
     DraftWriter,
     HookConfigWriter,
 )
+from natal.frontend.data import ModelDraft, build_population_config
+from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
 
 # ── markers and shared builders ───────────────────────────────────────────────
 
@@ -185,7 +185,6 @@ def _pop_writer(pop: nt.AgeStructuredPopulation) -> CoreConfigWriter:
     """A CoreConfigWriter wired exactly like ParamsView._writer does."""
     return CoreConfigWriter(
         pop.config,
-        pop._rust_dirty,  # noqa: SLF001 — the test asserts bridge contents
         getattr(pop, "_rust_lifecycle_backend", None),
         on_replace=pop.set_config,
         species=pop.species,
@@ -222,20 +221,17 @@ class TestMethodLevelAtomicity:
         draft_k0 = float(pop.config.carrying_capacity)
         session_k0 = session.get_scalar("carrying_capacity")
         for writes in self._orderings():
-            sink_before = set(pop._rust_dirty)  # noqa: SLF001
             with pytest.raises(ValueError):
                 writer.apply(writes)
             # Draft side: bit-identical scalar.
             assert float(pop.config.carrying_capacity) == draft_k0
             # Session side: the live Rust params never saw the batch.
             assert session.get_scalar("carrying_capacity") == session_k0
-            # Bridge side: no sentinel was marked by the failed batch.
-            assert pop._rust_dirty == sink_before  # noqa: SLF001
 
     def test_fake_session_rejected_batch_pushes_nothing(self):
         cfg = _age_draft()
         session = RecordingSession()
-        writer = CoreConfigWriter(cfg, set(), session)
+        writer = CoreConfigWriter(cfg, session)
         with pytest.raises(ValueError):
             writer.apply({"carrying_capacity": 555.0, "sex_ratio": 7.0})
         assert session.applied == []
@@ -355,7 +351,7 @@ class TestSensitiveDrivenSync:
 
     def test_cleared_champer_override_pushed_as_minus_one(self):
         session = RecordingSession()
-        writer = CoreConfigWriter(_age_draft(), set(), session)
+        writer = CoreConfigWriter(_age_draft(), session)
         writer.apply({"external_expected_eggs": 123.0})
         assert session.applied == [{"external_expected_eggs": 123.0}]
         writer.apply({"external_expected_eggs": None})
@@ -365,7 +361,7 @@ class TestSensitiveDrivenSync:
 
     def test_derive_mode_equilibrium_declaration_not_pushed(self):
         session = RecordingSession()
-        writer = CoreConfigWriter(_age_draft(), set(), session)
+        writer = CoreConfigWriter(_age_draft(), session)
         declared = np.array([[10.0, 5.0, 1.0], [10.0, 5.0, 1.0]])
         writer.apply({"equilibrium_distribution": declared})
         assert len(session.tensors) == 1
@@ -435,7 +431,7 @@ class TestParamsSessionSurface:
             pop.params.carrying_capacity = -1.0
         assert float(pop.config.carrying_capacity) == draft0
         assert session.get_scalar("carrying_capacity") == session0  # type: ignore[attr-defined]
-        assert pop._rust_dirty == set()  # noqa: SLF001
+        assert pop._rust_needs_rebuild is False
 
     def test_pattern_read_aggregates_exactly_like_manual_sum(self):
         pop = self._rust_age_pop()
@@ -486,14 +482,14 @@ class TestParamsSessionSurface:
         assert pop.params.carrying_capacity == 900.0
         assert session.get_scalar("carrying_capacity") == 900.0  # type: ignore[attr-defined]
 
-    def test_bool_write_marks_blueprint_and_run_drains_it(self):
+    def test_bool_write_marks_rebuild_and_run_drains_it(self):
         pop = self._rust_age_pop()
         pop.params.fixed_egg_count = True
         assert pop.params.fixed_egg_count is True
         # Boolean rows are frozen Blueprint flags: rebuild sentinel only.
-        assert pop._rust_dirty == {"__blueprint__"}  # noqa: SLF001
+        assert pop._rust_needs_rebuild is True
         pop.run(n_steps=1)
-        assert pop._rust_dirty == set()  # noqa: SLF001
+        assert pop._rust_needs_rebuild is False
         assert pop.state.individual_count.sum() > 0.0
 
     def test_spatial_and_unknown_names_raise_attribute_error(self):
@@ -950,7 +946,7 @@ class TestHookConfigWriterDirect:
         # No refresh, no rebuild: the writer never touches session structure.
         assert session.other_calls == []
 
-    def test_binds_no_draft_and_marks_no_bridge(self):
+    def test_binds_no_draft_and_schedules_no_rebuild(self):
         pop = _age_pop(backend="rust")
         backend = pop._rust_lifecycle_backend  # noqa: SLF001
         writer = HookConfigWriter(backend)
@@ -959,12 +955,18 @@ class TestHookConfigWriterDirect:
         writer.apply({"carrying_capacity": 300.0})
         # The draft is untouched: the hook path bypasses the config layer.
         assert float(pop.config.carrying_capacity) == k0
-        # The bridge is untouched: no rebuild will be scheduled by this write.
-        assert pop._rust_dirty == set()  # noqa: SLF001
+        # No rebuild is scheduled: direct session writes are values only.
+        assert pop._rust_needs_rebuild is False
 
     def test_direct_write_survives_into_the_next_run(self):
-        # no_competition keeps the engine alive regardless of the hook
-        # values; the point is that the direct writes persist and drive it.
+        """Session-only direct writes survive and drive the next run.
+
+        HookConfigWriter (slice-4 in-hook path) bypasses the draft on
+        purpose: it is the emergency push channel.  A run only flushes
+        the draft at the boundary when an in-run write deferred through a
+        writer — a bare session push leaves no deferral and is therefore
+        not overwritten.
+        """
         pop = _discrete_pop(0, backend="rust")
         session = pop._rust_lifecycle_backend._session  # noqa: SLF001
         writer = HookConfigWriter(pop._rust_lifecycle_backend)  # noqa: SLF001
@@ -973,8 +975,6 @@ class TestHookConfigWriterDirect:
         writer.tensor_write("survival_rates", rates)
         assert session.get_scalar("carrying_capacity") == 300.0
         pop.run(n_steps=1)
-        # run() must not clobber the direct hook writes (the dirty set is
-        # empty, so no refresh happens) — the values drive the engine.
         assert session.get_scalar("carrying_capacity") == 300.0
         np.testing.assert_allclose(
             np.asarray(session.get_tensor("survival_rates")), rates

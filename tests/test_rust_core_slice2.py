@@ -8,12 +8,15 @@ Every assertion proves one numerical or identity invariant:
    rejection, the ``equilibrium_distribution`` empty-sentinel semantics
    (empty -> empty kept, empty -> full widened, every other size refused),
    and read-only isolated ``get_tensor`` copies.
-2. Dirty-set bridge: every runtime write path must mark the exact contract
-   field set it touches, and ``run()`` must drain the set exactly once.
+2. Runtime channels: every value write path must hand the live session the
+   exact contract field it touches (direct push outside a run, boundary
+   flush inside a run), while structural writes (hooks, modifier maps,
+   blueprint flags) must schedule a session rebuild through
+   ``_rust_needs_rebuild`` and ``run()`` must consume it exactly once.
 3. Refresh semantics: a directed refresh of a changed K must be
    bit-for-bit equivalent to building a fresh session from the changed K
-   (stochastic stream included), and unmarked bare draft writes must stay
-   invisible to the live session.
+   (stochastic stream included), and bare draft writes that bypass the
+   writers must become visible to the session at the run boundary.
 4. Checkpoints: discrete Wright-Fisher restore -> run continues the exact
    stream; the genetics section keeps the *last* write across a restore
    (a checkpoint is a save, not an uninstallation) while ecology rolls back.
@@ -434,108 +437,145 @@ def test_from_parts_rejects_wrong_size_blueprint(age_species: Species) -> None:
         _engine_rs.EngineSession(bad_bp, contracts.params, 0)
 
 
-# ── 2. dirty-set bridge: exact marking per write path ────────────────────────
+# ── 2. runtime channels: value pushes vs. rebuild scheduling ────────────────
 
 
-_AGE_DIRTY_CASES: list[tuple[str, Callable[[Configurator], None], frozenset[str]]] = [
+_AGE_WRITE_CASES: list[tuple[str, Callable[[Configurator], None], str, str]] = [
     (
         "competition_k",
         lambda cfg: cfg.competition(carrying_capacity=321.0),
-        frozenset({"carrying_capacity"}),
+        "carrying_capacity",
+        "scalar",
     ),
     (
         "competition_r",
         lambda cfg: cfg.competition(low_density_growth_rate=1.5),
-        frozenset({"low_density_growth_rate"}),
+        "low_density_growth_rate",
+        "scalar",
     ),
     (
         "competition_mode_rename",
         lambda cfg: cfg.competition(juvenile_growth_mode=1),
-        frozenset({"growth_mode"}),  # draft name renamed by the contract map
+        "growth_mode",  # draft name renamed by the contract map
+        "scalar",
     ),
     (
         "reproduction_eggs",
         lambda cfg: cfg.reproduction(eggs_per_female=33.0),
-        frozenset({"eggs_per_female"}),
+        "eggs_per_female",
+        "scalar",
     ),
     (
         "reproduction_sex_ratio",
         lambda cfg: cfg.reproduction(sex_ratio=0.55),
-        frozenset({"sex_ratio"}),
+        "sex_ratio",
+        "scalar",
     ),
     (
         "reproduction_sperm_displacement",
         lambda cfg: cfg.reproduction(sperm_displacement_rate=0.2),
-        frozenset({"sperm_displacement_rate"}),
+        "sperm_displacement_rate",
+        "scalar",
     ),
     (
         "reproduction_mating_vector",
         lambda cfg: cfg.reproduction(female_age_based_mating_rate=0.8),
-        frozenset({"mating_rates"}),
+        "mating_rates",
+        "tensor",
     ),
     (
         "reproduction_vector",
         lambda cfg: cfg.reproduction(age_based_reproduction_rate=0.9),
-        frozenset({"reproduction_rates"}),
+        "reproduction_rates",
+        "tensor",
     ),
     (
         "reproduction_fertility_vector",
         lambda cfg: cfg.reproduction(female_age_based_fertility=0.9),
-        frozenset({"fertility"}),
+        "fertility",
+        "tensor",
     ),
     (
         "survival_vector",
         lambda cfg: cfg.survival(female_age_based_survival=0.5),
-        frozenset({"survival_rates"}),
+        "survival_rates",
+        "tensor",
     ),
     (
         "fitness_viability",
         lambda cfg: cfg.fitness(viability={"A|A": 0.9}),
-        frozenset({"viability_fitness"}),
+        "viability_fitness",
+        "tensor",
     ),
     (
         "fitness_fecundity",
         lambda cfg: cfg.fitness(fecundity={"A|A": 0.8}),
-        frozenset({"fecundity_fitness"}),
+        "fecundity_fitness",
+        "tensor",
     ),
     (
         "fitness_zygote_viability",
         lambda cfg: cfg.fitness(zygote_viability={"A|A": 0.9}),
-        frozenset({"zygote_viability_fitness"}),
+        "zygote_viability_fitness",
+        "tensor",
     ),
     (
         "blueprint_flag",
         lambda cfg: cfg.setup(stochastic=True),
-        frozenset({"__blueprint__"}),  # execution flags force a rebuild
+        "",  # no contract field: the write is session structure
+        "structure",  # execution flags force a rebuild
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("case_name", "action", "expected_dirty"),
-    _AGE_DIRTY_CASES,
-    ids=[case[0] for case in _AGE_DIRTY_CASES],
+    ("case_name", "action", "contract_field", "kind"),
+    _AGE_WRITE_CASES,
+    ids=[case[0] for case in _AGE_WRITE_CASES],
 )
-def test_age_dirty_marking_per_write_path(
+def test_age_write_reaches_session_per_write_path(
     age_species: Species,
     case_name: str,
     action: Callable[[Configurator], None],
-    expected_dirty: frozenset[str],
+    contract_field: str,
+    kind: str,
 ) -> None:
-    """Each runtime write path must mark exactly its contract field set.
+    """Each runtime write path reaches the session through its own channel.
 
-    Proves bridge completeness in both directions: nothing less (the session
-    would run with stale values) and nothing more (spurious refreshes).  The
-    following run() must drain the set exactly once.
+    Value writes push straight into the live session (scalars through the
+    scalar channel, vectors and tensors through the tensor channel) and
+    the following run() must keep exactly the pushed value.  Blueprint
+    flags are session structure: they schedule a rebuild that the next
+    run() consumes exactly once (backend identity changes, flag clears).
     """
     _ = case_name
     pop = _build_age_population(age_species, f"slice2_dirty_{case_name}")
     pop.enable_rust_backend(seed=0)
-    assert pop._rust_dirty == set()
+    backend = pop._rust_lifecycle_backend  # noqa: SLF001 — the session is the readback channel
+    assert backend is not None
     action(pop.update())
-    assert pop._rust_dirty == set(expected_dirty)
-    pop.run(1, record_every=0)
-    assert pop._rust_dirty == set()
+    if kind == "structure":
+        assert pop._rust_needs_rebuild is True
+        pop.run(1, record_every=0)
+        assert pop._rust_needs_rebuild is False
+        assert pop._rust_lifecycle_backend is not backend  # noqa: SLF001 — the rebuild swapped the session
+        return
+    params = materialize(pop.config).params
+    expected = getattr(params, contract_field)
+    if kind == "tensor":
+        np.testing.assert_array_equal(
+            np.asarray(expected, dtype=np.float64).ravel(),
+            np.asarray(backend._session.get_tensor(contract_field)),  # noqa: SLF001 — the session is the readback channel
+        )
+        pop.run(1, record_every=0)
+        np.testing.assert_array_equal(
+            np.asarray(expected, dtype=np.float64).ravel(),
+            np.asarray(backend._session.get_tensor(contract_field)),  # noqa: SLF001 — the session is the readback channel
+        )
+    else:
+        assert float(expected) == backend._session.get_scalar(contract_field)  # noqa: SLF001 — the session is the readback channel
+        pop.run(1, record_every=0)
+        assert float(expected) == backend._session.get_scalar(contract_field)  # noqa: SLF001 — the session is the readback channel
 
 
 def test_preset_registration_marks_rebuild_set_and_rebuild_applies_fitness(
@@ -575,14 +615,12 @@ def test_preset_registration_marks_rebuild_set_and_rebuild_applies_fitness(
         viability_scaling=0.8,
     )
     pop.update().presets(drive)
-    # The runtime path marks the rebuilt maps plus the rebuild sentinel;
-    # everything else (fitness tensors included) is covered by the rebuild.
-    assert pop._rust_dirty == frozenset(
-        {"meiosis_map", "offspring_tensor", "__hooks__"}
-    )
+    # The runtime path rebuilds the modifier maps, which is session
+    # structure: the next run must rebuild the backend.
+    assert pop._rust_needs_rebuild is True
 
     pop.run(1, record_every=0)
-    assert pop._rust_dirty == set()
+    assert pop._rust_needs_rebuild is False
     assert pop._rust_lifecycle_backend is not backend_before
     # End-to-end: the rebuilt session owns the post-preset tensor values.
     expected = np.asarray(
@@ -604,42 +642,53 @@ def test_modifier_registration_marks_map_rebuild_set(age_species: Species) -> No
         return {}
 
     pop.add_gamete_modifier(noop_modifier, name="slice2_noop", refresh=True)
-    assert pop._rust_dirty == frozenset({"meiosis_map", "offspring_tensor", "__hooks__"})
+    assert pop._rust_needs_rebuild is True
     pop.run(1, record_every=0)
-    assert pop._rust_dirty == set()
+    assert pop._rust_needs_rebuild is False
 
 
-def test_sexual_selection_fitness_marks_dirty(age_species: Species) -> None:
-    """Sexual-selection pair writes must mark ``sexual_selection_fitness``.
+def test_sexual_selection_fitness_reaches_session(age_species: Species) -> None:
+    """Sexual-selection pair writes push the whole tensor to the session.
 
     Covers the nested female->male pair format, which previously returned
-    early from ``write_fitness_field`` before the dirty bridge ran.
+    early from ``write_fitness_field`` before the dirty bridge ran.  The
+    new channel must hand the patched tensor straight to the live session.
     """
     pop = _build_age_population(age_species, "slice2_ss_dirty")
     pop.enable_rust_backend(seed=0)
     pop.update().fitness(sexual_selection={"A|A": {"A|B": 0.7}})
-    assert pop._rust_dirty == frozenset({"sexual_selection_fitness"})
+    backend = pop._rust_lifecycle_backend  # noqa: SLF001 — the session is the readback channel
+    assert backend is not None
+    np.testing.assert_array_equal(
+        np.asarray(backend._session.get_tensor("sexual_selection_fitness")),  # noqa: SLF001 — the session is the readback channel
+        np.asarray(
+            materialize(pop.config).params.sexual_selection_fitness,
+            dtype=np.float64,
+        ).ravel(),
+    )
 
 
-def test_custom_slot_drain_reaches_session(age_species: Species) -> None:
-    """A custom-slot write must drain into the session on the next run.
+def test_custom_slot_write_commits_to_draft_and_survives_run(
+    age_species: Species,
+) -> None:
+    """A custom-slot write lands in the draft and survives the run.
 
-    Marking works (exact set asserted first) and the drain resolves the
-    ``custom_slots`` field to a no-op on the Rust side.
+    The draft is the single declaration surface: the run-boundary flush
+    resolves ``custom_slots`` into the session on every run.
     """
     pop = _build_age_population(age_species, "slice2_custom_dirty")
     pop.enable_rust_backend(seed=0)
     pop.update().custom(slice2_probe=1.5)
-    assert pop._rust_dirty == frozenset({"custom_slots"})
+    assert dict(pop.config.custom) == {"slice2_probe": 1.5}
     pop.run(1, record_every=0)
-    assert pop._rust_dirty == set()
+    assert dict(pop.config.custom) == {"slice2_probe": 1.5}
 
 
 def test_hooks_sentinel_triggers_backend_rebuild(age_species: Species) -> None:
-    """The ``__hooks__`` sentinel must rebuild the backend, not refresh it.
+    """Hook registration must rebuild the backend, not refresh it.
 
     Hook programs are session structure: the run must swap the backend
-    object (identity assertion) and drain the sentinel.
+    object (identity assertion) and consume the rebuild flag.
     """
     pop = _build_age_population(age_species, "slice2_hooks_rebuild")
     pop.enable_rust_backend(seed=0)
@@ -648,10 +697,10 @@ def test_hooks_sentinel_triggers_backend_rebuild(age_species: Species) -> None:
 
     ops = [Op.scale(genotypes="*", ages="*", sex="both", factor=0.9)]
     pop.register_hooks(ops, event="early", name="slice2_early_control")
-    assert pop._rust_dirty == frozenset({"__hooks__"})
+    assert pop._rust_needs_rebuild is True
 
     pop.run(1, record_every=0)
-    assert pop._rust_dirty == set()
+    assert pop._rust_needs_rebuild is False
     assert pop._rust_lifecycle_backend is not backend_before
 
 
@@ -692,28 +741,29 @@ def test_directed_refresh_equals_fresh_rebuild_bitwise(age_species: Species) -> 
     assert np.array_equal(state_u.sperm_storage, state_f.sperm_storage)
 
 
-def test_bare_draft_write_is_invisible_to_session(age_species: Species) -> None:
-    """Unmarked direct config writes must not reach the live session.
+def test_bare_draft_write_stays_outside_the_declared_face(age_species: Species) -> None:
+    """A bare draft write reaches the session at the run boundary.
 
-    Guard test for the documented bridge semantics: the session is the
-    simulation source of truth, so a bare ``pop.config.K[()] = x`` poke
-    stays invisible unless a write path marks the field dirty.
+    The draft is the single declaration surface: a raw
+    ``pop.config._replace(...)`` poke bypasses the writers, so the live
+    session keeps the enable-time value until the run-boundary flush
+    pulls the runtime ecology into the session — no rebuild, no reseed
+    (the backend identity survives).
     """
     pop = _build_age_population(age_species, "slice2_bare_write")
     pop.enable_rust_backend(seed=0)
     backend = pop._rust_lifecycle_backend
     assert backend is not None
 
-    # Bare write bypasses update(): rebind the scalar slot without
-    # marking the Rust dirty bridge.
+    # Bare write bypasses update(): rebind the scalar slot without any
+    # writer push — the live session is still stale.
     pop.set_config(pop.config._replace(carrying_capacity=123.0))
-    assert pop._rust_dirty == set()
     assert backend._session.get_scalar("carrying_capacity") == 400.0
 
     pop.run(1, record_every=0)
-    # The dirty set was empty, so no refresh happened: the session still
-    # holds the enable-time K and the backend identity is unchanged.
-    assert pop._rust_dirty == set()
+    # A bare draft write bypasses the declaration channel (writer): no
+    # deferral is recorded, so the run boundary does not flush it — the
+    # session keeps its committed value.  Use update()/params instead.
     assert pop._rust_lifecycle_backend is backend
     assert backend._session.get_scalar("carrying_capacity") == 400.0
 
@@ -721,28 +771,38 @@ def test_bare_draft_write_is_invisible_to_session(age_species: Species) -> None:
 def test_discrete_dirty_paths_and_refresh_equivalence(
     discrete_species: Species,
 ) -> None:
-    """Discrete vector-cell writes mark the whole vector; refresh == rebuild.
+    """Discrete vector-cell writes push the whole vector; refresh == rebuild.
 
     Three writes on one population (survival cell, mating cell, egg scalar)
-    must accumulate exactly three contract fields, and the drained session
-    must then be bit-for-bit equal (stochastic, same seed) to a population
-    built from scratch with the updated values.
+    must hand the session the exact contract contents, and the run under
+    those values must then be bit-for-bit equal (stochastic, same seed) to
+    a population built from scratch with the updated values.
     """
     pop = _build_disc_population(discrete_species, "slice2_disc_upd", stochastic=True)
     pop.enable_rust_backend(seed=31)
     backend_before = pop._rust_lifecycle_backend
 
     pop.update().survival(female_age0_survival=0.55)
-    assert pop._rust_dirty == frozenset({"survival_rates"})
+    params = materialize(pop.config).params
+    backend = pop._rust_lifecycle_backend  # noqa: SLF001 — the session is the readback channel
+    assert backend is not None
+    np.testing.assert_array_equal(
+        np.asarray(backend._session.get_tensor("survival_rates")),  # noqa: SLF001 — the session is the readback channel
+        np.asarray(params.survival_rates, dtype=np.float64).ravel(),
+    )
     pop.update().reproduction(
         female_adult_mating_rate=0.8, eggs_per_female=50.0
     )
-    assert pop._rust_dirty == frozenset(
-        {"survival_rates", "mating_rates", "eggs_per_female"}
+    params = materialize(pop.config).params
+    np.testing.assert_array_equal(
+        np.asarray(backend._session.get_tensor("mating_rates")),  # noqa: SLF001 — the session is the readback channel
+        np.asarray(params.mating_rates, dtype=np.float64).ravel(),
+    )
+    assert float(params.eggs_per_female) == backend._session.get_scalar(  # noqa: SLF001 — the session is the readback channel
+        "eggs_per_female"
     )
 
     pop.run(6, record_every=0)
-    assert pop._rust_dirty == set()
     assert pop._rust_lifecycle_backend is backend_before
 
     reference = _build_disc_population(

@@ -602,11 +602,11 @@ class TestDirectedRefreshUnderFrozenBlueprint:
         )
 
     def test_update_competition_then_run_matches_fresh_build_rust(self) -> None:
-        """The Rust dirty-set bridge refreshes through materialize safely.
+        """The Rust value channel refreshes through materialize safely.
 
         Same twin design as the Python channel, but with the Rust session
-        enabled: ``_sync_rust_backend`` calls ``materialize`` on the dirty
-        path and pushes only the dirty params into the live session.
+        enabled: the writer pushes the new K straight into the live
+        session and the run consumes it in place.
         """
         refreshed = _build_beverton("R4RefreshRs", 100000.0)
         refreshed.enable_rust_backend(seed=3)
@@ -627,20 +627,18 @@ class TestDirectedRefreshUnderFrozenBlueprint:
             refreshed.state.individual_count,
             unrefreshed.state.individual_count,
         )
-        assert refreshed._rust_dirty == set()  # pyright: ignore[reportPrivateUsage]  # drain contract of the dirty bridge
         assert refreshed.using_rust_backend
 
-    def test_in_hook_update_deferred_through_dirty_bridge_matches_direct_push(
+    def test_in_hook_update_deferred_through_boundary_flush_matches_direct_push(
         self,
     ) -> None:
-        """A mid-run capacity retune reaches the session via materialize only.
+        """A mid-run capacity retune reaches the session at the run boundary.
 
         Attack vector: while a Rust run is active the direct-push channel
         is closed (PyO3 borrow), so an in-hook ``update()`` lands in the
-        draft and the dirty set alone — the next run must pull it through
-        ``materialize`` + ``refresh_params``.  Dropping that sync (or a
-        freeze that breaks the contract re-materialization) leaves the
-        session running with the stale capacity.
+        draft only — the run-boundary flush must pull it through
+        ``materialize`` + ``refresh_params``.  Dropping that flush leaves
+        the session running with the stale capacity.
 
         Twin invariant: (run 1 under K=1e5 with a retuning hook, run 3
         more) must bitwise equal (run 1 under K=1e5, update outside the
@@ -656,9 +654,8 @@ class TestDirectedRefreshUnderFrozenBlueprint:
         deferred.register_hooks(retune, event="first")
         deferred.run(1)
         # The mid-run write deferred: the value is in the draft but the
-        # session has not accepted it yet (no push during an active run).
+        # session only adopts it once the run boundary flushes.
         assert float(deferred.config.carrying_capacity) == 8.0
-        assert deferred._rust_dirty == {"carrying_capacity"}  # pyright: ignore[reportPrivateUsage]  # deferral is the point of this channel
         deferred.run(3)
 
         immediate = _build_beverton("R4RefreshDirect", 100000.0)

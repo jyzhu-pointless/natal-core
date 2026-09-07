@@ -65,7 +65,6 @@ def write_fitness_field(
     species: Species,
     registry: IndexRegistry,
     all_genotypes: list[Genotype],
-    _dirty: set[str] | None = None,
 ) -> None:
     """Resolve genotype-pattern strings and write into a fitness tensor.
 
@@ -85,8 +84,6 @@ def write_fitness_field(
         species: Genetic architecture for selector resolution.
         registry: Index registry mapping genotypes to ztype indices.
         all_genotypes: All genotypes in registry order.
-        _dirty: Optional sink set receiving the contract tensor name after
-            a successful write (Rust dirty bridge); ``None`` skips marking.
 
     Supported formats::
 
@@ -121,8 +118,6 @@ def write_fitness_field(
                 species=species, registry=registry,
                 all_genotypes=all_genotypes,
             )
-        if _dirty is not None:
-            _dirty.add(f"{field_name}_fitness")
         return
 
     # ══════════════════════════════════════════════════════════════════════
@@ -166,8 +161,6 @@ def write_fitness_field(
                                         arr[f_z, m_z] = val
                                     else:
                                         arr[f_z, m_z] *= val
-            if _dirty is not None:
-                _dirty.add("sexual_selection_fitness")
             return
 
         # ═══════════════════════════════════════════════════════════════
@@ -198,8 +191,6 @@ def write_fitness_field(
                         arr[:, m_z] = val        # broadcast: all females × this male
                     else:
                         arr[:, m_z] *= val
-        if _dirty is not None:
-            _dirty.add("sexual_selection_fitness")
         return
 
     # ══════════════════════════════════════════════════════════════════════
@@ -272,13 +263,6 @@ def write_fitness_field(
                     species=species, registry=registry,
                     all_genotypes=all_genotypes,
                 )
-
-
-    # Mark the Rust dirty bridge: the whole tensor contents changed.
-    if _dirty is not None:
-        contract_name = _RUST_CONTRACT_TENSOR.get(field_name)
-        if contract_name is not None:
-            _dirty.add(contract_name)
 
 
 def _write_fitness_field_flat(

@@ -182,9 +182,15 @@ MUST_NOT_EXIST: tuple[RemovalEntry, ...] = (
     ),
     RemovalEntry(
         item_id="python-authoritative-state",
-        description="_state/_tick/_config authoritative copies, _rust_dirty, journal-to-draft replay",
+        description="_state/_tick/_config authoritative copies, journal-to-draft replay",
         owner_stage="S2",
         status="pending",
+    ),
+    RemovalEntry(
+        item_id="rust-dirty-bridge",
+        description="_rust_dirty set and the _contract_params mirror (S2 batch 24)",
+        owner_stage="S2",
+        status="removed",
     ),
     RemovalEntry(
         item_id="configcontext-population-clone",
@@ -197,9 +203,9 @@ MUST_NOT_EXIST: tuple[RemovalEntry, ...] = (
     ),
     RemovalEntry(
         item_id="per-run-session-rebuild",
-        description="per-run session rebuild and full-state round trips",
+        description="the directed-pull _sync_rust_backend bridge ahead of every run",
         owner_stage="S2",
-        status="pending",
+        status="removed",
     ),
     RemovalEntry(
         item_id="discrete-spatial-hookless-backend",
@@ -286,10 +292,41 @@ def _removed_probe_configcontext_population_clone() -> None:
         )
 
 
+def _removed_probe_rust_dirty_bridge() -> None:
+    """The Rust dirty-set bridge and the contract-params mirror are gone."""
+    from natal.frontend.population.age_structured import AgeStructuredPopulation
+    from natal.frontend.population.discrete_generation import (
+        DiscreteGenerationPopulation,
+    )
+
+    for cls in (AgeStructuredPopulation, DiscreteGenerationPopulation):
+        for attr in ("_rust_dirty", "_contract_params"):
+            assert not hasattr(cls, attr), (
+                f"{cls.__name__}.{attr} is reachable again — the dirty-set "
+                f"bridge returned"
+            )
+
+
+def _removed_probe_per_run_session_rebuild() -> None:
+    """The directed-pull ``_sync_rust_backend`` bridge must stay gone."""
+    from natal.frontend.population.age_structured import AgeStructuredPopulation
+    from natal.frontend.population.discrete_generation import (
+        DiscreteGenerationPopulation,
+    )
+
+    for cls in (AgeStructuredPopulation, DiscreteGenerationPopulation):
+        assert not hasattr(cls, "_sync_rust_backend"), (
+            f"{cls.__name__}._sync_rust_backend is reachable again — the "
+            "directed-pull bridge returned"
+        )
+
+
 REMOVED_PROBES: dict[str, Callable[[], None]] = {
     "output.record": _removed_probe_output_record,
     "build_observation_row_panmictic": _removed_probe_build_observation_row_panmictic,
     "configcontext-population-clone": _removed_probe_configcontext_population_clone,
+    "rust-dirty-bridge": _removed_probe_rust_dirty_bridge,
+    "per-run-session-rebuild": _removed_probe_per_run_session_rebuild,
 }
 
 
@@ -354,24 +391,11 @@ def _pending_probe_python_authoritative_state() -> None:
         .competition(carrying_capacity=1000.0, low_density_growth_rate=2.0)
         .build()
     )
-    for attr in ("_state", "_tick", "_config", "_rust_dirty"):
+    for attr in ("_state", "_tick", "_config"):
         assert hasattr(pop, attr), (
             f"private authoritative field {attr} is gone — flip this entry "
             'to "removed" in the same batch as the deletion'
         )
-
-
-def _pending_probe_per_run_session_rebuild() -> None:
-    """The per-run full-state handoff machinery must still exist."""
-    from natal.frontend.population.discrete_generation import (
-        DiscreteGenerationPopulation,
-    )
-
-    # _run_rust_lifecycle hands backend.run(self.state, ...) the complete
-    # state every run; _sync_rust_backend is the directed-pull bridge.
-    # Both disappear when the Rust session becomes the sole owner (S2).
-    assert hasattr(DiscreteGenerationPopulation, "_run_rust_lifecycle")
-    assert hasattr(DiscreteGenerationPopulation, "_sync_rust_backend")
 
 
 def _pending_probe_discrete_spatial_hookless_backend() -> None:
@@ -412,7 +436,6 @@ PENDING_PROBES: dict[str, Callable[[], None]] = {
     "backends.reference": _pending_probe_backends_reference,
     "backend-selector": _pending_probe_backend_selector,
     "python-authoritative-state": _pending_probe_python_authoritative_state,
-    "per-run-session-rebuild": _pending_probe_per_run_session_rebuild,
     "discrete-spatial-hookless-backend": _pending_probe_discrete_spatial_hookless_backend,
     "python-history-append-store": _pending_probe_python_history_append_store,
     "same-path-parity-tests": _pending_probe_same_path_parity_tests,

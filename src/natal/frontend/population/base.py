@@ -43,6 +43,43 @@ from natal.frontend.population._mixins._observation import ObservationMixin
 from natal.frontend.population._mixins._output import OutputMixin
 from natal.frontend.registry.index import IndexRegistry
 
+"""Runtime fields pulled into the session by the run-boundary flush
+(plan S2): every ecology scalar, every vector column, the custom slots,
+and the genetics tensors.  In-run writes (hook callbacks, deferred
+pushes) land in the draft only while the session owns its borrow; the
+flush re-materializes the contract params and pulls this whole list, so
+the next run starts from the user-visible draft values.  The list is a
+writable subset of the contract fields — values keep the session alive;
+structural changes (modifier maps rebuilt at a different width) still
+rebuild through ``_rust_needs_rebuild``.
+"""
+RUNTIME_FLUSH_FIELDS: tuple[str, ...] = (
+    "carrying_capacity",
+    "eggs_per_female",
+    "sex_ratio",
+    "sperm_displacement_rate",
+    "low_density_growth_rate",
+    "growth_mode",
+    "external_expected_eggs",
+    "survival_rates",
+    "mating_rates",
+    "reproduction_rates",
+    "fertility",
+    "competition_weights",
+    "equilibrium_distribution",
+    "migration_rate",
+    "custom_slots",
+    "viability_fitness",
+    "fecundity_fitness",
+    "sexual_selection_fitness",
+    "zygote_viability_fitness",
+    "offspring_tensor",
+    "meiosis_map",
+    "female_ztype_compatibility",
+    "male_ztype_compatibility",
+)
+
+
 T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationState])
 
 if TYPE_CHECKING:
@@ -215,7 +252,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         # changed after the Rust session was built.  The next run() pulls
         # exactly these fields into the session (no rebuild, no RNG reset).
         # The sentinel "__blueprint__" forces a full backend rebuild instead.
-        self._rust_dirty: set[str] = set()
         # Session ownership flags live in the model subclasses (their
         # backends are concrete types); base-class consumers reach them via
         # getattr so the annotation stays unclaimed here.
@@ -286,7 +322,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         clone = cls.__new__(cls)
 
         # --- rust dirty bridge (independent per deme) ---
-        clone._rust_dirty = set()
         # Session-ownership attributes (plan S2): clones start backend-less
         # with a fresh cache flag — __new__ skips every initializer, so a
         # missing attribute here would crash reset()/state reads later.
@@ -790,6 +825,17 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         duck-typed hosts without a session stay functional.
         """
         return
+
+    def _mark_rust_dirty(self) -> None:
+        """Flag a structural change so the next run rebuilds the session.
+
+        Blueprint-flag writes (setup) and similar structural edits cannot
+        be value-refreshed; the run head rebuilds the session (RNG
+        reseeds to the original seed — the documented refresh semantics).
+        setattr keeps the attribute unclaimed on this base class: the
+        model subclasses own its declaration.
+        """
+        self._rust_needs_rebuild = True
 
     def _mark_state_cache_stale(self) -> None:
         """Flag the cached state as behind the Rust session.

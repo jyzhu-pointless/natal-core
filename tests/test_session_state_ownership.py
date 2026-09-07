@@ -9,14 +9,18 @@ handoff signatures.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 from numpy.typing import NDArray
 
 import natal as nt
 from natal import _engine_rs
+from natal.contracts.params import Params
 from natal.frontend.data import DiscretePopulationState, PopulationState
 from natal.frontend.hooks.tick_context import TickContext
+from natal.frontend.population.base import RUNTIME_FLUSH_FIELDS
 
 
 def _species(name: str) -> nt.Species:
@@ -620,3 +624,731 @@ class TestZeroTickRun:
         assert pop.tick == 2
         np.testing.assert_array_equal(pop.state.individual_count, after_ind)
         np.testing.assert_array_equal(pop.state.sperm_storage, after_sperm)
+
+
+class TestDirtyBridgeNegativeContracts:
+    """The retired dirty bridge is unreachable (S2 batch 24)."""
+
+    def test_dirty_set_and_mirror_are_gone(self) -> None:
+        """``_rust_dirty``, ``_contract_params``, and ``_sync_rust_backend`` are gone."""
+        pop = _build_discrete("NegDirty")
+        pop.enable_rust_backend(seed=3)
+        for attr in ("_rust_dirty", "_contract_params", "_sync_rust_backend"):
+            assert not hasattr(pop, attr), (
+                f"{attr} is back — the retired dirty-bridge compartment returned"
+            )
+
+    def test_dirty_sink_parameter_is_gone_from_writers(self) -> None:
+        """No writer accepts the dirty_sink argument anymore."""
+        from natal.frontend.configurator._writers import (
+            CoreConfigWriter,
+            DraftWriter,
+        )
+
+        pop = _build_discrete("NegDirtySink")
+        pop.enable_rust_backend(seed=3)
+        with pytest.raises(TypeError, match="dirty_sink"):
+            CoreConfigWriter(pop.config, pop._rust_lifecycle_backend, dirty_sink=set())  # pyright: ignore[reportCallIssue]  # negative contract probe
+        with pytest.raises(TypeError, match="dirty_sink"):
+            DraftWriter(pop.config, dirty_sink=set())  # pyright: ignore[reportCallIssue]  # negative contract probe
+
+    def test_needs_rebuild_flag_round_trip(self) -> None:
+        """Structural writes flag the rebuild; a run consumes it."""
+        pop = _build_discrete("NegRebuild")
+        pop.enable_rust_backend(seed=3)
+        backend_before = pop._rust_lifecycle_backend  # pyright: ignore[reportPrivateUsage]
+
+        @nt.hook(event="first")
+        def noop(ctx: nt.TickContext) -> int:
+            return 0
+
+        pop.register_hooks(noop, event="first")
+        assert pop._rust_needs_rebuild is True  # pyright: ignore[reportPrivateUsage]
+
+        pop.run(1)
+        assert pop._rust_needs_rebuild is False  # pyright: ignore[reportPrivateUsage]
+        assert pop._rust_lifecycle_backend is not backend_before  # pyright: ignore[reportPrivateUsage]  # the rebuild replaced the session
+
+    def test_value_writes_do_not_flag_rebuild(self) -> None:
+        """Value writes push straight to the session without a rebuild."""
+        pop = _build_discrete("NegValue")
+        pop.enable_rust_backend(seed=3)
+        backend_before = pop._rust_lifecycle_backend  # pyright: ignore[reportPrivateUsage]
+        pop.update().competition(carrying_capacity=25.0)
+        assert pop._rust_needs_rebuild is False  # pyright: ignore[reportPrivateUsage]
+        assert pop._rust_lifecycle_backend is backend_before  # pyright: ignore[reportPrivateUsage]
+        pop.run(1)
+        assert pop._rust_lifecycle_backend is backend_before  # pyright: ignore[reportPrivateUsage]
+
+
+# ============================================================================
+# S2 batch 24: the run-boundary ecology flush and the rebuild-flag rollback
+# ============================================================================
+
+
+@nt.hook(event="early")
+def _retune_capacity(ctx: TickContext) -> int:
+    """Retune carrying capacity mid-tick (deferred to the draft under Rust)."""
+    ctx.update().competition(carrying_capacity=25.0)
+    return 0
+
+
+@nt.hook(event="early")
+def _noop_hook(ctx: TickContext) -> int:
+    """Do-nothing callback (keeps the callback firing path identical)."""
+    return 0
+
+
+@nt.hook(event="early")
+def _retune_eggs(ctx: TickContext) -> int:
+    """Retune eggs per female mid-tick (deferred to the draft under Rust)."""
+    ctx.update().reproduction(eggs_per_female=3.0)
+    return 0
+
+
+@nt.hook(event="early")
+def _write_custom_slot(ctx: TickContext) -> int:
+    """Write a custom slot from inside a run."""
+    ctx.update().custom(probe=7.5)
+    return 0
+
+
+@nt.hook(event="early")
+def _write_out_of_bounds(ctx: TickContext) -> int:
+    """Write an out-of-bounds carrying capacity from inside a run."""
+    ctx.update().competition(carrying_capacity=-5.0)
+    return 0
+
+
+def _age_with_hook(
+    name: str,
+    hook: Callable[[TickContext], int],
+    *,
+    stochastic: bool,
+    custom: dict[str, float] | None = None,
+) -> nt.AgeStructuredPopulation:
+    """Return an age-structured population with one pre-enabled hook.
+
+    Args:
+        name: Unique population label.
+        hook: Callback hook registered on the ``early`` event.
+        stochastic: Whether the session RNG stream drives the trajectory.
+        custom: Optional custom slots declared at build time.
+
+    Returns:
+        A built population ready for ``enable_rust_backend``.
+    """
+    chain = (
+        nt.AgeStructuredPopulation.setup(species=_species(name), stochastic=stochastic)
+        .age_structure(n_ages=3, new_adult_age=1)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0.0, 20.0, 0.0]},
+                "male": {"WT|WT": [0.0, 20.0, 0.0]},
+            }
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.0],
+            male_age_based_survival=[1.0, 0.8, 0.0],
+        )
+        .reproduction(eggs_per_female=2, sex_ratio=0.5)
+        .competition(carrying_capacity=1000.0)
+    )
+    if custom is not None:
+        chain = chain.custom(**custom)
+    return chain.hooks(hook).build()
+
+
+def _discrete_with_hook(
+    name: str,
+    hook: Callable[[TickContext], int],
+    *,
+    stochastic: bool,
+) -> nt.DiscreteGenerationPopulation:
+    """Return a discrete-generation population with one pre-enabled hook.
+
+    Args:
+        name: Unique population label.
+        hook: Callback hook registered on the ``early`` event.
+        stochastic: Whether the session RNG stream drives the trajectory.
+
+    Returns:
+        A built population ready for ``enable_rust_backend``.
+    """
+    chain = (
+        nt.DiscreteGenerationPopulation.setup(
+            species=_species(name), stochastic=stochastic
+        )
+        .initial_state(
+            individual_count={"female": {"WT|WT": 30}, "male": {"WT|WT": 30}}
+        )
+        .survival(female_age0_survival=0.9, male_age0_survival=0.9)
+        .reproduction(eggs_per_female=6, sex_ratio=0.5)
+        .competition(carrying_capacity=100.0, low_density_growth_rate=2.0)
+    )
+    return chain.hooks(hook).build()
+
+
+def _drive_pop(
+    name: str, drive: nt.HomingDrive, *, stochastic: bool
+) -> nt.AgeStructuredPopulation:
+    """Return an age-structured population carrying *drive* (preset).
+
+    Args:
+        name: Unique population label.
+        drive: The homing-drive preset registered at build time.
+        stochastic: Whether the session RNG stream drives the trajectory.
+
+    Returns:
+        A built population ready for ``enable_rust_backend``.
+    """
+    return (
+        nt.AgeStructuredPopulation.setup(
+            species=_species(name), stochastic=stochastic
+        )
+        .age_structure(n_ages=2, new_adult_age=1)
+        .initial_state(
+            individual_count={
+                "female": {"WT|Dr": [0.0, 100.0]},
+                "male": {"WT|Dr": [0.0, 100.0]},
+            }
+        )
+        .competition(carrying_capacity=500.0)
+        .presets(drive)
+        .build()
+    )
+
+
+class TestRunBoundaryDeferralFlush:
+    """In-run writes land in the draft; the run boundary flushes them."""
+
+    def test_in_run_capacity_retune_drives_the_next_age_run(self) -> None:
+        """Deferred and immediate capacity retunes converge bitwise (age).
+
+        The hook fires inside the batch while the session holds its
+        borrow: the write lands in the draft only and the run boundary
+        flushes the runtime ecology fields back into the session.  Twin:
+        the same retune pushed outside the run (writer -> session.apply)
+        must produce a bitwise-identical two-tick trajectory, and the
+        first tick must still have used the old capacity — the flush
+        lands only after the batch completed.
+        """
+        deferred = _age_with_hook("DefDefer", _retune_capacity, stochastic=True)
+        deferred.enable_rust_backend(seed=5)
+        deferred.run(1)
+        # The boundary flush ran: the session already holds the retuned K
+        # while the finished tick just ran under the old K.
+        backend = deferred._rust_lifecycle_backend  # noqa: SLF001
+        assert backend is not None
+        assert backend._session.get_scalar("carrying_capacity") == 25.0  # noqa: SLF001
+        # The boundary consumed the flag (flush ran) and the finally
+        # cleared it; the session readback above is the effect proof.
+        assert deferred._rust_deferred_writes is False  # noqa: SLF001
+        deferred_tick1_ind = deferred.state.individual_count.copy()
+        deferred_tick1_sperm = deferred.state.sperm_storage.copy()
+        deferred.run(1)
+
+        immediate = _age_with_hook("DefImmediate", _noop_hook, stochastic=True)
+        immediate.enable_rust_backend(seed=5)
+        immediate.run(1)
+        immediate.update().competition(carrying_capacity=25.0)
+        immediate.run(1)
+
+        # First-run proof: the deferred twin's tick-1 state equals a
+        # never-retuned single-tick control — the old K drove tick 1.
+        old_reference = _age_with_hook("DefOldRef", _noop_hook, stochastic=True)
+        old_reference.enable_rust_backend(seed=5)
+        old_reference.run(1)
+        np.testing.assert_array_equal(
+            deferred_tick1_ind, old_reference.state.individual_count
+        )
+        np.testing.assert_array_equal(
+            deferred_tick1_sperm, old_reference.state.sperm_storage
+        )
+        # Both two-step trajectories are bitwise identical ...
+        np.testing.assert_array_equal(
+            deferred.state.individual_count, immediate.state.individual_count
+        )
+        np.testing.assert_array_equal(
+            deferred.state.sperm_storage, immediate.state.sperm_storage
+        )
+        assert deferred.tick == 2
+        assert immediate.tick == 2
+        # ... and differ from the never-retuned control: the new K truly
+        # drove the second tick (the flush was not inert).
+        never = _age_with_hook("DefNever", _noop_hook, stochastic=True)
+        never.enable_rust_backend(seed=5)
+        never.run(2)
+        assert not np.array_equal(
+            deferred.state.individual_count, never.state.individual_count
+        )
+        assert not np.array_equal(
+            deferred.state.sperm_storage, never.state.sperm_storage
+        )
+
+    def test_in_run_capacity_retune_drives_the_next_discrete_run(self) -> None:
+        """The same boundary flush converges bitwise on the discrete model.
+
+        The discrete fixture's default growth mode is ``no_competition``
+        (K is inert), so the retune targets eggs per female — a value the
+        discrete engine actually consumes.
+        """
+        deferred = _discrete_with_hook(
+            "DefDiscrete", _retune_eggs, stochastic=True
+        )
+        deferred.enable_rust_backend(seed=3)
+        deferred.run(1)
+        backend = deferred._rust_lifecycle_backend  # noqa: SLF001
+        assert backend is not None
+        assert backend._session.get_scalar("eggs_per_female") == 3.0  # noqa: SLF001
+        # The boundary consumed the flag (flush ran) and the finally
+        # cleared it; the session readback above is the effect proof.
+        assert deferred._rust_deferred_writes is False  # noqa: SLF001
+        deferred_tick1 = deferred.state.individual_count.copy()
+        deferred.run(1)
+
+        immediate = _discrete_with_hook(
+            "DefDiscImmediate", _noop_hook, stochastic=True
+        )
+        immediate.enable_rust_backend(seed=3)
+        immediate.run(1)
+        immediate.update().reproduction(eggs_per_female=3.0)
+        immediate.run(1)
+
+        # Tick 1 ran under the old eggs-per-female (single-tick reference).
+        old_reference = _discrete_with_hook(
+            "DefDiscOldRef", _noop_hook, stochastic=True
+        )
+        old_reference.enable_rust_backend(seed=3)
+        old_reference.run(1)
+        np.testing.assert_array_equal(
+            deferred_tick1, old_reference.state.individual_count
+        )
+        np.testing.assert_array_equal(
+            deferred.state.individual_count, immediate.state.individual_count
+        )
+        assert deferred.tick == 2
+        assert immediate.tick == 2
+        # The retune was effective: 3 eggs per female halves reproduction.
+        never = _discrete_with_hook("DefDiscNever", _noop_hook, stochastic=True)
+        never.enable_rust_backend(seed=3)
+        never.run(2)
+        assert not np.array_equal(
+            deferred.state.individual_count, never.state.individual_count
+        )
+
+
+class TestInRunCustomSlotWrite:
+    """A custom-slot write from inside a run must reach the session."""
+
+    def test_in_run_custom_write_is_flushed_at_the_boundary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``ctx.update().custom(...)`` inside a run reaches the session.
+
+        The slot write mutates the shared draft dict in place; while the
+        session holds its borrow the boundary flush is the only channel
+        into the session, so the flush must run with the constant field
+        list and the materialized params carrying the new slot.
+        """
+        pop = _age_with_hook("SlotHook", _write_custom_slot, stochastic=False)
+        pop.enable_rust_backend(seed=1)
+        backend = pop._rust_lifecycle_backend  # noqa: SLF001
+        assert backend is not None
+
+        flushed: list[tuple[list[str], dict[str, object]]] = []
+        original = backend.refresh_params
+
+        def spy(fields: list[str], params_obj: Params) -> None:
+            flushed.append((list(fields), dict(params_obj.custom_slots)))
+            original(fields, params_obj)
+
+        monkeypatch.setattr(backend, "refresh_params", spy)
+        pop.run(1)
+
+        assert dict(pop.config.custom) == {"probe": 7.5}
+        # The run boundary pulled the slot dict into the session exactly
+        # once, using the full runtime field list.
+        assert flushed == [(list(RUNTIME_FLUSH_FIELDS), {"probe": 7.5})]
+
+    def test_runtime_custom_write_accumulates_with_build_slots(self) -> None:
+        """A runtime slot write must not wipe slots declared at build time.
+
+        ``custom()`` documents that multiple calls accumulate; the runtime
+        configurator re-validates the whole slot set, so a write through
+        ``pop.update().custom(...)`` must preserve the slots the
+        population was built with.
+        """
+        pop = _age_with_hook(
+            "SlotAccum", _write_custom_slot, stochastic=False, custom={"mark": 3.0}
+        )
+        pop.enable_rust_backend(seed=1)
+        pop.run(1)
+        assert dict(pop.config.custom) == {"mark": 3.0, "probe": 7.5}
+
+
+class TestStructuralRebuildChain:
+    """Post-enable structural edits rebuild the session at the run head."""
+
+    def test_hook_registration_reseeds_the_rng_stream(self) -> None:
+        """``register_hooks`` after enable rebuilds the session (RNG reseed).
+
+        A hook registration is session structure: the run head must
+        rebuild the backend from the current state with the ORIGINAL
+        seed, so the second tick draws a fresh seed-S stream against the
+        tick-1 state — bitwise different from the atomic two-tick run,
+        and bitwise equal to an explicit ``refresh_rust_backend`` (the
+        documented refresh semantics).
+        """
+        pop = _build_age("RebuildChain", stochastic=True)
+        pop.enable_rust_backend(seed=13)
+        pop.run(1)
+        backend_before = pop._rust_lifecycle_backend  # noqa: SLF001
+        pop.register_hooks(_noop_hook, event="early")
+        assert pop._rust_needs_rebuild is True  # noqa: SLF001
+        pop.run(1)
+        assert pop._rust_lifecycle_backend is not backend_before  # noqa: SLF001
+        assert pop._rust_needs_rebuild is False  # noqa: SLF001
+        assert pop.tick == 2
+
+        atomic = _build_age("RebuildAtomic", stochastic=True)
+        atomic.enable_rust_backend(seed=13)
+        atomic.run(2)
+        # The reseeded stream replays the first two ticks' draws against a
+        # different state mix, so the counts diverge from the atomic run.
+        # (The sperm-storage array happens to coincide at this seed and is
+        # not a reliable divergence witness — the counts are.)
+        assert not np.array_equal(
+            pop.state.individual_count, atomic.state.individual_count
+        )
+
+        # The rebuild resets the stream to the original seed: same end
+        # state as the explicit refresh path, bitwise.
+        refreshed = _build_age("RebuildRef", stochastic=True)
+        refreshed.enable_rust_backend(seed=13)
+        refreshed.run(1)
+        refreshed.refresh_rust_backend()
+        refreshed.run(1)
+        np.testing.assert_array_equal(
+            pop.state.individual_count, refreshed.state.individual_count
+        )
+        np.testing.assert_array_equal(
+            pop.state.sperm_storage, refreshed.state.sperm_storage
+        )
+
+
+class TestReconfigureRollbackFlagIntegrity:
+    """Failed preset reconfigures must not schedule a session rebuild."""
+
+    def _drive(self, name: str) -> nt.HomingDrive:
+        """Return a homing drive preset registered on the test population."""
+        return nt.HomingDrive(
+            name=name,
+            drive_allele="Dr",
+            target_allele="WT",
+            drive_conversion_rate=0.9,
+        )
+
+    def test_failed_reconfigure_keeps_stream_and_backend(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed reconfigure leaves the RNG stream untouched (bitwise).
+
+        ``refresh_modifier_maps`` marks ``_rust_needs_rebuild`` while the
+        recipe runs; when the fitness patch then explodes, that mark must
+        be rolled back together with the config.  A surviving mark routes
+        the next run through a session rebuild, which reseeds the RNG:
+        then split == fused fails bitwise (the exact regression that made
+        a stub trajectory diverge 15.7%).
+        """
+        drive = self._drive("__rollback_reproc_flag__")
+        split = _drive_pop("RecRollSplit", drive, stochastic=True)
+        split.enable_rust_backend(seed=29)
+        split.run(1)
+        backend_before = split._rust_lifecycle_backend  # noqa: SLF001
+
+        def exploding_patch() -> None:
+            raise RuntimeError("boom: fitness patch failure")
+
+        monkeypatch.setattr(drive, "fitness_patch", exploding_patch)
+        with pytest.raises(RuntimeError, match="boom"):
+            split.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+        monkeypatch.undo()
+
+        # The attempted attribute change never landed on the preset: the
+        # constructor-normalized (female, male) tuple is untouched, and the
+        # rebuild flag sits at its pre-call (False) value.
+        assert drive.drive_conversion_rate == (0.9, 0.9)
+        assert split._rust_needs_rebuild is False  # noqa: SLF001
+
+        # The next run must NOT rebuild: same backend object and a
+        # bitwise match against the atomic two-tick run.  A separate
+        # equivalent drive instance serves the control (presets bind to
+        # their first species, so one object cannot serve two pops; the
+        # maps depend on the parameters only).
+        split.run(1)
+        assert split._rust_lifecycle_backend is backend_before  # noqa: SLF001
+        fused = _drive_pop(
+            "RecRollFused", self._drive("__rollback_reproc_fused__"), stochastic=True
+        )
+        fused.enable_rust_backend(seed=29)
+        fused.run(2)
+        np.testing.assert_array_equal(
+            split.state.individual_count, fused.state.individual_count
+        )
+        np.testing.assert_array_equal(
+            split.state.sperm_storage, fused.state.sperm_storage
+        )
+        assert split.tick == 2
+        assert fused.tick == 2
+
+    def test_failed_reconfigure_preserves_pending_structural_marks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pre-existing rebuild request survives a failed transaction.
+
+        The rollback restores the flag instead of clearing it: a user's
+        own pending structural update (here hook registration) must still
+        be honored by the next run.
+        """
+        drive = self._drive("__rollback_pending_flag__")
+        pop = _drive_pop("RecRollPending", drive, stochastic=True)
+        pop.enable_rust_backend(seed=29)
+        pop.run(1)
+        pop.register_hooks(_noop_hook, event="early")
+        assert pop._rust_needs_rebuild is True  # noqa: SLF001
+        backend_before = pop._rust_lifecycle_backend  # noqa: SLF001
+
+        def exploding_patch() -> None:
+            raise RuntimeError("boom: fitness patch failure")
+
+        monkeypatch.setattr(drive, "fitness_patch", exploding_patch)
+        with pytest.raises(RuntimeError, match="boom"):
+            pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+        monkeypatch.undo()
+
+        # The pending user mark survived the rollback ...
+        assert pop._rust_needs_rebuild is True  # noqa: SLF001
+        # ... and the next run rebuilds the session (backend swap).
+        pop.run(1)
+        assert pop._rust_lifecycle_backend is not backend_before  # noqa: SLF001
+        assert pop._rust_needs_rebuild is False  # noqa: SLF001
+
+    def test_successful_reconfigure_schedules_a_rebuild(self) -> None:
+        """A committed reconfigure marks the rebuild; the next run rebuilds."""
+        drive = self._drive("__recommit_flag__")
+        pop = _drive_pop("RecCommit", drive, stochastic=False)
+        pop.enable_rust_backend(seed=29)
+        pop.run(1)
+        backend_before = pop._rust_lifecycle_backend  # noqa: SLF001
+
+        pop.update().reconfigure_preset(drive, drive_conversion_rate=0.3)
+        assert drive.drive_conversion_rate == 0.3
+        # refresh_modifier_maps ran inside the transaction → structural.
+        assert pop._rust_needs_rebuild is True  # noqa: SLF001
+
+        pop.run(1)
+        assert pop._rust_lifecycle_backend is not backend_before  # noqa: SLF001
+        assert pop._rust_needs_rebuild is False  # noqa: SLF001
+
+
+class TestEnumAndSlotValueWrites:
+    """Enum and slot-cell writes push values, never rebuild the session."""
+
+    def test_mode_enum_write_pushes_session_without_rebuild(self) -> None:
+        """``juvenile_growth_mode`` (enum) reaches the session as a value."""
+        pop = _build_age("EnumWrite", stochastic=False)
+        pop.enable_rust_backend(seed=1)
+        backend = pop._rust_lifecycle_backend  # noqa: SLF001
+        assert backend is not None
+
+        pop.params.juvenile_growth_mode = 4
+        assert backend._session.get_scalar("growth_mode") == 4.0  # noqa: SLF001
+        assert pop._rust_needs_rebuild is False  # noqa: SLF001
+        assert pop._rust_lifecycle_backend is backend  # noqa: SLF001
+        pop.run(1)
+        assert pop._rust_lifecycle_backend is backend  # noqa: SLF001
+        assert pop._rust_needs_rebuild is False  # noqa: SLF001
+
+    def test_slot_cell_write_pushes_whole_vector_without_rebuild(self) -> None:
+        """A slot cell pushes a whole vector into the session, no rebuild."""
+        pop = _build_age("SlotWrite", stochastic=False)
+        pop.enable_rust_backend(seed=1)
+        backend = pop._rust_lifecycle_backend  # noqa: SLF001
+        assert backend is not None
+
+        pop.params.competition_strength = 2.0
+        np.testing.assert_array_equal(
+            backend._session.get_tensor("competition_weights"),  # noqa: SLF001
+            np.array([1.0, 2.0, 1.0], dtype=np.float64),
+        )
+        assert pop._rust_needs_rebuild is False  # noqa: SLF001
+        assert pop._rust_lifecycle_backend is backend  # noqa: SLF001
+        pop.run(1)
+        assert pop._rust_lifecycle_backend is backend  # noqa: SLF001
+        assert pop._rust_needs_rebuild is False  # noqa: SLF001
+
+
+class TestDeferredFlushAtomicity:
+    """A rejected in-run write must not schedule a boundary flush."""
+
+    def test_in_run_writer_failure_leaves_no_deferral(self) -> None:
+        """An out-of-bounds in-run write surfaces and leaves no deferral.
+
+        The hook fires inside the batch; its write raises at validation.
+        The failure must surface from ``run()`` and the deferred flag
+        must NOT survive: the boundary flushes only when a write was
+        deferred, so a failed write must not cause a later spurious flush
+        that could re-push draft values over direct session writes (the
+        inverted contract pinned by ``test_direct_write_survives_into_the_next_run``).
+        """
+        pop = _age_with_hook("BadWrite", _write_out_of_bounds, stochastic=False)
+        pop.enable_rust_backend(seed=1)
+        d0 = float(pop.config.carrying_capacity)
+        with pytest.raises(RuntimeError, match="ValueError"):
+            pop.run(1)
+        # The failing write is atomic: neither the draft ...
+        assert float(pop.config.carrying_capacity) == d0
+        # ... nor the deferral bookkeeping was committed.
+        assert pop._rust_deferred_writes is False  # noqa: SLF001
+        assert pop._rust_needs_rebuild is False  # noqa: SLF001
+
+
+class TestRuntimeEcoFieldList:
+    """RUNTIME_FLUSH_FIELDS is the exact run-boundary flush set."""
+
+    def test_constant_covers_exactly_the_contract_set(self) -> None:
+        """The flush list is exactly the 7 scalars + 7 vectors + slots."""
+        scalars = {
+            "carrying_capacity",
+            "eggs_per_female",
+            "sex_ratio",
+            "sperm_displacement_rate",
+            "low_density_growth_rate",
+            "growth_mode",
+            "external_expected_eggs",
+        }
+        vectors = {
+            "survival_rates",
+            "mating_rates",
+            "reproduction_rates",
+            "fertility",
+            "competition_weights",
+            "equilibrium_distribution",
+            "migration_rate",
+        }
+        genetics = {
+            "viability_fitness",
+            "fecundity_fitness",
+            "sexual_selection_fitness",
+            "zygote_viability_fitness",
+            "offspring_tensor",
+            "meiosis_map",
+            "female_ztype_compatibility",
+            "male_ztype_compatibility",
+        }
+        assert len(RUNTIME_FLUSH_FIELDS) == 23
+        assert set(RUNTIME_FLUSH_FIELDS[:7]) == scalars
+        assert set(RUNTIME_FLUSH_FIELDS[7:14]) == vectors
+        assert RUNTIME_FLUSH_FIELDS[14] == "custom_slots"
+        assert set(RUNTIME_FLUSH_FIELDS[15:]) == genetics
+        assert len(set(RUNTIME_FLUSH_FIELDS)) == 23
+
+    def test_refresh_params_accepts_the_constant_and_reads_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The boundary refreshes exactly the constant list into the session."""
+        pop = _age_with_hook("FieldList", _retune_capacity, stochastic=False)
+        pop.enable_rust_backend(seed=1)
+        backend = pop._rust_lifecycle_backend  # noqa: SLF001
+        assert backend is not None
+
+        flushed: list[list[str]] = []
+        original = backend.refresh_params
+
+        def spy(fields: list[str], params_obj: Params) -> None:
+            flushed.append(list(fields))
+            original(fields, params_obj)
+
+        monkeypatch.setattr(backend, "refresh_params", spy)
+        pop.run(1)
+
+        assert flushed == [list(RUNTIME_FLUSH_FIELDS)]
+        # The refresh really landed in the session: the retuned K reads back.
+        assert backend._session.get_scalar("carrying_capacity") == 25.0  # noqa: SLF001
+
+
+class TestInRunGeneticsWrites:
+    """In-run genetics/fitness writes reach the session at the boundary."""
+
+    def test_in_run_viability_write_flushes_to_session(self) -> None:
+        """A hook's fitness write lands in the session after the run (HB1).
+
+        The run-boundary flush pulls every runtime contract field — the
+        genetics tensors included — so a drift between the draft and the
+        session can never survive a run boundary.
+        """
+        import natal as _nt
+
+        sp = _species("InRunGenetics")
+
+        @_nt.hook(event="early")
+        def apply_viability(ctx: _nt.TickContext) -> int:
+            ctx.update().fitness(viability={"WT|WT": 0.1})
+            return 0
+
+        pop = (
+            _nt.DiscreteGenerationPopulation.setup(species=sp, name="irg", stochastic=False)
+            .initial_state(
+                individual_count={"female": {"WT|WT": 10}, "male": {"WT|WT": 10}}
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(eggs_per_female=6, sex_ratio=0.5)
+            .competition(carrying_capacity=100.0, low_density_growth_rate=2.0)
+            .build()
+        )
+        pop.enable_rust_backend(seed=11)
+        pop.register_hooks(apply_viability, event="early")
+        pop.run(1)
+
+        backend = pop._rust_lifecycle_backend  # pyright: ignore[reportPrivateUsage]
+        session_viability = np.asarray(  # pyright: ignore[union-attr]
+            backend._session.get_tensor("viability_fitness")  # noqa: SLF001
+        )
+        # Flat (2, n_ztypes) row-major: female x ztype 0 is index 0.
+        assert float(session_viability[0]) == 0.1, (
+            "in-run fitness write never reached the Rust session — the "
+            "boundary flush must pull the genetics tensors"
+        )
+
+    def test_in_run_fitness_write_zeroes_survival_via_boundary(self) -> None:
+        """A second in-run fitness field flushes through the same boundary."""
+        import natal as _nt
+
+        sp = _species("InRunFitness")
+
+        @_nt.hook(event="early")
+        def apply_zygote(ctx: _nt.TickContext) -> int:
+            ctx.update().fitness(zygote_viability={"WT|Dr": 0.25})
+            return 0
+
+        pop = (
+            _nt.DiscreteGenerationPopulation.setup(species=sp, name="irf", stochastic=False)
+            .initial_state(
+                individual_count={"female": {"WT|WT": 10}, "male": {"WT|WT": 10}}
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(eggs_per_female=6, sex_ratio=0.5)
+            .competition(carrying_capacity=100.0, low_density_growth_rate=2.0)
+            .build()
+        )
+        pop.enable_rust_backend(seed=11)
+        pop.register_hooks(apply_zygote, event="early")
+        pop.run(1)
+
+        backend = pop._rust_lifecycle_backend  # pyright: ignore[reportPrivateUsage]
+        session_fitness = np.asarray(  # pyright: ignore[union-attr]
+            backend._session.get_tensor("zygote_viability_fitness")  # noqa: SLF001
+        )
+        # Flat (2, n_ztypes) row-major: female x ztype 1 is index 1.
+        assert float(session_fitness[1]) == 0.25

@@ -172,7 +172,7 @@ class TestRuntimePresetsTransaction:
         return pop
 
     def test_failed_registration_rolls_back_every_surface(self) -> None:
-        """An exploding recipe leaves tables, fitness, and the bridge intact."""
+        """An exploding recipe leaves tables, fitness, and the flag intact."""
         pop = self._population()
         ok = _drive(rate=0.8)
         pop.update().presets(ok)
@@ -189,7 +189,7 @@ class TestRuntimePresetsTransaction:
             pop.config.offspring_tensor.copy(),
             pop.config.viability_fitness.copy(),
             [p.name for p in pop.presets],
-            set(pop._rust_dirty),  # pyright: ignore[reportPrivateUsage]  # the bridge is the rollback surface under test
+            pop._rust_needs_rebuild,  # noqa: SLF001 — the rebuild flag is the rollback surface under test
         )
 
         with pytest.raises(RuntimeError, match="boom"):
@@ -204,7 +204,7 @@ class TestRuntimePresetsTransaction:
         assert np.array_equal(before[2], pop.config.offspring_tensor)
         assert np.array_equal(before[3], pop.config.viability_fitness)
         assert [p.name for p in pop.presets] == before[4]
-        assert pop._rust_dirty == before[5]  # pyright: ignore[reportPrivateUsage]  # same surface
+        assert pop._rust_needs_rebuild == before[5]  # noqa: SLF001  # the flag survived or was restored identically
 
         pop.run(1)
         assert pop.tick == 1

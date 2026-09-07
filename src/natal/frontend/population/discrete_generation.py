@@ -38,7 +38,6 @@ from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
     from natal.backends.rust.rust_backend import RustDiscreteLifecycleBackend
-    from natal.contracts.params import Params
     from natal.frontend.configurator import Configurator
 
 __all__ = ["DiscreteGenerationPopulation"]
@@ -195,10 +194,14 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._rust_run_active = False
         self._rust_lifecycle_backend: RustDiscreteLifecycleBackend | None = None
         self._rust_backend_seed: int | None = None
-        # Contract params materialized from the draft at enable time and
-        # re-materialized on each dirty sync; the source object handed to
-        # the session's directed refresh_params pull.
-        self._contract_params: Params | None = None
+        # Structural changes (hook registration, modifier maps, blueprint
+        # flags) rebuild the session before the next run; value changes go
+        # straight to the session through the writers and the run-boundary
+        # ecology flush.
+        self._rust_needs_rebuild: bool = False
+        # True while a run's in-hook writes deferred to the draft; the run
+        # boundary flushes the draft into the session exactly when it is.
+        self._rust_deferred_writes: bool = False
 
         # Keep a pristine copy so reset() can restore the starting state.
         self._initial_population_snapshot = (
@@ -358,7 +361,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             RustDiscreteLifecycleBackend,
             rust_backend_available,
         )
-        from natal.contracts.materialize import materialize
 
         if not rust_backend_available():
             raise RuntimeError(
@@ -380,8 +382,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         state_to_install = self._live_state()
         self._rust_lifecycle_backend = backend
         self._rust_backend_seed = seed
-        self._contract_params = materialize(self.config).params
-        self._rust_dirty.clear()
+        self._rust_needs_rebuild = False
         # The session owns the state from here on (plan S2): install the
         # live Python state so the freshly seeded RNG continues from the
         # population's current counts and tick.
@@ -402,8 +403,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self._refresh_state_cache_from_session()
         self._rust_lifecycle_backend = None
         self._rust_backend_seed = None
-        self._contract_params = None
-        self._rust_dirty.clear()
         self._state_cache_stale = False
         return self
 
@@ -412,8 +411,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         Explicit full-refresh escape hatch: rebuilds the session from a
         fresh materialization (RNG resets to the original seed).  Value-only
-        changes do not need this — the dirty-set bridge syncs them before
-        the next run automatically.
+        changes do not need this — the writers push them straight to the
+        session, and the run-boundary ecology flush covers in-run writes.
 
         Returns:
             Self for chaining.
@@ -434,34 +433,36 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         """
         return getattr(self, "_rust_lifecycle_backend", None) is not None
 
-    def _sync_rust_backend(self) -> None:
-        """Drain the dirty set into the live Rust session.
+    def _run_startup_sync(self) -> None:
+        """Rebuild the session when structural changes requested it.
 
-        Dirty non-empty: re-materialize the contract params from the draft
-        and pull exactly the dirty fields into the session (directed
-        refresh — the session object and its RNG survive).  The
-        ``__hooks__``/``__blueprint__`` sentinels route to a full backend
-        rebuild because hooks and blueprint flags are session structure,
-        not values.
+        Hook registration, modifier-map rebuilds, and blueprint-flag writes
+        are session structure, not values: the live session must be
+        rebuilt (RNG reseeds to the original seed for rebuilds — the
+        documented refresh semantics).
         """
-        if self._rust_backend_seed is None or not self._rust_dirty:
-            return
-        if (
-            self._rust_lifecycle_backend is None
-            or "__hooks__" in self._rust_dirty
-            or "__blueprint__" in self._rust_dirty
-        ):
+        if self._rust_needs_rebuild:
+            self._rust_needs_rebuild = False
             self.refresh_rust_backend()
-            self._rust_dirty.clear()
+
+    def _flush_ecology_after_run(self) -> None:
+        """Sync the draft's runtime ecology into the session after a run.
+
+        In-run writes (hook callbacks, deferred pushes) land in the draft
+        only while the session owns its borrow; this boundary flush
+        re-materializes the contract params once and pulls every runtime
+        field, so the next run starts from the user-visible draft values
+        (including values a hook wrote through ``ctx.update()``).
+        """
+        from natal.frontend.population.base import RUNTIME_FLUSH_FIELDS
+
+        backend = self._rust_lifecycle_backend
+        if backend is None:
             return
         from natal.contracts.materialize import materialize
 
-        self._contract_params = materialize(self.config).params
-        # backend is non-None here: the None case rebuilt above and returned.
-        self._rust_lifecycle_backend.refresh_params(
-            sorted(self._rust_dirty), self._contract_params
-        )
-        self._rust_dirty.clear()
+        params = materialize(self.config).params
+        backend.refresh_params(list(RUNTIME_FLUSH_FIELDS), params)
 
     def _run_rust_lifecycle(
         self,
@@ -471,7 +472,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         clear_history_on_start: bool,
     ) -> DiscreteGenerationPopulation:
         """Run the Rust batch kernel and commit its history rows."""
-        self._sync_rust_backend()
+        self._run_startup_sync()
         backend = self._rust_lifecycle_backend
         if backend is None:
             raise RuntimeError(
@@ -492,6 +493,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         # In-hook writes during the batch defer session pushes to the next run.
         self._rust_run_active = True
+        self._rust_deferred_writes = False
         try:
             final_tick, history_new, was_stopped = backend.run(
                 n_steps=n_steps,
@@ -499,8 +501,15 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 observation_mask=self._observation_mask,
                 checkpoint_every=checkpoint_every,
             )
+            if self._rust_deferred_writes:
+                # Run-boundary ecology flush: in-run writes landed in the
+                # draft; the next run starts from the user-visible values.
+                self._flush_ecology_after_run()
         finally:
             self._rust_run_active = False
+            # A failed run wrote nothing to the session (validation is
+            # atomic): the deferral flag must not leak into the next run.
+            self._rust_deferred_writes = False
 
         # Merge the session's set_param writes (params_log rows under their
         # own commit ticks + final draft values) so the Rust run path keeps
