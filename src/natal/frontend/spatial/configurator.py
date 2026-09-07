@@ -566,8 +566,13 @@ class SpatialConfigurator:
         # Accumulated batch settings: param_name -> BatchSetting.
         self._batch_settings: Dict[str, BatchSetting[Any]] = {}  # Any: BatchSetting value type varies per config field
 
-        # Replay log: list of (method_name, kwargs_with_batch_settings).
-        self._replay_log: List[tuple[str, Dict[str, Any]]] = []
+        # Declaration journal (plan 5.1): the spatial twin of the plain
+        # Configurator's _declaration_log — same entry type, plus raw
+        # BatchSetting values preserved for the per-group replay.  This is
+        # the SINGLE store for the spatial chain: template calls bypass the
+        # @_declared wrapper (see _call_template) so no second journal
+        # entry is written for the same declaration.
+        self._declaration_log: List[tuple[str, Dict[str, Any]]] = []
 
         # Spatial migration parameters.
         self._migration_kernel: Optional[NDArray[np.float64]] = None
@@ -666,7 +671,7 @@ class SpatialConfigurator:
         # ── Step 3: Seeds from hook genotype refs ──────────────────────
         from natal.frontend.configurator._base import collect_hook_genotype_refs
         hook_strs: set[str] = set()
-        for method_name, kwargs in self._replay_log:
+        for method_name, kwargs in self._declaration_log:
             if method_name == "hooks":
                 hook_items = kwargs.get("hook_items", ())
                 if hook_items:
@@ -784,7 +789,7 @@ class SpatialConfigurator:
 
             # Do a lightweight replay — only need modifiers.
             cfg = Configurator.for_age_structured(self._species)
-            for method_name, kwargs in self._replay_log:
+            for method_name, kwargs in self._declaration_log:
                 if method_name in ("hooks", "initial_state", "setup",
                                    "reproduction", "competition",
                                    "age_structure", "survival", "fitness",
@@ -860,6 +865,33 @@ class SpatialConfigurator:
     # Internal: batch detection and delegation
     # ------------------------------------------------------------------
 
+
+    def _call_template(
+        self,
+        method_name: str,
+        *args: object,  # object: template methods take heterogeneous payloads
+        **kwargs: object,  # object: template methods take heterogeneous payloads
+    ) -> None:
+        """Invoke a template method without journaling it a second time.
+
+        The @_declared decorator on the template's chaining methods would
+        append a sanitized entry to the template's own journal; the spatial
+        journal above already records the same declaration (with the raw
+        BatchSetting values the replay needs), so this helper calls the
+        undecorated function to keep exactly one store per declaration.
+
+        Args:
+            method_name: Template method name.
+            *args: Positional arguments for the method.
+            **kwargs: Keyword arguments for the method.
+        """
+        bound = getattr(self._template, method_name)
+        inner = getattr(bound, "__wrapped__", None)
+        if inner is not None:
+            inner(self._template, *args, **kwargs)
+        else:
+            bound(*args, **kwargs)
+
     def _detect_and_delegate(
         self,
         method_name: str,
@@ -873,7 +905,7 @@ class SpatialConfigurator:
             Each chainable call does two things simultaneously:
 
             1. **Record** the raw kwargs (including BatchSetting objects) in
-               ``_replay_log`` — used later by ``_build_template_for_group``
+               ``_declaration_log`` — used later by ``_build_template_for_group``
                to replay the full builder pipeline for each config group.
             2. **Delegate** a sanitized version to the template builder —
                ``BatchSetting`` values are replaced with their first element
@@ -908,12 +940,12 @@ class SpatialConfigurator:
 
         # Record the original call with BatchSetting objects preserved,
         # for full replay in _build_template_for_group.
-        self._replay_log.append((method_name, dict(kwargs)))
+        self._declaration_log.append((method_name, dict(kwargs)))
 
-        # Delegate sanitized kwargs to template builder.
-        template_method = getattr(self._template, method_name)
+        # Delegate sanitized kwargs to the template (single store: the
+        # decorator's journaling is bypassed).
         filtered = {k: v for k, v in concrete.items() if v is not None}
-        template_method(**filtered)
+        self._call_template(method_name, **filtered)
         return self
 
     def _delegate_positional(
@@ -941,11 +973,10 @@ class SpatialConfigurator:
             else:
                 concrete_kwargs[key] = value
 
-        self._replay_log.append((method_name, dict(kwargs)))
+        self._declaration_log.append((method_name, dict(kwargs)))
 
-        template_method = getattr(self._template, method_name)
         filtered = {k: v for k, v in concrete_kwargs.items() if v is not None}
-        template_method(*args, **filtered)
+        self._call_template(method_name, *args, **filtered)
         return self
 
     # ------------------------------------------------------------------
@@ -989,7 +1020,7 @@ class SpatialConfigurator:
             "compress": compress,
             "declared_zygote_types": declared_zygote_types,
         }
-        self._replay_log.append(("setup", replay_kwargs))
+        self._declaration_log.append(("setup", replay_kwargs))
         template_kwargs: dict[str, object] = {
             "name": name,
             "stochastic": stochastic,
@@ -998,7 +1029,7 @@ class SpatialConfigurator:
             "compress": compress if not self._batch_settings else False,
             "declared_zygote_types": declared_zygote_types,
         }
-        self._template.setup(**template_kwargs)  # type: ignore[arg-type]  # template_kwargs has mixed value types; setup validates at runtime
+        self._call_template("setup", **template_kwargs)  # type: ignore[arg-type]  # template_kwargs has mixed value types; setup validates at runtime
         if compress:
             self._compress = True
         if declared_zygote_types is not None:
@@ -1260,10 +1291,10 @@ class SpatialConfigurator:
             else:
                 concrete_args.append(item)
 
-        self._replay_log.append(("presets", {"preset_list": preset_list}))
+        self._declaration_log.append(("presets", {"preset_list": preset_list}))
         # concrete_args contains GeneticPreset instances resolved from potential
         # BatchSetting wrappers; cast needed because first_value() returns object.
-        self._template.presets(*cast('list[GeneticPreset]', concrete_args))
+        self._call_template("presets", *cast('list[GeneticPreset]', concrete_args))
         return self
 
     def fitness(
@@ -1324,8 +1355,8 @@ class SpatialConfigurator:
         Returns:
             Self for chaining.
         """
-        self._replay_log.append(("hooks", {"hook_items": hook_items}))
-        self._template.hooks(*hook_items)
+        self._declaration_log.append(("hooks", {"hook_items": hook_items}))
+        self._call_template("hooks", *hook_items)
         return self
 
     def modifiers(
@@ -1965,7 +1996,7 @@ class SpatialConfigurator:
         """Build a single template deme for one config-signature group.
 
         Creates a fresh panmictic builder and replays every method call
-        recorded in ``_replay_log``, substituting ``BatchSetting`` values
+        recorded in ``_declaration_log``, substituting ``BatchSetting`` values
         with the group-specific concrete values from *sig_map*.
 
         Args:
@@ -1979,7 +2010,7 @@ class SpatialConfigurator:
         else:
             template_cfg = Configurator.for_discrete(self._species)
 
-        for method_name, kwargs in self._replay_log:
+        for method_name, kwargs in self._declaration_log:
             method = getattr(template_cfg, method_name, None)
             if method is None:
                 continue

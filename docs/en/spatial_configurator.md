@@ -35,7 +35,7 @@ SpatialPopulation.setup(...)
            │                     Always sees scalar parameters for a single deme
            ├─ _batch_settings  ← {param_name: BatchSetting}
            │                     Intercepted cross-deme varying parameters
-           └─ _replay_log      ← [(method_name, kwargs), ...]
+           └─ _declaration_log      ← [(method_name, kwargs), ...]
                                   Complete record of each chained call
 ```
 
@@ -43,7 +43,7 @@ SpatialPopulation.setup(...)
 
 1. **Delegates to `_template`** — the template builder always receives scalar values, maintaining correct internal state
 2. **Detects `BatchSetting`** — intercepts and stores them in `_batch_settings`; template only sees `first_value()`
-3. **Records in `_replay_log`** — preserves original arguments (including BatchSetting objects) for heterogeneous scenario replay
+3. **Records in `_declaration_log`** — preserves original arguments (including BatchSetting objects) for heterogeneous scenario replay
 
 ### Delegation Mechanism
 
@@ -63,7 +63,7 @@ def _detect_and_delegate(self, method_name, kwargs):
         else:
             concrete[key] = value                     # Normal parameters pass through as-is
 
-    self._replay_log.append((method_name, dict(kwargs)))  # Record original call
+    self._declaration_log.append((method_name, dict(kwargs)))  # Record original call
 
     method = getattr(self._template, method_name)
     method(**{k: v for k, v in concrete.items() if v is not None})
@@ -85,7 +85,7 @@ User passes age_1_carrying_capacity ─┘
 
 Priority: `age_1_carrying_capacity` > `old_juvenile_carrying_capacity` > `carrying_capacity`.
 
-This unifies key names in `_replay_log`, ensuring parameter names are consistent with the template builder signature during heterogeneous replay.
+This unifies key names in `_declaration_log`, ensuring parameter names are consistent with the template builder signature during heterogeneous replay.
 
 ## Two Build Paths
 
@@ -117,7 +117,7 @@ _build_heterogeneous():
 
     4. For each group:
        a. _build_template_for_group(sig_map)
-          # Create new builder, replay _replay_log, replace batch params with group values
+          # Create new builder, replay _declaration_log, replace batch params with group values
        b. Remaining demes in group = _clone_deme(group_template)
 
     5. Assemble all demes by index, construct SpatialPopulation
@@ -129,7 +129,7 @@ _build_heterogeneous():
 def _build_template_for_group(self, sig_map):
     builder = AgeStructuredPopulationBuilder(self._species)  # Fresh builder
 
-    for method_name, kwargs in self._replay_log:
+    for method_name, kwargs in self._declaration_log:
         resolved = {}
         for key, value in kwargs.items():
             if key in sig_map:

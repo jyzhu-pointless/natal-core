@@ -35,7 +35,7 @@ SpatialPopulation.builder(...)
            │                     始终只看到一个 deme 的标量参数
            ├─ _batch_settings  ← {参数名: BatchSetting}
            │                     拦截到的跨 deme 变化参数
-           └─ _replay_log      ← [(method_name, kwargs), ...]
+           └─ _declaration_log      ← [(method_name, kwargs), ...]
                                  每次链式调用的完整记录
 ```
 
@@ -43,7 +43,7 @@ SpatialPopulation.builder(...)
 
 1. **代理给 `_template`** — template builder 始终收到标量值，保持正确的内部状态
 2. **检测 `BatchSetting`** — 拦截并存储到 `_batch_settings`，template 只拿到 `first_value()`
-3. **记录到 `_replay_log`** — 保留原始参数（含 BatchSetting 对象），供异构场景回放
+3. **记录到 `_declaration_log`** — 保留原始参数（含 BatchSetting 对象），供异构场景回放
 
 ### 代理机制
 
@@ -63,7 +63,7 @@ def _detect_and_delegate(self, method_name, kwargs):
         else:
             concrete[key] = value                     # 普通参数原样传递
 
-    self._replay_log.append((method_name, dict(kwargs)))  # 记录原始调用
+    self._declaration_log.append((method_name, dict(kwargs)))  # 记录原始调用
 
     method = getattr(self._template, method_name)
     method(**{k: v for k, v in concrete.items() if v is not None})
@@ -85,7 +85,7 @@ def _detect_and_delegate(self, method_name, kwargs):
 
 优先级：`age_1_carrying_capacity` > `old_juvenile_carrying_capacity` > `carrying_capacity`。
 
-这在 `_replay_log` 中统一键名，确保异构回放时参数名与 template builder 签名一致。
+这在 `_declaration_log` 中统一键名，确保异构回放时参数名与 template builder 签名一致。
 
 ## 两条构建路径
 
@@ -117,7 +117,7 @@ _build_heterogeneous():
 
     4. 对每组:
        a. _build_template_for_group(sig_map)
-          # 创建新 builder，重放 _replay_log，替换 batch 参数为组值
+          # 创建新 builder，重放 _declaration_log，替换 batch 参数为组值
        b. 组内其余 deme = _clone_deme(group_template)
 
     5. 按索引组装所有 deme，构造 SpatialPopulation
@@ -129,7 +129,7 @@ _build_heterogeneous():
 def _build_template_for_group(self, sig_map):
     builder = AgeStructuredPopulationBuilder(self._species)  # 全新的 builder
 
-    for method_name, kwargs in self._replay_log:
+    for method_name, kwargs in self._declaration_log:
         resolved = {}
         for key, value in kwargs.items():
             if key in sig_map:

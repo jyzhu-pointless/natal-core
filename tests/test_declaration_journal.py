@@ -247,3 +247,84 @@ class TestDeclarationJournal:
         assert replayed._compress is True
         # setup normalizes the declared sequence into a set.
         assert replayed._declared_zygote_types == {"A|A", "A|B"}
+
+
+class TestSpatialJournalUnification:
+    """The spatial chain journals into ONE store (slice 1b).
+
+    The wrapper's ``_declaration_log`` (BatchSetting values preserved) is
+    the single record; the template's own journal stays empty because
+    delegated calls bypass the ``@_declared`` wrapper.
+    """
+
+    def _builder(self):
+        species = _species()
+        return (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, pop_type="age_structured"
+            )
+            .setup(name="__journal_spatial__", stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=1)
+            .reproduction(eggs_per_female=nt.batch_setting([10.0, 20.0]))
+        )
+
+    def test_spatial_chain_journals_once_per_call(self) -> None:
+        """One entry per chaining call, in order, on the wrapper only."""
+        builder = self._builder()
+        assert [name for name, _ in builder._declaration_log] == [
+            "setup",
+            "age_structure",
+            "reproduction",
+        ]
+        # The single-store contract: the template's journal stays empty.
+        assert builder._template._declaration_log == []
+
+    def test_journal_preserves_batch_settings(self) -> None:
+        """Raw BatchSetting objects survive in the journal for replay."""
+        from natal import BatchSetting
+
+        builder = self._builder()
+        entries = dict(builder._declaration_log)
+        eggs = entries["reproduction"]["eggs_per_female"]
+        assert isinstance(eggs, BatchSetting)
+
+    def test_hooks_declaration_journals_once(self) -> None:
+        """A hooks call also lands in exactly one journal (the wrapper's).
+
+        The hooks delegation used to call the decorated template method
+        directly, double-writing the declaration in two formats; it now
+        goes through the same single-store bypass.
+        """
+        species = _species()
+        builder = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, pop_type="age_structured"
+            )
+            .setup(name="__journal_hooks__", stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=1)
+            .hooks(nt.Op.set_count(genotypes="A|A", sex="both", value=3.0))
+        )
+        names = [name for name, _ in builder._declaration_log]
+        assert names == ["setup", "age_structure", "hooks"]
+        assert builder._template._declaration_log == []
+
+    def test_journaled_build_expands_per_deme(self) -> None:
+        """The batch journal drives per-deme expansion at build time."""
+        pop = (
+            self._builder()
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 50, 0, 0]},
+                    "male": {"A|A": [0, 50, 0, 0]},
+                }
+            )
+            .survival(
+                female_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+                male_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+            )
+            .competition(carrying_capacity=100.0, juvenile_growth_mode=3)
+            .build()
+        )
+        assert float(pop.demes[0].config.eggs_per_female) == 10.0
+        assert float(pop.demes[1].config.eggs_per_female) == 20.0
+        pop.run(1)

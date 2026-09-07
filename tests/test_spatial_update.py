@@ -894,7 +894,7 @@ class TestEquilibriumChannelAdversarial:
             else:
                 builder.age_structure(n_ages=4, new_adult_age=1)
                 builder.survival(equilibrium_distribution=self.AGE_DECLARED)
-            entries = builder._replay_log  # pyright: ignore[reportPrivateUsage]  # the log is the replay contract under test; no public accessor exists
+            entries = builder._declaration_log  # pyright: ignore[reportPrivateUsage]  # the log is the replay contract under test; no public accessor exists
             comp_entries = [kw for m, kw in entries if m == "competition"]
             assert any(
                 kw.get("equilibrium_distribution") is not None
