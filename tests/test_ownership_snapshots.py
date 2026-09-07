@@ -782,13 +782,15 @@ class TestR5SnapshotChannelAttacks:
             pop.state.sperm_storage, twin.state.sperm_storage
         )
 
-    def test_spatial_slice_state_writes_are_live_and_scoped(self) -> None:
-        """DemeSlice.state is the deme's live container (S3-pinned semantics).
+    def test_spatial_slice_state_is_snapshot_and_import_state_writes(self) -> None:
+        """DemeSlice.state is a snapshot; import_state is the write channel.
 
-        Current contract: writing through the slice reaches the deme's
-        live arrays, is invisible to the other demes, and a sperm-only
-        write leaves the container's individual-count aggregation (and
-        every deme's counts) untouched.
+        Plan S3 contract inversion: a retained ``deme.state`` container is
+        an independent point-in-time copy, so mutating it must never move
+        the real run (the old live write-through is retired).  The
+        sanctioned write channel is ``deme.import_state``, whose payload
+        reaches the deme's live state, every subsequent read, and the next
+        tick.
         """
         species = _species("R5SpatialLive")
         d0 = _build_age_with_species(species, "R5SpatialD0")
@@ -800,17 +802,60 @@ class TestR5SnapshotChannelAttacks:
         total_before = spatial.get_total_count()
         assert total_before == 80
 
-        # Pinned S3 semantics: the slice hands out the live container.
-        assert spatial.demes[0].state is d0._state  # pyright: ignore[reportPrivateUsage]  # the pinned live delegation itself
+        # (a) Snapshot discipline: the slice hands out an independent
+        # copy, and a retained reference is inert against the run.
+        retained = spatial.demes[0].state
+        assert retained is not d0._state  # pyright: ignore[reportPrivateUsage]  # no longer the live container (S3)
+        assert not np.may_share_memory(
+            retained.sperm_storage, d0._state.sperm_storage  # pyright: ignore[reportPrivateUsage]  # buffer-level snapshot attack
+        )
+        retained.sperm_storage[1, 0, 0] = 777.0
+        retained.individual_count.fill(-999.0)
 
-        spatial.demes[0].state.sperm_storage[1, 0, 0] = 777.0
-
-        assert float(d0._state.sperm_storage.sum()) == 777.0  # pyright: ignore[reportPrivateUsage]  # live write landed
+        assert float(d0._state.sperm_storage.sum()) == 0.0  # pyright: ignore[reportPrivateUsage]  # the write stayed inert
         assert float(d1._state.sperm_storage.sum()) == 0.0  # pyright: ignore[reportPrivateUsage]  # sibling deme isolated
         np.testing.assert_array_equal(
             spatial.demes[0].state.individual_count, counts_before
         )
         assert spatial.get_total_count() == total_before
+
+        # (b) The sanctioned channel: import_state changes the live run
+        # and is visible in subsequent reads and ticks.
+        fresh = spatial.demes[0].state  # compose the payload from a read
+        zeroed = np.zeros_like(fresh.individual_count)
+        spatial.demes[0].import_state({
+            "n_tick": int(fresh.n_tick),
+            "individual_count": zeroed,
+            "sperm_storage": fresh.sperm_storage,
+        })
+
+        assert float(d0._state.individual_count.sum()) == 0.0  # pyright: ignore[reportPrivateUsage]  # the import landed
+        assert float(spatial.demes[0].state.individual_count.sum()) == 0.0  # reads see it
+        np.testing.assert_array_equal(
+            spatial.aggregate_individual_count(),
+            spatial.demes[1].state.individual_count,
+        )
+
+        # The next tick advances from the imported state: with no females
+        # left in deme 0 it stays exactly at zero (migration is off),
+        # while the untouched sibling matches a never-imported twin
+        # bitwise — the divergence proves the import reached the engine.
+        twin = nt.SpatialPopulation(
+            [
+                _build_age_with_species(species, "R5SpatialTwin0"),
+                _build_age_with_species(species, "R5SpatialTwin1"),
+            ],
+            migration_rate=0.0,
+            name="R5SpatialTwin",
+        )
+        spatial.run(1)
+        twin.run(1)
+        assert float(spatial.demes[0].state.individual_count.sum()) == 0.0
+        assert float(twin.demes[0].state.individual_count.sum()) > 0.0
+        np.testing.assert_array_equal(
+            spatial.demes[1].state.individual_count,
+            twin.demes[1].state.individual_count,
+        )
 
 
 class TestLiveStateContract:

@@ -328,9 +328,7 @@ class RustLifecycleBackend:
             ValueError: When the session state does not match the
                 checkpoint sizes.
         """
-        return _session_call(
-            lambda: self._session.restore_from_checkpoint(int(tick))
-        )
+        return _session_call(lambda: self._session.restore_from_checkpoint(int(tick)))
 
     def clear_checkpoints(self) -> None:
         """Drop every stored checkpoint (paired with ``clear_history``)."""
@@ -338,7 +336,9 @@ class RustLifecycleBackend:
 
     def truncate_checkpoints(self, retain_until_tick: int) -> None:
         """Drop checkpoints captured after *retain_until_tick*."""
-        _session_call(lambda: self._session.truncate_checkpoints(int(retain_until_tick)))
+        _session_call(
+            lambda: self._session.truncate_checkpoints(int(retain_until_tick))
+        )
 
     def set_state(self, state: PopulationState) -> None:
         """Install a full live state into the session (plan S2).
@@ -352,7 +352,9 @@ class RustLifecycleBackend:
         """
         _session_call(
             lambda: self._session.set_state(
-                np.ascontiguousarray(state.individual_count, dtype=np.float64).reshape(-1),
+                np.ascontiguousarray(state.individual_count, dtype=np.float64).reshape(
+                    -1
+                ),
                 np.ascontiguousarray(state.sperm_storage, dtype=np.float64).reshape(-1),
                 int(state.n_tick),
             )
@@ -628,9 +630,7 @@ class RustDiscreteLifecycleBackend:
             ValueError: When the session state does not match the
                 checkpoint size.
         """
-        return _session_call(
-            lambda: self._session.restore_from_checkpoint(int(tick))
-        )
+        return _session_call(lambda: self._session.restore_from_checkpoint(int(tick)))
 
     def clear_checkpoints(self) -> None:
         """Drop every stored checkpoint (paired with ``clear_history``)."""
@@ -638,7 +638,9 @@ class RustDiscreteLifecycleBackend:
 
     def truncate_checkpoints(self, retain_until_tick: int) -> None:
         """Drop checkpoints captured after *retain_until_tick*."""
-        _session_call(lambda: self._session.truncate_checkpoints(int(retain_until_tick)))
+        _session_call(
+            lambda: self._session.truncate_checkpoints(int(retain_until_tick))
+        )
 
     def set_state(self, state: DiscretePopulationState) -> None:
         """Install a full live state into the session (plan S2).
@@ -652,7 +654,9 @@ class RustDiscreteLifecycleBackend:
         """
         _session_call(
             lambda: self._session.set_state(
-                np.ascontiguousarray(state.individual_count, dtype=np.float64).reshape(-1),
+                np.ascontiguousarray(state.individual_count, dtype=np.float64).reshape(
+                    -1
+                ),
                 int(state.n_tick),
             )
         )
@@ -666,7 +670,9 @@ class RustDiscreteLifecycleBackend:
         tick, ind_flat = _session_call(lambda: self._session.state_snapshot())
         return int(tick), ind_flat
 
-    def run_tick(self, state: DiscretePopulationState) -> tuple[DiscretePopulationState, int]:
+    def run_tick(
+        self, state: DiscretePopulationState
+    ) -> tuple[DiscretePopulationState, int]:
         """Run one discrete/Wright-Fisher tick from an explicit state.
 
         The explicit state is installed into the session, one tick runs,
@@ -892,6 +898,11 @@ class RustHeterogeneousSpatialLifecycleBackend:
     genetics ``TensorSet`` variants, and a per-deme variant index.  Demes
     with identical genetics share one bank entry regardless of how their
     ecology differs, so bank size scales with genetics diversity only.
+
+    Plan S3 ownership: the session also owns the stacked counts, sperm
+    storage, tick, and one persistent RNG stream per deme.  ``run_tick``
+    carries control parameters only (lifecycle then migration inside
+    Rust); Python reads state back through :meth:`state_snapshot`.
     """
 
     def __init__(
@@ -900,6 +911,10 @@ class RustHeterogeneousSpatialLifecycleBackend:
         ecology_columns: Mapping[str, NDArray[np.float64] | NDArray[np.int64]],
         tensor_bank: Sequence[Mapping[str, NDArray[np.float64]]],
         deme_variant_ids: NDArray[np.int64],
+        individual_count_all: NDArray[np.float64],
+        sperm_storage_all: NDArray[np.float64],
+        tick: int,
+        stay_after_send: bool = False,
         hook_program: HookProgram | None = None,
         seed: int = 0,
     ) -> None:
@@ -915,8 +930,17 @@ class RustHeterogeneousSpatialLifecycleBackend:
             tensor_bank: Sequence of ``{genetics tensor name: flat array}``
                 mappings.  See :func:`genetics_variant_bank`.
             deme_variant_ids: Int64 array mapping each deme to a bank index.
+            individual_count_all: Stacked initial state
+                ``(n_demes, 2, n_ages, n_ztypes)`` — the one-time build
+                handoff of the run state into the session.
+            sperm_storage_all: Stacked initial sperm
+                ``(n_demes, n_ages, n_ztypes, n_ztypes)``.
+            tick: The authoritative starting tick.
+            stay_after_send: Deterministic-migration bookkeeping order
+                mirrored from the frozen migration CSR.
             hook_program: Optional shared declarative CSR hook program.
-            seed: Base seed; deme *d* uses ``seed ^ d``.
+            seed: Base seed; deme *d* uses ``seed ^ d`` for its persistent
+                stream.
         """
         try:
             from natal import _engine_rs
@@ -943,6 +967,10 @@ class RustHeterogeneousSpatialLifecycleBackend:
                 for tensors in tensor_bank
             ],
             np.ascontiguousarray(deme_variant_ids, dtype=np.int64),
+            np.ascontiguousarray(individual_count_all, dtype=np.float64),
+            np.ascontiguousarray(sperm_storage_all, dtype=np.float64),
+            int(tick),
+            bool(stay_after_send),
             seed,
         )
         if hook_program is not None:
@@ -968,7 +996,9 @@ class RustHeterogeneousSpatialLifecycleBackend:
         """
         return int(self._session.fork_variant(deme))
 
-    def refresh_deme_ecology(self, deme: int, fields: list[str], params_obj: Params) -> None:
+    def refresh_deme_ecology(
+        self, deme: int, fields: list[str], params_obj: Params
+    ) -> None:
         """Pull exactly *fields* for one deme's ecology column.
 
         Args:
@@ -992,30 +1022,119 @@ class RustHeterogeneousSpatialLifecycleBackend:
         """
         self._session.refresh_variant_tensors(variant_id, fields, params_obj)
 
-    def run(
-        self,
-        individual_count_all: NDArray[np.float64],
-        sperm_storage_all: NDArray[np.float64],
-        tick: int,
-    ) -> tuple[NDArray[np.float64], NDArray[np.float64], int]:
-        """Run one tick for all demes with per-deme ecology columns.
+    def run_tick(self) -> int:
+        """Run one complete spatial tick inside Rust (control only).
 
-        Args:
-            individual_count_all: Stacked state ``(n_demes, 2, n_ages, n_z)``.
-            sperm_storage_all: Stacked storage ``(n_demes, n_ages, n_z, n_z)``.
-            tick: Current tick.
+        The session owns the stacked state and per-deme RNG streams; the
+        lifecycle runs first, then migration consumes the same per-deme
+        streams.  A hook stop keeps the modifications up to that boundary
+        and freezes the tick.
 
         Returns:
-            ``(individual_count_all, sperm_storage_all, next_tick)``.
+            The tick value after the call: previous ``tick + 1`` on a
+            completed tick, the unchanged tick when a hook stopped.
 
         Raises:
             ValueError: When an in-run ``Op.set_param`` value fails the Rust
                 bounds gate (non-finite or outside the jsonc bounds).
         """
-        ind = np.array(individual_count_all, dtype=np.float64, order="C", copy=True)
-        sperm = np.array(sperm_storage_all, dtype=np.float64, order="C", copy=True)
-        next_tick = _session_call(lambda: self._session.run(ind, sperm, int(tick)))
-        return ind, sperm, int(next_tick)
+        return int(_session_call(self._session.run_tick))
+
+    def state_snapshot(
+        self,
+    ) -> tuple[int, NDArray[np.float64], NDArray[np.float64]]:
+        """Return ``(tick, ind_flat, sperm_flat)`` snapshots from the session.
+
+        The arrays are fresh copies; ``ind_flat`` is the stacked
+        ``(n_demes, 2, n_ages, n_ztypes)`` counts flattened row-major,
+        ``sperm_flat`` the stacked sperm storage flattened.
+        """
+        tick, ind, sperm = self._session.state_snapshot()
+        return int(tick), ind, sperm
+
+    def set_state(
+        self,
+        individual_count_all: NDArray[np.float64],
+        sperm_storage_all: NDArray[np.float64],
+        tick: int,
+    ) -> None:
+        """Install a full stacked live state (container import handoff).
+
+        Args:
+            individual_count_all: Stacked ``(n_demes, 2, n_ages, n_ztypes)``.
+            sperm_storage_all: Stacked ``(n_demes, n_ages, n_ztypes, n_ztypes)``.
+            tick: The authoritative tick.
+        """
+        _session_call(
+            lambda: self._session.set_state(
+                np.ascontiguousarray(individual_count_all, dtype=np.float64),
+                np.ascontiguousarray(sperm_storage_all, dtype=np.float64),
+                int(tick),
+            )
+        )
+
+    def set_deme_state(
+        self,
+        deme: int,
+        individual_count: NDArray[np.float64],
+        sperm_storage: NDArray[np.float64],
+        tick: int,
+    ) -> None:
+        """Install one deme's state slice (per-deme import handoff).
+
+        Args:
+            deme: Deme index to overwrite.
+            individual_count: ``(2, n_ages, n_ztypes)`` counts.
+            sperm_storage: ``(n_ages, n_ztypes, n_ztypes)`` storage.
+            tick: The authoritative tick (all demes share the tick axis).
+        """
+        _session_call(
+            lambda: self._session.set_deme_state(
+                int(deme),
+                np.ascontiguousarray(individual_count, dtype=np.float64),
+                np.ascontiguousarray(sperm_storage, dtype=np.float64),
+                int(tick),
+            )
+        )
+
+    def set_migration_rate(self, values: NDArray[np.float64]) -> None:
+        """Replace the live migration-rate column used by the session.
+
+        The rate column is runtime-mutable through the spatial params
+        view; without this push the session-owned column would silently
+        diverge from the Python-side contract array.
+
+        Args:
+            values: Flat ``(n_demes * 2 * n_ages)`` rate column, row-major
+                ``(n_demes, 2, n_ages)``.
+        """
+        _session_call(
+            lambda: self._session.set_migration_rate(
+                np.ascontiguousarray(values, dtype=np.float64)
+            )
+        )
+
+    def set_python_callbacks(
+        self,
+        first: list[Callable[..., int]],
+        early: list[Callable[..., int]],
+        late: list[Callable[..., int]],
+    ) -> None:
+        """Register Python callables fired at deme-tick event boundaries.
+
+        Any callback-carrying program runs the demes sequentially in stable
+        deme order so cross-deme callback order cannot depend on threads.
+
+        Args:
+            first: Callables invoked after the ``first`` CSR event.
+            early: Callables invoked after the ``early`` CSR event.
+            late: Callables invoked after the ``late`` CSR event.
+        """
+        self._session.set_python_callbacks(first, early, late)
+
+    def clear_python_callbacks(self) -> None:
+        """Clear all registered Python callbacks."""
+        self._session.clear_python_callbacks()
 
     def drain_eco_journal(self) -> list[EcoJournalEntry]:
         """Drain the session's per-deme set_param audit journal.
@@ -1130,10 +1249,16 @@ def ecology_columns_from_drafts(
     # Equilibrium declaration: keep the derive-mode sentinel empty unless
     # at least one draft declares a distribution (heterogeneous declared
     # and derived demes cannot share one column set).
-    declared = [d for d in drafts if getattr(d, "equilibrium_individual_distribution", None) is not None
-                and np.asarray(d.equilibrium_individual_distribution).size]
+    declared = [
+        d
+        for d in drafts
+        if getattr(d, "equilibrium_individual_distribution", None) is not None
+        and np.asarray(d.equilibrium_individual_distribution).size
+    ]
     if declared:
-        first = np.asarray(declared[0].equilibrium_individual_distribution, dtype=np.float64)
+        first = np.asarray(
+            declared[0].equilibrium_individual_distribution, dtype=np.float64
+        )
         stacked = np.zeros((n_demes,) + first.shape, dtype=np.float64)
         for index, draft in enumerate(drafts):
             eq = getattr(draft, "equilibrium_individual_distribution", None)
@@ -1169,7 +1294,9 @@ def genetics_variant_bank(
     by_identity: dict[tuple[int, ...], int] = {}
     ids = np.zeros(len(drafts), dtype=np.int64)
     for index, draft in enumerate(drafts):
-        identity = tuple(id(getattr(draft, field)) for field, _ in _GENETICS_CONTRACT_FIELDS)
+        identity = tuple(
+            id(getattr(draft, field)) for field, _ in _GENETICS_CONTRACT_FIELDS
+        )
         cached = by_identity.get(identity)
         if cached is None:
             tensors = {

@@ -152,11 +152,23 @@ def test_heterogeneous_spatial_tick_matches_reference(config: object) -> None:
     )
     blueprint = materialize(config_high, migration).blueprint
     backend = RustHeterogeneousSpatialLifecycleBackend(
-        blueprint, columns, tensor_bank, variant_ids, _empty_hook_program(), seed=0
+        blueprint,
+        columns,
+        tensor_bank,
+        variant_ids,
+        ind,
+        sperm,
+        6,
+        hook_program=_empty_hook_program(),
+        seed=0,
     )
-    actual_ind, actual_sperm, actual_tick = backend.run(ind, sperm, tick=6)
+    actual_tick = backend.run_tick()
+    snap_tick, ind_flat, sperm_flat = backend.state_snapshot()
+    n_ztypes = config.n_ztypes
+    actual_ind = np.asarray(ind_flat).reshape(4, 2, n_ages, n_ztypes)
+    actual_sperm = np.asarray(sperm_flat).reshape(4, n_ages, n_ztypes, n_ztypes)
 
-    assert actual_tick == expected_tick == 7
+    assert actual_tick == snap_tick == expected_tick == 7
     assert np.array_equal(actual_ind, expected_ind)
     assert np.array_equal(actual_sperm, expected_sperm)
 

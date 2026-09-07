@@ -339,14 +339,21 @@ class TestColumnizedRefreshChannels:
             ref.params.migration_rate, dtype=np.float64
         ).ravel()
         bank, ids = genetics_variant_bank(drafts)
+        # Plan S3: the session owns the stacked state, so the manual
+        # build hands the initial stacked arrays and tick over once.
+        ind_all, sperm_all = ref._stack_deme_state_arrays()  # pyright: ignore[reportPrivateUsage]  # initial state before any run
         manual = RustHeterogeneousSpatialLifecycleBackend(
-            ref.blueprint, columns, bank, ids, seed=6,
+            ref.blueprint, columns, bank, ids, ind_all, sperm_all, 0, seed=6,
         )
 
-        ind, sperm = ref._stack_deme_state_arrays()  # pyright: ignore[reportPrivateUsage]  # initial state before any run
-        tick = 0
         for _ in range(3):
-            ind, sperm, tick = manual.run(ind, sperm, tick)
+            manual.run_tick()
+        tick, ind_flat, _sperm_flat = manual.state_snapshot()
+        n_ages = int(ref.blueprint.n_ages)
+        n_ztypes = int(ref.blueprint.n_ztypes)
+        ind = np.asarray(ind_flat, dtype=np.float64).reshape(
+            ref.n_demes, 2, n_ages, n_ztypes
+        )
         ref.run(3, record_every=0)
 
         assert tick == 3
@@ -512,24 +519,29 @@ class TestColumnizedRefreshChannels:
             pop.params.migration_rate, dtype=np.float64
         ).ravel()
         bank, ids = genetics_variant_bank(drafts)
+        # Plan S3 constructor: the stacked state and tick travel with the
+        # build handoff; the column guards below must be unchanged.
+        ind_all, sperm_all = pop._stack_deme_state_arrays()  # pyright: ignore[reportPrivateUsage]
 
         unknown = dict(columns)
         unknown["bogus_column"] = np.zeros(3, dtype=np.float64)
         with pytest.raises(KeyError, match="unknown ecology column"):
             RustHeterogeneousSpatialLifecycleBackend(
-                pop.blueprint, unknown, bank, ids, seed=0)
+                pop.blueprint, unknown, bank, ids, ind_all, sperm_all, 0, seed=0)
 
         short_scalar = dict(columns)
         short_scalar["carrying_capacity"] = np.zeros(2, dtype=np.float64)
         with pytest.raises(ValueError, match="expected 3 entries"):
             RustHeterogeneousSpatialLifecycleBackend(
-                pop.blueprint, short_scalar, bank, ids, seed=0)
+                pop.blueprint, short_scalar, bank, ids, ind_all, sperm_all, 0,
+                seed=0)
 
         ragged_vector = dict(columns)
         ragged_vector["survival_rates"] = np.zeros(5, dtype=np.float64)
         with pytest.raises(ValueError, match="not a multiple of 3"):
             RustHeterogeneousSpatialLifecycleBackend(
-                pop.blueprint, ragged_vector, bank, ids, seed=0)
+                pop.blueprint, ragged_vector, bank, ids, ind_all, sperm_all, 0,
+                seed=0)
 
 
 # ══════════════════════════════════════════════════════════════════════════

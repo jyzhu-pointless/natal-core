@@ -169,21 +169,47 @@ class TestDemeSliceReadCompat:
         pop = homogeneous_pop
         deme0 = pop.deme(0)
         assert deme0.config is pop._demes[0].config  # pyright: ignore[reportPrivateUsage]  # compat contract: same object
-        # DemeSlice.state delegates to the deme's live container (the
-        # public population-level state is a snapshot since R5; spatial
-        # deme handles keep their live-delegation semantics until S3).
-        assert deme0.state is pop._demes[0]._state  # pyright: ignore[reportPrivateUsage]  # compat contract
+        # DemeSlice.state returns an independent snapshot of the deme's
+        # live container (plan S3): equal by value, never the same object
+        # or buffer (the public population-level state has been a
+        # snapshot since R5; spatial slices now follow the same rule).
+        snapshot = deme0.state
+        live = pop._demes[0]._state  # pyright: ignore[reportPrivateUsage]  # engine truth
+        assert snapshot is not live  # compat contract: snapshot, not the live container
+        assert snapshot.n_tick == live.n_tick
+        np.testing.assert_array_equal(snapshot.individual_count, live.individual_count)
+        assert not np.may_share_memory(snapshot.individual_count, live.individual_count)
         assert deme0.name == pop._demes[0].name  # pyright: ignore[reportPrivateUsage]  # compat contract
         assert deme0.registry is pop._demes[0].registry  # pyright: ignore[reportPrivateUsage]  # compat contract (UI reads)
         assert deme0.export_config().n_ages == pop._demes[0].export_config().n_ages  # pyright: ignore[reportPrivateUsage]  # compat contract
 
-    def test_state_writes_through_slice_are_live(
+    def test_state_reads_are_snapshots_and_import_state_writes(
         self, homogeneous_pop,
     ) -> None:
-        """Counts written through the slice land on the live state array."""
+        """Slice reads hand out snapshots; import_state is the write channel.
+
+        Plan S3 inversion: a write through a retained ``deme.state``
+        snapshot is inert (it cannot reach the deme's live array), while
+        the sanctioned ``import_state`` payload lands on the live state
+        and every subsequent read.
+        """
         pop = homogeneous_pop
-        pop.deme(2).state.individual_count[0, 0, 0] = 77.0
-        assert float(pop._demes[2].state.individual_count[0, 0, 0]) == 77.0  # pyright: ignore[reportPrivateUsage]  # compat contract
+        live = pop._demes[2]._state  # pyright: ignore[reportPrivateUsage]  # engine truth
+        snapshot = pop.deme(2).state
+        # Snapshot read: independent copy, equal values.
+        assert snapshot is not live
+        assert not np.may_share_memory(snapshot.individual_count, live.individual_count)
+        snapshot.individual_count[0, 0, 0] = 77.0
+        assert float(pop.deme(2).state.individual_count[0, 0, 0]) == 0.0  # write through the snapshot is inert
+        assert float(live.individual_count[0, 0, 0]) == 0.0  # the live array never moved
+        # Sanctioned write channel: import_state reaches the live run.
+        changed = pop.deme(2).state.individual_count.copy()
+        changed[0, 0, 0] = 77.0
+        pop.deme(2).import_state(
+            {"n_tick": pop.tick, "individual_count": changed}
+        )
+        assert float(pop._demes[2].state.individual_count[0, 0, 0]) == 77.0  # pyright: ignore[reportPrivateUsage]  # live write landed
+        assert float(pop.deme(2).state.individual_count[0, 0, 0]) == 77.0  # reads see it
 
     def test_attribute_writes_forward_to_deme(self, homogeneous_pop) -> None:
         """Attribute assignment through the slice reaches the deme."""

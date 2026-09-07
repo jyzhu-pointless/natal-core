@@ -162,7 +162,11 @@ class HeterogeneousSpatialEngineSession:
 
     One shared blueprint, one columnized ecology set (per-deme ``Params``
     columns), a bank of shared genetics variants, and a per-deme variant
-    index — no per-deme contract clones.
+    index — no per-deme contract clones.  The session also owns the
+    stacked counts, sperm storage, tick, and one persistent RNG stream
+    per deme (``seed ^ deme``, advancing across ticks); ``run_tick``
+    carries control parameters only and runs lifecycle then migration
+    inside Rust.
     """
 
     def __init__(
@@ -171,6 +175,10 @@ class HeterogeneousSpatialEngineSession:
         ecology_columns: dict[str, NDArray[np.float64] | NDArray[np.int64]],
         tensor_bank: list[dict[str, NDArray[np.float64]]],
         deme_variant_ids: NDArray[np.int64],
+        individual_count_all: NDArray[np.float64],
+        sperm_storage_all: NDArray[np.float64],
+        tick: int,
+        stay_after_send: bool = False,
         seed: int = 0,
     ) -> None: ...
     def refresh_deme_ecology(self, deme: int, fields: list[str], source: object) -> None: ...
@@ -179,14 +187,33 @@ class HeterogeneousSpatialEngineSession:
     def fork_variant(self, deme: int) -> int: ...
     def set_hook_program(self, program: object) -> None: ...
     def clear_hook_program(self) -> None: ...
+    def set_python_callbacks(
+        self,
+        first: list[Callable[..., int]],
+        early: list[Callable[..., int]],
+        late: list[Callable[..., int]],
+    ) -> None: ...
+    def clear_python_callbacks(self) -> None: ...
     def reseed(self, seed: int) -> None: ...
     def drain_eco_journal(self) -> list[tuple[int, int, int, float, float]]: ...
-    def run(
+    def set_migration_rate(self, values: NDArray[np.float64]) -> None: ...
+    def run_tick(self) -> int: ...
+    def state_snapshot(
+        self,
+    ) -> tuple[int, NDArray[np.float64], NDArray[np.float64]]: ...
+    def set_state(
         self,
         individual_count_all: NDArray[np.float64],
         sperm_storage_all: NDArray[np.float64],
         tick: int,
-    ) -> int: ...
+    ) -> None: ...
+    def set_deme_state(
+        self,
+        deme: int,
+        individual_count: NDArray[np.float64],
+        sperm_storage: NDArray[np.float64],
+        tick: int,
+    ) -> None: ...
 
 
 def migrate_csr_deterministic(

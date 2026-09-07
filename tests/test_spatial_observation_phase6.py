@@ -172,6 +172,10 @@ def _build_age(
 def _install_coordinate_counts(population: nt.SpatialPopulation) -> np.ndarray:
     """Install counts whose decimal place identifies every source axis.
 
+    The counts enter through the sanctioned ``import_state`` channel:
+    since plan S3, ``deme.state`` hands out independent snapshots and
+    writes through them no longer reach the run.
+
     Args:
         population: A built spatial population.
 
@@ -183,7 +187,17 @@ def _install_coordinate_counts(population: nt.SpatialPopulation) -> np.ndarray:
         shape = deme.state.individual_count.shape
         coordinates = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
         counts = coordinates + 1.0 + 1000.0 * deme_index
-        deme.state.individual_count[:] = counts
+        # import_state replaces the whole payload; the age-structured
+        # dict import requires sperm_storage, so the current values
+        # travel along whenever the model carries them.
+        payload: dict[str, object] = {
+            "n_tick": int(deme.state.n_tick),
+            "individual_count": counts,
+        }
+        sperm = getattr(deme.state, "sperm_storage", None)
+        if sperm is not None:
+            payload["sperm_storage"] = sperm
+        deme.import_state(payload)
         installed.append(counts)
     return np.stack(installed)
 
@@ -207,7 +221,13 @@ def _install_valid_coordinate_sperm(
         female_counts = counts[deme_index, 0]
         sperm[:, :, 0] = female_counts / 4.0
         sperm[:, :, 1] = female_counts / 8.0
-        deme.state.sperm_storage[:] = sperm
+        # Age-structured import replaces the whole payload, so the counts
+        # installed by _install_coordinate_counts travel with the sperm.
+        deme.import_state({
+            "n_tick": int(deme.state.n_tick),
+            "individual_count": counts[deme_index],
+            "sperm_storage": sperm,
+        })
         installed.append(sperm)
     return np.stack(installed)
 
@@ -618,7 +638,13 @@ def test_raw_history_ignores_observation_demes_and_preserves_sperm() -> None:
             + 1.0
             + 10000.0 * deme_index
         )
-        deme.state.sperm_storage[:] = sperm
+        # import_state replaces the whole payload, so the counts travel
+        # with the sperm (the age-structured dict import requires both).
+        deme.import_state({
+            "n_tick": int(deme.state.n_tick),
+            "individual_count": counts[deme_index],
+            "sperm_storage": sperm,
+        })
         sperm_rows.append(sperm)
     expected_sperm = np.stack(sperm_rows)
 

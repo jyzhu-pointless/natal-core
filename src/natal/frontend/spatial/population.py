@@ -11,7 +11,6 @@ from dataclasses import replace
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     List,
     Literal,
     Optional,
@@ -67,7 +66,9 @@ __all__ = ["SpatialPopulation"]
 
 ConfigObject: TypeAlias = object
 SpatialStateTuple: TypeAlias = tuple[NDArray[np.float64], NDArray[np.float64], int]
-DemePopulation: TypeAlias = BasePopulation[PopulationState] | BasePopulation[DiscretePopulationState]
+DemePopulation: TypeAlias = (
+    BasePopulation[PopulationState] | BasePopulation[DiscretePopulationState]
+)
 
 
 def _coerce_adjacency_dense(
@@ -107,9 +108,7 @@ def _coerce_adjacency_dense(
         # Tuple mode is interpreted as CSR triplet: (indptr, indices, data).
         csr_items = cast(tuple[object, ...], adjacency_obj)
         if len(csr_items) != 3:
-            raise TypeError(
-                "adjacency tuple input must be CSR (indptr, indices, data)"
-            )
+            raise TypeError("adjacency tuple input must be CSR (indptr, indices, data)")
         csr_tuple = csr_items
         indptr = np.asarray(csr_tuple[0], dtype=np.int64)
         indices = np.asarray(csr_tuple[1], dtype=np.int64)
@@ -266,15 +265,48 @@ class DemeSlice:
 
     @property
     def state(self) -> PopulationState | DiscretePopulationState:
-        """The deme's live state NamedTuple (state arrays are writable)."""
-        # Live delegation on purpose: the spatial container and the test
-        # fixtures write through this channel today; the snapshot
-        # discipline for deme handles lands with S3's unification.
-        deme = self._pop._demes[self._index]  # pyright: ignore[reportPrivateUsage]  # delegated live channel until S3
-        assert deme is not None  # slot access implies a constructed deme
-        state = deme._state  # pyright: ignore[reportPrivateUsage]  # live delegation
-        assert state is not None  # constructed demes always carry a container
-        return state
+        """The deme's state snapshot (plan S3 snapshot discipline).
+
+        When the container Rust backend is enabled, the session owns the
+        authoritative stacked state; reading refreshes the per-deme caches
+        from one session snapshot, then returns an independent copy so a
+        retained reference cannot mutate the real run state.  State
+        modifications go through ``import_state``.
+        """
+        pop = self._pop
+        pop._ensure_rust_states_fresh()  # pyright: ignore[reportPrivateUsage]  # container lazy refresh
+        deme = pop._demes[self._index]  # pyright: ignore[reportPrivateUsage]  # slot access implies a constructed deme
+        assert deme is not None  # constructed demes always carry a container
+        state = deme._live_state()  # pyright: ignore[reportPrivateUsage]  # fresh after the refresh above
+        assert state is not None
+        # Independent copy: arrays handed out must not alias the caches.
+        replacements: dict[str, NDArray[np.float64]] = {
+            name: np.array(getattr(state, name), copy=True)
+            for name in ("individual_count", "sperm_storage")
+            if getattr(state, name, None) is not None
+        }
+        return state._replace(**replacements)
+
+    def import_state(self, state: object) -> None:
+        """Import a state into this deme and push it into the live session.
+
+        Args:
+            state: The state payload accepted by the underlying deme —
+                ``{"n_tick", "individual_count"}`` for discrete demes and
+                ``{"n_tick", "individual_count", "sperm_storage"}`` for
+                age-structured demes (the sperm plane is required there,
+                matching the raw import payload).
+
+        Note:
+            Recording an already-recorded tick after a mid-timeline import
+            trips the history boundary guard; imports belong before the
+            next record boundary or on unrecorded runs.
+        """
+        pop = self._pop
+        deme = pop._demes[self._index]  # pyright: ignore[reportPrivateUsage]  # slot access implies a constructed deme
+        assert deme is not None
+        deme.import_state(state)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # duck-typed per-model method
+        pop._push_deme_state_to_session(self._index)  # pyright: ignore[reportPrivateUsage]  # session push
 
     # -- stage-3 write path --------------------------------------------------
 
@@ -307,6 +339,7 @@ class DemeSlice:
     def __repr__(self) -> str:
         """Return a debug representation pointing at the deme index."""
         return f"DemeSlice(index={self._index}, pop={self._pop.name!r})"
+
 
 def _minimal_contract(
     *,
@@ -390,13 +423,24 @@ def _minimal_contract(
 
 
 # Contract ecology field names carried as (n_demes, ...) columns.
-_ECOLOGY_COLUMN_FIELDS: frozenset[str] = frozenset({
-    "carrying_capacity", "eggs_per_female", "sex_ratio",
-    "sperm_displacement_rate", "low_density_growth_rate", "growth_mode",
-    "external_expected_eggs", "survival_rates", "mating_rates",
-    "reproduction_rates", "fertility", "competition_weights",
-    "equilibrium_distribution", "migration_rate",
-})
+_ECOLOGY_COLUMN_FIELDS: frozenset[str] = frozenset(
+    {
+        "carrying_capacity",
+        "eggs_per_female",
+        "sex_ratio",
+        "sperm_displacement_rate",
+        "low_density_growth_rate",
+        "growth_mode",
+        "external_expected_eggs",
+        "survival_rates",
+        "mating_rates",
+        "reproduction_rates",
+        "fertility",
+        "competition_weights",
+        "equilibrium_distribution",
+        "migration_rate",
+    }
+)
 
 # Contract ecology name -> draft field (scalar / vector columns).
 _ECOLOGY_DRAFT_FIELDS: dict[str, str] = {
@@ -503,30 +547,35 @@ class SpatialParamsView:
                 rate_2d = normalize_migration_rate(
                     values, n_sexes, n_ages, int(bp.new_adult_age)
                 )
-                live[...] = np.tile(rate_2d, (n_demes, 1, 1))
-                return
-            arr = np.asarray(values, dtype=np.float64)
-            if arr.ndim == 3:
-                if arr.shape != live.shape:
-                    raise ValueError(
-                        f"migration_rate shape {arr.shape} does not match "
-                        f"{live.shape}"
+                new_live = np.tile(rate_2d, (n_demes, 1, 1))
+            else:
+                arr = np.asarray(values, dtype=np.float64)
+                if arr.ndim == 3:
+                    if arr.shape != live.shape:
+                        raise ValueError(
+                            f"migration_rate shape {arr.shape} does not match {live.shape}"
+                        )
+                    new_live = arr
+                elif arr.ndim == 2:
+                    if arr.shape != (n_sexes, n_ages):
+                        raise ValueError(
+                            f"migration_rate shape {arr.shape} does not match "
+                            f"(n_sexes={n_sexes}, n_ages={n_ages})"
+                        )
+                    new_live = np.tile(arr, (n_demes, 1, 1))
+                else:
+                    bp = self._pop._blueprint  # pyright: ignore[reportPrivateUsage]  # frozen adult-age anchor
+                    rate_2d = normalize_migration_rate(
+                        values, n_sexes, n_ages, int(bp.new_adult_age)
                     )
-                live[...] = arr
-                return
-            if arr.ndim == 2:
-                if arr.shape != (n_sexes, n_ages):
-                    raise ValueError(
-                        f"migration_rate shape {arr.shape} does not match "
-                        f"(n_sexes={n_sexes}, n_ages={n_ages})"
-                    )
-                live[...] = np.tile(arr, (n_demes, 1, 1))
-                return
-            bp = self._pop._blueprint  # pyright: ignore[reportPrivateUsage]  # frozen adult-age anchor
-            rate_2d = normalize_migration_rate(
-                values, n_sexes, n_ages, int(bp.new_adult_age)
-            )
-            live[...] = np.tile(rate_2d, (n_demes, 1, 1))
+                    new_live = np.tile(rate_2d, (n_demes, 1, 1))
+            live[...] = new_live
+            # The session owns the rate the migration stage consumes; a
+            # runtime write must reach it or Rust ticks silently keep the
+            # enable-time column.
+            backend = getattr(self._pop, "_rust_spatial_backend", None)  # pyright: ignore[reportPrivateUsage]
+            if backend is not None:
+                backend.set_migration_rate(np.asarray(live, dtype=np.float64).ravel())
             return
 
         if field not in _ECOLOGY_COLUMN_FIELDS:
@@ -611,6 +660,7 @@ class SpatialPopulation:
             ...     .build()
         """
         from natal.frontend.spatial.configurator import SpatialConfigurator
+
         return SpatialConfigurator(
             species=species,
             n_demes=n_demes,
@@ -734,7 +784,9 @@ class SpatialPopulation:
                 or migration_kernel.shape[0] % 2 == 0
                 or migration_kernel.shape[1] % 2 == 0
             ):
-                raise ValueError("migration_kernel must be a 2D array with odd dimensions")
+                raise ValueError(
+                    "migration_kernel must be a 2D array with odd dimensions"
+                )
 
         if adjacency is None:
             # Default adjacency:
@@ -958,9 +1010,7 @@ class SpatialPopulation:
         counts = state.individual_count
         n_sexes, n_ages, n_ztypes = map(int, counts.shape)
         has_sperm = getattr(state, "sperm_storage", None) is not None
-        kind: Literal[
-            "spatial_age_structured", "spatial_discrete_generation"
-        ] = (
+        kind: Literal["spatial_age_structured", "spatial_discrete_generation"] = (
             "spatial_discrete_generation"
             if isinstance(state, DiscretePopulationState)
             else "spatial_age_structured"
@@ -968,8 +1018,7 @@ class SpatialPopulation:
         registry = getattr(self._demes[0], "_index_registry", None)
         if registry is not None and len(registry.index_to_ztype) == n_ztypes:
             ztype_labels = tuple(
-                f"{genotype}@{slab}"
-                for genotype, slab in registry.index_to_ztype
+                f"{genotype}@{slab}" for genotype, slab in registry.index_to_ztype
             )
         else:
             ztype_labels = tuple(f"ztype_{index}" for index in range(n_ztypes))
@@ -997,9 +1046,7 @@ class SpatialPopulation:
         schema = HistorySchema(
             mode="raw",
             population=layout,
-            row_size=(
-                1 + self.n_demes * (ind_per_deme + sperm_per_deme)
-            ),
+            row_size=(1 + self.n_demes * (ind_per_deme + sperm_per_deme)),
             spatial_layout=SpatialHistoryLayout(
                 n_demes=self.n_demes,
                 ind_per_deme=ind_per_deme,
@@ -1092,9 +1139,7 @@ class SpatialPopulation:
 
     # -- stage-3 write channels (ecology columns + genetics fork) --------
 
-    def _sync_ecology_columns_from_rows(
-        self, rows: list[NDArray[np.float64]]
-    ) -> None:
+    def _sync_ecology_columns_from_rows(self, rows: list[NDArray[np.float64]]) -> None:
         """Commit per-deme tick-local ecology chains to columns and draft.
 
         Called after a python-dispatch tick whose program carried
@@ -1203,8 +1248,8 @@ class SpatialPopulation:
         """
         target = self._demes[deme_index]
         config = target.config
-        field_value: NDArray[np.generic] | float | int | bool | None = (
-            getattr(config, draft_field)
+        field_value: NDArray[np.generic] | float | int | bool | None = getattr(
+            config, draft_field
         )
         if isinstance(field_value, np.ndarray):
             typed_value = field_value
@@ -1216,8 +1261,8 @@ class SpatialPopulation:
             if shared:
                 config = config._replace(**{draft_field: typed_value.copy()})
                 target.set_config(config)
-                field_value: NDArray[np.generic] | float | int | bool | None = (
-                    getattr(config, draft_field)
+                field_value: NDArray[np.generic] | float | int | bool | None = getattr(
+                    config, draft_field
                 )
         return config, field_value
 
@@ -1311,8 +1356,7 @@ class SpatialPopulation:
         config, field_value = self._detach_deme_field(deme_index, draft_field)
         if not isinstance(field_value, np.ndarray):
             raise TypeError(
-                f"{field!r} expects a tensor-backed draft field, got "
-                f"a scalar"
+                f"{field!r} expects a tensor-backed draft field, got a scalar"
             )
         field_array: NDArray[np.float64] = cast("NDArray[np.float64]", field_value)
         candidate = np.asarray(values, dtype=np.float64).reshape(field_array.shape)
@@ -1344,7 +1388,6 @@ class SpatialPopulation:
 
                 contracts = materialize(config)
                 refresh(variant_id, refresh_fields, contracts.params)
-
 
     @property
     def tick(self) -> int:
@@ -1509,15 +1552,13 @@ class SpatialPopulation:
             flat[1:] = values.ravel()
         else:
             sperm_size = (
-                sperm_all.size
-                if history_obj.schema.population.has_sperm_storage
-                else 0
+                sperm_all.size if history_obj.schema.population.has_sperm_storage else 0
             )
             flat = np.empty(1 + ind_all.size + sperm_size, dtype=np.float64)
             flat[0] = float(self._tick)
-            flat[1:1 + ind_all.size] = ind_all.ravel()
+            flat[1 : 1 + ind_all.size] = ind_all.ravel()
             if sperm_size:
-                flat[1 + ind_all.size:] = sperm_all.ravel()
+                flat[1 + ind_all.size :] = sperm_all.ravel()
         from natal.frontend.output.history import HistoryBatch
 
         batch = HistoryBatch(schema=history_obj.schema, rows=flat[np.newaxis, :])
@@ -1584,6 +1625,27 @@ class SpatialPopulation:
                 deme._state = deme._live_state()._replace(n_tick=restored_tick)  # pyright: ignore[reportPrivateUsage]  # type: ignore[attr-defined]  # checkpoint must synchronize the immutable state tick
                 deme._tick = restored_tick  # type: ignore[attr-defined]  # private attr on base population
         self._tick = restored_tick
+        # The session owns the run state: a restore that stops at the deme
+        # caches would be silently overwritten by the next tick.
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is not None and ic.ndim == 4:
+            sperm_all = (
+                np.zeros(
+                    (
+                        len(self._demes),
+                        int(self._blueprint.n_ages),
+                        int(self._blueprint.n_ztypes),
+                        int(self._blueprint.n_ztypes),
+                    ),
+                    dtype=np.float64,
+                )
+                if ss is None
+                else np.asarray(ss, dtype=np.float64)
+            )
+            backend.set_state(
+                np.asarray(ic, dtype=np.float64), sperm_all, int(restored_tick)
+            )
+            self._rust_states_dirty = False
         history_obj.truncate(retain_until_tick=tick)
 
     @property
@@ -1623,8 +1685,7 @@ class SpatialPopulation:
         """
         # Determine which demes are targeted by the selector.
         target_ids = [
-            i for i in range(self.n_demes)
-            if self._selector_matches_deme(deme, i)
+            i for i in range(self.n_demes) if self._selector_matches_deme(deme, i)
         ]
 
         if not target_ids:
@@ -1665,7 +1726,8 @@ class SpatialPopulation:
         self._refresh_spatial_hooks()
 
     def _group_demes_by_hook_storage(
-        self, deme_ids: list[int],
+        self,
+        deme_ids: list[int],
     ) -> dict[int, list[int]]:
         """Group deme indices by the identity of their hook storage.
 
@@ -1688,7 +1750,8 @@ class SpatialPopulation:
         return groups
 
     def _demes_sharing_storage(
-        self, storage_key: int,
+        self,
+        storage_key: int,
     ) -> list[int]:
         """Return all deme indices that share the given hook storage identity.
 
@@ -1708,7 +1771,8 @@ class SpatialPopulation:
         return owners
 
     def _copy_hook_storage_for_demes(
-        self, deme_ids: list[int],
+        self,
+        deme_ids: list[int],
     ) -> None:
         """Copy-on-write hook storage for a subset of demes.
 
@@ -1727,7 +1791,7 @@ class SpatialPopulation:
 
         for deme_id in deme_ids:
             deme = self._demes[deme_id]
-            object.__setattr__(deme, 'compiled_hook_descriptors', compiled_copy)
+            object.__setattr__(deme, "compiled_hook_descriptors", compiled_copy)
 
     @staticmethod
     def _selector_matches_deme(selector: DemeSelector, deme_id: int) -> bool:
@@ -1874,7 +1938,9 @@ class SpatialPopulation:
         return compiled_hooks
 
     @staticmethod
-    def _build_hook_program(compiled_hooks: list[CompiledHookDescriptor]) -> HookProgram:
+    def _build_hook_program(
+        compiled_hooks: list[CompiledHookDescriptor],
+    ) -> HookProgram:
         """Build one CSR ``HookProgram`` from aggregate compiled descriptors.
 
         Args:
@@ -1951,12 +2017,18 @@ class SpatialPopulation:
                 # payload is appended.
                 zidx_offset_base = len(all_zidx_data)
                 for i in range(plan.n_ops):
-                    all_zidx_offsets.append(zidx_offset_base + plan.zidx_offsets[i + 1] - plan.zidx_offsets[0])
+                    all_zidx_offsets.append(
+                        zidx_offset_base
+                        + plan.zidx_offsets[i + 1]
+                        - plan.zidx_offsets[0]
+                    )
                 all_zidx_data.extend(plan.zidx_data.tolist())
 
                 age_offset_base = len(all_age_data)
                 for i in range(plan.n_ops):
-                    all_age_offsets.append(age_offset_base + plan.age_offsets[i + 1] - plan.age_offsets[0])
+                    all_age_offsets.append(
+                        age_offset_base + plan.age_offsets[i + 1] - plan.age_offsets[0]
+                    )
                 all_age_data.extend(plan.age_data.tolist())
 
                 all_sex_masks.extend(plan.sex_masks.flatten().tolist())
@@ -1965,7 +2037,9 @@ class SpatialPopulation:
                 cond_offset_base = len(all_cond_types)
                 for i in range(plan.n_ops):
                     all_cond_offsets.append(
-                        cond_offset_base + plan.condition_offsets[i + 1] - plan.condition_offsets[0]
+                        cond_offset_base
+                        + plan.condition_offsets[i + 1]
+                        - plan.condition_offsets[0]
                     )
                 all_cond_types.extend(plan.condition_types.tolist())
                 all_cond_params.extend(plan.condition_params.tolist())
@@ -2078,14 +2152,17 @@ class SpatialPopulation:
 
     def get_total_count(self) -> int:
         """Return the total count across all demes."""
+        self._ensure_rust_states_fresh()
         return int(sum(deme.get_total_count() for deme in self._demes))
 
     def get_female_count(self) -> int:
         """Return the total female count across all demes."""
+        self._ensure_rust_states_fresh()
         return int(sum(deme.get_female_count() for deme in self._demes))
 
     def get_male_count(self) -> int:
         """Return the total male count across all demes."""
+        self._ensure_rust_states_fresh()
         return int(sum(deme.get_male_count() for deme in self._demes))
 
     def reset(self) -> None:
@@ -2097,12 +2174,23 @@ class SpatialPopulation:
         for deme in self._demes:
             deme.reset()
         self._tick = int(self._demes[0].tick)
+        # Push the reset (blueprint-initial) state into the live session so
+        # the next tick continues from the reset, not the session's past.
+        # Reset also restores the initial random source (plan 9): the
+        # per-deme streams rebuild from the enable-time base seed.
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is not None:
+            backend.reseed(int(self._rust_spatial_seed or 0))
+            ind_all, sperm_all = self._stack_deme_state_arrays()
+            backend.set_state(ind_all, sperm_all, int(self._tick))
+            self._rust_states_dirty = False
         history_obj = getattr(self, "_history_obj", None)
         if history_obj is not None:
             history_obj.clear()
 
     def aggregate_individual_count(self) -> NDArray[np.float64]:
         """Return the total individual-count tensor summed over all demes."""
+        self._ensure_rust_states_fresh()
         return np.sum(
             np.stack([deme.state.individual_count for deme in self._demes], axis=0),
             axis=0,
@@ -2172,7 +2260,9 @@ class SpatialPopulation:
             weights /= total
         return weights
 
-    def _stack_deme_state_arrays(self) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def _stack_deme_state_arrays(
+        self,
+    ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Stack per-deme state arrays along a new deme axis.
 
         Returns:
@@ -2184,7 +2274,10 @@ class SpatialPopulation:
             case this method synthesizes zero-valued storage arrays with a
             shape compatible with the deme's age/genotype dimensions.
         """
-        ind_all = np.stack([deme.state.individual_count for deme in self._demes], axis=0)
+        self._ensure_rust_states_fresh()
+        ind_all = np.stack(
+            [deme.state.individual_count for deme in self._demes], axis=0
+        )
 
         # Handle potential absence of sperm_storage (e.g. DiscreteGenerationPopulation)
         sperm_list: List[NDArray[np.float64]] = []
@@ -2193,18 +2286,28 @@ class SpatialPopulation:
             if s is None:
                 # Create a dummy array if storage is missing
                 cfg = getattr(deme, "config", None)
-                if cfg is not None and hasattr(cfg, "n_ages") and hasattr(cfg, "n_ztypes"):
-                    s = np.zeros((cfg.n_ages, cfg.n_ztypes, cfg.n_ztypes), dtype=np.float64)
+                if (
+                    cfg is not None
+                    and hasattr(cfg, "n_ages")
+                    and hasattr(cfg, "n_ztypes")
+                ):
+                    s = np.zeros(
+                        (cfg.n_ages, cfg.n_ztypes, cfg.n_ztypes), dtype=np.float64
+                    )
                 else:
                     # Conservative fallback derived from state tensor shape.
                     ind_shape = deme.state.individual_count.shape
-                    s = np.zeros((ind_shape[1], ind_shape[2], ind_shape[2]), dtype=np.float64)
+                    s = np.zeros(
+                        (ind_shape[1], ind_shape[2], ind_shape[2]), dtype=np.float64
+                    )
             sperm_list.append(s)
 
         sperm_all = np.stack(sperm_list, axis=0)
         return ind_all, sperm_all
 
-    def _apply_stacked_state(self, ind_all: NDArray[np.float64], sperm_all: NDArray[np.float64], tick: int) -> None:
+    def _apply_stacked_state(
+        self, ind_all: NDArray[np.float64], sperm_all: NDArray[np.float64], tick: int
+    ) -> None:
         """Write one stacked spatial state back into each managed deme.
 
         Args:
@@ -2275,7 +2378,9 @@ class SpatialPopulation:
         return False
 
     @staticmethod
-    def _configs_match(reference_cfg: ConfigObject, candidate_cfg: ConfigObject) -> bool:
+    def _configs_match(
+        reference_cfg: ConfigObject, candidate_cfg: ConfigObject
+    ) -> bool:
         """Return whether two exported configs are equivalent by value.
 
         Args:
@@ -2299,8 +2404,12 @@ class SpatialPopulation:
                 reference_value = getattr(reference_cfg, field_name)
                 candidate_value = getattr(candidate_cfg, field_name)
 
-                if isinstance(reference_value, np.ndarray) or isinstance(candidate_value, np.ndarray):
-                    if not isinstance(reference_value, np.ndarray) or not isinstance(candidate_value, np.ndarray):
+                if isinstance(reference_value, np.ndarray) or isinstance(
+                    candidate_value, np.ndarray
+                ):
+                    if not isinstance(reference_value, np.ndarray) or not isinstance(
+                        candidate_value, np.ndarray
+                    ):
                         return False
                     reference_array = cast(NDArray[np.generic], reference_value)
                     candidate_array = cast(NDArray[np.generic], candidate_value)
@@ -2412,7 +2521,9 @@ class SpatialPopulation:
 
         return groups
 
-    def _heterogeneous_config_bank_and_ids(self) -> tuple[list[object], NDArray[np.int64]]:
+    def _heterogeneous_config_bank_and_ids(
+        self,
+    ) -> tuple[list[object], NDArray[np.int64]]:
         """Build a config bank and per-deme config ids.
 
         Returns:
@@ -2463,9 +2574,7 @@ class SpatialPopulation:
                     f"deme[{idx}] has different stochastic; migration requires "
                     "consistent stochastic mode across demes"
                 )
-            if (
-                bool(getattr(other, "continuous_sampling", False)) != continuous
-            ):
+            if bool(getattr(other, "continuous_sampling", False)) != continuous:
                 raise ValueError(
                     f"deme[{idx}] has different continuous_sampling; migration "
                     "requires consistent sampling mode across demes"
@@ -2639,26 +2748,40 @@ class SpatialPopulation:
         tensor_bank, deme_variant_ids = genetics_variant_bank(deme_drafts)
         compiled_hooks = self._collect_compact_spatial_hooks()
         hook_program = self._build_hook_program(compiled_hooks)
+        # One-time build handoff: the session owns the stacked state and
+        # the per-deme RNG streams from here on (plan S3).
+        ind_all, sperm_all = self._stack_deme_state_arrays()
         self._rust_spatial_backend = RustHeterogeneousSpatialLifecycleBackend(
             self._blueprint,
             columns,
             tensor_bank,
             deme_variant_ids,
+            ind_all,
+            sperm_all,
+            int(self._tick),
+            bool(self._migration_csr.stay_after_send),
             hook_program=hook_program,
             seed=seed,
         )
         self._rust_spatial_seed = seed
+        self._rust_states_dirty = False
         return self
 
     def disable_rust_backend(self) -> SpatialPopulation:
         """Disable the Rust spatial backend.
 
+        The session owns the authoritative state while enabled, so the
+        latest snapshot is pulled back into the per-deme caches before the
+        backend is dropped.
+
         Returns:
             Self for chaining.
         """
+        self._ensure_rust_states_fresh()
         self._rust_spatial_backend = None
         self._rust_discrete_spatial_backends = None
         self._rust_spatial_seed = None
+        self._rust_states_dirty = False
         return self
 
     @property
@@ -2669,12 +2792,9 @@ class SpatialPopulation:
             True when enabled and no Python-callback hooks are present.
         """
         return (
-            (
-                getattr(self, "_rust_spatial_backend", None) is not None
-                or getattr(self, "_rust_discrete_spatial_backends", None) is not None
-            )
-            and not getattr(self._demes[0], "has_python_callbacks", lambda: False)()
-        )
+            getattr(self, "_rust_spatial_backend", None) is not None
+            or getattr(self, "_rust_discrete_spatial_backends", None) is not None
+        ) and not getattr(self._demes[0], "has_python_callbacks", lambda: False)()
 
     def _absorb_rust_spatial_journal(self, backend: object) -> None:
         """Split a drained spatial journal into per-deme plain-name rows.
@@ -2691,7 +2811,7 @@ class SpatialPopulation:
         per_deme: dict[int, list[tuple[int, str, float, float]]] = {}
         for tick, route, old, new in drain():
             deme_part, _, name = route.partition(":")
-            deme = int(deme_part[len("deme"):])
+            deme = int(deme_part[len("deme") :])
             per_deme.setdefault(deme, []).append((tick, name, old, new))
             # Mirror the write into the authoritative container columns so
             # the python-dispatch surface (pop.params) stays identical.
@@ -2706,76 +2826,150 @@ class SpatialPopulation:
                 absorb(rows)
 
     def _run_rust_spatial_tick(self) -> bool:
-        """Run one spatial tick through the Rust lifecycle and migration."""
+        """Run one spatial tick through the session-owned Rust kernel.
+
+        The session owns the stacked state and per-deme RNG streams, so
+        the tick carries control parameters only: lifecycle first, then
+        migration on the same per-deme streams, both inside Rust.  The
+        per-deme caches refresh eagerly at the tick boundary from one
+        bulk session snapshot, so every cache-backed reader observes the
+        tick's result.
+
+        Returns:
+            ``True`` when a hook stopped the tick (state keeps the
+            modifications up to that boundary and the tick freezes),
+            ``False`` when the tick completed.
+        """
+        if self._is_discrete_demes():
+            return self._run_rust_discrete_spatial_tick()
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is None:
+            raise RuntimeError("Rust spatial backend is not enabled.")
+        previous_tick = int(self._tick)
+        next_tick = int(backend.run_tick())
+        # Merge the session's per-deme set_param writes (prefixed rows
+        # split back into each deme's plain-name log rows and draft).
+        self._absorb_rust_spatial_journal(backend)
+        was_stopped = next_tick == previous_tick
+        # Refresh the per-deme caches at the tick boundary (one bulk
+        # snapshot): every cache-backed reader — counts, aggregates, allele
+        # frequencies, export_state, deme delegation — must observe the
+        # tick's result without each reader knowing about the session.
+        self._rust_states_dirty = True
+        self._ensure_rust_states_fresh()
+        if was_stopped:
+            # A stop froze the tick above (run_tick returns it unchanged);
+            # the boundary state is kept, not rolled back (plan 7.4).
+            self._tick = previous_tick
+            for deme in self._demes:
+                deme.tick = previous_tick
+        return was_stopped
+
+    def _ensure_rust_states_fresh(self) -> None:
+        """Refresh the per-deme state caches from the session snapshot.
+
+        One bulk snapshot per boundary: the session owns the authoritative
+        stacked state, and the tick boundary (or an explicit reader guard)
+        pulls it once instead of Python shuttling arrays through every
+        tick.  Idempotent: a no-op when the caches already match.
+        """
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is None or not getattr(self, "_rust_states_dirty", False):
+            return
+        tick, ind_flat, sperm_flat = backend.state_snapshot()
+        n_demes = len(self._demes)
+        n_ages = int(self._blueprint.n_ages)
+        n_ztypes = int(self._blueprint.n_ztypes)
+        ind_all = np.asarray(ind_flat, dtype=np.float64).reshape(
+            n_demes, 2, n_ages, n_ztypes
+        )
+        sperm_all = np.asarray(sperm_flat, dtype=np.float64).reshape(
+            n_demes, n_ages, n_ztypes, n_ztypes
+        )
+        self._apply_stacked_state(ind_all, sperm_all, int(tick))
+        self._rust_states_dirty = False
+
+    def _push_deme_state_to_session(self, deme_id: int) -> None:
+        """Push one deme's freshly imported state into the live session.
+
+        Per-deme ``import_state`` bypasses the session, so without this
+        push the next tick would silently overwrite the import.
+
+        Args:
+            deme_id: Deme whose state changed outside the engine.
+        """
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is None:
+            return
+        deme = self._demes[deme_id]
+        state = deme._live_state()  # pyright: ignore[reportPrivateUsage]
+        sperm = getattr(state, "sperm_storage", None)
+        n_ages = int(self._blueprint.n_ages)
+        n_ztypes = int(self._blueprint.n_ztypes)
+        if sperm is None:
+            sperm = np.zeros((n_ages, n_ztypes, n_ztypes), dtype=np.float64)
+        backend.set_deme_state(
+            deme_id,
+            np.asarray(state.individual_count, dtype=np.float64),
+            np.asarray(sperm, dtype=np.float64),
+            int(deme.tick),
+        )
+        self._tick = int(deme.tick)
+        self._rust_states_dirty = False
+
+    def _run_rust_discrete_spatial_tick(self) -> bool:
+        """Run one discrete spatial tick through the per-bank sessions.
+
+        Legacy path kept until S3b unifies discrete demes onto the
+        session-owned heterogeneous kernel (plan S3: one Program, per-deme
+        RNG banks, no per-config-bank execution sessions).  The shared
+        migration tail (rate column x frozen CSR) runs after the per-deme
+        lifecycle, exactly like the reference and fused-kernel paths.
+        """
         from natal.backends.rust.rust_backend import (
             rust_migrate_csr_deterministic,
             rust_migrate_csr_stochastic,
         )
 
         ind_all, sperm_all = self._stack_deme_state_arrays()
-        if self._is_discrete_demes():
-            backends = getattr(self, "_rust_discrete_spatial_backends", None)
-            if backends is None:
-                raise RuntimeError("Rust spatial backend is not enabled.")
-            _, deme_config_ids = self._heterogeneous_config_bank_and_ids()
-            new_ind = np.zeros_like(ind_all)
-            for deme_id, deme in enumerate(self._demes):
-                backend = backends[int(deme_config_ids[deme_id])]
-                state = DiscretePopulationState(
-                    n_tick=self._tick,
-                    individual_count=deme._live_state().individual_count,  # pyright: ignore[reportPrivateUsage]
-                )
-                next_state, _ = backend.run_tick(state)
-                # Per-deme sessions journal plain rows; merge them into the
-                # deme's own params_log and draft.
-                absorb = getattr(deme, "_absorb_rust_eco_journal", None)
-                if absorb is not None:
-                    absorb(backend.drain_eco_journal())
-                new_ind[deme_id] = next_state.individual_count
-            ind_all = new_ind
-            next_tick = self._tick + 1
-        else:
-            backend = getattr(self, "_rust_spatial_backend", None)
-            if backend is None:
-                raise RuntimeError("Rust spatial backend is not enabled.")
-            rust_run = cast(
-                "Callable[[NDArray[np.float64], NDArray[np.float64], int], tuple[NDArray[np.float64], NDArray[np.float64], int]]",
-                backend.run,
+        backends = getattr(self, "_rust_discrete_spatial_backends", None)
+        if backends is None:
+            raise RuntimeError("Rust spatial backend is not enabled.")
+        _, deme_config_ids = self._heterogeneous_config_bank_and_ids()
+        new_ind = np.zeros_like(ind_all)
+        for deme_id, deme in enumerate(self._demes):
+            backend = backends[int(deme_config_ids[deme_id])]
+            state = DiscretePopulationState(
+                n_tick=self._tick,
+                individual_count=deme._live_state().individual_count,  # pyright: ignore[reportPrivateUsage]
             )
-            ind_all, sperm_all, next_tick = rust_run(ind_all, sperm_all, self._tick)
-            # Merge the session's per-deme set_param writes (prefixed rows
-            # split back into each deme's plain-name log rows and draft).
-            self._absorb_rust_spatial_journal(backend)
-        # Runtime migration = rate column x frozen CSR, same data plane as
-        # the reference and Python-dispatch paths (slice 5).
-        csr = self._migration_csr
-        stochastic = bool(self._blueprint.stochastic)
-        continuous = bool(self._blueprint.continuous_sampling)
+            next_state, _ = backend.run_tick(state)
+            # Per-deme sessions journal plain rows; merge them into the
+            # deme's own params_log and draft.
+            absorb = getattr(deme, "_absorb_rust_eco_journal", None)
+            if absorb is not None:
+                absorb(backend.drain_eco_journal())
+            new_ind[deme_id] = next_state.individual_count
+        next_tick = self._tick + 1
+        # Shared migration tail (pre-S3b): zero-rate skip preserves the
+        # no-routing identity bitwise.
         rate = self._params.migration_rate
-
-        # Zero-rate fast path: the Python migration kernel returns the
-        # arrays untouched when every rate is <= 0 (np.all identity).  The
-        # Rust path must mirror that contract — running the CSR kernel
-        # would rebuild female counts from (virgins + sperm-bucket sums)
-        # and pick up last-ulp residues, breaking bitwise parity.
-        if bool(np.all(np.asarray(rate) <= 0.0)):
-            self._apply_stacked_state(ind_all, sperm_all, int(next_tick))
-            return False
-
-        if stochastic:
-            ind_all, sperm_all = rust_migrate_csr_stochastic(
-                ind_all, sperm_all,
-                csr.indptr, csr.dest_idx, csr.weights, rate,
-                int(self._rust_spatial_seed or 0), continuous,
-            )
-        else:
-            ind_all, sperm_all = rust_migrate_csr_deterministic(
-                ind_all, sperm_all,
-                csr.indptr, csr.dest_idx, csr.weights, rate,
-                bool(csr.stay_after_send),
-            )
-
-        self._apply_stacked_state(ind_all, sperm_all, int(next_tick))
+        if not bool(np.all(np.asarray(rate) <= 0.0)):
+            csr = self._migration_csr
+            if bool(self._blueprint.stochastic):
+                new_ind, sperm_all = rust_migrate_csr_stochastic(
+                    new_ind, sperm_all,
+                    csr.indptr, csr.dest_idx, csr.weights, rate,
+                    int(self._rust_spatial_seed or 0),
+                    bool(self._blueprint.continuous_sampling),
+                )
+            else:
+                new_ind, sperm_all = rust_migrate_csr_deterministic(
+                    new_ind, sperm_all,
+                    csr.indptr, csr.dest_idx, csr.weights, rate,
+                    bool(csr.stay_after_send),
+                )
+        self._apply_stacked_state(new_ind, sperm_all, int(next_tick))
         return False
 
     def _run_rust_spatial_steps(

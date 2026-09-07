@@ -413,6 +413,14 @@ def test_python_continuation_rejects_same_tick_changed_payload_atomically(
         current_count = _continuation_mutable_count(population, model)
         current_count[0, 0, 0] += 0.5
         changed_state = current_count.copy()
+        if model == "spatial":
+            # deme.state hands out snapshots since plan S3, so the
+            # boundary-guard probe reaches the run through the sanctioned
+            # per-deme import channel instead.
+            assert isinstance(population, nt.SpatialPopulation)
+            population.demes[0].import_state(
+                {"n_tick": population.tick, "individual_count": changed_state}
+            )
 
         with pytest.raises(ValueError, match="boundary payload does not match"):
             population.run(

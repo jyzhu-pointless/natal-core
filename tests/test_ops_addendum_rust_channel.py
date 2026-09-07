@@ -148,12 +148,12 @@ def test_spatial_set_param_event_granularity_python_vs_rust_bitwise(event: str) 
         for d in range(2):
             np.testing.assert_array_equal(
                 demes_py[d].state.individual_count,
-                demes_rs[d].state.individual_count,
+                spatial_rs.demes[d].state.individual_count,
                 err_msg=f"deme {d} ind mismatch at tick {tick} (event={event})",
             )
             np.testing.assert_array_equal(
                 demes_py[d].state.sperm_storage,
-                demes_rs[d].state.sperm_storage,
+                spatial_rs.demes[d].state.sperm_storage,
                 err_msg=f"deme {d} sperm mismatch at tick {tick} (event={event})",
             )
             # Write-channel parity per deme: same K value, same log rows.
@@ -180,7 +180,7 @@ def test_spatial_first_event_write_binds_same_tick_density_regulation() -> None:
 
     for d in range(2):
         cohort_py = float(demes_py[d].state.individual_count[:, 1, :].sum())
-        cohort_rs = float(demes_rs[d].state.individual_count[:, 1, :].sum())
+        cohort_rs = float(spatial_rs.demes[d].state.individual_count[:, 1, :].sum())
         expected_cohort = 900.0 * 0.5 * 0.5
         # The deterministic recruit distributes 112.5 per sex over genotype
         # proportions, so the cap shows up to last-ulp float error; the
@@ -237,24 +237,21 @@ def test_spatial_heterogeneous_columns_split_across_demes() -> None:
     assert demes_rs[1].params.carrying_capacity == 100.0  # 400 -> 200 -> 100
     for d in range(2):
         np.testing.assert_array_equal(
-            demes_py[d].state.individual_count, demes_rs[d].state.individual_count
+            demes_py[d].state.individual_count,
+            spatial_rs.demes[d].state.individual_count,
         )
         assert demes_py[d].params_log == demes_rs[d].params_log
 
 
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
-def test_rust_homogeneous_spatial_session_applies_event_writes() -> None:
-    """The homogeneous session (``run_spatial_tick``) applies writes too.
+def test_rust_spatial_session_applies_event_writes_raw_rows() -> None:
+    """The spatial session applies event writes and journals raw rows.
 
-    The homogeneous Rust session shares one config across demes; with
-    set_param its per-deme local ecology copies must commit at event
-    granularity like the heterogeneous session does.  Driven directly at
-    the session level (raw ``(deme, tick, param_id, old, new)`` rows),
-    using the spatial blueprint so the session owns two deme columns.
+    With set_param, the per-deme local ecology copies commit at event
+    granularity; the raw journal rows are ``(deme, tick, param_id, old,
+    new)``.  Driven through the container backend so the session owns
+    the stacked state and both deme columns.
     """
-    from natal import _engine_rs
-    from natal.contracts.materialize import materialize
-
     species = _fresh_species()
     demes = [_build_viable(species, f"hom{d}") for d in range(2)]
     for deme in demes:
@@ -263,28 +260,28 @@ def test_rust_homogeneous_spatial_session_applies_event_writes() -> None:
             event="first",
         )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=5)
 
-    contracts = materialize(demes[0].config)
-    # The panmictic contract carries a (1, 2, A) migration column; widen it
-    # to the spatial blueprint's extent so the session validates.
-    contracts.params.migration_rate = np.zeros((2, 2, 4), dtype=np.float64).ravel()
-    session = _engine_rs.SpatialEngineSession(spatial._blueprint, contracts.params, 5)  # noqa: SLF001
-    session.set_hook_program(demes[0]._build_hook_program())  # noqa: SLF001 — test drives the session directly
-    ind_all, sperm_all = spatial._stack_deme_state_arrays()  # noqa: SLF001
-    session.run(ind_all, sperm_all, 0)
+    backend = spatial._rust_spatial_backend  # noqa: SLF001 — test drives the backend directly
+    assert backend is not None
+    backend.run_tick()
     # Raw journal rows: (deme, tick, param_id, old, new) — both demes
     # halved their own (identical) column at tick 0.
-    assert session.drain_eco_journal() == [
+    assert backend._session.drain_eco_journal() == [  # noqa: SLF001
         (0, 0, 0, 900.0, 450.0),
         (1, 0, 0, 900.0, 450.0),
     ]
     # Draining is destructive.
-    assert session.drain_eco_journal() == []
+    assert backend._session.drain_eco_journal() == []  # noqa: SLF001
     # The event-level write bound the same tick: each deme's recruited
     # cohort (aged to slot 1 by the tick's aging stage) sits at the halved
-    # cap times the age-0 survival — far from the un-halved 450.0.
-    for deme in range(2):
-        cohort = float(ind_all[deme, :, 1, :].sum())
+    # cap times the age-0 survival — far from the un-halved 450.0.  The
+    # session-owned state reads back through the backend snapshot.
+    snap_tick, ind_flat, _ = backend.state_snapshot()
+    assert snap_tick == 1
+    ind_all = np.asarray(ind_flat).reshape(2, 2, 4, -1)
+    for deme_id in range(2):
+        cohort = float(ind_all[deme_id, :, 1, :].sum())
         assert cohort == pytest.approx(900.0 * 0.5 * 0.5, abs=1e-9)
         assert abs(cohort - 450.0) > 1.0
 
@@ -416,8 +413,7 @@ def test_spatial_drain_presentation_uses_deme_prefix() -> None:
     spatial.enable_rust_backend(seed=29)
     backend = spatial._rust_spatial_backend  # noqa: SLF001 — drive the session directly
     assert backend is not None
-    ind_all, sperm_all = spatial._stack_deme_state_arrays()  # noqa: SLF001
-    backend.run(ind_all, sperm_all, 0)
+    backend.run_tick()
     rows = backend.drain_eco_journal()
     assert rows == [
         (0, "deme0:carrying_capacity", 900.0, 450.0),

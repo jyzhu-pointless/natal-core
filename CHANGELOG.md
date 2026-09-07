@@ -44,12 +44,28 @@
   panicking between that ceiling (1.844e19) and the 2^104 resolution guard;
   a stochastic run whose per-pair egg total lands in that window (e.g. a
   census explosion under a large-scale configuration) now completes.
+- **Spatial RNG streams**: per-deme streams were rebuilt from `seed ^ deme`
+  every tick (and stochastic migration re-seeded per call), reusing identical
+  random numbers across ticks; streams are now a persistent per-deme bank
+  advancing across ticks.  Same-seed reproducibility and segmented-run
+  bitwise identity hold; stochastic spatial trajectories differ from the
+  defective old streams (plan R1).
 
 ### Changed
 
 - **Spatial update internals**: replace the private `_SpatialUpdate` facade and
   method-name batching table with typed Configurator dispatch and explicit
   `batch_setting()` values.
+- **Rust spatial session owns the run state**: the heterogeneous session holds
+  the stacked counts, sperm storage, tick, and per-deme RNG bank;
+  `RustHeterogeneousSpatialLifecycleBackend.run(ind, sperm, tick)` is replaced
+  by control-only `run_tick()` plus `state_snapshot()` / `set_state()` /
+  `set_deme_state()` / `set_migration_rate()`; lifecycle then migration run
+  inside Rust with the zero-rate skip preserved.  A hook stop now freezes the
+  tick keeping the boundary state instead of raising `RuntimeError`.  Spatial
+  `deme.state` returns an independent snapshot (the live write-through is
+  retired — `deme.import_state(...)` is the write channel), and
+  `SpatialPopulation.reset()` reseeds the RNG bank.
 
 ## v0.2.0b (2026.7.14)
 
