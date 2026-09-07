@@ -71,8 +71,6 @@ class _ComputedMaps(NamedTuple):
 
     # -- Equilibrium & competition --
     carrying_capacity: float
-    expected_competition_strength: float
-    expected_survival_rate: float
     eggs_per_female: float
     sex_ratio: float
     sperm_displacement_rate: float
@@ -232,45 +230,6 @@ def build_config_maps(
         gametes_to_zygotes_map, (n_hg_glabs, n_hg_glabs, _n_g_axis), "gametes_to_zygotes_map",
         default_value=np.zeros,
     )
-    # Rust kernel first via the shared dispatch (plan 5.2: Rust owns the
-    # numeric algorithm); the pure-Python spelling remains the
-    # extension-less fallback until the Rust-only stage retires it.  Note
-    # the build path keeps its own None semantics: reproduction is already
-    # normalized to a (possibly all-zero) array above, so the sync path's
-    # mating-row fallback deliberately does NOT apply here.
-    from natal.frontend.data._engine import equilibrium_metrics_dispatch
-
-    metrics = equilibrium_metrics_dispatch(
-        carrying_capacity=float(carrying_capacity_f),
-        eggs_per_female=float(eggs_per_female),
-        survival_rates=survival,
-        reproduction_rates=reproduction,
-        fertility=female_fertility,
-        competition_weights=competition,
-        sex_ratio=float(sex_ratio),
-        new_adult_age=new_adult_age_i,
-        n_ages=n_ages_i,
-        declared_distribution=equilibrium_individual_distribution,
-        external_expected_eggs=external_expected_eggs,
-    )
-    if metrics is not None:
-        expected_competition_strength, expected_survival_rate = metrics
-    else:
-        expected_competition_strength, expected_survival_rate = alg.compute_equilibrium_metrics(
-            carrying_capacity=float(carrying_capacity_f),
-            eggs_per_female=float(eggs_per_female),
-            age_based_survival_rates=survival,
-            age_based_mating_rates=mating,
-            age_based_reproduction_rates=reproduction,
-            female_age_based_fertility=female_fertility,
-            relative_competition_strength=competition,
-            sex_ratio=float(sex_ratio),
-            new_adult_age=new_adult_age_i,
-            n_ages=n_ages_i,
-            equilibrium_individual_count=equilibrium_individual_distribution,
-            external_expected_eggs=external_expected_eggs,
-        )
-
     # Index compression mask placeholders (compression is applied externally).
     n_g_compressed = n_genotypes_i
     n_hg_effective = n_gtypes_i // n_glabs_i
@@ -346,8 +305,6 @@ def build_config_maps(
         initial_individual_count=init_ind,
         initial_sperm_storage=init_sperm,
         carrying_capacity=carrying_capacity_f,
-        expected_competition_strength=expected_competition_strength,
-        expected_survival_rate=expected_survival_rate,
         eggs_per_female=float(eggs_per_female),
         sex_ratio=float(sex_ratio),
         sperm_displacement_rate=float(sperm_displacement_rate),
@@ -552,8 +509,6 @@ def build_population_config(
             sperm_displacement_rate=m.sperm_displacement_rate,
             low_density_growth_rate=m.low_density_growth_rate,
             juvenile_growth_mode=int(m.juvenile_growth_mode),
-            expected_competition_strength=m.expected_competition_strength,
-            expected_survival_rate=m.expected_survival_rate,
             generation_time=0.0,
             viability_fitness=m.viability,
             fecundity_fitness=m.fecundity,
@@ -603,8 +558,6 @@ def build_population_config(
         sperm_displacement_rate=m.sperm_displacement_rate,
         low_density_growth_rate=m.low_density_growth_rate,
         juvenile_growth_mode=int(m.juvenile_growth_mode),
-        expected_competition_strength=m.expected_competition_strength,
-        expected_survival_rate=m.expected_survival_rate,
         generation_time=generation_time_f,
         viability_fitness=m.viability,
         fecundity_fitness=m.fecundity,

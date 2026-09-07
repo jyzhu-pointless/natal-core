@@ -154,18 +154,12 @@ def _flush_eco_writes(
                 population.log_param_change(name, old, new)
                 # Propagate to the deme's live draft so the LATER stages of
                 # this deme's tick observe the write (event-level semantics,
-                # Rust EcoCtx parity — including the equilibrium metrics
-                # the Rust assembler recomputes on the fly).  The per-deme
-                # tick preamble resets the draft to the deme's own column
-                # value, so this write cannot leak into another deme.
-                from natal.frontend.configurator._routes import (
-                    sync_equilibrium_for_draft,
-                )
-
+                # Rust EcoCtx parity — the equilibrium metrics are derived
+                # on read everywhere, so no cache refresh is needed).  The
+                # per-deme tick preamble resets the draft to the deme's own
+                # column value, so this write cannot leak into another deme.
                 population.set_config(
-                    sync_equilibrium_for_draft(
-                        population.config._replace(**{name: new})
-                    )
+                    population.config._replace(**{name: new})
                 )
         return
 

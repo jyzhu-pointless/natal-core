@@ -1240,13 +1240,8 @@ class SpatialPopulation:
             config = config._replace(**{draft_field: value})
             self._demes[deme_index].set_config(config)
 
-        from natal.backends.reference.simulation.age_structured import (
-            sync_equilibrium_metrics,
-        )
-
-        # scalar metric slots are refreshed through _replace (immutable).
-        config = sync_equilibrium_metrics(config)
-        self._demes[deme_index].set_config(config)
+        # The equilibrium metrics are derived on read (slice 2 retired
+        # the stored copies), so no post-write refresh is needed here.
 
         column = self._ecology_columns.get(field)
         if column is not None and field != "migration_rate":

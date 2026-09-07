@@ -66,7 +66,6 @@ from natal.frontend.configurator._registry_builder import (
 from natal.frontend.configurator._routes import (
     dispatch,
     lookup_or_none,
-    sync_equilibrium_for_draft,
 )
 from natal.frontend.configurator._writers import (
     ConfigWriter,
@@ -236,7 +235,8 @@ def set_param(
             f"like {name!r}. Use the corresponding Configurator method "
             f"or pop.params.tensor_write instead."
         )
-    return dispatch(config, name, value, dirty_sink=_dirty, sync_sensitive=_sync_equilibrium)
+    del _sync_equilibrium  # retired with the derived-cache sync (slice 2)
+    return dispatch(config, name, value, dirty_sink=_dirty)
 
 
 # ── Helpers: fitness field writing ─────────────────────────────────────────────
@@ -1793,7 +1793,6 @@ class Configurator:
         ]
         self._config = pop.config
 
-        self._config = sync_equilibrium_for_draft(self._config)
         return self
 
     # -- apply / build ---------------------------------------------------------
@@ -1809,7 +1808,6 @@ class Configurator:
         Returns:
             Self for chaining.
         """
-        self._config = sync_equilibrium_for_draft(self._config)
         return self
 
     def build(

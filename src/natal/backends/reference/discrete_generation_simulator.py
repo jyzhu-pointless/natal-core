@@ -109,6 +109,14 @@ def run_discrete_survival(
 
     total_age_0 = float(ind_count[0, 0, :].sum() + ind_count[1, 0, :].sum())
 
+    # Derived on read: the draft no longer stores the equilibrium
+    # metrics (slice 2); compute them from the config's own ecology.
+    from natal.frontend.data._engine import (
+        derive_equilibrium_metrics_from_draft,
+    )
+
+    expected_comp, expected_surv = derive_equilibrium_metrics_from_draft(cfg)
+
     if mode == NO_COMPETITION:
         scaling = 1.0
     elif mode == FIXED:
@@ -117,22 +125,22 @@ def run_discrete_survival(
         if mode == LOGISTIC:
             scaling = alg.compute_scaling_factor_logistic(
                 total_age_0,
-                cfg.expected_competition_strength,  # pyright: ignore[reportArgumentType]
-                cfg.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                expected_comp,
+                expected_surv,
                 cfg.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
             )
         elif mode == 4:  # RICKER (exponential overcompensation)
             scaling = alg.compute_scaling_factor_ricker(
                 total_age_0,
-                cfg.expected_competition_strength,  # pyright: ignore[reportArgumentType]
-                cfg.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                expected_comp,
+                expected_surv,
                 cfg.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
             )
         else:
             scaling = alg.compute_scaling_factor_beverton_holt(
                 total_age_0,
-                cfg.expected_competition_strength,  # pyright: ignore[reportArgumentType]
-                cfg.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                expected_comp,
+                expected_surv,
                 cfg.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
             )
 

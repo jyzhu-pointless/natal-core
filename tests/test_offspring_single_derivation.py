@@ -1190,7 +1190,7 @@ class TestEquilibriumKernelParity:
         from natal.backends.reference.simulation.age_structured import (
             compute_equilibrium_metrics,
         )
-        from natal.frontend.configurator._routes import sync_equilibrium_for_draft
+        from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
 
         sp = nt.Species.from_dict(
             name="__eq_parity_species__",
@@ -1227,17 +1227,13 @@ class TestEquilibriumKernelParity:
             draft.age_based_relative_competition_strength.copy()
         )
 
-        rust_synced = sync_equilibrium_for_draft(draft)
+        rust_derived = derive_equilibrium_metrics_from_draft(draft)
 
         monkeypatch.setitem(sys.modules, "natal._engine_rs", None)
-        py_synced = sync_equilibrium_for_draft(draft)
+        py_derived = derive_equilibrium_metrics_from_draft(draft)
 
-        assert py_synced.expected_competition_strength == (
-            rust_synced.expected_competition_strength
-        )
-        assert py_synced.expected_survival_rate == (
-            rust_synced.expected_survival_rate
-        )
+        assert py_derived[0] == rust_derived[0]
+        assert py_derived[1] == rust_derived[1]
         # Anchor both branches against the reference kernel on the
         # draft's own demographic fields (a wrong-but-agreed pair fails).
         expected = compute_equilibrium_metrics(
@@ -1256,15 +1252,11 @@ class TestEquilibriumKernelParity:
             equilibrium_individual_count=None,
             external_expected_eggs=None,
         )
-        assert rust_synced.expected_competition_strength == expected[0]
-        assert rust_synced.expected_survival_rate == expected[1]
-        # Ownership: sync must read the draft, never scribble on it —
+        assert rust_derived[0] == expected[0]
+        assert rust_derived[1] == expected[1]
+        # Ownership: derive must read the draft, never scribble on it —
         # every demographic array survives both dispatch branches
-        # bit-identically, and the caches keep their build-time values.
-        draft_cache = (
-            draft.expected_competition_strength,
-            draft.expected_survival_rate,
-        )
+        # bit-identically.
         np.testing.assert_array_equal(
             draft.age_based_survival_rates, survival_before
         )
@@ -1277,19 +1269,11 @@ class TestEquilibriumKernelParity:
         np.testing.assert_array_equal(
             draft.age_based_relative_competition_strength, competition_before
         )
-        assert (
-            draft.expected_competition_strength,
-            draft.expected_survival_rate,
-        ) == draft_cache
-
         # Lift the block: the next call must find the extension again
         # (no negative caching of the failed import).
         monkeypatch.undo()
-        again = sync_equilibrium_for_draft(draft)
-        assert again.expected_competition_strength == (
-            rust_synced.expected_competition_strength
-        )
-        assert again.expected_survival_rate == rust_synced.expected_survival_rate
+        again = derive_equilibrium_metrics_from_draft(draft)
+        assert again == rust_derived
 
     def test_sync_resolves_none_reproduction_to_mating_row(self) -> None:
         """A draft carrying ``age_based_reproduction_rates=None`` syncs to
@@ -1303,7 +1287,7 @@ class TestEquilibriumKernelParity:
         branches plus the None-vs-resolved draft comparison pins the row
         choice.
         """
-        from natal.frontend.configurator._routes import sync_equilibrium_for_draft
+        from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
 
         sp = nt.Species.from_dict(
             name="__eq_none_repro_species__",
@@ -1333,24 +1317,18 @@ class TestEquilibriumKernelParity:
         assert not np.array_equal(female_row, male_row)
 
         none_draft = draft._replace(age_based_reproduction_rates=None)
-        synced_none = sync_equilibrium_for_draft(none_draft)
-        synced_resolved = sync_equilibrium_for_draft(draft._replace(
+        derived_none = derive_equilibrium_metrics_from_draft(none_draft)
+        derived_resolved = derive_equilibrium_metrics_from_draft(draft._replace(
             age_based_reproduction_rates=female_row
         ))
         # None must behave exactly like the female mating row.
-        assert synced_none.expected_competition_strength == (
-            synced_resolved.expected_competition_strength
-        )
-        assert synced_none.expected_survival_rate == (
-            synced_resolved.expected_survival_rate
-        )
+        assert derived_none[0] == derived_resolved[0]
+        assert derived_none[1] == derived_resolved[1]
         # And unlike the male row (the wrong-row detector).
-        synced_male = sync_equilibrium_for_draft(draft._replace(
+        derived_male = derive_equilibrium_metrics_from_draft(draft._replace(
             age_based_reproduction_rates=male_row
         ))
-        assert synced_male.expected_competition_strength != (
-            synced_none.expected_competition_strength
-        )
+        assert derived_male[0] != derived_none[0]
 
     def test_equilibrium_parity_edge_axis_matrix(self) -> None:
         """Bit-pattern parity across the edge/axis product of inputs.
@@ -1995,11 +1973,12 @@ def _pack_metrics(metrics: tuple[float, float]) -> tuple[bytes, bytes]:
 
 
 def _draft_metrics(draft: nt.ModelDraft) -> tuple[float, float]:
-    """The two equilibrium caches of a built draft."""
-    return (
-        float(draft.expected_competition_strength),
-        float(draft.expected_survival_rate),
+    """The equilibrium metrics derived from a draft's own ecology."""
+    from natal.frontend.data._engine import (
+        derive_equilibrium_metrics_from_draft,
     )
+
+    return derive_equilibrium_metrics_from_draft(draft)
 
 
 def _assert_draft_fields_equal(
@@ -2098,8 +2077,8 @@ class TestBuildPathEquilibriumDispatch:
         from natal.backends.reference.simulation.age_structured import (
             compute_equilibrium_metrics,
         )
-        from natal.frontend.configurator._routes import (
-            sync_equilibrium_for_draft,
+        from natal.frontend.data._engine import (
+            derive_equilibrium_metrics_from_draft,
         )
 
         case = _age_build_cases()[0]
@@ -2138,22 +2117,20 @@ class TestBuildPathEquilibriumDispatch:
         assert _pack_metrics(build_metrics) != _pack_metrics(ref_mating)
 
         # Sync on a draft carrying None resolves to the female mating row.
-        synced_none = sync_equilibrium_for_draft(
+        synced_none = derive_equilibrium_metrics_from_draft(
             draft._replace(age_based_reproduction_rates=None)
         )
-        assert _pack_metrics(_draft_metrics(synced_none)) == _pack_metrics(
+        assert _pack_metrics(synced_none) == _pack_metrics(
             ref_mating
         ), "sync(None) must consume the female mating row"
-        assert _pack_metrics(_draft_metrics(synced_none)) != _pack_metrics(
+        assert _pack_metrics(synced_none) != _pack_metrics(
             ref_default
         )
 
         # Fixed point: sync on the stored (non-None) reproduction is the
         # build result — build->sync cannot move the caches.
-        synced_stored = sync_equilibrium_for_draft(draft)
-        assert _pack_metrics(_draft_metrics(synced_stored)) == (
-            _pack_metrics(build_metrics)
-        )
+        synced_stored = derive_equilibrium_metrics_from_draft(draft)
+        assert _pack_metrics(synced_stored) == _pack_metrics(build_metrics)
 
     def test_dispatch_normalizes_empty_sentinels_to_derive(self) -> None:
         """None, (0,0), (2,0), and 1-D empty declared all derive; a real
@@ -2289,8 +2266,8 @@ class TestBuildPathEquilibriumDispatch:
         import inspect
 
         from natal.frontend.configurator import _routes as routes_module
-        from natal.frontend.configurator._routes import (
-            sync_equilibrium_for_draft,
+        from natal.frontend.data._engine import (
+            derive_equilibrium_metrics_from_draft,
         )
         from natal.frontend.data import _engine as engine_module
         from natal.frontend.data._config import build_population_config
@@ -2327,35 +2304,31 @@ class TestBuildPathEquilibriumDispatch:
                 eggs_per_female=case.eggs,
                 sex_ratio=case.sr,
             )
-            synced = sync_equilibrium_for_draft(
+            synced = derive_equilibrium_metrics_from_draft(
                 draft._replace(age_based_reproduction_rates=None)
             )
         finally:
             monkeypatch.undo()
 
-        assert len(calls) == 2, "build and sync must each dispatch exactly once"
-        (build_args, build_kwargs), (sync_args, _sync_kwargs) = calls
-        # The build caller spells keywords; the sync caller spells
-        # positionals (slot 5 / index 4 is the resolved reproduction).
-        np.testing.assert_array_equal(
-            np.asarray(build_kwargs["reproduction_rates"]),
-            [0.0, 0.0, 1.0, 1.0],
-            err_msg="build must dispatch the normalized default vector",
-        )
+        # Slice 2 retired both the sync entry and the build-time metric
+        # computation — the stored caches no longer exist, so only the
+        # derive call dispatches (positional args; index 4 is the
+        # resolved reproduction vector).
+        assert len(calls) == 1, "only the derive entry dispatches now"
+        (sync_args, _sync_kwargs), = calls
         np.testing.assert_array_equal(
             np.asarray(sync_args[4]), case.mating[0],
-            err_msg="sync must dispatch the female mating row for None",
+            err_msg="derive must dispatch the female mating row for None",
         )
-        # The None return was translated into the fallback on both sides.
+        # The None return was translated into the fallback: the derived
+        # metrics equal the direct reference on the same inputs.
         assert _pack_metrics(_draft_metrics(rebuilt)) == _pack_metrics(
             expected_metrics
         )
-        assert _pack_metrics(_draft_metrics(synced)) == _pack_metrics(
+        assert _pack_metrics(synced) == _pack_metrics(
             _draft_metrics(
-                sync_equilibrium_for_draft(
-                    draft._replace(
-                        age_based_reproduction_rates=case.mating[0].copy()
-                    )
+                draft._replace(
+                    age_based_reproduction_rates=case.mating[0].copy()
                 )
             )
         )

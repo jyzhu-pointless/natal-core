@@ -327,6 +327,16 @@ def run_wf_tick(
     if result != RESULT_CONTINUE:
         return current, RESULT_STOP, config
 
+    # Derived on read: the draft no longer stores the equilibrium
+    # metrics (slice 2); compute them from the config's own ecology.
+    from natal.frontend.data._engine import (
+        derive_equilibrium_metrics_from_draft,
+    )
+
+    expected_competition_strength, expected_survival_rate = (
+        derive_equilibrium_metrics_from_draft(config)
+    )
+
     new_ind = _run_wf_wide(
         ind_count=current.individual_count,
         offspring_tensor=config.offspring_tensor,
@@ -350,8 +360,8 @@ def run_wf_tick(
         carrying_capacity=config.carrying_capacity,
         juvenile_growth_mode=config.juvenile_growth_mode,
         low_density_growth_rate=config.low_density_growth_rate,
-        expected_competition_strength=config.expected_competition_strength,
-        expected_survival_rate=config.expected_survival_rate,
+        expected_competition_strength=expected_competition_strength,
+        expected_survival_rate=expected_survival_rate,
     )
     return DiscretePopulationState(
         n_tick=tick + 1,

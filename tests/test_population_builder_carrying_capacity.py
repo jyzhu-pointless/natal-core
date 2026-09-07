@@ -8,6 +8,9 @@ from numpy.typing import NDArray
 import pytest
 
 import natal as nt
+from natal.frontend.data._engine import (
+    derive_equilibrium_metrics_from_draft,
+)
 from natal.frontend.configurator import PopulationConfigBuilder
 
 
@@ -367,7 +370,7 @@ class TestCarryingCapacityResolution:
         )
 
         cfg = pop.export_config()
-        assert cfg.expected_competition_strength == pytest.approx(29250.0, rel=1e-12, abs=1e-12)
+        assert derive_equilibrium_metrics_from_draft(cfg)[0] == pytest.approx(29250.0, rel=1e-12, abs=1e-12)
 
 
 class TestChamperModel:
@@ -454,12 +457,12 @@ class TestChamperModel:
         assert cfg.carrying_capacity == pytest.approx(12.0)  # K from init age-1
 
         # Competition strength from distribution's produced_age_0 and age-1
-        assert cfg.expected_competition_strength == pytest.approx(1110.0)
+        assert derive_equilibrium_metrics_from_draft(cfg)[0] == pytest.approx(1110.0)
 
         # Survival rate from distribution's own eggs
         s_0_avg = 1.0  # both sexes have 1.0 at age 0
         expected_surv = 12.0 / (1050.0 * s_0_avg)  # 0.01142857...
-        assert cfg.expected_survival_rate == pytest.approx(expected_surv)
+        assert derive_equilibrium_metrics_from_draft(cfg)[1] == pytest.approx(expected_surv)
 
     def test_path_both_params_independent(self) -> None:
         """Path 2: K and expected_num_new_adult_females are independent."""
@@ -495,7 +498,7 @@ class TestChamperModel:
         assert cfg.carrying_capacity == pytest.approx(12.0)
 
         # Competition strength still from equilibrium distribution (not affected by external eggs)
-        assert cfg.expected_competition_strength == pytest.approx(1110.0)
+        assert derive_equilibrium_metrics_from_draft(cfg)[0] == pytest.approx(1110.0)
 
         # Survival rate uses external_expected_eggs from expected_num_new_adult_females
         # 21 females at age 2 → forward-propagated via survival → 73.5 female-age-units
@@ -503,7 +506,7 @@ class TestChamperModel:
         external_eggs = 73.5 * 50.0  # = 3675.0
         s_0_avg = 1.0
         expected_surv = 12.0 / (external_eggs * s_0_avg)
-        assert cfg.expected_survival_rate == pytest.approx(expected_surv)
+        assert derive_equilibrium_metrics_from_draft(cfg)[1] == pytest.approx(expected_surv)
 
     def test_path_initial_state_inference(self) -> None:
         """Path 3: K inferred from initial state age-1 sum; eggs from distribution."""
@@ -537,8 +540,8 @@ class TestChamperModel:
         assert cfg.carrying_capacity == pytest.approx(12.0)
 
         # Same as Path 1 (no external eggs)
-        assert cfg.expected_competition_strength == pytest.approx(1110.0)
-        assert cfg.expected_survival_rate == pytest.approx(12.0 / 1050.0)
+        assert derive_equilibrium_metrics_from_draft(cfg)[0] == pytest.approx(1110.0)
+        assert derive_equilibrium_metrics_from_draft(cfg)[1] == pytest.approx(12.0 / 1050.0)
 
     # --- Expected eggs calculation verification ---
 

@@ -246,25 +246,34 @@ def run_survival(
             new_adult_age=new_adult_age
         )
 
+        # Derived on read: the draft no longer stores the equilibrium
+        # metrics (slice 2); compute them from the config's own ecology.
+        from natal.frontend.data._engine import (
+            derive_equilibrium_metrics_from_draft,
+        )
+
+        expected_comp, expected_surv = derive_equilibrium_metrics_from_draft(
+            config
+        )
         if juvenile_growth_mode == LOGISTIC:
             scaling_factor = alg.compute_scaling_factor_logistic(
                 actual_competition_strength=actual_comp,
-                expected_competition_strength=config.expected_competition_strength,  # pyright: ignore[reportArgumentType]
-                expected_survival_rate=config.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                expected_competition_strength=expected_comp,
+                expected_survival_rate=expected_surv,
                 low_density_growth_rate=config.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
             )
         elif juvenile_growth_mode == 4:  # RICKER (exponential overcompensation)
             scaling_factor = alg.compute_scaling_factor_ricker(
                 actual_competition_strength=actual_comp,
-                expected_competition_strength=config.expected_competition_strength,  # pyright: ignore[reportArgumentType]
-                expected_survival_rate=config.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                expected_competition_strength=expected_comp,
+                expected_survival_rate=expected_surv,
                 low_density_growth_rate=config.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
             )
         else:  # Mode 3: BEVERTON_HOLT
             scaling_factor = alg.compute_scaling_factor_beverton_holt(
                 actual_competition_strength=actual_comp,
-                expected_competition_strength=config.expected_competition_strength,  # pyright: ignore[reportArgumentType]
-                expected_survival_rate=config.expected_survival_rate,  # pyright: ignore[reportArgumentType]
+                expected_competition_strength=expected_comp,
+                expected_survival_rate=expected_surv,
                 low_density_growth_rate=config.low_density_growth_rate,  # pyright: ignore[reportArgumentType]
             )
 

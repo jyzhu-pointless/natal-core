@@ -50,6 +50,15 @@ from natal.frontend.ui.visualization import get_allele_color, render_cell_svg
 if TYPE_CHECKING:
     from natal.frontend.population.base import BasePopulation
 
+def _derive_metrics(conf: object) -> tuple[float, float]:
+    """Derive the equilibrium metrics from a config's own ecology."""
+    from natal.frontend.data._engine import (
+        derive_equilibrium_metrics_from_draft,
+    )
+
+    return derive_equilibrium_metrics_from_draft(conf)  # pyright: ignore[reportArgumentType]  # dashboard receives the population config
+
+
 class Dashboard:
     """
     A real-time dashboard for controlling and visualizing a NATAL population.
@@ -910,8 +919,12 @@ class Dashboard:
             "carrying_capacity": float(conf.carrying_capacity),
             "sex_ratio": float(conf.sex_ratio),
             "low_density_growth_rate": float(conf.low_density_growth_rate),
-            "expected_competition_strength": float(conf.expected_competition_strength),
-            "expected_survival_rate": float(conf.expected_survival_rate),
+            **dict(
+                zip(
+                    ("expected_competition_strength", "expected_survival_rate"),
+                    _derive_metrics(conf),
+                )
+            ),
             "generation_time": float(conf.generation_time),
             "hook_slot": int(conf.hook_slot),
             "juvenile_growth_mode": {

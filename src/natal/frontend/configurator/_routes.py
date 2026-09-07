@@ -51,7 +51,6 @@ __all__ = [
     "lookup",
     "lookup_or_none",
     "plan_write",
-    "sync_equilibrium_for_draft",
 ]
 
 
@@ -142,8 +141,6 @@ _REPLACE_FIELDS: frozenset[str] = frozenset({
     "sperm_displacement_rate",
     "low_density_growth_rate",
     "juvenile_growth_mode",
-    "expected_competition_strength",
-    "expected_survival_rate",
     "generation_time",
 })
 
@@ -574,50 +571,12 @@ def commit_write(target: ModelDraft, plan: ResolvedWrite) -> ModelDraft:
 # ── sensitive-driven equilibrium sync ─────────────────────────────────────────
 
 
-def sync_equilibrium_for_draft(draft: ModelDraft) -> ModelDraft:
-    """Recompute the derived equilibrium caches from the draft's own state.
-
-    The single sync point driven by the jsonc ``sensitive`` column: any
-    committed write to a sensitive entry recomputes
-    ``expected_competition_strength`` / ``expected_survival_rate`` in
-    place via the shared derivation.  The declared equilibrium
-    distribution and the Champer egg override are read from the draft
-    itself (both are persisted by the route writer when declared), so no
-    per-Configurator bookkeeping is involved.  Discrete drafts carry the
-    same unified fields (their demographic vectors are normalized at
-    construction) and sync exactly like age-structured ones.
-
-    Args:
-        draft: The draft whose caches are refreshed in place.
-    """
-    from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
-
-    expected_comp, expected_surv = derive_equilibrium_metrics_from_draft(draft)
-    return draft._replace(
-        expected_competition_strength=expected_comp,
-        expected_survival_rate=expected_surv,
-    )
-
-
-# ── dispatcher ────────────────────────────────────────────────────────────────
-
-
-# Derived-cache route entries exist so reads and the sensitive-write sync
-# can resolve these names; they must never be written directly — the
-# values are recomputed from the draft's own ecology (slice 2 retires
-# the stored copies entirely).
-_DERIVED_CACHE_FIELDS: frozenset[str] = frozenset(
-    {"expected_competition_strength", "expected_survival_rate"}
-)
-
-
 def dispatch(
     target: ModelDraft,
     name: str,
     value: object,
     *,
     dirty_sink: set[str] | None = None,
-    sync_sensitive: bool = True,
 ) -> ModelDraft:
     """Resolve, validate, and commit a single parameter write.
 
@@ -633,8 +592,6 @@ def dispatch(
         value: The new value; the accepted forms depend on the kind.
         dirty_sink: Optional set receiving the contract field name
             after a successful commit (the slice-2 dirty bridge).
-        sync_sensitive: When ``False``, skip the equilibrium refresh
-            even for sensitive entries (callers that sync explicitly).
 
     Returns:
         The draft to use going forward (``target`` or its replaced
@@ -646,16 +603,8 @@ def dispatch(
         ValueError: If *value* fails bounds/shape validation.
     """
     entry = lookup(name)
-    if entry.config_field in _DERIVED_CACHE_FIELDS:
-        raise AttributeError(
-            f"{name!r} is a derived cache; it is recomputed from the "
-            "current ecology and cannot be written (read it via "
-            "pop.params.<name>)"
-        )
     plan = plan_write(target, entry, value)
     live = commit_write(target, plan)
     if dirty_sink is not None:
         dirty_sink.add(entry.contract_field)
-    if sync_sensitive and entry.sensitive:
-        live = sync_equilibrium_for_draft(live)
     return live

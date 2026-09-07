@@ -6,6 +6,9 @@ import pytest
 import natal as nt
 from natal.frontend.configurator import Configurator, set_param
 from natal.frontend.data import build_custom_slots, build_population_config
+from natal.frontend.data._engine import (
+    derive_equilibrium_metrics_from_draft,
+)
 from natal.frontend.patterns import IndividualSelector
 
 
@@ -61,10 +64,10 @@ class TestSetParam:
         assert minimal_config.eggs_per_female == 100.0
 
     def test_auto_sync_equilibrium(self, minimal_config):
-        old_comp = minimal_config.expected_competition_strength
+        old_comp = derive_equilibrium_metrics_from_draft(minimal_config)[0]
         minimal_config = set_param(minimal_config, "carrying_capacity", 8000.0)
-        new_comp = minimal_config.expected_competition_strength
-        # Equilibrium metric must change with carrying capacity
+        new_comp = derive_equilibrium_metrics_from_draft(minimal_config)[0]
+        # The derived metric must change with carrying capacity
         assert new_comp != old_comp
         assert new_comp > 0, f"competition strength should be positive, got {new_comp}"
 
@@ -277,9 +280,9 @@ class TestConfiguratorUpdate:
             .competition(carrying_capacity=10000)
             .build()
         )
-        old = pop.config.expected_competition_strength
+        old = derive_equilibrium_metrics_from_draft(pop.config)[0]
         pop.update().competition(carrying_capacity=5000)
-        new = pop.config.expected_competition_strength
+        new = derive_equilibrium_metrics_from_draft(pop.config)[0]
         assert new != old
         assert new > 0, f"competition strength should be positive, got {new}"
 
@@ -539,11 +542,11 @@ class TestHooks:
 
     def test_apply_syncs_equilibrium(self, species):
         cfg = Configurator.from_species(species).competition(carrying_capacity=5000)
-        old_comp = cfg._config.expected_competition_strength
+        old_comp = derive_equilibrium_metrics_from_draft(cfg._config)[0]
         # Scalar slots are immutable: rebind before the explicit apply.
         cfg._config = cfg._config._replace(carrying_capacity=10000.0)
         cfg.apply()
-        assert cfg._config.expected_competition_strength != old_comp
+        assert derive_equilibrium_metrics_from_draft(cfg._config)[0] != old_comp
 
 
 # ══════════════════════════════════════════════════════════════════════════

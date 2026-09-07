@@ -72,11 +72,6 @@ class ModelDraft(NamedTuple):
             probability.
         low_density_growth_rate: float, low-density growth rate r.
         juvenile_growth_mode: int, density-regulation selector.
-        expected_competition_strength: float derived cache
-            (recomputed on sensitive-key updates; leaves the contract in
-            slice ② when metrics go on-demand).
-        expected_survival_rate: float derived cache (as above).
-        generation_time: float derived cache.
         viability_fitness: (2, n_ages, n_ztypes) viability coefficients.
         fecundity_fitness: (2, n_ztypes) fecundity coefficients.
         sexual_selection_fitness: (n_ztypes, n_ztypes) mating weights.
@@ -144,9 +139,10 @@ class ModelDraft(NamedTuple):
     sperm_displacement_rate: float
     low_density_growth_rate: float
     juvenile_growth_mode: int
-    # -- derived caches (interim; leave with the carrier swap) --
-    expected_competition_strength: float
-    expected_survival_rate: float
+    # generation_time is a declared static descriptor (age_structure
+    # kwarg / build-time derivation); the equilibrium metrics are NOT
+    # stored — read them via the always-fresh derive surface
+    # (pop.params.expected_*).
     generation_time: float
     # -- fitness tensors --
     viability_fitness: NDArray[np.float64]

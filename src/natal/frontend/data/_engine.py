@@ -623,8 +623,6 @@ def build_discrete_engine_config(
         sperm_displacement_rate=m.sperm_displacement_rate,
         low_density_growth_rate=m.low_density_growth_rate,
         juvenile_growth_mode=int(m.juvenile_growth_mode),
-        expected_competition_strength=m.expected_competition_strength,
-        expected_survival_rate=m.expected_survival_rate,
         generation_time=0.0,
         viability_fitness=m.viability,
         fecundity_fitness=m.fecundity,

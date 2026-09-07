@@ -77,7 +77,7 @@ set_param(pop.config, "eggs_per_female", 100.0)  # 别名
 1. 查 `parameters.jsonc` 注册表：全名 → 短名 → 别名
 2. 定位 config 字段和数组索引
 3. 原地写入：`config.carrying_capacity[()] = 5000.0`
-4. K / eggs / sex_ratio 修改后自动 `sync_equilibrium_metrics`
+4. 均衡指标（expected_competition_strength / expected_survival_rate）按需现算（derive），不再有存储副本需要同步
 
 ---
 
@@ -106,9 +106,8 @@ def heatwave(pop: TickContext) -> int:
   5 参数目标表 + 同类生态标量）；越界值抛 `ValueError`，写入后同一 tick 后续阶段
   立即可见。
 - 向量/张量参数用 `pop.params.tensor_write(name, values)`。
-- 直接写 draft 数组（绕过 `pop.params`）**不会**自动同步 equilibrium——
-  Age-structured 模型需手动 `sync_equilibrium_metrics(config)`；`pop.params` 写入
-  会自动处理。
+- 均衡指标不再存储于配置中：任何读取（`pop.params.expected_competition_strength`
+  等）都会按当前生态现算，写入生态参数后立即反映，无需手动同步。
 - 声明式的 `Op.set_param("carrying_capacity", "K * 0.95", every=10)` 等价于按计划
   执行同一写入链（无需任何 Python 代码），详见 [Hook 系统](2_hooks.md)。
 
@@ -207,12 +206,13 @@ ndarray，不适合标量表达）；`spatial` kind 的 lambda 需要 builder �
 set_param / pop.update() / pop.params / hook 内 params 写入 / Op.set_param
   → config.carrying_capacity           # 普通标量
   → carrying_capacity[()] = 5000.0     # 原地写（原子操作）
-  → sync_equilibrium_metrics(config)   # K/eggs/sr 自动触发
+  → 读取时现算均衡指标（derive，无存储副本）
 ```
 
 生态标量（K、eggs、sex_ratio、sperm_displacement_rate、low_density_growth_rate、
-juvenile_growth_mode、generation_time、expected_competition_strength、
-expected_survival_rate）均为 普通标量。
+juvenile_growth_mode、generation_time）均为 普通标量；均衡指标
+（expected_competition_strength、expected_survival_rate）为只读派生值，经
+`pop.params.<name>` 读取（现算），直接写入会抛 AttributeError。
 
 ### `set_config()` — 整体配置替换
 

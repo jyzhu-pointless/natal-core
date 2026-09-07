@@ -16,7 +16,7 @@ Key features:
   with narrowed parameter signatures
 - **Preset/modifier/fitness** — applied directly to config arrays, no deferred execution
 - **Equilibrium sync** — `carrying_capacity` / `eggs_per_female` / `sex_ratio` changes
-  auto-trigger `sync_equilibrium_metrics`
+  derive the equilibrium metrics on read
 
 ## Quick Start
 

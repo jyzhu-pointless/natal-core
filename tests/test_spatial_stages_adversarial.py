@@ -39,6 +39,9 @@ from collections.abc import Sequence
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
+
+import natal as nt
 from natal.backends.reference.simulation.age_structured import (
     compute_equilibrium_metrics,
 )
@@ -50,11 +53,11 @@ from natal.backends.rust.rust_backend import (
 )
 from natal.contracts.materialize import SpatialMigration, materialize
 from natal.contracts.params import Params
+from natal.frontend.data._engine import (
+    derive_equilibrium_metrics_from_draft,
+)
 from natal.frontend.data.config import ModelDraft
 from natal.frontend.spatial.configurator import batch_setting
-from numpy.typing import NDArray
-
-import natal as nt
 
 pytestmark = pytest.mark.skipif(
     not rust_backend_available(),
@@ -714,8 +717,8 @@ class TestDemeSliceWriteChannels:
             n_ages=int(draft.n_ages),
             age_based_reproduction_rates=draft.age_based_reproduction_rates,
         )
-        assert float(draft.expected_competition_strength) == expected_comp
-        assert float(draft.expected_survival_rate) == expected_surv
+        assert derive_equilibrium_metrics_from_draft(draft)[0] == expected_comp
+        assert derive_equilibrium_metrics_from_draft(draft)[1] == expected_surv
 
     def test_write_genetics_detaches_shared_arrays_and_forks_bank(self) -> None:
         """A genetics write forks the bank and detaches the draft arrays.

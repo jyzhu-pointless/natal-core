@@ -7,15 +7,12 @@ offspring distributions, and other population genetics operations. All
 functions are written to be shape-defensive and to integrate with the
 `PopulationState` data structures.
 """
-from typing import TYPE_CHECKING, Annotated, Any, Optional, Tuple
+from typing import Annotated, Any, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
 
 import natal.backends.reference.sampling as sampling
-
-if TYPE_CHECKING:
-    from natal.frontend.data.config import ModelDraft
 
 # ============================================================================
 # Continuous distribution helper functions (for continuous_sampling=True)
@@ -1071,49 +1068,6 @@ def compute_equilibrium_metrics(
 
     return expected_competition_strength, expected_survival_rate
 
-
-def sync_equilibrium_metrics(config: "ModelDraft") -> "ModelDraft":
-    """Recompute and return a draft with refreshed equilibrium metrics.
-
-    Call this after modifying *carrying_capacity*, *eggs_per_female*,
-    or *sex_ratio* at runtime (e.g. from a hook or Configurator).  The
-    function reads the current values of all relevant config fields, computes
-    fresh equilibrium metrics, and returns a ``_replace``-built draft
-    carrying the new values.
-
-    Args:
-        config: ``ModelDraft`` whose equilibrium fields are refreshed.
-
-    Returns:
-        A new ``ModelDraft`` with updated ``expected_competition_strength``
-        and ``expected_survival_rate``.
-    """
-    comp, surv_val = compute_equilibrium_metrics(
-        carrying_capacity=float(config.carrying_capacity),
-        eggs_per_female=float(config.eggs_per_female),
-        sex_ratio=float(config.sex_ratio),
-        age_based_survival_rates=config.age_based_survival_rates,
-        age_based_mating_rates=config.age_based_mating_rates,
-        age_based_reproduction_rates=config.age_based_reproduction_rates,
-        female_age_based_fertility=config.female_age_based_fertility,
-        relative_competition_strength=config.age_based_relative_competition_strength,
-        new_adult_age=config.new_adult_age,
-        n_ages=config.n_ages,
-        # Re-derivation must honor the persisted Champer override — the
-        # calibrated expected_survival_rate of build time would otherwise
-        # silently fall back to the derive-from-K value on any runtime
-        # sensitive-key update.
-        external_expected_eggs=getattr(config, "external_expected_eggs", None),
-    )
-    return config._replace(
-        expected_competition_strength=comp,
-        expected_survival_rate=surv_val,
-    )
-
-
-# ============================================================================
-# Scaling factor calculation functions (for larval recruitment)
-# ============================================================================
 
 # Growth mode constants
 NO_COMPETITION = 0

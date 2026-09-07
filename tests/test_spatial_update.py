@@ -29,6 +29,9 @@ import numpy as np
 import pytest
 
 import natal as nt
+from natal.frontend.data._engine import (
+    derive_equilibrium_metrics_from_draft,
+)
 from natal.frontend.spatial.population import DemeSlice, SpatialPopulation
 
 
@@ -218,9 +221,9 @@ class TestDemeSliceEcologyWrite:
     def test_k_write_resyncs_equilibrium_metrics(self, homogeneous_pop) -> None:
         """A sensitive write recomputes the equilibrium metric caches."""
         pop = homogeneous_pop
-        before = float(pop.deme(0).config.expected_competition_strength)
+        before = derive_equilibrium_metrics_from_draft(pop.deme(0).config)[0]
         pop.deme(0).write_ecology("carrying_capacity", 100.0)
-        after = float(pop.deme(0).config.expected_competition_strength)
+        after = derive_equilibrium_metrics_from_draft(pop.deme(0).config)[0]
         assert after != before, "equilibrium metric must follow the K write"
 
     def test_vector_write_lands_per_deme(self, homogeneous_age_pop) -> None:
@@ -535,10 +538,10 @@ class TestVariantEquilibriumDeclaration:
         d1 = pop.demes[1].config
         assert float(d0.eggs_per_female) == 10.0
         assert float(d1.eggs_per_female) == 20.0
-        assert float(d0.expected_competition_strength) == 500.0
-        assert float(d0.expected_survival_rate) == 0.2
-        assert float(d1.expected_competition_strength) == 1000.0
-        assert float(d1.expected_survival_rate) == 0.1
+        assert derive_equilibrium_metrics_from_draft(d0)[0] == 500.0
+        assert derive_equilibrium_metrics_from_draft(d0)[1] == 0.2
+        assert derive_equilibrium_metrics_from_draft(d1)[0] == 1000.0
+        assert derive_equilibrium_metrics_from_draft(d1)[1] == 0.1
 
     def test_variant_external_eggs_drive_survival_not_competition(self) -> None:
         """The variant's survival rate uses the persisted egg override.
@@ -555,60 +558,45 @@ class TestVariantEquilibriumDeclaration:
         ext1 = float(pop.demes[1].config.external_expected_eggs)
         assert ext0 == ext1  # the override is declared, not per-deme
         # External eggs only change s*, never the competition strength.
-        assert float(pop.demes[0].config.expected_competition_strength) == 500.0
-        assert float(pop.demes[1].config.expected_competition_strength) == 1000.0
+        assert derive_equilibrium_metrics_from_draft(pop.demes[0].config)[0] == 500.0
+        assert derive_equilibrium_metrics_from_draft(pop.demes[1].config)[0] == 1000.0
         assert (
-            float(pop.demes[0].config.expected_survival_rate)
+            derive_equilibrium_metrics_from_draft(pop.demes[0].config)[1]
             == 100.0 / ext0
         )
         assert (
-            float(pop.demes[1].config.expected_survival_rate)
+            derive_equilibrium_metrics_from_draft(pop.demes[1].config)[1]
             == 100.0 / ext1
         )
 
     def test_variant_python_fallback_carries_the_two_params(self, monkeypatch) -> None:
-        """The forced Python fallback recompute carries declared + external.
+        """The forced-Python derive branch carries declared + external.
 
-        The assertion is scoped to the *variant* call (eggs = 20), so a
-        regression that drops the two kwargs again cannot hide behind the
-        template/sync calls that legitimately carry them.
+        Slice 2 retired the variant recompute (the metrics are derived
+        on read), so the parity target is the derive surface itself:
+        with the Rust kernel blocked, the pure-Python branch must honor
+        the declared distribution and the egg override bit-for-bit.
         """
-        from natal.frontend.data import _engine as engine_module
-
-        calls: list[dict[str, float | None]] = []
-
-        def recording_dispatch(
-            carrying_capacity: float,
-            eggs_per_female: float,
-            sex_ratio: float,
-            survival_rates: object,
-            reproduction_rates: object,
-            fertility: object,
-            competition_weights: object,
-            new_adult_age: int,
-            n_ages: int,
-            declared_distribution: object,
-            external_expected_eggs: float | None,
-        ) -> None:
-            calls.append({"eggs": eggs_per_female})
-            return None  # force the python fallback everywhere
-
-        monkeypatch.setattr(
-            engine_module, "equilibrium_metrics_dispatch", recording_dispatch
+        from natal.frontend.data._engine import (
+            derive_equilibrium_metrics_from_draft,
         )
+
         pop, declared = self._eggs_heterogeneous_population(
-            "eq_fallback_variant", external_females=100.0
+            "eq_fallback_variant2", external_females=100.0
         )
+        cfg = pop.demes[1].config
+        rust = derive_equilibrium_metrics_from_draft(cfg)
 
-        variant_calls = [c for c in calls if c["eggs"] == 20.0]
-        assert variant_calls, "the variant path never dispatched"
-        # And the fallback results honor the declared distribution, i.e.
-        # the python branch carried the two kwargs too.
-        assert float(pop.demes[1].config.expected_competition_strength) == 1000.0
-        assert (
-            float(pop.demes[1].config.expected_survival_rate)
-            == 100.0 / float(pop.demes[1].config.external_expected_eggs)
-        )
+        monkeypatch.setitem(__import__("sys").modules, "natal._engine_rs", None)
+        py = derive_equilibrium_metrics_from_draft(cfg)
+        monkeypatch.undo()
+
+        assert py == rust  # bit-for-bit across both branches
+        # The declared distribution drives the competition mass (1000,
+        # not the derivation-mode 2530) and the override drives s*.
+        assert rust[0] == 1000.0
+        ext = float(cfg.external_expected_eggs)
+        assert rust[1] == 100.0 / ext
 
     def test_variant_metrics_isolated_between_demes(self) -> None:
         """A runtime ecology write on deme 0 leaves deme 1's metrics alone."""
@@ -617,8 +605,8 @@ class TestVariantEquilibriumDeclaration:
 
         pop.demes[0].write_ecology("carrying_capacity", 999.0)
 
-        assert float(pop.demes[1].config.expected_competition_strength) == 1000.0
-        assert float(pop.demes[1].config.expected_survival_rate) == 0.1
+        assert derive_equilibrium_metrics_from_draft(pop.demes[1].config)[0] == 1000.0
+        assert derive_equilibrium_metrics_from_draft(pop.demes[1].config)[1] == 0.1
 
     def test_bad_declared_shape_raises_value_error(self) -> None:
         """A declared distribution of the wrong shape fails loudly."""
@@ -721,15 +709,15 @@ class TestEquilibriumDistributionChannels:
         """
         pop = self._population("eq_channel_age", "age_structure")
         cfg = pop.demes[0].config
-        assert float(cfg.expected_competition_strength) == 500.0
-        assert float(cfg.expected_survival_rate) == 0.2
+        assert derive_equilibrium_metrics_from_draft(cfg)[0] == 500.0
+        assert derive_equilibrium_metrics_from_draft(cfg)[1] == 0.2
 
     def test_survival_channel_declares_distribution(self) -> None:
         """survival(equilibrium_distribution=...) takes effect identically."""
         pop = self._population("eq_channel_survival", "survival")
         cfg = pop.demes[0].config
-        assert float(cfg.expected_competition_strength) == 500.0
-        assert float(cfg.expected_survival_rate) == 0.2
+        assert derive_equilibrium_metrics_from_draft(cfg)[0] == 500.0
+        assert derive_equilibrium_metrics_from_draft(cfg)[1] == 0.2
 
     def test_channel_survives_heterogeneous_replay(self) -> None:
         """The declaration recorded in the replay log reaches variants.
@@ -741,8 +729,8 @@ class TestEquilibriumDistributionChannels:
         pop = self._population(
             "eq_channel_replay", "age_structure", heterogeneous=True
         )
-        assert float(pop.demes[0].config.expected_competition_strength) == 500.0
-        assert float(pop.demes[1].config.expected_competition_strength) == 1000.0
+        assert derive_equilibrium_metrics_from_draft(pop.demes[0].config)[0] == 500.0
+        assert derive_equilibrium_metrics_from_draft(pop.demes[1].config)[0] == 1000.0
 
 
 class TestEquilibriumChannelAdversarial:
@@ -865,16 +853,16 @@ class TestEquilibriumChannelAdversarial:
             assert stored.tobytes() == self.AGE_DECLARED.tobytes(), (
                 f"{ch}: stored distribution bytes differ from the declared array"
             )
-            assert float(cfg.expected_competition_strength) == 500.0, ch
-            assert float(cfg.expected_survival_rate) == 0.2, ch
+            assert derive_equilibrium_metrics_from_draft(cfg)[0] == 500.0, ch
+            assert derive_equilibrium_metrics_from_draft(cfg)[1] == 0.2, ch
             # Bit-level metric equality against the direct channel.
             assert (
-                float(cfg.expected_competition_strength).hex()
-                == float(ref.expected_competition_strength).hex()
+                derive_equilibrium_metrics_from_draft(cfg)[0].hex()
+                == derive_equilibrium_metrics_from_draft(ref)[0].hex()
             ), ch
             assert (
-                float(cfg.expected_survival_rate).hex()
-                == float(ref.expected_survival_rate).hex()
+                derive_equilibrium_metrics_from_draft(cfg)[1].hex()
+                == derive_equilibrium_metrics_from_draft(ref)[1].hex()
             ), ch
             # The rest of the ecology anchors are channel-independent too.
             assert float(cfg.carrying_capacity) == 100.0, ch
@@ -927,8 +915,8 @@ class TestEquilibriumChannelAdversarial:
             stored = cfg.equilibrium_individual_distribution
             assert stored is not None, f"deme{i}: declaration lost on clone"
             assert stored.tobytes() == self.AGE_DECLARED.tobytes()
-            assert float(cfg.expected_competition_strength) == 500.0
-            assert float(cfg.expected_survival_rate) == 0.2
+            assert derive_equilibrium_metrics_from_draft(cfg)[0] == 500.0
+            assert derive_equilibrium_metrics_from_draft(cfg)[1] == 0.2
 
     def test_carrying_capacity_batch_replay_keeps_declaration(self) -> None:
         """A K batch forces full template replay; the declaration survives it.
@@ -952,8 +940,8 @@ class TestEquilibriumChannelAdversarial:
             assert stored is not None, f"deme{i}: declaration lost in replay"
             assert stored.tobytes() == self.AGE_DECLARED.tobytes()
             assert float(cfg.carrying_capacity) == expected_k
-            assert float(cfg.expected_competition_strength) == 500.0
-            assert float(cfg.expected_survival_rate) == 0.2
+            assert derive_equilibrium_metrics_from_draft(cfg)[0] == 500.0
+            assert derive_equilibrium_metrics_from_draft(cfg)[1] == 0.2
 
     def test_batch_setting_declaration_applies_per_deme(self) -> None:
         """A BatchSetting of distributions declares one equilibrium per deme.
@@ -982,8 +970,8 @@ class TestEquilibriumChannelAdversarial:
             stored = cfg.equilibrium_individual_distribution
             assert stored is not None, f"deme{i}: declaration lost"
             assert stored.tobytes() == expected_bytes
-            assert float(cfg.expected_competition_strength) == expected_c
-            assert float(cfg.expected_survival_rate) == expected_s
+            assert derive_equilibrium_metrics_from_draft(cfg)[0] == expected_c
+            assert derive_equilibrium_metrics_from_draft(cfg)[1] == expected_s
 
     def test_double_declaration_last_write_wins(self) -> None:
         """A survival-channel declaration overwrites an earlier age_structure one.
@@ -1001,8 +989,8 @@ class TestEquilibriumChannelAdversarial:
         stored = cfg.equilibrium_individual_distribution
         assert stored is not None
         assert stored.tobytes() == second.tobytes()
-        assert float(cfg.expected_competition_strength) == 250.0
-        assert float(cfg.expected_survival_rate) == 0.2
+        assert derive_equilibrium_metrics_from_draft(cfg)[0] == 250.0
+        assert derive_equilibrium_metrics_from_draft(cfg)[1] == 0.2
 
     def test_later_none_competition_does_not_clear_declaration(self) -> None:
         """competition(equilibrium_distribution=None) means "don't touch".
@@ -1020,8 +1008,8 @@ class TestEquilibriumChannelAdversarial:
         stored = cfg.equilibrium_individual_distribution
         assert stored is not None, "explicit None cleared the declaration"
         assert stored.tobytes() == self.AGE_DECLARED.tobytes()
-        assert float(cfg.expected_competition_strength) == 500.0
-        assert float(cfg.expected_survival_rate) == 0.2
+        assert derive_equilibrium_metrics_from_draft(cfg)[0] == 500.0
+        assert derive_equilibrium_metrics_from_draft(cfg)[1] == 0.2
 
     def test_bad_shape_via_wrapper_channel_raises_value_error(self) -> None:
         """A wrong-shaped declaration fails with the expected shape named.

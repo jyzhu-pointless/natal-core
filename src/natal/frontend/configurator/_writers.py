@@ -41,7 +41,6 @@ from natal.frontend.configurator._routes import (
     commit_write,
     lookup,
     plan_write,
-    sync_equilibrium_for_draft,
 )
 from natal.frontend.data import ModelDraft
 
@@ -330,12 +329,6 @@ class _DraftWriterBase:
         """Push committed values to the session and refresh sensitive caches."""
         if self._session is not None:
             self._push_session(touched)
-        if any(entry.sensitive for entry in touched):
-            self._draft = sync_equilibrium_for_draft(self._draft)
-            # Replacing the draft swaps identity: republish so the
-            # population's set_config observes the synced metrics.
-            if self._on_replace is not None:
-                self._on_replace(self._draft)
 
     def _push_session(self, touched: list[RouteEntry]) -> None:
         """Mirror the committed writes into the live session.

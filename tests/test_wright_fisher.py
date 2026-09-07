@@ -5,6 +5,9 @@ import pytest
 
 import natal as nt
 from natal.backends.reference.simulation.discrete_generation import run_wf_tick
+from natal.frontend.data._engine import (
+    derive_equilibrium_metrics_from_draft,
+)
 
 
 def _make_neutral_config():
@@ -406,8 +409,8 @@ class TestRegressionFixes:
             carrying_capacity=float(cfg.carrying_capacity),
             juvenile_growth_mode=int(cfg.juvenile_growth_mode),
             low_density_growth_rate=float(cfg.low_density_growth_rate),
-            expected_competition_strength=float(cfg.expected_competition_strength),
-            expected_survival_rate=float(cfg.expected_survival_rate),
+            expected_competition_strength=derive_equilibrium_metrics_from_draft(cfg)[0],
+            expected_survival_rate=derive_equilibrium_metrics_from_draft(cfg)[1],
             mating_rate_f=cfg.age_based_mating_rates[0, 1],
             mating_rate_m=cfg.age_based_mating_rates[1, 1],
             reproduction_rate=cfg.age_based_reproduction_rates[1],

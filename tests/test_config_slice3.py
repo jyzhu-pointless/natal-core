@@ -56,6 +56,7 @@ import natal as nt
 from natal.frontend.configurator import Configurator
 from natal.frontend.data import ModelDraft, build_population_config
 from natal.backends.rust.rust_backend import rust_backend_available
+from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
 from natal.frontend.configurator._routes import (
     ROUTES,
     commit_write,
@@ -274,18 +275,16 @@ class TestMethodLevelAtomicity:
             np.asarray(session.get_tensor("survival_rates")), session0
         )
 
-    def test_draft_writer_rejected_batch_skips_equilibrium_sync(self):
+    def test_draft_writer_rejected_batch_commits_nothing(self):
         cfg = _age_draft()
         writer = DraftWriter(cfg)
         writer.apply({"carrying_capacity": 400.0})
-        comp0 = float(writer.draft.expected_competition_strength)
-        surv0 = float(writer.draft.expected_survival_rate)
         with pytest.raises(ValueError):
             writer.apply({"eggs_per_female": 33.0, "sex_ratio": -0.5})
-        # No sensitive sync may have run for the partially-planned batch.
-        assert float(writer.draft.expected_competition_strength) == comp0
-        assert float(writer.draft.expected_survival_rate) == surv0
+        # A rejected batch commits no field — atomic, nothing derived moved.
+        assert float(writer.draft.carrying_capacity) == 400.0
         assert float(writer.draft.eggs_per_female) != 33.0
+        assert float(writer.draft.sex_ratio) >= 0.0
 
     def test_recovery_after_rejected_batch(self):
         # Atomicity must not poison the writer: the same writer commits a
@@ -323,41 +322,36 @@ class TestSensitiveDrivenSync:
             external_expected_eggs=cfg.external_expected_eggs,
         )
 
-    def test_sensitive_write_matches_hand_computed_metrics_exactly(self):
+    def test_write_then_derive_matches_hand_computed_metrics_exactly(self):
         writer = DraftWriter(_age_draft())
         writer.apply({"carrying_capacity": 400.0})
         exp_comp, exp_surv = self._hand_metrics(writer.draft)
-        # The sync must equal a direct call on the same inputs, bit for bit.
-        assert float(writer.draft.expected_competition_strength) == exp_comp
-        assert float(writer.draft.expected_survival_rate) == exp_surv
+        # The derive surface must equal a direct call on the same inputs,
+        # bit for bit — the stored copies retired with the sync.
+        got_comp, got_surv = derive_equilibrium_metrics_from_draft(writer.draft)
+        assert got_comp == exp_comp
+        assert got_surv == exp_surv
 
-    def test_declared_distribution_drives_the_metrics(self):
+    def test_declared_distribution_drives_the_derived_metrics(self):
         writer = DraftWriter(_age_draft())
         declared = np.array([[30.0, 30.0, 0.0], [70.0, 70.0, 0.0]])
         writer.apply({"equilibrium_distribution": declared})
         exp_comp, exp_surv = self._hand_metrics(writer.draft)
-        assert float(writer.draft.expected_competition_strength) == exp_comp
-        assert float(writer.draft.expected_survival_rate) == exp_surv
+        got_comp, got_surv = derive_equilibrium_metrics_from_draft(writer.draft)
+        assert got_comp == exp_comp
+        assert got_surv == exp_surv
 
-    def test_non_sensitive_write_leaves_caches_bit_identical(self):
+    def test_non_sensitive_write_changes_only_its_own_field(self):
         writer = DraftWriter(_age_draft())
         writer.apply({"carrying_capacity": 400.0})
-        comp0 = float(writer.draft.expected_competition_strength)
-        surv0 = float(writer.draft.expected_survival_rate)
+        comp0, surv0 = derive_equilibrium_metrics_from_draft(writer.draft)
         writer.apply({"sperm_displacement_rate": 0.3})
-        assert float(writer.draft.expected_competition_strength) == comp0
-        assert float(writer.draft.expected_survival_rate) == surv0
+        got_comp, got_surv = derive_equilibrium_metrics_from_draft(writer.draft)
+        # sperm_displacement_rate does not enter the equilibrium formulas,
+        # so the derived metrics are bit-identical.
+        assert got_comp == comp0
+        assert got_surv == surv0
         assert float(writer.draft.sperm_displacement_rate) == 0.3
-
-    def test_dispatch_sync_sensitive_false_skips_refresh(self):
-        writer = DraftWriter(_age_draft())
-        writer.apply({"carrying_capacity": 400.0})
-        comp0 = float(writer.draft.expected_competition_strength)
-        live = dispatch(
-            writer.draft, "carrying_capacity", 800.0, sync_sensitive=False,
-        )
-        assert float(live.carrying_capacity) == 800.0
-        assert float(live.expected_competition_strength) == comp0
 
     def test_cleared_champer_override_pushed_as_minus_one(self):
         session = RecordingSession()
@@ -694,7 +688,7 @@ class TestRouteTableIntegrity:
         "mode_enum",
     }
     EXPECTED_COUNTS = {
-        "scalar": 17, "geno_tensor": 8, "slot": 7, "sex_row": 5,
+        "scalar": 15, "geno_tensor": 8, "slot": 7, "sex_row": 5,
         "bool": 4, "age_vec": 2, "mode_enum": 1,
     }
     EXPECTED_SENSITIVE = {
@@ -707,7 +701,7 @@ class TestRouteTableIntegrity:
 
     def test_exactly_forty_four_rows_in_seven_shapes(self):
         entries = self._unique_entries()
-        assert len(entries) == 44
+        assert len(entries) == 42
         counts = Counter(e.kind for e in entries)  # type: ignore[attr-defined]  # entries are RouteEntry records
         assert dict(counts) == self.EXPECTED_COUNTS
         for entry in entries:
@@ -1202,8 +1196,7 @@ class TestNegativeContractsSlice3:
         for field in (
             "carrying_capacity", "eggs_per_female", "sex_ratio",
             "sperm_displacement_rate", "low_density_growth_rate",
-            "juvenile_growth_mode", "expected_competition_strength",
-            "expected_survival_rate",
+            "juvenile_growth_mode",
         ):
             assert is_replace_field(field)
         for field in ("age_based_survival_rates",):

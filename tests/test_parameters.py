@@ -214,8 +214,10 @@ class TestParametersByDomain:
         assert "growth_mode" in comp
         assert "juvenile_growth_mode" in comp["growth_mode"].aliases
         assert "competition_strength" in comp
-        assert "expected_competition_strength" in comp
-        assert "expected_survival_rate" in comp
+        # The derived-cache rows retired with the slice-2 sync; the
+        # metrics are read via the derive surface instead.
+        assert "expected_competition_strength" not in comp
+        assert "expected_survival_rate" not in comp
         assert "external_expected_eggs" in comp
         assert "equilibrium_distribution" in comp
 

@@ -77,7 +77,7 @@ Four internal steps:
 1. Look up the `parameters.jsonc` registry: full name -> short name -> alias
 2. Locate the config field and the array index
 3. Write in place: `config.carrying_capacity[()] = 5000.0`
-4. After K / eggs / sex_ratio changes, `sync_equilibrium_metrics` runs automatically
+4. Equilibrium metrics (expected_competition_strength / expected_survival_rate) are derived on read — no stored copies to sync
 
 ---
 
@@ -109,7 +109,7 @@ Rules and notes:
 - Vector/tensor parameters use `pop.params.tensor_write(name, values)`.
 - Writing draft arrays directly (bypassing `pop.params`) does **not** sync the
   equilibrium automatically -- Age-structured models need a manual
-  `sync_equilibrium_metrics(config)`; `pop.params` writes handle it.
+  the metrics follow automatically (derived on read).
 - Declarative `Op.set_param("carrying_capacity", "K * 0.95", every=10)` is equivalent
   to running the same write chain on a schedule (no Python code), see
   [Hook System](2_hooks.md).
@@ -201,7 +201,7 @@ All modification paths converge on the same operation:
 set_param / pop.update() / pop.params / hook-side params writes / Op.set_param
   -> config.carrying_capacity           # plain scalar
   -> carrying_capacity[()] = 5000.0     # in-place write (atomic)
-  -> sync_equilibrium_metrics(config)   # triggered automatically for K/eggs/sr
+  -> equilibrium metrics derived on read (no stored copies)
 ```
 
 Ecology scalars (K, eggs, sex_ratio, sperm_displacement_rate, low_density_growth_rate,
