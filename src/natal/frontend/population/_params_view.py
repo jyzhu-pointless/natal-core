@@ -190,6 +190,32 @@ class ParamsView:
         """
         self._pop = pop
 
+    # -- derived equilibrium metrics (read-only, always fresh) ----------------
+
+    @property
+    def expected_competition_strength(self) -> float:
+        """The equilibrium competition strength derived from current values.
+
+        Always freshly computed from the draft's own ecology (never a
+        cached copy), so runtime parameter writes are reflected
+        immediately.
+        """
+        from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
+
+        return derive_equilibrium_metrics_from_draft(self._draft)[0]
+
+    @property
+    def expected_survival_rate(self) -> float:
+        """The equilibrium survival rate derived from current values.
+
+        Always freshly computed from the draft's own ecology (never a
+        cached copy), so runtime parameter writes are reflected
+        immediately.
+        """
+        from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
+
+        return derive_equilibrium_metrics_from_draft(self._draft)[1]
+
     # -- internal helpers ------------------------------------------------------
 
     @property
@@ -284,6 +310,14 @@ class ParamsView:
         if name.startswith("_"):
             super().__setattr__(name, value)
             return
+        if name in ("expected_competition_strength", "expected_survival_rate"):
+            # Read-only derived metrics: property reads recompute them;
+            # writes would desynchronize the draft cache from the
+            # engine's own derivation.
+            raise AttributeError(
+                f"pop.params.{name} is a read-only derived metric; "
+                "it follows the population's ecology automatically"
+            )
         entry = lookup_or_none(name)
         if entry is None or entry.kind not in ("scalar", "mode_enum", "slot", "bool"):
             raise AttributeError(

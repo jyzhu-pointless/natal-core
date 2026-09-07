@@ -32,11 +32,8 @@ import pytest
 
 import natal as nt
 from natal.backends.rust.rust_backend import rust_backend_available
-from natal.frontend.configurator import Configurator, set_param
-from natal.frontend.data import ModelDraft
-from natal.frontend.configurator import _routes
+from natal.frontend.configurator import Configurator, _routes, set_param
 from natal.frontend.configurator._routes import (
-    ROUTES,
     ROUTES_BY_METHOD,
     commit_write,
     dispatch,
@@ -49,7 +46,8 @@ from natal.frontend.configurator._writers import (
     DraftWriter,
     HookConfigWriter,
 )
-from natal.frontend.utils.parameters import ALL_PARAMETERS, _build_registry
+from natal.frontend.data import ModelDraft
+from natal.frontend.utils.parameters import _build_registry
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -149,9 +147,13 @@ class TestModeEnumShape:
         from natal.frontend.configurator._params import resolve_growth_mode
 
         with pytest.raises(ImportError):
-            from natal.frontend.data import CONCAVE  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            from natal.frontend.data import (
+                CONCAVE,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            )
         with pytest.raises(ImportError):
-            from natal.frontend.data.constants import CONCAVE  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            from natal.frontend.data.constants import (
+                CONCAVE,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            )
         assert not hasattr(nt, "CONCAVE")
         # The legacy resolver rejects both spellings but keeps mode 3 valid.
         with pytest.raises(ValueError, match="Unknown growth mode"):
@@ -1136,3 +1138,128 @@ class TestPlanCommitSplit:
         # plan afterwards is still possible.
         cfg = commit_write(cfg, plans[0])
         assert float(cfg.carrying_capacity) == 222.0
+
+
+class TestDerivedMetricQueries:
+    """``pop.params`` exposes freshly derived equilibrium metrics.
+
+    The properties always recompute from the draft's own ecology; the
+    draft's stored copies stay in lockstep through the sensitive-write
+    sync until slice 2 retires them.
+    """
+
+    def test_params_metrics_match_config_cache_after_build(self):
+        """Derived properties equal the built caches exactly."""
+        sp = nt.Species.from_dict(
+            name="__slice3_derived_q__",
+            structure={"chr1": {"loc": ["A", "B"]}},
+            gamete_labels=["default"],
+        )
+        pop = (
+            nt.AgeStructuredPopulation.setup(species=sp, stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 60, 0, 0]},
+                    "male": {"A|A": [0, 40, 0, 0]},
+                }
+            )
+            .reproduction(
+                female_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+                male_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+                eggs_per_female=17.0,
+            )
+            .survival(
+                female_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+                male_age_based_survival=[1.0, 0.85, 0.6, 0.0],
+            )
+            .competition(carrying_capacity=500.0, juvenile_growth_mode=3)
+            .build()
+        )
+        assert (
+            pop.params.expected_competition_strength
+            == pop.config.expected_competition_strength
+        )
+        assert (
+            pop.params.expected_survival_rate == pop.config.expected_survival_rate
+        )
+
+    def test_params_metrics_track_runtime_writes(self):
+        """A runtime K write moves the derived properties immediately."""
+        sp = nt.Species.from_dict(
+            name="__slice3_derived_w__",
+            structure={"chr1": {"loc": ["A", "B"]}},
+            gamete_labels=["default"],
+        )
+        pop = (
+            nt.AgeStructuredPopulation.setup(species=sp, stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 60, 0, 0]},
+                    "male": {"A|A": [0, 40, 0, 0]},
+                }
+            )
+            .reproduction(eggs_per_female=17.0)
+            .survival(
+                female_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+                male_age_based_survival=[1.0, 0.85, 0.6, 0.0],
+            )
+            .competition(carrying_capacity=500.0, juvenile_growth_mode=3)
+            .build()
+        )
+        before = pop.params.expected_competition_strength
+
+        pop.update().competition(carrying_capacity=125.0)
+
+        after = pop.params.expected_competition_strength
+        # In derivation mode the competition mass scales with K, so the
+        # quarter-capacity write must quarter the metric.
+        np.testing.assert_allclose(after, before * 125.0 / 500.0)
+        # And the draft cache stays in lockstep (sync-driven) until
+        # slice 2 removes it.
+        assert after == pop.config.expected_competition_strength
+
+    def test_derived_metrics_reject_direct_writes(self):
+        """Derived caches are read-only: both write channels fail closed.
+
+        A pre-batch probe showed a direct ``pop.params.<metric> = ...``
+        assignment slipped past the route table into the draft (and a
+        session KeyError), silently desynchronizing the cache from the
+        engine's own derivation.  Both the params view and the dispatch
+        entry now reject the write and leave the draft untouched.
+        """
+        from natal.frontend.configurator._routes import dispatch
+
+        sp = nt.Species.from_dict(
+            name="__slice3_derived_ro__",
+            structure={"chr1": {"loc": ["A", "B"]}},
+            gamete_labels=["default"],
+        )
+        pop = (
+            nt.AgeStructuredPopulation.setup(species=sp, stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": [0, 60, 0, 0]},
+                    "male": {"A|A": [0, 40, 0, 0]},
+                }
+            )
+            .reproduction(eggs_per_female=17.0)
+            .competition(carrying_capacity=500.0, juvenile_growth_mode=3)
+            .build()
+        )
+        cached = pop.config.expected_competition_strength
+        fresh = pop.params.expected_competition_strength
+        assert cached == fresh  # sanity: the two sources agree
+
+        with pytest.raises(AttributeError, match="read-only derived metric"):
+            pop.params.expected_competition_strength = 1.0
+        with pytest.raises(AttributeError, match="derived cache"):
+            dispatch(pop.config, "expected_competition_strength", 1.0)
+        with pytest.raises(AttributeError, match="derived cache"):
+            dispatch(pop.config, "expected_survival_rate", 0.5)
+
+        # Zero-write contract: nothing moved on either channel.
+        assert pop.config.expected_competition_strength == cached
+        assert pop.params.expected_competition_strength == fresh

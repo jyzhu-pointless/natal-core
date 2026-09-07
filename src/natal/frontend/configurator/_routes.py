@@ -580,68 +580,19 @@ def sync_equilibrium_for_draft(draft: ModelDraft) -> ModelDraft:
     The single sync point driven by the jsonc ``sensitive`` column: any
     committed write to a sensitive entry recomputes
     ``expected_competition_strength`` / ``expected_survival_rate`` in
-    place.  The declared equilibrium distribution and the Champer egg
-    override are read from the draft itself (both are persisted by the
-    route writer when declared), so no per-Configurator bookkeeping is
-    involved.  Discrete drafts carry the same unified fields (their
-    demographic vectors are normalized at construction) and sync
-    exactly like age-structured ones.
+    place via the shared derivation.  The declared equilibrium
+    distribution and the Champer egg override are read from the draft
+    itself (both are persisted by the route writer when declared), so no
+    per-Configurator bookkeeping is involved.  Discrete drafts carry the
+    same unified fields (their demographic vectors are normalized at
+    construction) and sync exactly like age-structured ones.
 
     Args:
         draft: The draft whose caches are refreshed in place.
     """
-    from natal.frontend.data._engine import equilibrium_metrics_dispatch
+    from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
 
-    eq_dist = draft.equilibrium_individual_distribution
-    external_eggs = draft.external_expected_eggs
-    # Python falls back to the female mating-rate row when the
-    # reproduction vector was not declared; resolve that here so both the
-    # Rust kernel and the Python fallback consume the same inputs.
-    reproduction = (
-        draft.age_based_reproduction_rates
-        if draft.age_based_reproduction_rates is not None
-        else draft.age_based_mating_rates[0]
-    )
-
-    # Rust kernel first via the shared dispatch (plan 5.2: Rust owns the
-    # numeric algorithm); the pure-Python spelling remains the
-    # extension-less fallback until the Rust-only stage retires it.  Both
-    # mirror each other statement by statement, so the results are
-    # bit-identical either way.
-    metrics = equilibrium_metrics_dispatch(
-        draft.carrying_capacity,
-        draft.eggs_per_female,
-        draft.sex_ratio,
-        draft.age_based_survival_rates,
-        reproduction,
-        draft.female_age_based_fertility,
-        draft.age_based_relative_competition_strength,
-        int(draft.new_adult_age),
-        int(draft.n_ages),
-        eq_dist,
-        external_eggs,
-    )
-    if metrics is not None:
-        expected_comp, expected_surv = metrics
-    else:
-        from natal.backends.reference.simulation.age_structured import (
-            compute_equilibrium_metrics,
-        )
-
-        expected_comp, expected_surv = compute_equilibrium_metrics(
-            carrying_capacity=float(draft.carrying_capacity),
-            eggs_per_female=float(draft.eggs_per_female),
-            age_based_survival_rates=draft.age_based_survival_rates,
-            age_based_mating_rates=draft.age_based_mating_rates,
-            age_based_reproduction_rates=draft.age_based_reproduction_rates,
-            female_age_based_fertility=draft.female_age_based_fertility,
-            relative_competition_strength=draft.age_based_relative_competition_strength,
-            sex_ratio=float(draft.sex_ratio),
-            new_adult_age=int(draft.new_adult_age),
-            n_ages=int(draft.n_ages),
-            equilibrium_individual_count=eq_dist,
-            external_expected_eggs=external_eggs,
-        )
+    expected_comp, expected_surv = derive_equilibrium_metrics_from_draft(draft)
     return draft._replace(
         expected_competition_strength=expected_comp,
         expected_survival_rate=expected_surv,
@@ -649,6 +600,15 @@ def sync_equilibrium_for_draft(draft: ModelDraft) -> ModelDraft:
 
 
 # ── dispatcher ────────────────────────────────────────────────────────────────
+
+
+# Derived-cache route entries exist so reads and the sensitive-write sync
+# can resolve these names; they must never be written directly — the
+# values are recomputed from the draft's own ecology (slice 2 retires
+# the stored copies entirely).
+_DERIVED_CACHE_FIELDS: frozenset[str] = frozenset(
+    {"expected_competition_strength", "expected_survival_rate"}
+)
 
 
 def dispatch(
@@ -686,6 +646,12 @@ def dispatch(
         ValueError: If *value* fails bounds/shape validation.
     """
     entry = lookup(name)
+    if entry.config_field in _DERIVED_CACHE_FIELDS:
+        raise AttributeError(
+            f"{name!r} is a derived cache; it is recomputed from the "
+            "current ecology and cannot be written (read it via "
+            "pop.params.<name>)"
+        )
     plan = plan_write(target, entry, value)
     live = commit_write(target, plan)
     if dirty_sink is not None:

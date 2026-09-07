@@ -22,6 +22,7 @@ from ._config import (
 from .config import ModelDraft
 
 __all__ = [
+    "derive_equilibrium_metrics_from_draft",
     "equilibrium_metrics_dispatch",
     "initialize_gamete_map",
     "initialize_zygote_map",
@@ -165,6 +166,65 @@ def recompute_offspring_tensor(
             n_ztypes=n_z,
             n_gtypes=n_g,
         )
+    )
+
+
+def derive_equilibrium_metrics_from_draft(
+    draft: ModelDraft,
+) -> tuple[float, float]:
+    """Derive the equilibrium metrics from a draft's current values.
+
+    Single read-side derivation shared by the sensitive-write sync and
+    the ``pop.params`` query surface (plan 5.2: one numeric source; the
+    draft's stored copies retire with slice 2).  The declared
+    distribution and Champer override are read from the draft itself,
+    and the reproduction fallback (female mating row) is resolved here.
+
+    Args:
+        draft: The draft whose ecology drives the derivation.
+
+    Returns:
+        ``(expected_competition_strength, expected_survival_rate)`` —
+        always freshly computed, never a cached copy.
+    """
+    reproduction = (
+        draft.age_based_reproduction_rates
+        if draft.age_based_reproduction_rates is not None
+        else draft.age_based_mating_rates[0]
+    )
+    metrics = equilibrium_metrics_dispatch(
+        draft.carrying_capacity,
+        draft.eggs_per_female,
+        draft.sex_ratio,
+        draft.age_based_survival_rates,
+        reproduction,
+        draft.female_age_based_fertility,
+        draft.age_based_relative_competition_strength,
+        int(draft.new_adult_age),
+        int(draft.n_ages),
+        draft.equilibrium_individual_distribution,
+        draft.external_expected_eggs,
+    )
+    if metrics is not None:
+        return metrics
+    # Extension-less fallback: the pure-Python spelling (retired at S6).
+    from natal.backends.reference.simulation.age_structured import (
+        compute_equilibrium_metrics,
+    )
+
+    return compute_equilibrium_metrics(
+        carrying_capacity=float(draft.carrying_capacity),
+        eggs_per_female=float(draft.eggs_per_female),
+        age_based_survival_rates=draft.age_based_survival_rates,
+        age_based_mating_rates=draft.age_based_mating_rates,
+        age_based_reproduction_rates=draft.age_based_reproduction_rates,
+        female_age_based_fertility=draft.female_age_based_fertility,
+        relative_competition_strength=draft.age_based_relative_competition_strength,
+        sex_ratio=float(draft.sex_ratio),
+        new_adult_age=int(draft.new_adult_age),
+        n_ages=int(draft.n_ages),
+        equilibrium_individual_count=draft.equilibrium_individual_distribution,
+        external_expected_eggs=draft.external_expected_eggs,
     )
 
 
