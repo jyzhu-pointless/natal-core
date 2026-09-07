@@ -218,14 +218,17 @@ pub fn binomial(rng: &mut SessionRng, n: i64, p: f64) -> f64 {
 /// - `lambda`: Mean of the Poisson distribution.
 ///
 /// ## Returns
-/// The sampled count as ``f64``.  Very large lambdas return the mean directly
-/// to avoid numerical overflow.
+/// The sampled count as ``f64``.  Lambdas at or above the library sampling
+/// ceiling return the mean directly to avoid numerical overflow.
 pub fn poisson(rng: &mut SessionRng, lambda: f64) -> f64 {
     // Guard tiny and huge lambdas to avoid numerical issues in rand_distr.
+    // The upper guard must sit at rand_distr's own ceiling: Poisson::new
+    // rejects lambdas above Poisson::MAX_LAMBDA, so any window between a
+    // larger guard and that ceiling would panic instead of sampling.
     if lambda <= EPS {
         return 0.0;
     }
-    if lambda >= RESOLUTION_LIMIT {
+    if lambda >= Poisson::<f64>::MAX_LAMBDA {
         return lambda;
     }
     Poisson::new(lambda)
@@ -513,6 +516,29 @@ mod tests {
         assert_eq!(poisson(&mut rng, 1e300), 1e300);
         assert_eq!(gamma(&mut rng, 0.0), 0.0);
         assert_eq!(gamma(&mut rng, 1e300), 1e300);
+    }
+
+    /// Lambdas between rand_distr's own ceiling and the resolution limit
+    /// must return the mean, not trip ``Poisson::new``'s ShapeTooLarge
+    /// rejection: the sampler rejects lambdas above
+    /// ``Poisson::MAX_LAMBDA``.
+    #[test]
+    fn poisson_lambda_above_distr_ceiling_returns_mean() {
+        let mut rng = new_rng(9);
+        assert_eq!(poisson(&mut rng, 2.0e19), 2.0e19);
+        assert_eq!(
+            poisson(&mut rng, Poisson::<f64>::MAX_LAMBDA),
+            Poisson::<f64>::MAX_LAMBDA
+        );
+        // Just below the ceiling the sampler must still draw from the
+        // distribution: identical samples would mean a guard was lowered
+        // into the window and the huge-lambda mean shortcut moved down.
+        let samples: [f64; 8] = std::array::from_fn(|_| poisson(&mut rng, 1.8e19));
+        assert!(samples.iter().all(|sample| sample.is_finite()));
+        assert!(
+            samples.iter().any(|&sample| sample != 1.8e19),
+            "1.8e19 is below MAX_LAMBDA and must be sampled, not returned as the mean"
+        );
     }
 
     /// Below the small-n threshold the continuous multinomial is the exact

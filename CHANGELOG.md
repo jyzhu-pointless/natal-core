@@ -39,6 +39,11 @@
 - **Preset modifier refresh**: rebuild gamete and zygote conversions from the
   Mendelian baseline so repeated refresh or runtime reconfiguration cannot
   compound drive rates; preserve build-time preset registration after `build()`.
+- **Discrete Poisson lambda ceiling**: the Rust Poisson helper now returns the
+  mean for lambdas at or above the library sampling ceiling instead of
+  panicking between that ceiling (1.844e19) and the 2^104 resolution guard;
+  a stochastic run whose per-pair egg total lands in that window (e.g. a
+  census explosion under a large-scale configuration) now completes.
 
 ### Changed
 
