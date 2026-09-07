@@ -316,7 +316,7 @@ fn tick_discrete_deme(
         tick,
         journal: Vec::new(),
     });
-    let result = discrete::run_tick(rng, cfg, hooks, ind, tick, eco, &mut ctx);
+    let result = discrete::run_tick(rng, cfg, hooks, ind, tick, deme_id as i64, eco, &mut ctx);
     let rows = ctx.map(|ctx| {
         for id in 0..crate::hooks::N_ECO_PARAMS {
             eco[id] = ctx.params.eco_value(id, 0);

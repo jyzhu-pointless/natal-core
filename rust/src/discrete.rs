@@ -621,6 +621,7 @@ pub fn run_tick(
     hooks: &HookProgram,
     ind: &mut [f64],
     tick: i64,
+    deme_id: i64,
     eco_values: &mut [f64],
     eco_ctx: &mut Option<crate::lifecycle::EcoCtx<'_>>,
 ) -> Result<i32, String> {
@@ -648,13 +649,11 @@ pub fn run_tick(
         tick,
         cfg.stochastic,
         cfg.continuous_sampling,
-        0,
+        deme_id,
         eco_values,
     );
     if result == 0 {
-        // Discrete Rust sessions are panmictic-only today: hooks must see
-        // deme 0 (TickContext.deme_id contract), never a -1 sentinel.
-        result = hooks.fire_python_callbacks(0, ind, &mut [], tick, 0)?;
+        result = hooks.fire_python_callbacks(0, ind, &mut [], tick, deme_id)?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
@@ -678,11 +677,11 @@ pub fn run_tick(
         tick,
         cfg.stochastic,
         cfg.continuous_sampling,
-        0,
+        deme_id,
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(1, ind, &mut [], tick, 0)?;
+        result = hooks.fire_python_callbacks(1, ind, &mut [], tick, deme_id)?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
@@ -706,11 +705,11 @@ pub fn run_tick(
         tick,
         cfg.stochastic,
         cfg.continuous_sampling,
-        0,
+        deme_id,
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(2, ind, &mut [], tick, 0)?;
+        result = hooks.fire_python_callbacks(2, ind, &mut [], tick, deme_id)?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
@@ -983,7 +982,7 @@ pub fn run_batch(
             run_wf_tick(rng, cfg, ind)?;
             0
         } else {
-            run_tick(rng, cfg, hooks, ind, current_tick, eco_values, eco_ctx)?
+            run_tick(rng, cfg, hooks, ind, current_tick, 0, eco_values, eco_ctx)?
         };
         if result != 0 {
             return Ok((current_tick, history, n_rows, true));

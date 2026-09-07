@@ -513,3 +513,291 @@ def test_discrete_spatial_stochastic_migration_matches_python_dispatch() -> None
     population.reset()
     population.run(1, record_every=0)
     np.testing.assert_array_equal(_stacked(population), _stacked(fresh))
+
+
+# ── S3c: Python callbacks on the spatial session ─────────────────────────────
+
+
+def _build_callback_population(
+    name: str,
+    seed: int,
+    hooks: tuple,
+    *,
+    n_demes: int = 3,
+    stochastic: bool = False,
+) -> SpatialPopulation:
+    """Build a small age-structured spatial population with *hooks*."""
+    builder = (
+        nt.SpatialPopulation.builder(
+            _species(f"{name}sp"), n_demes=n_demes, pop_type="age_structured"
+        )
+        .setup(name=name, stochastic=stochastic)
+        .age_structure(n_ages=3, new_adult_age=1)
+        .initial_state(
+            individual_count=nt.batch_setting(
+                [
+                    {
+                        "female": {"WT|WT": [0.0, 100.0, 0.0]},
+                        "male": {"WT|WT": [0.0, 100.0, 0.0]},
+                    },
+                ]
+                * n_demes
+            )
+        )
+        .reproduction(
+            female_age_based_mating_rate=[0.0, 1.0, 0.0],
+            male_age_based_mating_rate=[0.0, 1.0, 0.0],
+            eggs_per_female=4.0,
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.0],
+            male_age_based_survival=[1.0, 0.9, 0.0],
+        )
+        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        .migration(adjacency=np.eye(n_demes), migration_rate=0.0)
+    )
+    if hooks:
+        builder = builder.hooks(*hooks)
+    population = builder.build()
+    population.enable_rust_backend(seed=seed)
+    return population
+
+
+def test_python_callbacks_fire_per_deme_and_keep_trajectories() -> None:
+    """Callbacks fire once per deme per tick; a no-op hook leaves the
+    deterministic trajectory bitwise unchanged (scheduler parity)."""
+    fires: list[tuple[int, int]] = []
+
+    @nt.hook(event="early")
+    def counter(context: nt.TickContext) -> None:
+        fires.append((int(context.tick), int(context.deme_id)))
+
+    plain = _build_callback_population("own_cb_plain", 73, ())
+    hooked = _build_callback_population("own_cb_hook", 73, (counter,))
+    plain.run(2, record_every=0)
+    hooked.run(2, record_every=0)
+    assert sorted(fires) == sorted(
+        (tick, deme) for tick in (0, 1) for deme in range(3)
+    )
+    np.testing.assert_array_equal(_stacked(plain), _stacked(hooked))
+
+
+def test_python_hook_update_lands_for_the_next_tick() -> None:
+    """ctx.update writes defer to the next tick (plain-backend semantics).
+
+    A late hook halving K must bind the FOLLOWING tick's density
+    regulation: the hooked trajectory diverges from the un-hooked twin
+    and the deme draft reads the written value.
+    """
+
+    @nt.hook(event="late")
+    def halve(context: nt.TickContext) -> None:
+        context.update().competition(carrying_capacity=500.0)
+
+    hooked = _build_callback_population(
+        "own_upd_h", 74,
+        (halve,),
+    )
+    twin = _build_callback_population("own_upd_n", 74, ())
+    hooked.run(2, record_every=0)
+    twin.run(2, record_every=0)
+    assert hooked.demes[0].params.carrying_capacity == 500.0
+    assert twin.demes[0].params.carrying_capacity == 100000.0
+    assert not np.array_equal(_stacked(hooked), _stacked(twin))
+
+
+def test_python_hook_stop_on_discrete_spatial_freezes_the_tick() -> None:
+    """A Python stop on the discrete spatial path is a graceful freeze."""
+
+    @nt.hook(event="first")
+    def stopper(context: nt.TickContext) -> None:
+        context.stop()
+
+    population = (
+        nt.SpatialPopulation.builder(
+            _species("own_cbsp_sp"), n_demes=2, pop_type="discrete_generation"
+        )
+        .setup(name="own_cb_stop", stochastic=False)
+        .initial_state(
+            individual_count=nt.batch_setting(
+                [{"female": {"WT|WT": 100.0}, "male": {"WT|WT": 100.0}}] * 2
+            )
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2, sex_ratio=0.5)
+        .competition(carrying_capacity=1e12, low_density_growth_rate=2.0)
+        .migration(adjacency=np.eye(2), migration_rate=0.0)
+        .hooks(stopper)
+        .build()
+    )
+    population.enable_rust_backend(seed=75)
+    population.run(3, record_every=0)
+    assert population._tick == 0  # noqa: SLF001 — stop froze the tick
+    with pytest.raises(RuntimeError, match="finished"):
+        population.run(1)
+
+
+def test_mixed_declarative_and_python_hooks_share_one_program() -> None:
+    """A declarative set_param and a Python callback coexist: both land."""
+    seen: list[int] = []
+
+    @nt.hook(event="late")
+    def observer(context: nt.TickContext) -> None:
+        seen.append(int(context.deme_id))
+
+    @nt.hook(event="late")
+    def halve_k() -> list:
+        return [nt.Op.set_param("carrying_capacity", "K * 0.5")]
+
+    population = (
+        nt.SpatialPopulation.builder(
+            _species("own_mixsp"), n_demes=2, pop_type="discrete_generation"
+        )
+        .setup(name="own_mix", stochastic=False)
+        .initial_state(
+            individual_count=nt.batch_setting(
+                [{"female": {"WT|WT": 100.0}, "male": {"WT|WT": 100.0}}] * 2
+            )
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2, sex_ratio=0.5)
+        .competition(carrying_capacity=10000.0, low_density_growth_rate=2.0)
+        .migration(adjacency=np.eye(2), migration_rate=0.0)
+        .hooks(halve_k, observer)
+        .build()
+    )
+    population.enable_rust_backend(seed=76)
+    population.run(2, record_every=0)
+    assert [deme.params.carrying_capacity for deme in population.demes] == [
+        2500.0,
+        2500.0,
+    ]
+    assert sorted(seen) == [0, 0, 1, 1]
+
+
+def test_python_callbacks_fire_on_every_registered_event() -> None:
+    """F2 guard: hooks on multiple events all fire (first+early+late)."""
+    seen_events: list[str] = []
+
+    @nt.hook(event="first")
+    def on_first(context: nt.TickContext) -> None:
+        seen_events.append("first")
+
+    @nt.hook(event="early")
+    def on_early(context: nt.TickContext) -> None:
+        seen_events.append("early")
+
+    @nt.hook(event="late")
+    def on_late(context: nt.TickContext) -> None:
+        seen_events.append("late")
+
+    population = _build_callback_population(
+        "own_multi", 77, (on_first, on_early, on_late)
+    )
+    population.run(2, record_every=0)
+    # 3 demes x 2 ticks per event.
+    assert sorted(seen_events) == sorted(
+        ["first"] * 6 + ["early"] * 6 + ["late"] * 6
+    )
+
+
+def test_python_update_routes_to_every_owning_deme() -> None:
+    """F1 guard: a build-time hook writing ctx.update lands on ALL demes
+    (cloned demes must not share one runner bound to deme 0)."""
+
+    @nt.hook(event="late")
+    def halve(context: nt.TickContext) -> None:
+        context.update().competition(carrying_capacity=500.0)
+
+    population = _build_callback_population("own_route", 78, (halve,))
+    population.run(2, record_every=0)
+    assert [
+        deme.params.carrying_capacity for deme in population.demes
+    ] == [500.0, 500.0, 500.0]
+
+
+def test_declarative_and_python_same_tick_writes_compose() -> None:
+    """A declarative eggs write and a python K write in the same tick must
+    compose: the declarative commit binds the NEXT tick's journal old
+    value and the python write lands beside it (no clobber)."""
+    journal_seen: list[tuple] = []
+
+    @nt.hook(event="first")
+    def bump_eggs() -> list:
+        return [nt.Op.set_param("eggs_per_female", "eggs_per_female + 1", every=1)]
+
+    @nt.hook(event="first")
+    def write_k(context: nt.TickContext) -> None:
+        journal_seen.append(len(journal_seen))
+        context.update().competition(carrying_capacity=500.0)
+
+    population = (
+        nt.SpatialPopulation.builder(
+            _species("own_composesp"), n_demes=1, pop_type="age_structured"
+        )
+        .setup(name="own_compose", stochastic=False)
+        .age_structure(n_ages=3, new_adult_age=1)
+        .initial_state(
+            individual_count=nt.batch_setting(
+                [
+                    {
+                        "female": {"WT|WT": [0.0, 100.0, 0.0]},
+                        "male": {"WT|WT": [0.0, 100.0, 0.0]},
+                    },
+                ]
+            )
+        )
+        .reproduction(
+            female_age_based_mating_rate=[0.0, 1.0, 0.0],
+            male_age_based_mating_rate=[0.0, 1.0, 0.0],
+            eggs_per_female=4.0,
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.0],
+            male_age_based_survival=[1.0, 0.9, 0.0],
+        )
+        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        .migration(adjacency=np.eye(1), migration_rate=0.0)
+        .hooks(bump_eggs, write_k)
+        .build()
+    )
+    population.enable_rust_backend(seed=79)
+    population.run(3, record_every=0)
+    eggs_log = [
+        row for row in population.demes[0].params_log
+        if row[1] == "eggs_per_female"
+    ]
+    # Tick 0 commits 4->5; tick 1 must run with eggs=5 and commit 5->6 —
+    # the python K write (a different field) must not revert the tick-0
+    # declarative commit, and the K write lands beside it.
+    assert eggs_log[0] == (0, "eggs_per_female", 4.0, 5.0)
+    assert eggs_log[1] == (1, "eggs_per_female", 5.0, 6.0)
+    assert population.demes[0].params.carrying_capacity == 500.0
+
+
+def test_python_vector_write_reaches_every_sharing_deme() -> None:
+    """F8 guard: a ctx.update of a VECTOR ecology field on a homogeneous
+    build (demes sharing one config object, vectors written in place)
+    must refresh the session column of every sharing deme."""
+
+    @nt.hook(event="late")
+    def slash_survival(context: nt.TickContext) -> None:
+        context.update().survival(female_age_based_survival=[1.0, 0.1, 0.0])
+
+    population = _build_callback_population(
+        "own_vec", 80, (slash_survival,)
+    )
+    twin = _build_callback_population("own_vec_n", 80, ())
+    population.run(2, record_every=0)
+    twin.run(2, record_every=0)
+    # All demes read the new vector...
+    for deme in population.demes:
+        assert float(deme.params.survival_rates[0][1]) == 0.1
+    # ...and every deme's TRAJECTORY diverged from the un-hooked twin
+    # (each session column was refreshed, not just deme 0's).
+    stacked_hooked = _stacked(population)
+    stacked_twin = _stacked(twin)
+    for deme_index in range(3):
+        assert not np.array_equal(
+            stacked_hooked[deme_index], stacked_twin[deme_index]
+        ), f"deme {deme_index} kept the stale survival column"

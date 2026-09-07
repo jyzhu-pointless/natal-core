@@ -11,6 +11,7 @@ from dataclasses import replace
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     List,
     Literal,
     Optional,
@@ -423,6 +424,55 @@ def _minimal_contract(
 
 
 # Contract ecology field names carried as (n_demes, ...) columns.
+def _eco_field_values(draft: ModelDraft) -> dict[str, float | int | bool | bytes | None]:
+    """Snapshot the draft's runtime ecology fields by contract name.
+
+    Used to detect whether a Python hook wrote params through its
+    TickContext: comparing the snapshot before and after the fire yields
+    exactly the fields the PYTHON hook changed, so the container never
+    pushes stale values over a same-tick declarative set_param commit.
+
+    Args:
+        draft: A deme's live ``ModelDraft``.
+
+    Returns:
+        A mapping of contract ecology field name to current value
+        (vectors as bytes so the mapping stays hashable/comparable).
+    """
+    import numpy as np
+
+    values: dict[str, float | int | bool | bytes | None] = {}
+    for draft_field, contract_name in _ECO_DRAFT_TO_COLUMN:
+        raw = getattr(draft, draft_field)
+        if isinstance(raw, np.generic):
+            values[contract_name] = raw.item()
+        elif isinstance(raw, np.ndarray):
+            values[contract_name] = np.ascontiguousarray(
+                raw, dtype=np.float64
+            ).tobytes()
+        else:
+            values[contract_name] = raw
+    return values
+
+
+# Draft field -> contract column name for the runtime ecology fields a
+# Python hook may write through its TickContext (migration_rate has its
+# own dedicated channel and is excluded).
+_ECO_DRAFT_TO_COLUMN: tuple[tuple[str, str], ...] = (
+    ("carrying_capacity", "carrying_capacity"),
+    ("eggs_per_female", "eggs_per_female"),
+    ("sex_ratio", "sex_ratio"),
+    ("sperm_displacement_rate", "sperm_displacement_rate"),
+    ("low_density_growth_rate", "low_density_growth_rate"),
+    ("juvenile_growth_mode", "growth_mode"),
+    ("external_expected_eggs", "external_expected_eggs"),
+    ("age_based_survival_rates", "survival_rates"),
+    ("age_based_mating_rates", "mating_rates"),
+    ("age_based_reproduction_rates", "reproduction_rates"),
+    ("female_age_based_fertility", "fertility"),
+    ("age_based_relative_competition_strength", "competition_weights"),
+)
+
 _ECOLOGY_COLUMN_FIELDS: frozenset[str] = frozenset(
     {
         "carrying_capacity",
@@ -2002,9 +2052,25 @@ class SpatialPopulation:
                 plan = hook.plan
                 if plan is None or plan.n_ops == 0:
                     # Keep offset arrays aligned even for hooks without
-                    # declarative operations (e.g. pure njit/python descriptors).
+                    # declarative operations (e.g. pure python descriptors):
+                    # the deme selector must still be packed, or the Rust
+                    # matcher indexes an empty array for this hook slot.
                     n_ops_list.append(0)
                     op_offsets.append(op_offsets[-1])
+                    sel = hook.deme_selector
+                    if sel == "*":
+                        all_deme_sel_types.append(0)
+                    elif isinstance(sel, int):
+                        all_deme_sel_types.append(1)
+                        all_deme_sel_data.append(int(sel))
+                    elif isinstance(sel, range):
+                        all_deme_sel_types.append(2)
+                        all_deme_sel_data.append(int(sel.start))
+                        all_deme_sel_data.append(int(sel.stop))
+                    else:
+                        all_deme_sel_types.append(3)
+                        all_deme_sel_data.extend([int(x) for x in sel])
+                    all_deme_sel_offsets.append(len(all_deme_sel_data))
                     continue
 
                 n_ops_list.append(plan.n_ops)
@@ -2653,8 +2719,7 @@ class SpatialPopulation:
             Self for chaining.
 
         Raises:
-            RuntimeError: If the Rust extension is unavailable or
-                Python-callback hooks are present (not bridged yet).
+            RuntimeError: If the Rust extension is unavailable.
         """
         from natal.backends.rust.rust_backend import (
             RustHeterogeneousSpatialLifecycleBackend,
@@ -2667,11 +2732,6 @@ class SpatialPopulation:
             raise RuntimeError(
                 "natal._engine_rs is not available; build it with `maturin develop` "
                 "before enabling the Rust backend."
-            )
-        if getattr(self._demes[0], "has_python_callbacks", lambda: False)():
-            raise RuntimeError(
-                "The Rust spatial backend does not bridge Python callbacks "
-                "yet. Keep the reference backend for callback hooks."
             )
 
         model = "discrete_generation" if self._is_discrete_demes() else "age_structured"
@@ -2707,7 +2767,93 @@ class SpatialPopulation:
         )
         self._rust_spatial_seed = seed
         self._rust_states_dirty = False
+        if self._has_python_hooks():
+            self._register_spatial_rust_callbacks(self._rust_spatial_backend)
         return self
+
+    def _register_spatial_rust_callbacks(self, backend: object) -> None:
+        """Bridge the demes' Python callbacks into the spatial session.
+
+        One aggregated adapter per in-tick event routes each Rust fire to
+        the owning deme's runner (stable deme identity), and after each
+        fire the changed draft fields are recorded; :meth:`_run_rust_spatial_tick`
+        pulls them into the session columns once the tick — and with it the
+        session borrow — has returned.  A hook's ``ctx.update`` therefore
+        lands for the NEXT tick: the same deferred-write semantics the
+        plain Rust backend has.
+
+        Args:
+            backend: The freshly constructed spatial backend.
+        """
+        # Fresh per-deme runners: cloned demes share the template's cached
+        # runner (bound to deme 0), so a cached runner would route every
+        # fire's ctx.update to the wrong draft.
+        from natal.frontend.hooks.tick_context import HookRunner
+        from natal.frontend.hooks.types import EVENT_EARLY, EVENT_FIRST, EVENT_LATE
+
+        runners = [HookRunner(deme) for deme in self._demes]
+        self._spatial_hook_sync_fields: dict[int, set[str]] = {}
+        bridges: list[list[Callable[..., int] | None]] = []
+
+        for event_id in (EVENT_FIRST, EVENT_EARLY, EVENT_LATE):
+            per_deme = [runner.rust_callback(event_id) for runner in runners]
+            if not any(per_deme):
+                # Rust fires every registered adapter for every deme; an
+                # all-None event contributes an empty list so the engine
+                # skips the GIL boundary for it entirely.
+                bridges.append([])
+                continue
+            demes = self._demes
+
+            def bridge(
+                ind: NDArray[np.float64],
+                sperm: NDArray[np.float64],
+                tick: int,
+                deme_id: int,
+                _cbs: list[Callable[..., int] | None] = per_deme,
+                _demes: list[BasePopulation[Any]] = demes,
+            ) -> int:
+                deme_id = int(deme_id)
+                deme = _demes[deme_id]
+                before = _eco_field_values(deme.config)  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed deme draft read channel
+                callback = _cbs[deme_id]
+                result = 0
+                if callback is not None:
+                    result = int(  # pyright: ignore[reportAny]  # duck-typed callback ABI
+                        callback(ind, sperm, tick, deme_id)
+                    )
+                # A hook may have written params through its TickContext;
+                # the changed fields land in the deme draft and are pulled
+                # into the session columns after the tick returns.  Only
+                # fields the PYTHON hook actually changed are synced — a
+                # blind pull would clobber same-tick declarative set_param
+                # commits with the stale pre-tick draft.
+                after = _eco_field_values(deme.config)
+                changed = {name for name, value in after.items() if before.get(name) != value}
+                if changed:
+                    # Homogeneous clones share one config object, and vector
+                    # writes mutate that object in place: by the time a
+                    # sibling clone fires, its signature already matches the
+                    # post-write draft.  Queue every deme sharing this
+                    # config so each session column is refreshed.
+                    sharers = [
+                        other_id
+                        for other_id, other in enumerate(_demes)
+                        if other.config is deme.config
+                    ]
+                    for shared_id in sharers or (deme_id,):
+                        queued = self._spatial_hook_sync_fields.setdefault(
+                            shared_id, set()
+                        )
+                        queued.update(changed)
+                return result
+
+            bridges.append([bridge])
+
+        if any(bridges):
+            # One registration for all events: set_python_callbacks
+            # replaces the whole per-event vector.
+            backend.set_python_callbacks(*bridges)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
 
     def disable_rust_backend(self) -> SpatialPopulation:
         """Disable the Rust spatial backend.
@@ -2730,12 +2876,9 @@ class SpatialPopulation:
         """Return whether the Rust spatial backend is enabled.
 
         Returns:
-            True when enabled and no Python-callback hooks are present.
+            True when the session-owned Rust backend is enabled.
         """
-        return (
-            getattr(self, "_rust_spatial_backend", None) is not None
-            and not getattr(self._demes[0], "has_python_callbacks", lambda: False)()
-        )
+        return getattr(self, "_rust_spatial_backend", None) is not None
 
     def _absorb_rust_spatial_journal(self, backend: object) -> None:
         """Split a drained spatial journal into per-deme plain-name rows.
@@ -2786,6 +2929,24 @@ class SpatialPopulation:
             raise RuntimeError("Rust spatial backend is not enabled.")
         previous_tick = int(self._tick)
         next_tick = int(backend.run_tick())
+        # Deferred-write sync (plan 7.2): a Python hook that wrote params
+        # through its TickContext lands the values in the deme draft; pull
+        # the runtime ecology into the session columns now that the tick —
+        # and with it the session borrow — has returned, so the NEXT tick
+        # starts from them.
+        sync_fields: dict[int, set[str]] = getattr(
+            self, "_spatial_hook_sync_fields", {}
+        )
+        if sync_fields:
+            from natal.contracts.materialize import materialize
+
+            for deme_id, fields in sync_fields.items():
+                backend.refresh_deme_ecology(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # session backend surface
+                    deme_id,
+                    sorted(fields),
+                    materialize(self._demes[deme_id].config).params,  # pyright: ignore[reportAny, reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]  # duck-typed deme draft read channel
+                )
+            self._spatial_hook_sync_fields = {}
         # Merge the session's per-deme set_param writes (prefixed rows
         # split back into each deme's plain-name log rows and draft).
         self._absorb_rust_spatial_journal(backend)

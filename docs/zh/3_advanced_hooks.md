@@ -266,8 +266,12 @@ Hook 内如需构建链式更新，可用 `pop.update()` 返回的 Configurator�
   且 tick 不递增。
 - **`stop()` 之后**：继续 `run()` 前必须先 `reset()`；否则 `run()` 抛错。
 - **Hook 异常**：参考后端原始抛出的异常类型原样上抛；Rust 后端把跨桥异常包装为
-  `RuntimeError`（信息保留在原 `__cause__`），因此跨后端异常类型**不对称**是
-  有意行为。
+  `RuntimeError`，消息中内嵌原始错误文本（普通模型桥保留原异常在 `__cause__`，
+  空间桥仅在消息中内嵌），因此跨后端异常类型**不对称**是有意行为。
+- **空间 `ctx.update()` 下一 tick 生效**：空间 run 内 hook 的参数写先落入 deme
+  draft，并在该 tick 返回时拉入会话列，因此从**下一个 tick** 开始生效（与普通
+  Rust 后端的延迟写语义一致）。同一 tick 内声明式 `Op.set_param` 与 `ctx.update()`
+  写同一参数时，运行时按后写者为准（Python 回调在该事件的声明式钩子之后触发）。
 - **Rust 的 hook 内参数写与 `run()` 合流**（HB-2 修复后）：会话内写发生在会话
   生态列中；`run()` 返回时审计日志按各自提交 tick 追加到 `params_log`，最终值
   同步回 draft，无需脏桥回推。

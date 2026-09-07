@@ -273,8 +273,9 @@ impl DiscreteEngineSession {
                 tick,
                 journal: Vec::new(),
             });
-            let result = discrete::run_tick(rng, &cfg, hooks, ind, tick, &mut eco_values, &mut ctx)
-                .map_err(map_lifecycle_error);
+            let result =
+                discrete::run_tick(rng, &cfg, hooks, ind, tick, 0, &mut eco_values, &mut ctx)
+                    .map_err(map_lifecycle_error);
             if let Some(ctx) = ctx.as_mut() {
                 eco_journal.append(&mut ctx.journal);
             }

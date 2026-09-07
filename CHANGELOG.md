@@ -56,6 +56,11 @@
 - **Spatial update internals**: replace the private `_SpatialUpdate` facade and
   method-name batching table with typed Configurator dispatch and explicit
   `batch_setting()` values.
+- **Python callbacks on the spatial Rust path**: deme hooks (``@nt.hook``)
+  now run inside the spatial session's ticks — stable deme-order execution,
+  private per-fire array copies, graceful stop, and ``ctx.update()`` param
+  writes deferred to the next tick (plain-backend semantics).  The former
+  "keep the reference backend for callback hooks" refusal is gone.
 - **One spatial session for every model**: discrete-generation spatial
   populations now share the session-owned heterogeneous kernel with
   age-structured (per-deme RNG banks, declarative hooks and Python-callback

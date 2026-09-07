@@ -248,7 +248,8 @@ For chain-style updates inside a hook, use the Configurator returned by `pop.upd
 
 - **`stop()` in the late event**: halts immediately at the event boundary; the rest of the current tick does not execute and the tick does not advance.
 - **After `stop()`**: `run()` must be preceded by `reset()`; otherwise `run()` raises.
-- **Hook exceptions**: the reference backend re-raises the original type; the Rust backend wraps the bridged error as `RuntimeError` (the original information is preserved in `__cause__`), so the backend asymmetry of exception types is intentional.
+- **Hook exceptions**: the reference backend re-raises the original type; the Rust backends wrap the bridged error as `RuntimeError` whose message embeds the original error text (plain-model bridges keep the original exception in `__cause__`; the spatial bridge embeds it in the message only), so the backend asymmetry of exception types is intentional.
+- **Spatial `ctx.update()` defers to the next tick**: inside a spatial run, a hook's parameter write lands in the deme draft and is pulled into the session columns when the tick returns, so it binds from the FOLLOWING tick (the same deferred-write semantics as the plain Rust backend). A parameter written by both a declarative `Op.set_param` and `ctx.update()` in the same tick follows last-writer-wins in the runtime (the Python callback fires after the declarative hooks of that event).
 - **Rust hook-side parameter writes merge after `run()`** (post-HB-2 fix): session-side writes evolve inside the session ecology columns; when `run()` returns, the audited transitions are appended to `params_log` under their own commit ticks and the final values are synchronized into the draft -- no dirty-bridge push-back needed.
 
 ## Related Sections
