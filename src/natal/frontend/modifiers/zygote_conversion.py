@@ -27,7 +27,6 @@ Typical use cases:
 
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
     Dict,
     List,
@@ -47,7 +46,7 @@ from natal.frontend.modifiers.module import (
 )
 
 if TYPE_CHECKING:
-    from natal.frontend.population.base import BasePopulation
+    from natal.frontend.genetics.compile import RecipeHost
 
 __all__ = [
     "ZygoteAlleleConversionRule",
@@ -477,7 +476,7 @@ class ZygoteConversionRuleSet:
     # ------------------------------------------------------------------
     def to_zygote_modifier(
         self,
-        population: "BasePopulation[Any]",
+        host: "RecipeHost",
     ) -> ZygoteModifier:
         """Convert the rule-set into a ``ZygoteModifier``.
 
@@ -491,40 +490,40 @@ class ZygoteConversionRuleSet:
         ``(c1, c2)`` pair.
 
         Args:
-            population: The population that will consume the modifier.
+            host: The compilation host providing registry and config.
 
         Returns:
             A zero-argument callable implementing ``ZygoteModifier``.
         """
         rules = self.rules
-        haploid_genotypes = population.registry.index_to_haplo
-        diploid_genotypes = population.registry.index_to_genotype
+        haploid_genotypes = host.registry.index_to_haplo
+        diploid_genotypes = host.registry.index_to_genotype
         full_mendelian_map = initialize_zygote_map(
             haploid_genotypes=haploid_genotypes,
             diploid_genotypes=diploid_genotypes,
-            n_glabs=int(population.config.n_glabs),
-            n_slabs=int(population.config.n_slabs),
-            unordered=population.species.unordered,
+            n_glabs=int(host.config.n_glabs),
+            n_slabs=int(host.config.n_slabs),
+            unordered=host.species.unordered,
         )
         full_gtype_index = {
             (haplotype, glab): (
-                haplotype_idx * len(population.registry.glab_labels) + glab_idx
+                haplotype_idx * len(host.registry.glab_labels) + glab_idx
             )
             for haplotype_idx, haplotype in enumerate(haploid_genotypes)
-            for glab_idx, glab in enumerate(population.registry.glab_labels)
+            for glab_idx, glab in enumerate(host.registry.glab_labels)
         }
         full_ztype_index = {
             (genotype, slab): (
-                genotype_idx * len(population.registry.slab_labels) + slab_idx
+                genotype_idx * len(host.registry.slab_labels) + slab_idx
             )
             for genotype_idx, genotype in enumerate(diploid_genotypes)
-            for slab_idx, slab in enumerate(population.registry.slab_labels)
+            for slab_idx, slab in enumerate(host.registry.slab_labels)
         }
         active_gtypes = [
-            full_gtype_index[gtype] for gtype in population.registry.index_to_gtype
+            full_gtype_index[gtype] for gtype in host.registry.index_to_gtype
         ]
         active_ztypes = [
-            full_ztype_index[ztype] for ztype in population.registry.index_to_ztype
+            full_ztype_index[ztype] for ztype in host.registry.index_to_ztype
         ]
         # A compressed registry is a sparse flat index, not necessarily the
         # haplotype×glab or genotype×slab Cartesian product.
@@ -536,7 +535,7 @@ class ZygoteConversionRuleSet:
             Tuple[int, int], Dict[int, float]
         ]:
             """Produce a mapping of gamete-pair -> {ztype_idx: probability} from all rules."""  # noqa: D400
-            ztype_list = population.registry.index_to_ztype  # [(Genotype, slab), ...]
+            ztype_list = host.registry.index_to_ztype  # [(Genotype, slab), ...]
             n_ztypes = len(ztype_list)
 
             # Build ztype-level index lookup — keyed by (Genotype, slab)
@@ -552,7 +551,7 @@ class ZygoteConversionRuleSet:
             n_c = baseline_g2z.shape[0]
 
             # Resolve glab names to indices for all rules
-            resolved_rules = _resolve_zygote_rule_glabs(rules, population)
+            resolved_rules = _resolve_zygote_rule_glabs(rules, host)
 
             result: Dict[Tuple[int, int], Dict[int, float]] = {}
 
@@ -566,11 +565,11 @@ class ZygoteConversionRuleSet:
                     base_gt, base_slab = ztype_list[g]
                     effective_slab = base_slab
 
-                    mat_glab = population.registry.glab_to_index[
-                        population.registry.index_to_gtype[c1][1]
+                    mat_glab = host.registry.glab_to_index[
+                        host.registry.index_to_gtype[c1][1]
                     ]
-                    pat_glab = population.registry.glab_to_index[
-                        population.registry.index_to_gtype[c2][1]
+                    pat_glab = host.registry.glab_to_index[
+                        host.registry.index_to_gtype[c2][1]
                     ]
 
                     # current_freqs holds the distribution of genotypes derived from this (c1,c2) pairing.
@@ -595,7 +594,7 @@ class ZygoteConversionRuleSet:
                             and not _when._matches(
                                 sex_idx=-1, ztype_idx=g,
                                 genotype=base_gt, slab=base_slab,
-                                registry=population.registry,
+                                registry=host.registry,
                             )
                         ):
                             continue
@@ -692,7 +691,7 @@ _ResolvedRule = Tuple[
 
 def _resolve_zygote_rule_glabs(
     rules: List[Union[ZygoteZtypeConversionRule, ZygoteAlleleConversionRule, ZygoteGlabRedirectRule]],
-    population: "BasePopulation[Any]",
+    host: "RecipeHost",
 ) -> List[_ResolvedRule]:
     """Resolve ``maternal_glab`` / ``paternal_glab`` strings to int indices.
 
@@ -704,7 +703,7 @@ def _resolve_zygote_rule_glabs(
     Returns:
         List of ``(rule, resolved_maternal_glab_idx, resolved_paternal_glab_idx)``.
     """
-    glab_to_idx = population.index_registry.glab_to_index
+    glab_to_idx = host.index_registry.glab_to_index
     resolved: List[_ResolvedRule] = []
     for rule in rules:
         mat_idx: Optional[int] = None

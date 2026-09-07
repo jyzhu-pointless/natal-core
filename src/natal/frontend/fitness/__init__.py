@@ -4,7 +4,7 @@ This subpackage hosts fitness logic extracted from presets and
 configurator modules:
 
 - ``fitness/_patch.py``: core fitness patch application (allele scaling, slab
-  scaling, selector-based writes).  Uses ``FitnessPopulationView`` protocol.
+  scaling, selector-based writes).  Uses the ``RecipeHost`` protocol.
 - ``fitness/_writer.py``: Configurator DSL writer — resolves genotype-pattern
   selectors to ztype indices and writes to config arrays.
 """

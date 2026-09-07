@@ -123,12 +123,12 @@ class MyCustomPreset(GeneticPreset):
         # 自定义参数
         self.custom_param = 0.5
 
-    def gamete_modifier(self, population) -> Optional[GameteModifier]:
+    def gamete_modifier(self, host) -> Optional[GameteModifier]:
         """定义配子阶段的修饰逻辑"""
         # 返回GameteModifier或None
         return None
 
-    def zygote_modifier(self, population) -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host) -> Optional[ZygoteModifier]:
         """定义合子阶段的修饰逻辑"""
         # 返回ZygoteModifier或None
         return None
@@ -145,6 +145,7 @@ class MyCustomPreset(GeneticPreset):
 2. **至少实现一个方法** - 否则预设不会有任何效果
 3. **可以返回 None** - 表示该阶段不需要修饰
 4. **支持延迟物种绑定** - 可以在创建时不指定 `Species`
+5. **`gamete_modifier` / `zygote_modifier` 的入参是 `host`** - 它是一个统一入口（接口约定 `natal.frontend.genetics.compile.RecipeHost`）：运行时指向当前的 Population，编译阶段指向构建中的 Configurator，两种场景都可以通过它读取 `species`、`config`、`registry`、`index_registry` 四项只读信息
 
 ### 简单示例
 
@@ -161,10 +162,10 @@ class PointMutation(GeneticPreset):
         super().__init__(name="PointMutation")
         self.mutation_rate = mutation_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("PointMutation")
         ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 
     def fitness_patch(self):
         return {
@@ -183,7 +184,7 @@ class BidirectionalMutation(GeneticPreset):
         self.forward_rate = forward_rate
         self.backward_rate = backward_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
@@ -193,7 +194,7 @@ class BidirectionalMutation(GeneticPreset):
         # B → A (回复突变)
         ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ## 2. 用 genotype_filter 控制规则生效范围
@@ -286,11 +287,11 @@ class PatternBasedPreset(GeneticPreset):
         self.pattern = pattern
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("PatternBased")
-        pattern_filter = population.species.parse_genotype_pattern(self.pattern)
+        pattern_filter = host.species.parse_genotype_pattern(self.pattern)
 
         ruleset.add_allele_convert(
             from_allele="WT",
@@ -298,7 +299,7 @@ class PatternBasedPreset(GeneticPreset):
             rate=self.conversion_rate,
             genotype_filter=pattern_filter,
         )
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 实践建议：
@@ -318,7 +319,7 @@ class ConditionalMutation(GeneticPreset):
         self.target_allele = target_allele
         self.required_background = required_background
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("ConditionalMutation")
@@ -331,7 +332,7 @@ class ConditionalMutation(GeneticPreset):
             genotype_filter=lambda gt: self.required_background in str(gt)
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ### 与 Observation 保持统计口径一致
@@ -392,7 +393,7 @@ class DrivePreset(GeneticPreset):
         super().__init__(name="DrivePreset")
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("drive_rules")
 
         def is_wd_heterozygote(genotype) -> bool:
@@ -406,7 +407,7 @@ class DrivePreset(GeneticPreset):
             genotype_filter=is_wd_heterozygote,
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ### 在 Builder 中应用 Preset
@@ -457,7 +458,7 @@ class ComplexDrive(GeneticPreset):
     def __init__(self):
         super().__init__(name="ComplexDrive")
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # 阶段1: 驱动转换 (WT → Drive)
@@ -468,9 +469,9 @@ class ComplexDrive(GeneticPreset):
         ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 
-    def zygote_modifier(self, population):
+    def zygote_modifier(self, host):
         ruleset = ZygoteConversionRuleSet("ComplexDrive_Embryo")
 
         # 胚胎阶段的额外修饰
@@ -481,7 +482,7 @@ class ComplexDrive(GeneticPreset):
             maternal_glab="cas9"  # 需要母源Cas9沉积
         )
 
-        return ruleset.to_zygote_modifier(population)
+        return ruleset.to_zygote_modifier(host)
 
     def fitness_patch(self):
         return {
@@ -517,9 +518,9 @@ class ComplexDrive(GeneticPreset):
 
 ```python
 class DebugPreset(GeneticPreset):
-    def gamete_modifier(self, population):
-        print(f"应用预设到物种: {population.species.name}")
-        print(f"可用等位基因: {list(population.species.gene_index.keys())}")
+    def gamete_modifier(self, host):
+        print(f"应用预设到物种: {host.species.name}")
+        print(f"可用等位基因: {list(host.species.gene_index.keys())}")
 
         # 创建修饰器并返回
         # ...

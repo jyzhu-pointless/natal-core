@@ -93,11 +93,11 @@ class PatternBasedPreset(GeneticPreset):
         self.pattern = pattern
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("PatternBased")
-        pattern_filter = population.species.parse_genotype_pattern(self.pattern)
+        pattern_filter = host.species.parse_genotype_pattern(self.pattern)
 
         ruleset.add_allele_convert(
             from_allele="WT",
@@ -105,7 +105,7 @@ class PatternBasedPreset(GeneticPreset):
             rate=self.conversion_rate,
             genotype_filter=pattern_filter,
         )
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 实践建议：
@@ -125,7 +125,7 @@ class ConditionalMutation(GeneticPreset):
         self.target_allele = target_allele
         self.required_background = required_background
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("ConditionalMutation")
@@ -138,7 +138,7 @@ class ConditionalMutation(GeneticPreset):
             genotype_filter=lambda gt: self.required_background in str(gt)
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ## 与 Observation 保持统计口径一致

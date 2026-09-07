@@ -270,10 +270,10 @@ class TestPresetFitnessPatch(unittest.TestCase):
         self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_drive_drive], 0.64)
 
     def test_with_minimal_fitness_population_view(self) -> None:
-        """Works with a minimal object satisfying FitnessPopulationView protocol.
+        """Works with a minimal object satisfying the RecipeHost protocol.
 
         The protocol requires only three attributes (config, species,
-        index_registry) — no Population or ConfigContext needed.
+        index_registry) — no Population or live session needed.
         """
         from natal.frontend.fitness._patch import apply_preset_fitness_patch as _patch_fn
 

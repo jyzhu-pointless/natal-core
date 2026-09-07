@@ -119,12 +119,12 @@ class MyCustomPreset(GeneticPreset):
         # 自定义参数
         self.custom_param = 0.5
 
-    def gamete_modifier(self, population) -> Optional[GameteModifier]:
+    def gamete_modifier(self, host) -> Optional[GameteModifier]:
         """定义配子阶段的修饰逻辑"""
         # 返回GameteModifier或None
         return None
 
-    def zygote_modifier(self, population) -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host) -> Optional[ZygoteModifier]:
         """定义合子阶段的修饰逻辑"""
         # 返回ZygoteModifier或None
         return None
@@ -141,6 +141,7 @@ class MyCustomPreset(GeneticPreset):
 2. **至少实现一个方法** - 否则预设不会有任何效果
 3. **可以返回 None** - 表示该阶段不需要修饰
 4. **支持延迟物种绑定** - 可以在创建时不指定 `Species`
+5. **`gamete_modifier` / `zygote_modifier` 的入参是 `host`** - 它是一个统一入口（接口约定 `natal.frontend.genetics.compile.RecipeHost`）：运行时指向当前的 Population，编译阶段指向构建中的 Configurator，两种场景都可以通过它读取 `species`、`config`、`registry`、`index_registry` 四项只读信息
 
 ## 简单示例
 
@@ -157,10 +158,10 @@ class PointMutation(GeneticPreset):
         super().__init__(name="PointMutation")
         self.mutation_rate = mutation_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("PointMutation")
         ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 
     def fitness_patch(self):
         return {
@@ -179,7 +180,7 @@ class BidirectionalMutation(GeneticPreset):
         self.forward_rate = forward_rate
         self.backward_rate = backward_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
@@ -189,7 +190,7 @@ class BidirectionalMutation(GeneticPreset):
         # B → A (回复突变)
         ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ## 小结

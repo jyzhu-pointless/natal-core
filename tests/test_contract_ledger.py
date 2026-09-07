@@ -188,9 +188,12 @@ MUST_NOT_EXIST: tuple[RemovalEntry, ...] = (
     ),
     RemovalEntry(
         item_id="configcontext-population-clone",
-        description="ConfigContext Population mimicry and clone-to-validate preset transactions",
+        description=(
+            "ConfigContext Population mimicry, apply_preset_to_population, "
+            "and clone-to-validate preset transactions"
+        ),
         owner_stage="S1",
-        status="pending",
+        status="removed",
     ),
     RemovalEntry(
         item_id="per-run-session-rebuild",
@@ -250,9 +253,43 @@ def _removed_probe_build_observation_row_panmictic() -> None:
     )
 
 
+def _removed_probe_configcontext_population_clone() -> None:
+    """The Population-mimicry adapter surface must stay unreachable.
+
+    Slice 6 removed the ConfigContext adapter, the
+    ``apply_preset_to_population`` dual-target helper, and the
+    Configurator's ``_make_ctx`` / ``_sync_from_ctx`` write-back pair:
+    build-time preset application now compiles against the Configurator
+    itself (RecipeHost protocol) through explicit-data rebuilds.
+    """
+    import natal as nt
+    from natal.frontend import presets as presets_pkg
+    from natal.frontend.configurator import _registry_builder as rb
+
+    assert not _module_importable("natal.frontend.configurator._registry_builder.ConfigContext"), (
+        "ConfigContext is importable again — the Population mimicry is back"
+    )
+    assert not hasattr(rb, "ConfigContext"), (
+        "ConfigContext is getattr-reachable on _registry_builder again"
+    )
+    assert not hasattr(presets_pkg, "apply_preset_to_population"), (
+        "apply_preset_to_population is reachable on the presets package again"
+    )
+    assert not hasattr(nt, "apply_preset_to_population"), (
+        "apply_preset_to_population is reachable on the top-level package again"
+    )
+    from natal.frontend.configurator._base import Configurator
+
+    for attr in ("_make_ctx", "_sync_from_ctx"):
+        assert not hasattr(Configurator, attr), (
+            f"Configurator.{attr} is back — the adapter round-trip returned"
+        )
+
+
 REMOVED_PROBES: dict[str, Callable[[], None]] = {
     "output.record": _removed_probe_output_record,
     "build_observation_row_panmictic": _removed_probe_build_observation_row_panmictic,
+    "configcontext-population-clone": _removed_probe_configcontext_population_clone,
 }
 
 
@@ -324,15 +361,6 @@ def _pending_probe_python_authoritative_state() -> None:
         )
 
 
-def _pending_probe_configcontext_population_clone() -> None:
-    """The ConfigContext population-mimicry adapter must still exist."""
-    from natal.frontend.configurator._registry_builder import ConfigContext
-
-    assert hasattr(ConfigContext, "add_gamete_modifier"), (
-        "ConfigContext no longer mimics the population modifier surface"
-    )
-
-
 def _pending_probe_per_run_session_rebuild() -> None:
     """The per-run full-state handoff machinery must still exist."""
     from natal.frontend.population.discrete_generation import (
@@ -384,7 +412,6 @@ PENDING_PROBES: dict[str, Callable[[], None]] = {
     "backends.reference": _pending_probe_backends_reference,
     "backend-selector": _pending_probe_backend_selector,
     "python-authoritative-state": _pending_probe_python_authoritative_state,
-    "configcontext-population-clone": _pending_probe_configcontext_population_clone,
     "per-run-session-rebuild": _pending_probe_per_run_session_rebuild,
     "discrete-spatial-hookless-backend": _pending_probe_discrete_spatial_hookless_backend,
     "python-history-append-store": _pending_probe_python_history_append_store,

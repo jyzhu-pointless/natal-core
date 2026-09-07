@@ -119,12 +119,12 @@ class MyCustomPreset(GeneticPreset):
         # Custom parameters
         self.custom_param = 0.5
 
-    def gamete_modifier(self, population) -> Optional[GameteModifier]:
+    def gamete_modifier(self, host) -> Optional[GameteModifier]:
         """Define gamete-stage modification logic"""
         # Return GameteModifier or None
         return None
 
-    def zygote_modifier(self, population) -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host) -> Optional[ZygoteModifier]:
         """Define zygote-stage modification logic"""
         # Return ZygoteModifier or None
         return None
@@ -141,6 +141,7 @@ Implementation highlights:
 2. **At least implement one method** - otherwise the preset will have no effect
 3. **Can return None** - indicating no modification is needed at that stage
 4. **Supports deferred species binding** - `Species` can be unspecified at creation time
+5. **The parameter of `gamete_modifier` / `zygote_modifier` is `host`** - one uniform entry point (interface contract `natal.frontend.genetics.compile.RecipeHost`): at runtime it points to the live Population, during compilation it points to the in-progress Configurator; both expose the same four read-only attributes — `species`, `config`, `registry`, `index_registry`
 
 ## Simple Examples
 
@@ -157,10 +158,10 @@ class PointMutation(GeneticPreset):
         super().__init__(name="PointMutation")
         self.mutation_rate = mutation_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("PointMutation")
         ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 
     def fitness_patch(self):
         return {
@@ -179,7 +180,7 @@ class BidirectionalMutation(GeneticPreset):
         self.forward_rate = forward_rate
         self.backward_rate = backward_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
@@ -189,7 +190,7 @@ class BidirectionalMutation(GeneticPreset):
         # B → A (back mutation)
         ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ## Chapter Summary

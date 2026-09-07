@@ -11,7 +11,7 @@ entry points cannot drift apart (the parity safety net in
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Protocol, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -19,8 +19,9 @@ from numpy.typing import NDArray
 from natal.frontend.data._engine import recompute_offspring_tensor
 
 if TYPE_CHECKING:
+    from natal.frontend.data.config import ModelDraft
+    from natal.frontend.genetics.structures.species import Species
     from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
-    from natal.frontend.population.base import BasePopulation
     from natal.frontend.registry.index import IndexRegistry
 
     # Modifier list entries are (id, name, callable) triples; gamete and
@@ -29,7 +30,44 @@ if TYPE_CHECKING:
     GameteList = list[Tuple[int, Optional[str], GameteModifier]]
     ZygoteList = list[Tuple[int, Optional[str], ZygoteModifier]]
 
-__all__: list[str] = ["compile_modifier_maps"]
+__all__: list[str] = ["RecipeHost", "compile_modifier_maps", "next_modifier_id"]
+
+
+class RecipeHost(Protocol):
+    """Read surface a recipe (preset / rule-set / fitness patch) may inspect.
+
+    ``BasePopulation`` satisfies this protocol structurally, and so does
+    the build-side candidate: a ``Configurator`` mid-compile.  Recipes run
+    exactly once against whichever host drives the compilation — there is
+    no adapter that impersonates a population.
+    """
+
+    @property
+    def species(self) -> Species: ...
+
+    @property
+    def config(self) -> ModelDraft: ...
+
+    @property
+    def registry(self) -> IndexRegistry: ...
+
+    @property
+    def index_registry(self) -> IndexRegistry: ...
+
+
+def next_modifier_id(
+    modifiers: GameteList | ZygoteList,
+) -> int:
+    """Return the next auto-assigned modifier ID for a candidate list.
+
+    Args:
+        modifiers: Existing ``(id, name, callable)`` triples.
+
+    Returns:
+        ``max(id) + 1``, or ``0`` when the list is empty.
+    """
+    ids = [mid for mid, _, _ in modifiers]
+    return (max(ids) + 1) if ids else 0
 
 
 def compile_modifier_maps(
@@ -39,9 +77,7 @@ def compile_modifier_maps(
     gamete_modifiers: GameteList,
     zygote_modifiers: ZygoteList,
     registry: IndexRegistry,
-    # Any: BasePopulation is generic over its state container; the
-    # compiler only passes the host through to recipe factories.
-    population: Optional[BasePopulation[Any]],
+    population: Optional[RecipeHost],
 ) -> tuple[
     NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]
 ]:
@@ -62,9 +98,9 @@ def compile_modifier_maps(
             first then manual, as accumulated by the caller.
         zygote_modifiers: The zygote-side twin of *gamete_modifiers*.
         registry: The registry whose active axes the tables address.
-        population: Optional live population handed to recipe factories
-            (runtime refresh passes the population; the build path
-            passes ``None`` and uses pre-built wrappers).
+        population: Optional host (live population or build-side
+            candidate) handed to recipe factories; wrappers built from
+            pre-compiled callables receive it unchanged.
 
     Returns:
         ``(z2g, g2z, offspring_tensor)`` — fresh contiguous tables with

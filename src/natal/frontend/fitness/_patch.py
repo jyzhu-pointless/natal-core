@@ -8,8 +8,8 @@ Private module — not part of the public API.
 from collections.abc import Mapping
 from typing import List, Tuple, Union, cast
 
-from natal.frontend.fitness._types import FitnessPopulationView
 from natal.frontend.genetics import Gene, Genotype
+from natal.frontend.genetics.compile import RecipeHost
 from natal.frontend.presets._types import (
     PresetFitnessPatch,
     _calculate_allele_effect,
@@ -33,7 +33,7 @@ from natal.frontend.presets._types import (
 
 
 def _apply_viability_allele_scaling(
-    deps: FitnessPopulationView,
+    deps: RecipeHost,
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
     config: _ViabilityScalingConfig,
@@ -118,7 +118,7 @@ def _apply_viability_allele_scaling(
 
 
 def _apply_fecundity_allele_scaling(
-    deps: FitnessPopulationView,
+    deps: RecipeHost,
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
     config: _FecundityScalingConfig,
@@ -169,7 +169,7 @@ def _apply_fecundity_allele_scaling(
 
 
 def _apply_sexual_selection_allele_scaling(
-    deps: FitnessPopulationView,
+    deps: RecipeHost,
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
     config: _SexualSelectionScalingConfig,
@@ -220,7 +220,7 @@ def _apply_sexual_selection_allele_scaling(
 
 
 def _apply_zygote_viability_allele_scaling(
-    deps: FitnessPopulationView,
+    deps: RecipeHost,
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
     config: _ZygoteViabilityScalingConfig,
@@ -289,7 +289,7 @@ def _apply_zygote_viability_allele_scaling(
 
 
 def _apply_viability_slab_scaling(
-    deps: FitnessPopulationView,
+    deps: RecipeHost,
     all_genotypes: List[Genotype],
     patch: PresetFitnessPatch,
 ) -> None:
@@ -305,7 +305,7 @@ def _apply_viability_slab_scaling(
 
 
 def _apply_fecundity_slab_scaling(
-    deps: FitnessPopulationView,
+    deps: RecipeHost,
     all_genotypes: List[Genotype],
     patch: PresetFitnessPatch,
 ) -> None:
@@ -320,7 +320,7 @@ def _apply_fecundity_slab_scaling(
 
 
 def _apply_sexual_selection_slab_scaling(
-    deps: FitnessPopulationView,
+    deps: RecipeHost,
     all_genotypes: List[Genotype],
     patch: PresetFitnessPatch,
 ) -> None:
@@ -341,7 +341,7 @@ def _apply_sexual_selection_slab_scaling(
 
 
 def _apply_zygote_slab_scaling(
-    deps: FitnessPopulationView,
+    deps: RecipeHost,
     all_genotypes: List[Genotype],
     patch: PresetFitnessPatch,
 ) -> None:
@@ -355,7 +355,7 @@ def _apply_zygote_slab_scaling(
                 arr[sex, z] = current * float(factor)
 
 
-def apply_preset_fitness_patch(deps: FitnessPopulationView, patch: PresetFitnessPatch) -> None:
+def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> None:
     """Apply a declarative preset fitness patch to population config tensors.
 
     Patch schema (all keys optional):

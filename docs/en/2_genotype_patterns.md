@@ -200,9 +200,9 @@ class PatternDrivenPreset(GeneticPreset):
     def _build_filter(self, species):
         return species.parse_genotype_pattern(self.target_pattern)
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("pattern_rules")
-        pattern_filter = self._build_filter(population.species)
+        pattern_filter = self._build_filter(host.species)
 
         ruleset.add_allele_convert(
             from_allele="W",
@@ -210,7 +210,7 @@ class PatternDrivenPreset(GeneticPreset):
             rate=self.conversion_rate,
             genotype_filter=pattern_filter,
         )
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ## Debugging and Validation

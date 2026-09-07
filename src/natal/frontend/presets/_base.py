@@ -1,4 +1,4 @@
-"""GeneticPreset abstract base class and apply_preset_to_population.
+"""GeneticPreset abstract base class and its recipe factories.
 
 Public module — provides the core preset infrastructure.
 """
@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Callable, Optional, Self, Tuple
 
 from natal.frontend.genetics import Gene, Species
+from natal.frontend.genetics.compile import RecipeHost
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 from natal.frontend.utils.types import Sex
 
@@ -20,60 +21,6 @@ from ._types import (
 
 if TYPE_CHECKING:
     from natal.frontend.population.base import BasePopulation
-
-
-def apply_preset_to_population(population: 'BasePopulation[Any]', preset: 'GeneticPreset') -> None:
-    """Apply a genetic preset to a population by registering its modifiers and fitness effects.
-
-    This function handles the mechanical application of a preset to a population,
-    including:
-    1. Species binding and validation
-    2. Registration of gamete modifiers
-    3. Registration of zygote modifiers
-    4. Application of fitness patches
-
-    Args:
-        population: The BasePopulation instance to modify.
-        preset: The GeneticPreset instance to apply.
-
-    Note:
-        This is typically called through the modern API:
-        ``population.apply_preset(preset)``
-
-        The legacy API ``preset.apply(population)`` is deprecated but still supported.
-
-    Raises:
-        ValueError: If preset is bound to a different species than the population
-        RuntimeError: If preset has no bound species
-    """
-    from natal.frontend.fitness._patch import apply_preset_fitness_patch
-
-    preset.bind_species(population.species)
-
-    gamete_mod = preset.gamete_modifier(population)
-    zygote_mod = preset.zygote_modifier(population)
-
-    if gamete_mod is not None:
-        population.add_gamete_modifier(
-            gamete_mod,
-            name=f"{preset.name}/gamete",
-            refresh=False,
-        )
-
-    if zygote_mod is not None:
-        population.add_zygote_modifier(
-            zygote_mod,
-            name=f"{preset.name}/zygote",
-            refresh=False,
-        )
-
-    if gamete_mod is not None or zygote_mod is not None:
-        population.refresh_modifier_maps()
-
-    # Preferred path: declarative fitness patch
-    patch = preset.fitness_patch()
-    if patch:
-        apply_preset_fitness_patch(population, patch)
 
 
 class GeneticPreset(ABC):
@@ -161,8 +108,13 @@ class GeneticPreset(ABC):
         return gene
 
     @abstractmethod
-    def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
+    def gamete_modifier(self, host: RecipeHost) -> Optional[GameteModifier]:
         """Return a gamete modifier or None.
+
+        Args:
+            host: The compilation host (live population or build-side
+                candidate) whose species/config/registry the recipe may
+                read while constructing the modifier.
 
         The modifier should return:
 
@@ -174,8 +126,13 @@ class GeneticPreset(ABC):
         return None
 
     @abstractmethod
-    def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host: RecipeHost) -> Optional[ZygoteModifier]:
         """Return a zygote modifier or None.
+
+        Args:
+            host: The compilation host (live population or build-side
+                candidate) whose species/config/registry the recipe may
+                read while constructing the modifier.
 
         The modifier should return:
 
@@ -271,10 +228,41 @@ class GeneticPreset(ABC):
             Use population.apply_preset(preset) instead.
             This method is kept for backwards compatibility and may be removed in future versions.
 
+        Unlike :meth:`natal.frontend.population.base.BasePopulation.apply_preset`
+        this legacy path registers the preset's modifiers as *manual*
+        modifiers and composes its fitness patch onto the current tensors,
+        so the two APIs are not interchangeable on one population.
+
         Args:
             population: The BasePopulation instance to modify.
 
         See Also:
             :meth:`natal.frontend.population.base.BasePopulation.apply_preset` - Preferred modern API
         """
-        apply_preset_to_population(population, self)
+        from natal.frontend.fitness._patch import apply_preset_fitness_patch
+
+        self.bind_species(population.species)
+
+        gamete_mod = self.gamete_modifier(population)
+        zygote_mod = self.zygote_modifier(population)
+
+        if gamete_mod is not None:
+            population.add_gamete_modifier(
+                gamete_mod,
+                name=f"{self.name}/gamete",
+                refresh=False,
+            )
+
+        if zygote_mod is not None:
+            population.add_zygote_modifier(
+                zygote_mod,
+                name=f"{self.name}/zygote",
+                refresh=False,
+            )
+
+        if gamete_mod is not None or zygote_mod is not None:
+            population.refresh_modifier_maps()
+
+        patch = self.fitness_patch()
+        if patch:
+            apply_preset_fitness_patch(population, patch)

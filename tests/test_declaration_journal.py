@@ -328,3 +328,110 @@ class TestSpatialJournalUnification:
         assert float(pop.demes[0].config.eggs_per_female) == 10.0
         assert float(pop.demes[1].config.eggs_per_female) == 20.0
         pop.run(1)
+
+
+class TestFailedCallsLeaveNoJournalEntry:
+    """Failed declarations stay out of the replayable journal (plan 5.1 #5).
+
+    A call that raises must leave neither state nor journal entries
+    behind — otherwise ``replay_declarations`` / ``ModelDefinition``
+    would re-apply a declaration the user never successfully made.
+    """
+
+    def test_failed_presets_call_is_not_journaled(self) -> None:
+        """A species-mismatch preset raises and journals nothing."""
+        other = nt.Species.from_dict(
+            name="__journal_other_species__",
+            structure={"chrZ": {"loc9": ["X", "Y"]}},
+            gamete_labels=["default"],
+        )
+        bound = nt.HomingDrive(
+            name="__journal_bound__",
+            drive_allele="Y",
+            target_allele="X",
+            drive_conversion_rate=0.9,
+        )
+        bound.bind_species(other)
+        cfg = Configurator.for_age_structured(_species()).age_structure(n_ages=2, new_adult_age=1)
+        before = list(cfg._declaration_log)
+
+        try:
+            cfg.presets(bound)
+            raise AssertionError("species mismatch must raise ValueError")
+        except ValueError:
+            pass
+
+        assert cfg._declaration_log == before, (
+            "the failed presets() call polluted the journal"
+        )
+
+    def test_journal_replays_cleanly_after_failed_call(self) -> None:
+        """A successful declaration after a failure is the only entry replayed."""
+        drive = nt.HomingDrive(
+            name="__journal_recovery__",
+            drive_allele="B",
+            target_allele="A",
+            drive_conversion_rate=0.8,
+        )
+        cfg = Configurator.for_age_structured(_species()).age_structure(n_ages=2, new_adult_age=1)
+        bad = nt.HomingDrive(
+            name="__journal_bad__",
+            drive_allele="Q",
+            target_allele="A",
+            drive_conversion_rate=0.5,
+        )
+        bad.bind_species(
+            nt.Species.from_dict(
+                name="__journal_mismatch__",
+                structure={"chrM": {"locM": ["M1", "M2"]}},
+                gamete_labels=["default"],
+            )
+        )
+        try:
+            cfg.presets(bad)
+        except ValueError:
+            pass
+        cfg.presets(drive)
+
+        assert [name for name, _ in cfg._declaration_log] == [
+            "age_structure",
+            "presets",
+        ], "journal must contain exactly the two successful calls"
+
+        replayed = replay_declarations(
+            lambda: Configurator.for_age_structured(_species()),
+            cfg._declaration_log,
+        )
+        np.testing.assert_array_equal(
+            replayed.config.offspring_tensor, cfg.config.offspring_tensor
+        )
+
+    def test_spatial_failed_delegation_is_not_journaled(self) -> None:
+        """A template failure leaves the spatial wrapper journal untouched."""
+        builder = (
+            nt.SpatialPopulation.builder(
+                _species(), n_demes=2, pop_type="age_structured"
+            )
+            .setup(name="__journal_spatial_fail__", stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=1)
+        )
+        before = list(builder._declaration_log)
+
+        def boom(*args: object, **kwargs: object) -> None:
+            """Simulate the template rejecting the delegated call."""
+            raise ValueError("__template_rejected__")
+
+        original = builder._call_template
+        builder._call_template = boom  # type: ignore[method-assign]  # test double: inject a failing template call
+        try:
+            try:
+                builder.competition(carrying_capacity=500.0)
+                raise AssertionError("injected failure must propagate")
+            except ValueError as exc:
+                assert "__template_rejected__" in str(exc)
+        finally:
+            builder._call_template = original  # type: ignore[method-assign]  # restore the real delegation
+
+        assert builder._declaration_log == before, (
+            "the failed spatial delegation polluted the journal"
+        )

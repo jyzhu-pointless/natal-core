@@ -27,7 +27,7 @@ from ._types import (
 )
 
 if TYPE_CHECKING:
-    from natal.frontend.population.base import BasePopulation
+    from natal.frontend.genetics.compile import RecipeHost
 
 
 class HomingDrive(GeneticPreset):
@@ -201,11 +201,11 @@ class HomingDrive(GeneticPreset):
 
         return patch
 
-    def _instantiate_allele(self, allele_name: str, population: 'BasePopulation[Any]') -> Gene:
-        """Helper to get Gene object for an allele name from the population's species."""
-        gene = population.species.gene_index.get(allele_name)
+    def _instantiate_allele(self, allele_name: str, host: "RecipeHost") -> Gene:
+        """Helper to get Gene object for an allele name from the host species."""
+        gene = host.species.gene_index.get(allele_name)
         if gene is None:
-            raise ValueError(f"Allele '{allele_name}' not found in species '{population.species.name}'.")
+            raise ValueError(f"Allele '{allele_name}' not found in species '{host.species.name}'.")
         return gene
 
     @property
@@ -256,7 +256,7 @@ class HomingDrive(GeneticPreset):
             return float(rate)
         return rate[sex]
 
-    def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
+    def gamete_modifier(self, host: "RecipeHost") -> Optional[GameteModifier]:
         """Implement homing in heterozygous parents, germline resistance, and Cas9 deposition.
 
         In heterozygotes (drive/wild-type), gametes are biased towards drive.
@@ -345,9 +345,9 @@ class HomingDrive(GeneticPreset):
                         genotype_filter=drive_carrier_filter,
                     )
 
-        return rule_set.to_gamete_modifier(population) if rule_set.rules else None
+        return rule_set.to_gamete_modifier(host) if rule_set.rules else None
 
-    def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host: "RecipeHost") -> Optional[ZygoteModifier]:
         """Implement embryo resistance.
 
         Cleavage in the embryo (due to deposited Cas9 or zygotic expression)
@@ -427,4 +427,4 @@ class HomingDrive(GeneticPreset):
                         genotype_filter=g_filter,
                     )
 
-        return rule_set.to_zygote_modifier(population) if rule_set.rules else None
+        return rule_set.to_zygote_modifier(host) if rule_set.rules else None

@@ -22,7 +22,7 @@ from natal.frontend.modifiers.zygote_conversion import (  # noqa: F401 (re-expor
     ZygoteZtypeConversionRule,
 )
 
-from ._base import GeneticPreset, apply_preset_to_population
+from ._base import GeneticPreset
 from ._types import PresetFitnessPatch, count_allele_copies
 from .cytoplasmic import CytoplasmicPreset, TransgenicBackground, Wolbachia
 from .homing import HomingDrive
@@ -57,7 +57,6 @@ __all__ = [
     "CytoplasmicPreset",
     "Wolbachia",
     "TransgenicBackground",
-    "apply_preset_to_population",
     "apply_preset_fitness_patch",
     "PresetFitnessPatch",
     "count_allele_copies",

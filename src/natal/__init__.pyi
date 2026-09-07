@@ -216,7 +216,6 @@ from .frontend.presets import (
     ZygoteGenotypeConversionRule,
     ZygoteGlabRedirectRule,
     ZygoteZtypeConversionRule,
-    apply_preset_to_population,
     count_allele_copies,
 )
 from .frontend.presets._fitness import apply_preset_fitness_patch
@@ -392,7 +391,6 @@ __all__ = [
     "ZygoteTypePattern",
     "ZygoteZtypeConversionRule",
     "apply_preset_fitness_patch",
-    "apply_preset_to_population",
     "apply_rule",
     "batch_setting",
     "build_adjacency_matrix",

@@ -123,12 +123,12 @@ class MyCustomPreset(GeneticPreset):
         # Custom parameters
         self.custom_param = 0.5
 
-    def gamete_modifier(self, population) -> Optional[GameteModifier]:
+    def gamete_modifier(self, host) -> Optional[GameteModifier]:
         """Define modification logic at the gamete stage"""
         # Return GameteModifier or None
         return None
 
-    def zygote_modifier(self, population) -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host) -> Optional[ZygoteModifier]:
         """Define modification logic at the zygote stage"""
         # Return ZygoteModifier or None
         return None
@@ -145,6 +145,7 @@ Implementation notes:
 2. **At least one method must be implemented** - otherwise the preset will have no effect
 3. **Can return None** - indicates no modification needed at that stage
 4. **Supports deferred species binding** - can create without specifying `Species`
+5. **The parameter of `gamete_modifier` / `zygote_modifier` is `host`** - one uniform entry point (interface contract `natal.frontend.genetics.compile.RecipeHost`): at runtime it points to the live Population, during compilation it points to the in-progress Configurator; both expose the same four read-only attributes — `species`, `config`, `registry`, `index_registry`
 
 ### Simple Examples
 
@@ -161,10 +162,10 @@ class PointMutation(GeneticPreset):
         super().__init__(name="PointMutation")
         self.mutation_rate = mutation_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("PointMutation")
         ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 
     def fitness_patch(self):
         return {
@@ -183,7 +184,7 @@ class BidirectionalMutation(GeneticPreset):
         self.forward_rate = forward_rate
         self.backward_rate = backward_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
@@ -193,7 +194,7 @@ class BidirectionalMutation(GeneticPreset):
         # B -> A (back mutation)
         ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ## 2. Using genotype_filter to Control Rule Scope
@@ -286,11 +287,11 @@ class PatternBasedPreset(GeneticPreset):
         self.pattern = pattern
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("PatternBased")
-        pattern_filter = population.species.parse_genotype_pattern(self.pattern)
+        pattern_filter = host.species.parse_genotype_pattern(self.pattern)
 
         ruleset.add_allele_convert(
             from_allele="WT",
@@ -298,7 +299,7 @@ class PatternBasedPreset(GeneticPreset):
             rate=self.conversion_rate,
             genotype_filter=pattern_filter,
         )
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 Practical advice:
@@ -318,7 +319,7 @@ class ConditionalMutation(GeneticPreset):
         self.target_allele = target_allele
         self.required_background = required_background
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("ConditionalMutation")
@@ -331,7 +332,7 @@ class ConditionalMutation(GeneticPreset):
             genotype_filter=lambda gt: self.required_background in str(gt)
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ### Maintaining Statistical Consistency with Observations
@@ -392,7 +393,7 @@ class DrivePreset(GeneticPreset):
         super().__init__(name="DrivePreset")
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("drive_rules")
 
         def is_wd_heterozygote(genotype) -> bool:
@@ -406,7 +407,7 @@ class DrivePreset(GeneticPreset):
             genotype_filter=is_wd_heterozygote,
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ### Applying Presets in the Builder
@@ -457,7 +458,7 @@ class ComplexDrive(GeneticPreset):
     def __init__(self):
         super().__init__(name="ComplexDrive")
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # Stage 1: Drive conversion (WT -> Drive)
@@ -468,9 +469,9 @@ class ComplexDrive(GeneticPreset):
         ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 
-    def zygote_modifier(self, population):
+    def zygote_modifier(self, host):
         ruleset = ZygoteConversionRuleSet("ComplexDrive_Embryo")
 
         # Additional modification at the embryo stage
@@ -481,7 +482,7 @@ class ComplexDrive(GeneticPreset):
             maternal_glab="cas9"  # Requires maternal Cas9 deposition
         )
 
-        return ruleset.to_zygote_modifier(population)
+        return ruleset.to_zygote_modifier(host)
 
     def fitness_patch(self):
         return {
@@ -517,9 +518,9 @@ class ComplexDrive(GeneticPreset):
 
 ```python
 class DebugPreset(GeneticPreset):
-    def gamete_modifier(self, population):
-        print(f"Applying preset to species: {population.species.name}")
-        print(f"Available alleles: {list(population.species.gene_index.keys())}")
+    def gamete_modifier(self, host):
+        print(f"Applying preset to species: {host.species.name}")
+        print(f"Available alleles: {list(host.species.gene_index.keys())}")
 
         # Create modifier and return
         # ...

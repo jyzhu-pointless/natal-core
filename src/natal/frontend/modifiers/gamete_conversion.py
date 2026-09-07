@@ -20,7 +20,7 @@ All create a GameteModifier that modifies zygotes_to_gametes_map during gamete p
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -37,7 +37,7 @@ from natal.frontend.utils.helpers import resolve_sex_label
 from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
-    from natal.frontend.population.base import BasePopulation
+    from natal.frontend.genetics.compile import RecipeHost
     from natal.frontend.registry.index import IndexRegistry
 
 __all__ = [
@@ -616,7 +616,7 @@ class GameteConversionRuleSet:
 
     def to_gamete_modifier(
         self,
-        population: BasePopulation[Any]
+        host: RecipeHost,
     ) -> GameteModifier:
         """Convert the ruleset to a GameteModifier for population integration.
 
@@ -624,45 +624,45 @@ class GameteConversionRuleSet:
         per (sex, ztype) pair replaces the legacy rule-cascading Python loop.
 
         Args:
-            population: The BasePopulation that will use this modifier.
+            host: The compilation host providing registry and config.
 
         Returns:
             A callable that implements GameteModifier protocol.
         """
         # Pre-compile matrices at modifier-definition time
-        ztype_to_matrix = self.to_matrix(population)
+        ztype_to_matrix = self.to_matrix(host)
 
-        n_glabs = int(population.config.n_glabs)
-        haploid_genotypes = population.registry.index_to_haplo
+        n_glabs = int(host.config.n_glabs)
+        haploid_genotypes = host.registry.index_to_haplo
         # Conversion modifiers describe a transformation from Mendelian
         # inheritance.  Reusing the population's current map would feed an
         # already converted distribution back through the same rule whenever
         # modifiers are refreshed or a preset is reconfigured.
         full_mendelian_map = initialize_gamete_map(
             haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=population.registry.index_to_genotype,
+            diploid_genotypes=host.registry.index_to_genotype,
             n_glabs=n_glabs,
-            n_slabs=int(population.config.n_slabs),
+            n_slabs=int(host.config.n_slabs),
         )
         full_ztype_index = {
             (genotype, slab): (
-                genotype_idx * len(population.registry.slab_labels) + slab_idx
+                genotype_idx * len(host.registry.slab_labels) + slab_idx
             )
-            for genotype_idx, genotype in enumerate(population.registry.index_to_genotype)
-            for slab_idx, slab in enumerate(population.registry.slab_labels)
+            for genotype_idx, genotype in enumerate(host.registry.index_to_genotype)
+            for slab_idx, slab in enumerate(host.registry.slab_labels)
         }
         full_gtype_index = {
             (haplotype, glab): (
-                haplotype_idx * len(population.registry.glab_labels) + glab_idx
+                haplotype_idx * len(host.registry.glab_labels) + glab_idx
             )
             for haplotype_idx, haplotype in enumerate(haploid_genotypes)
-            for glab_idx, glab in enumerate(population.registry.glab_labels)
+            for glab_idx, glab in enumerate(host.registry.glab_labels)
         }
         active_ztypes = [
-            full_ztype_index[ztype] for ztype in population.registry.index_to_ztype
+            full_ztype_index[ztype] for ztype in host.registry.index_to_ztype
         ]
         active_gtypes = [
-            full_gtype_index[gtype] for gtype in population.registry.index_to_gtype
+            full_gtype_index[gtype] for gtype in host.registry.index_to_gtype
         ]
         # Compression keeps arbitrary entries from the flat ZType/GType axes;
         # project by domain identity instead of assuming either axis remains a
@@ -702,7 +702,7 @@ class GameteConversionRuleSet:
 
     def to_matrix(
         self,
-        population: BasePopulation[Any],
+        host: RecipeHost,
     ) -> Dict[Tuple[int, int], NDArray[np.float64]]:
         """Compile rules to per-(sex, ztype) gtype→gtype transition matrices.
 
@@ -717,16 +717,16 @@ class GameteConversionRuleSet:
         Only (sex, ztype) pairs where at least one rule applies are included.
 
         Args:
-            population: The population providing the registry and config.
+            host: The compilation host providing registry and config.
 
         Returns:
             ``{(sex_idx, ztype_idx): (n_gtypes, n_gtypes) float64 matrix}``.
         """
-        registry = population.registry
+        registry = host.registry
         n_gtypes = registry.n_gtypes
 
         # 1. Resolve glab names to indices
-        resolved_rules = _resolve_rule_glabs(self.rules, population)
+        resolved_rules = _resolve_rule_glabs(self.rules, host)
 
         # 2. Build per-rule dense matrices (one per rule)
         per_rule_matrices = [
@@ -736,7 +736,7 @@ class GameteConversionRuleSet:
 
         # 3. For each (sex, ztype), compose applicable matrices
         result: Dict[Tuple[int, int], NDArray[np.float64]] = {}
-        for sex_idx in range(population.config.n_sexes):
+        for sex_idx in range(host.config.n_sexes):
             for ztype_idx, (genotype, slab) in enumerate(registry.index_to_ztype):
                 # Gather applicable matrices in insertion order
                 applicable = [
@@ -780,7 +780,7 @@ _ResolvedGameteRule = Tuple[
 
 def _resolve_rule_glabs(
     rules: List[_GameteRuleType],
-    population: BasePopulation[Any],
+    host: RecipeHost,
 ) -> List[_ResolvedGameteRule]:
     """Resolve string glab names in rules to integer indices.
 
@@ -792,7 +792,7 @@ def _resolve_rule_glabs(
     Returns:
         List of ``(rule, resolved_source_glab_idx, resolved_target_glab_idx)``.
     """
-    glab_to_idx = population.index_registry.glab_to_index
+    glab_to_idx = host.index_registry.glab_to_index
     resolved: List[_ResolvedGameteRule] = []
     for rule in rules:
         src_idx: Optional[int] = None

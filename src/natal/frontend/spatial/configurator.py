@@ -936,14 +936,15 @@ class SpatialConfigurator:
             else:
                 concrete[key] = value
 
+        # Delegate sanitized kwargs to the template (single store: the
+        # decorator's journaling is bypassed).  The journal entry lands
+        # only after the template call succeeded: a failed call must not
+        # pollute the replayable declaration log (plan 5.1 step 5).
+        filtered = {k: v for k, v in concrete.items() if v is not None}
+        self._call_template(method_name, **filtered)
         # Record the original call with BatchSetting objects preserved,
         # for full replay in _build_template_for_group.
         self._declaration_log.append((method_name, dict(kwargs)))
-
-        # Delegate sanitized kwargs to the template (single store: the
-        # decorator's journaling is bypassed).
-        filtered = {k: v for k, v in concrete.items() if v is not None}
-        self._call_template(method_name, **filtered)
         return self
 
     def _delegate_positional(
@@ -971,10 +972,11 @@ class SpatialConfigurator:
             else:
                 concrete_kwargs[key] = value
 
-        self._declaration_log.append((method_name, dict(kwargs)))
-
         filtered = {k: v for k, v in concrete_kwargs.items() if v is not None}
         self._call_template(method_name, *args, **filtered)
+        # Journal only after the template call succeeded — failed calls
+        # stay out of the replayable declaration log (plan 5.1 step 5).
+        self._declaration_log.append((method_name, dict(kwargs)))
         return self
 
     # ------------------------------------------------------------------
@@ -1018,7 +1020,6 @@ class SpatialConfigurator:
             "compress": compress,
             "declared_zygote_types": declared_zygote_types,
         }
-        self._declaration_log.append(("setup", replay_kwargs))
         template_kwargs: dict[str, object] = {
             "name": name,
             "stochastic": stochastic,
@@ -1028,6 +1029,9 @@ class SpatialConfigurator:
             "declared_zygote_types": declared_zygote_types,
         }
         self._call_template("setup", **template_kwargs)  # type: ignore[arg-type]  # template_kwargs has mixed value types; setup validates at runtime
+        # Journal only after the template call succeeded — failed calls
+        # stay out of the replayable declaration log (plan 5.1 step 5).
+        self._declaration_log.append(("setup", replay_kwargs))
         if compress:
             self._compress = True
         if declared_zygote_types is not None:

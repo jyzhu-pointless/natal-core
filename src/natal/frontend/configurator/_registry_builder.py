@@ -1,27 +1,22 @@
-"""Registry builder, adapter, and config map rebuild helpers.
+"""Registry builder and build-side config map compilation.
 
-Internal helpers shared by the Configurator and the ``ConfigContext``
-adapter.
+Internal helpers for the build-side candidate compile:
 
-Key components:
   - ``build_registry()`` — create an ``IndexRegistry`` pre-populated
     with all genotypes, haplotypes, and gamete/somatic labels from
     a ``Species``.
-  - ``ConfigContext`` — adapter that mimics ``BasePopulation``'s
-    attribute surface so that ``apply_preset_to_population()`` and
-    modifier functions can operate on config arrays without a live
-    Population object.
-  - ``rebuild_config_maps()`` — apply gamete/zygote modifiers,
-    run optional index compression, and recompute the offspring
-    probability tensor.
+  - ``rebuild_config_maps()`` — apply gamete/zygote modifiers to the
+    Mendelian baseline through the unified compiler, run optional index
+    compression, and return the updated draft.  All inputs and outputs
+    are explicit values: there is no adapter object impersonating a
+    population.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
-from numpy.typing import NDArray
 
 from natal.frontend.data import (
     ModelDraft,
@@ -31,9 +26,7 @@ from natal.frontend.genetics import Species, build_compression_mask
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
-    from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
-    from natal.frontend.presets import GeneticPreset
-
+    from natal.frontend.genetics.compile import GameteList, ZygoteList
 
 # ── Registry builder (shared by Configurator and adapter) ──────────────────────
 
@@ -75,211 +68,97 @@ def build_registry(species: Species) -> IndexRegistry:
     return registry
 
 
-# ── Adapter: lets presets/modifiers/fitness operate without a Population ──
-
-
-class ConfigContext:
-    """Adapter that lets presets/modifiers/fitness write into config arrays
-    without needing a live Population object.
-
-    ``apply_preset_to_population``, ``build_modifier_wrappers``, and
-    ``_apply_preset_fitness_patch`` are all designed to work against
-    ``BasePopulation``.  But during ``Configurator`` builds there *is* no
-    Population yet.  This class exposes the four things those functions
-    actually need — *species*, *config*, *index_registry*, and the two
-    modifier lists — with the same attribute names and mutation patterns
-    as ``BasePopulation``.
-
-    After the preset/modifier/fitness call returns, :meth:`Configurator.
-    _sync_from_ctx` pulls the mutated *config* and modifier lists back
-    into the Configurator.
-    """
-
-    def __init__(
-        self,
-        species: Species,
-        config: ModelDraft,
-        registry: IndexRegistry,
-        compress: bool = False,
-    ) -> None:
-        """Initialize the adapter with species, config, and registry.
-
-        Args:
-            species: The genetic architecture for the population.
-            config: The ModelDraft to wrap.
-            registry: An IndexRegistry pre-populated with genotypes/haplotypes.
-            compress: Enable both GType and ZType index compression at once.
-        """
-        self.species = species
-        self.config = config
-        self.registry = registry
-        self.index_registry = registry
-        self.compress = compress
-        self.compression_applied: bool = False
-        self.declared_zygote_types: set[str] | set[int] | None = None
-        # Compression masks (exposed for spatial post-processing).
-        self.ztype_mask: NDArray[np.int32] | None = None
-        self.gtype_mask: NDArray[np.int32] | None = None
-        self.gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
-        self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
-        self.presets: list[GeneticPreset] = []  # for cytoplasmic preset post-processing
-
-    # -- modifier registration (mimics BasePopulation) ----------------------
-
-    def add_gamete_modifier(
-        self,
-        modifier: GameteModifier,
-        *,
-        name: str | None = None,
-        modifier_id: int | None = None,
-        refresh: bool = True,
-    ) -> None:
-        """Register a gamete modifier on the adapter.
-
-        Args:
-            modifier: The GameteModifier callable.
-            name: Optional name string for identification.
-            modifier_id: Explicit modifier ID (auto-assigned if ``None``).
-            refresh: If ``True`` (default), rebuild modifier maps immediately.
-        """
-        resolved_id = ConfigContext.next_modifier_id(self.gamete_modifiers) if modifier_id is None else modifier_id
-        self.gamete_modifiers.append((resolved_id, name, modifier))
-        self.gamete_modifiers.sort(key=lambda x: x[0])
-        if refresh:
-            rebuild_config_maps(self)
-
-    def refresh_modifier_maps(self) -> None:
-        """Rebuild config maps from the current modifier lists.
-
-        Mirrors :meth:`BasePopulation.refresh_modifier_maps` for the
-        adapter — required by :func:`apply_preset_to_population` which
-        accepts both Population and ConfigContext objects.
-        """
-        rebuild_config_maps(self)
-
-    def add_zygote_modifier(
-        self,
-        modifier: ZygoteModifier,
-        *,
-        name: str | None = None,
-        modifier_id: int | None = None,
-        refresh: bool = True,
-    ) -> None:
-        """Register a zygote modifier on the adapter.
-
-        Args:
-            modifier: The ZygoteModifier callable.
-            name: Optional name string for identification.
-            modifier_id: Explicit modifier ID (auto-assigned if ``None``).
-            refresh: If ``True`` (default), rebuild modifier maps immediately.
-        """
-        resolved_id = ConfigContext.next_modifier_id(self.zygote_modifiers) if modifier_id is None else modifier_id
-        self.zygote_modifiers.append((resolved_id, name, modifier))
-        self.zygote_modifiers.sort(key=lambda x: x[0])
-        if refresh:
-            rebuild_config_maps(self)
-
-    # ``Any`` for the 3rd tuple element is justified: the function only
-    # reads ``id`` and ``name`` (1st/2nd elements); the modifier object
-    # itself is never accessed, so its type is irrelevant.
-    @staticmethod
-    def next_modifier_id(modifiers: list[tuple[int, str | None, Any]]) -> int:
-        """Return the next available modifier ID.
-
-        Scans the existing modifier IDs and returns ``max + 1``
-        (or ``0`` if the list is empty).
-
-        Args:
-            modifiers: List of ``(id, name, modifier)`` tuples.
-
-        Returns:
-            The next available integer ID.
-        """
-        ids = [mid for mid, _, _ in modifiers]
-        return (max(ids) + 1) if ids else 0
-
-
 # ── Core: rebuild genotype/gamete/zygote maps from modifier lists ─────────────
 
 
 def rebuild_config_maps(
-    ctx: ConfigContext,
+    species: Species,
+    config: ModelDraft,
+    registry: IndexRegistry,
     *,
-    override_z2g: NDArray[np.float64] | None = None,
-    override_g2z: NDArray[np.float64] | None = None,
-) -> None:
+    gamete_modifiers: GameteList,
+    zygote_modifiers: ZygoteList,
+    compress: bool = False,
+    declared_zygote_types: set[str] | set[int] | None = None,
+) -> tuple[ModelDraft, bool]:
     """Apply gamete/zygote modifiers and rebuild ``offspring_tensor``.
 
     Starts from the species-level Mendelian baseline (cached via
     :meth:`Species.get_config_blueprint`) and applies modifier callables
-    in-place, avoiding redundant O(n²) baseline recomputation.
+    through the unified compiler
+    (:func:`natal.frontend.genetics.compile.compile_modifier_maps`) — the
+    same spelling the population-side refresh uses.
 
-    When *override_z2g* / *override_g2z* are provided, the modifier
-    application step is skipped and the override maps are used directly.
-    This is used by spatial compression to combine modifier maps from
-    multiple demes into a unified BFS adjacency matrix.
+    When *compress* is enabled, reachable-index compression runs on the
+    result: unreachable gtypes/ztypes are pruned from the maps, the
+    config is subsliced via ``compress_config``, and *registry* is
+    compressed **in place** (the registry is shared state by design —
+    the symbolic name directory must stay index-aligned with the maps).
+
+    Args:
+        species: The genetic architecture providing the Mendelian baseline.
+        config: The candidate draft whose maps are rebuilt.
+        registry: The registry whose active axes the maps address; it is
+            compressed in place when *compress* prunes indices.
+        gamete_modifiers: ``(id, name, callable)`` triples to chain over
+            the meiosis table.
+        zygote_modifiers: The zygote-side twin of *gamete_modifiers*.
+        compress: Enable both GType and ZType index compression at once.
+        declared_zygote_types: Genotypes the user declared (string
+            selectors or raw indices) that must survive compression
+            pruning even when unreachable from the initial state.
+
+    Returns:
+        ``(new_config, compression_applied)`` — the rebuilt draft and
+        whether compression ran.  The input *config* is never mutated;
+        *registry* is compressed in place when compression applies.
     """
     from natal.frontend.data._engine import recompute_offspring_tensor
+    from natal.frontend.genetics.compile import compile_modifier_maps
 
     # ---- resolve genotype/haplotype lists from the registry ----
-    haploid_genotypes = ctx.registry.index_to_haplo
-    diploid_genotypes = ctx.registry.index_to_genotype
+    haploid_genotypes = registry.index_to_haplo
+    diploid_genotypes = registry.index_to_genotype
     if not haploid_genotypes or not diploid_genotypes:
-        return  # species has no haploid genotypes (no sex chromosomes)
+        # species has no haploid genotypes (no sex chromosomes)
+        return config, False
 
-    n_glabs = int(ctx.config.n_glabs)
-    if override_z2g is not None and override_g2z is not None:
-        # Overrides (spatial compression's combined maps) skip the recipes
-        # but still funnel through the unified compiler for the offspring
-        # derivation, so there is exactly one spelling of that step too.
-        from natal.frontend.genetics.compile import compile_modifier_maps
+    n_glabs = int(config.n_glabs)
 
-        zygotes_to_gametes_map, gametes_to_zygotes_map, _derived = (
-            compile_modifier_maps(
-                override_z2g,
-                override_g2z,
-                gamete_modifiers=[],
-                zygote_modifiers=[],
-                registry=ctx.registry,
-                population=None,
-            )
+    # ---- the unified compiler: baseline from the species cache,
+    # modifier recipes chained, offspring derived — the same spelling
+    # the population-side refresh uses ----
+    bp = species.get_config_blueprint()
+    zygotes_to_gametes_map, gametes_to_zygotes_map, _derived = (
+        compile_modifier_maps(
+            bp["zygotes_to_gametes_map"],
+            bp["gametes_to_zygotes_map"],
+            gamete_modifiers=gamete_modifiers,
+            zygote_modifiers=zygote_modifiers,
+            registry=registry,
+            population=None,
         )
-    else:
-        # ---- the unified compiler: baseline from the species cache,
-        # modifier recipes chained, offspring derived — the same spelling
-        # the population-side refresh uses ----
-        from natal.frontend.genetics.compile import compile_modifier_maps
-
-        bp = ctx.species.get_config_blueprint()
-        zygotes_to_gametes_map, gametes_to_zygotes_map, _derived = (
-            compile_modifier_maps(
-                bp["zygotes_to_gametes_map"],
-                bp["gametes_to_zygotes_map"],
-                gamete_modifiers=ctx.gamete_modifiers,
-                zygote_modifiers=ctx.zygote_modifiers,
-                registry=ctx.registry,
-                population=None,
-            )
-        )
+    )
 
     # ---- index compression (optional) ----
-    n_g_compressed = int(ctx.config.n_ztypes)
-    n_hg_effective = int(ctx.config.n_gtypes) // n_glabs
+    n_g_compressed = int(config.n_ztypes)
+    n_hg_effective = int(config.n_gtypes) // n_glabs
     n_glabs_effective = n_glabs
     gtype_mask = np.array([], dtype=np.int32)
     ztype_mask = np.array([], dtype=np.int32)
+    compression_applied = False
 
-    if ctx.compress:
-        ctx.compression_applied = True
+    if compress:
+        compression_applied = True
 
         # Resolve declared_zygote_types to integer indices for the BFS.
         # Each declared genotype is expanded to all slab variants because
         # the BFS operates in the slab-expanded space (G = G_orig × n_slabs).
         declared_ints: set[int] | None = None
-        if ctx.declared_zygote_types is not None:
+        if declared_zygote_types is not None:
             declared_ints = set()
-            n_slabs = int(ctx.config.n_slabs)
-            for dg in ctx.declared_zygote_types:
+            n_slabs = int(config.n_slabs)
+            for dg in declared_zygote_types:
                 if isinstance(dg, str):
                     try:
                         # Use ZygoteTypePattern to properly handle @slab
@@ -287,23 +166,23 @@ def rebuild_config_maps(
                         from natal.frontend.patterns.elements.diploid import (
                             ZygoteTypePattern,
                         )
-                        pattern = ZygoteTypePattern.parse(dg, ctx.species)
+                        pattern = ZygoteTypePattern.parse(dg, species)
                         matched = False
                         for gt in diploid_genotypes:
                             if pattern.genotype.matches(gt):
                                 for s in range(n_slabs):
                                     declared_ints.add(
-                                        ctx.registry.ztype_index(gt, ctx.registry.slab_labels[s])
+                                        registry.ztype_index(gt, registry.slab_labels[s])
                                     )
                                 matched = True
                         if not matched:
                             # Fallback: strip @slab and try exact match
                             dg_clean = dg.split("@")[0]
-                            gt = ctx.species.get_genotype_from_str(dg_clean)
+                            gt = species.get_genotype_from_str(dg_clean)
                             if gt in diploid_genotypes:
                                 for s in range(n_slabs):
                                     declared_ints.add(
-                                        ctx.registry.ztype_index(gt, ctx.registry.slab_labels[s])
+                                        registry.ztype_index(gt, registry.slab_labels[s])
                                     )
                     except Exception:
                         pass
@@ -311,9 +190,9 @@ def rebuild_config_maps(
                     g_orig = int(dg)
                     for s in range(n_slabs):
                         declared_ints.add(
-                            ctx.registry.ztype_index(
+                            registry.ztype_index(
                                 diploid_genotypes[g_orig],
-                                ctx.registry.slab_labels[s],
+                                registry.slab_labels[s],
                             )
                         )
 
@@ -321,14 +200,12 @@ def rebuild_config_maps(
             build_compression_mask(
                 zygotes_to_gametes_map,
                 gametes_to_zygotes_map,
-                ctx.config.initial_individual_count,
+                config.initial_individual_count,
                 declared_zygote_types=declared_ints,
             )
         )
         gtype_mask = _gt_mask
         ztype_mask = _zt_mask
-        ctx.gtype_mask = gtype_mask
-        ctx.ztype_mask = ztype_mask
 
         # Guard: if no genotypes or gametes are reachable, skip compression
         # entirely (initial state is empty and no declared_genotypes given).
@@ -336,10 +213,10 @@ def rebuild_config_maps(
         # that crash downstream code.
         has_reachable = (gtype_mask >= 0).any() or (ztype_mask >= 0).any()
         if not has_reachable:
-            return
+            return config, compression_applied
 
     # GType (gamete-axis) compression.
-    n_hg_effective = int(ctx.config.n_gtypes) // n_glabs
+    n_hg_effective = int(config.n_gtypes) // n_glabs
     n_glabs_effective = n_glabs
     gtype_compressed = False
     _hl_active = gtype_mask >= 0
@@ -357,9 +234,9 @@ def rebuild_config_maps(
         zygotes_to_gametes_map = zygotes_to_gametes_map[:, _z_active, :]
         gametes_to_zygotes_map = gametes_to_zygotes_map[:, :, _z_active]
 
-        ctx.config = compress_config(ctx.config, ztype_mask)
-        n_g_compressed = int(ctx.config.n_ztypes)
-        ctx.registry.compress(ztype_mask, gtype_mask)
+        config = compress_config(config, ztype_mask)
+        n_g_compressed = int(config.n_ztypes)
+        registry.compress(ztype_mask, gtype_mask)
 
     # ---- recompute offspring probability tensor from the updated maps via
     # the single shared derivation (shape-derived counts, so both the
@@ -368,8 +245,8 @@ def rebuild_config_maps(
         zygotes_to_gametes_map, gametes_to_zygotes_map
     )
 
-    # ---- write everything back into the config via _replace ----
-    overrides: dict[str, Any] = {
+    # ---- write everything back into a fresh draft via _replace ----
+    overrides: dict[str, object] = {
         "zygotes_to_gametes_map": zygotes_to_gametes_map,
         "gametes_to_zygotes_map": gametes_to_zygotes_map,
         "offspring_tensor": offspring_tensor,
@@ -381,7 +258,7 @@ def rebuild_config_maps(
         # name directory with it so indices stay aligned.
         overrides["gtype_names"] = tuple(
             name
-            for name, m in zip(ctx.config.gtype_names, gtype_mask.tolist())
+            for name, m in zip(config.gtype_names, gtype_mask.tolist())
             if m >= 0
         )
-    ctx.config = ctx.config._replace(**overrides)
+    return config._replace(**overrides), compression_applied

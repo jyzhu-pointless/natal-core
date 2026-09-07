@@ -17,8 +17,11 @@ top: all modifications route through the declarative route table
 (:mod:`natal.frontend.configurator._writers`), and the
 final draft is materialized via ``build()``.
 
-The adapter class ``ConfigContext`` lets genetic presets and modifiers
-operate on config arrays without needing a live Population object.
+The Configurator itself doubles as the build-side recipe host: during a
+candidate compile, preset / modifier / fitness recipes read
+``species`` / ``config`` / ``registry`` / ``index_registry`` directly off
+the Configurator (:class:`natal.frontend.genetics.compile.RecipeHost`)
+— there is no adapter object impersonating a Population.
 
 Since slice 3 there is exactly one ``Configurator`` class: the former
 ``AgeStructuredConfigurator`` / ``DiscreteConfigurator`` split was a
@@ -59,7 +62,6 @@ from natal.frontend.configurator._params import (
     compute_expected_eggs_from_females,
 )
 from natal.frontend.configurator._registry_builder import (
-    ConfigContext,
     build_registry,
     rebuild_config_maps,
 )
@@ -103,20 +105,6 @@ HookCall = tuple[tuple[object, ...], dict[str, object]]
 # A hook item: an Op, an op list, or a callable (decorated or a plain
 # single-parameter callback).
 _HookItem = object
-
-
-# Genetics tensors rebuilt wholesale by preset/modifier application.  The
-# Rust bridge refreshes these as whole tensors instead of tracking cells.
-_RUST_GENETICS_TENSORS: frozenset[str] = frozenset({
-    "viability_fitness",
-    "fecundity_fitness",
-    "sexual_selection_fitness",
-    "zygote_viability_fitness",
-    "offspring_tensor",
-    "meiosis_map",
-    "female_ztype_compatibility",
-    "male_ztype_compatibility",
-})
 
 
 def normalize_observation_groups(groups: object) -> dict[str, IndividualSelector]:
@@ -366,10 +354,16 @@ def _declared(
                 declared["__args__"] = value
             else:
                 declared[name] = value
+        # Record only AFTER the method body succeeded: a failed call must
+        # leave neither state nor journal entries behind (plan 5.1 step 5
+        # — failure does not pollute committed declarations).  The method's
+        # own rollback restores state; this ordering keeps the journal
+        # consistent with it, so replay never re-applies a failed call.
+        result = method(self, *args, **kwargs)
         self._declaration_log.append(  # pyright: ignore[reportPrivateUsage]  # the journal lives on the instance this decorator wraps
             (method.__name__, declared)
         )
-        return method(self, *args, **kwargs)
+        return result
 
     return wrapper
 
@@ -451,8 +445,9 @@ class Configurator:
         self._config: ModelDraft = config
         self._species = species  # needed for initial_state / preset resolution
 
-        # _registry is lazily built on first _make_ctx() call, avoiding the
-        # cost of genotype enumeration for simple scalar-param updates.
+        # _registry is lazily built on first `registry` property access,
+        # avoiding the cost of genotype enumeration for simple scalar-param
+        # updates.
         self._registry: IndexRegistry | None = None
 
         # Modifier lists — accumulated across presets() / modifiers() calls,
@@ -525,71 +520,106 @@ class Configurator:
         # getattr guard: spatial _clone builds instances via __new__.
         return getattr(pop, "_rust_dirty", None)
 
-    # -- adapter factory ------------------------------------------------------
+    # -- recipe-host surface (build-side candidate compile) ------------------
+    # These three read-only properties complete the RecipeHost protocol
+    # alongside the existing ``config`` property: preset / modifier /
+    # fitness recipes read them while the Configurator compiles a
+    # candidate.  A live BasePopulation satisfies the same protocol, so
+    # recipes cannot tell (and must not care) which side drives them.
 
-    def _make_ctx(self) -> ConfigContext:
-        """Build a :class:`ConfigContext` seeded from the current state.
-
-        Creates an adapter that mimics ``BasePopulation``'s attribute
-        surface so that ``apply_preset_to_population`` and modifier
-        functions can operate without a live Population.
-
-        The context receives a shallow copy of the modifier lists so that
-        preset / modifier calls can append without mutating the originals
-        until :meth:`_sync_from_ctx` explicitly commits them back.
-
-        Lazily builds ``self._registry`` from the species on first call.
-
-        Returns:
-            A new ``ConfigContext`` pre-populated with species, config,
-            registry, and modifier lists.
+    @property
+    def species(self) -> Species:
+        """The species whose architecture the candidate compiles against.
 
         Raises:
-            RuntimeError: If ``_species`` is ``None`` (Configurator was
-                created via the raw constructor without a Species).
+            RuntimeError: If no Species was bound (raw-constructor path).
         """
-        # _species and _registry are set either:
-        #   - by from_species() (build path) — _species directly, registry lazy
-        #   - by for_population() (update path) — both from the Population
-        # so the existing guards below work for both paths without changes.
         if self._species is None:
             raise RuntimeError(
                 "presets() / modifiers() / fitness() require a Species. "
                 "Use Configurator.from_species() to create this instance."
             )
-        if self._registry is None:
-            self._registry = build_registry(self._species)
+        return self._species
 
-        ctx = ConfigContext(
-            self._species, self._config, self._registry,
-            compress=False,  # compression is only enabled in build()
-        )
-        ctx.declared_zygote_types = self._declared_zygote_types
-        ctx.gamete_modifiers = list(self.gamete_modifiers)
-        ctx.zygote_modifiers = list(self.zygote_modifiers)
-        return ctx
+    @property
+    def registry(self) -> IndexRegistry:
+        """The candidate's index registry (built lazily from the species).
 
-    def _sync_from_ctx(self, ctx: ConfigContext) -> None:
-        """Commit adapter-side mutations back into the Configurator.
-
-        Called after ``apply_preset_to_population`` or ``rebuild_config_maps``
-        has finished writing into *ctx.config* and the modifier lists.
-        Copies the mutated config and modifier lists back, and records
-        whether compression was applied.
-
-        Args:
-            ctx: The ``ConfigContext`` whose state to consume.
+        Raises:
+            RuntimeError: If no Species was bound (raw-constructor path).
         """
-        self._config = ctx.config
-        self.gamete_modifiers = ctx.gamete_modifiers
-        self.zygote_modifiers = ctx.zygote_modifiers
-        if ctx.compression_applied:
-            self._compression_applied = True
-        # rebuild_config_maps rewrote the inheritance maps; mark the whole
-        # genetics section so the Rust session refreshes every tensor.
-        sink = self._rust_dirty_sink()
-        if sink is not None:
-            sink.update(_RUST_GENETICS_TENSORS)
+        if self._registry is None:
+            self._registry = build_registry(self.species)
+        return self._registry
+
+    @property
+    def index_registry(self) -> IndexRegistry:
+        """Alias of :attr:`registry` (recipe-host protocol member)."""
+        return self.registry
+
+    def _compile_candidate_maps(
+        self,
+        gamete_modifiers: list[tuple[int, str | None, GameteModifier]],
+        zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]],
+    ) -> None:
+        """Rebuild the candidate's inheritance maps via the build-side compile.
+
+        Thin wrapper so every build-path caller (``presets()``,
+        ``modifiers()``, ``build()`` compression) spells the candidate
+        compile exactly once: unified compiler over the Mendelian
+        baseline, modifier recipes chained, offspring tensor derived,
+        optional compression applied.
+        """
+        self._config, _applied = rebuild_config_maps(
+            self.species,
+            self._config,
+            self.registry,
+            gamete_modifiers=gamete_modifiers,
+            zygote_modifiers=zygote_modifiers,
+            compress=False,
+        )
+
+    def _apply_preset_to_candidate(
+        self,
+        preset: GeneticPreset,
+        gamete_modifiers: list[tuple[int, str | None, GameteModifier]],
+        zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]],
+    ) -> None:
+        """Run one preset's recipes against this candidate and rebuild.
+
+        Mirrors the historical per-preset application order exactly:
+        species binding, recipe factories, registration (ids assigned
+        from the *current* candidate lists, then sorted), an immediate
+        map rebuild when the preset contributed any modifier, and the
+        declarative fitness patch composed onto the current tensors.
+        """
+        from natal.frontend.fitness._patch import apply_preset_fitness_patch
+        from natal.frontend.genetics.compile import next_modifier_id
+
+        preset.bind_species(self.species)
+
+        gamete_mod = preset.gamete_modifier(self)
+        zygote_mod = preset.zygote_modifier(self)
+
+        if gamete_mod is not None:
+            gamete_modifiers.append(
+                (next_modifier_id(gamete_modifiers), f"{preset.name}/gamete", gamete_mod)
+            )
+            gamete_modifiers.sort(key=lambda x: x[0])
+
+        if zygote_mod is not None:
+            zygote_modifiers.append(
+                (next_modifier_id(zygote_modifiers), f"{preset.name}/zygote", zygote_mod)
+            )
+            zygote_modifiers.sort(key=lambda x: x[0])
+
+        if gamete_mod is not None or zygote_mod is not None:
+            self._compile_candidate_maps(gamete_modifiers, zygote_modifiers)
+
+        # Preferred path: declarative fitness patch
+        patch = preset.fitness_patch()
+        if patch:
+            apply_preset_fitness_patch(self, patch)
 
     # -- factory ---------------------------------------------------------------
 
@@ -716,8 +746,8 @@ class Configurator:
         # Record the Population reference for write-back
         cfg._pop_ref = pop
 
-        # Bind species and registry from the Population so
-        # _make_ctx() and fitness() work correctly.
+        # Bind species and registry from the Population so recipe
+        # factories and fitness() work against the live objects.
         cfg._species = pop.species
         cfg._registry = pop.index_registry
 
@@ -1307,8 +1337,10 @@ class Configurator:
         appends additional modifiers rather than replacing existing ones.
 
         When wired to a Population (via ``for_population()``), presets are
-        applied directly to the Population — no adapter, no write-back needed.
-        Otherwise the ``ConfigContext`` adapter path is used for build-time.
+        applied directly to the Population.  Otherwise the recipes run
+        against this Configurator as the build-side candidate (RecipeHost
+        protocol), isolated on a deepcopy of the draft that is published
+        only when every new preset has succeeded.
 
         Args:
             *presets: One or more ``GeneticPreset`` instances
@@ -1372,8 +1404,6 @@ class Configurator:
             self._config = pop.config
             return self
 
-        from natal.frontend.presets import apply_preset_to_population
-
         new_presets: list[GeneticPreset] = []
         for preset in presets:
             if any(registered is preset for registered in self._presets) or any(
@@ -1400,16 +1430,17 @@ class Configurator:
         isolated_config: ModelDraft = deepcopy(original_config)
         self._config = isolated_config
         self._presets.extend(new_presets)
+        # Candidate lists: shallow copies so a failed compile never leaves
+        # half-registered modifiers on the Configurator.
+        gamete_list = list(self.gamete_modifiers)
+        zygote_list = list(self.zygote_modifiers)
         try:
-            ctx = self._make_ctx()
-            ctx.presets = list(self._presets)
             for preset in new_presets:
-                apply_preset_to_population(ctx, preset)  # pyright: ignore[reportArgumentType]
+                self._apply_preset_to_candidate(preset, gamete_list, zygote_list)
             # Cytoplasmic presets have no gamete/zygote modifier that would
             # otherwise trigger a map rebuild.
             if any(isinstance(p, CytoplasmicPreset) for p in new_presets):
-                rebuild_config_maps(ctx)
-            self._sync_from_ctx(ctx)
+                self._compile_candidate_maps(gamete_list, zygote_list)
         except Exception:
             self._config = original_config
             self._registry = original_registry
@@ -1420,6 +1451,8 @@ class Configurator:
             for preset, bound_species in preset_bindings:
                 preset._bound_species = bound_species  # pyright: ignore[reportPrivateUsage]  # restore the caller-owned preset exactly.
             raise
+        self.gamete_modifiers = gamete_list
+        self.zygote_modifiers = zygote_list
         return self
 
     @_declared
@@ -1451,20 +1484,29 @@ class Configurator:
             self._config = self._pop_ref.config
             return self
 
-        ctx = self._make_ctx()
-        next_gid = ConfigContext.next_modifier_id(ctx.gamete_modifiers)
+        from natal.frontend.genetics.compile import next_modifier_id
+
+        # Candidate lists: shallow copies so a failed rebuild never leaves
+        # half-registered modifiers on the Configurator.  Manual modifiers
+        # keep insertion order (no id sort) — ids are assigned once from
+        # the pre-call state and incremented per entry, matching the
+        # historical build-time registration.
+        gamete_list = list(self.gamete_modifiers)
+        zygote_list = list(self.zygote_modifiers)
+        next_gid = next_modifier_id(gamete_list)
         if gamete_modifiers:
             for mod in gamete_modifiers:
-                ctx.gamete_modifiers.append((next_gid, None, mod))
+                gamete_list.append((next_gid, None, mod))
                 next_gid += 1
-        next_zid = ConfigContext.next_modifier_id(ctx.zygote_modifiers)
+        next_zid = next_modifier_id(zygote_list)
         if zygote_modifiers:
             for mod in zygote_modifiers:
-                ctx.zygote_modifiers.append((next_zid, None, mod))
+                zygote_list.append((next_zid, None, mod))
                 next_zid += 1
         if gamete_modifiers or zygote_modifiers:
-            rebuild_config_maps(ctx)
-        self._sync_from_ctx(ctx)
+            self._compile_candidate_maps(gamete_list, zygote_list)
+        self.gamete_modifiers = gamete_list
+        self.zygote_modifiers = zygote_list
         return self
 
     @_declared
@@ -1928,11 +1970,22 @@ class Configurator:
                         else hook_refs,
                     )
 
-            ctx = self._make_ctx()
-            ctx.compress = True  # compression only happens at build time
-            rebuild_config_maps(ctx)
-            self._sync_from_ctx(ctx)
-            final_config = ctx.config  # compressed copy
+            # Build-time compression runs the candidate compile with the
+            # compression flag: the unified compiler rebuilds the maps,
+            # reachable-index pruning subslices them, and the registry is
+            # compressed in place so name lookups stay aligned.
+            self._config, compression_applied = rebuild_config_maps(
+                self._species,
+                self._config,
+                self._registry,
+                gamete_modifiers=self.gamete_modifiers,
+                zygote_modifiers=self.zygote_modifiers,
+                compress=True,
+                declared_zygote_types=self._declared_zygote_types,
+            )
+            if compression_applied:
+                self._compression_applied = True
+            final_config = self._config  # compressed copy
 
         # Custom kwargs (accumulated by .custom()) applied to final config.
         if self._custom_kwargs:

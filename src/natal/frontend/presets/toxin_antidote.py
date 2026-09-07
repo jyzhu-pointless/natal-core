@@ -26,7 +26,7 @@ from ._types import (
 )
 
 if TYPE_CHECKING:
-    from natal.frontend.population.base import BasePopulation
+    from natal.frontend.genetics.compile import RecipeHost
 
 
 class ToxinAntidoteDrive(GeneticPreset):
@@ -161,7 +161,7 @@ class ToxinAntidoteDrive(GeneticPreset):
             return float(rate)
         return rate[sex]
 
-    def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
+    def gamete_modifier(self, host: "RecipeHost") -> Optional[GameteModifier]:
         """Implement target disruption in the germline of drive carriers."""
         def drive_carrier_filter(gt: Genotype) -> bool:
             """Return True if the genotype carries at least one drive allele."""
@@ -188,9 +188,9 @@ class ToxinAntidoteDrive(GeneticPreset):
                     genotype_filter=drive_carrier_filter,
                 )
 
-        return rule_set.to_gamete_modifier(population) if rule_set.rules else None
+        return rule_set.to_gamete_modifier(host) if rule_set.rules else None
 
-    def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host: "RecipeHost") -> Optional[ZygoteModifier]:
         """Implement target disruption in embryos."""
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoDisruption")
 
@@ -215,4 +215,4 @@ class ToxinAntidoteDrive(GeneticPreset):
                         genotype_filter=g_filter,
                     )
 
-        return rule_set.to_zygote_modifier(population) if rule_set.rules else None
+        return rule_set.to_zygote_modifier(host) if rule_set.rules else None

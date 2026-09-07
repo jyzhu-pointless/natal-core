@@ -38,7 +38,7 @@ class DrivePreset(GeneticPreset):
         super().__init__(name="DrivePreset")
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("drive_rules")
 
         def is_wd_heterozygote(genotype) -> bool:
@@ -52,7 +52,7 @@ class DrivePreset(GeneticPreset):
             genotype_filter=is_wd_heterozygote,
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ## 在 Builder 中应用 Preset
@@ -103,7 +103,7 @@ class ComplexDrive(GeneticPreset):
     def __init__(self):
         super().__init__(name="ComplexDrive")
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # 阶段1: 驱动转换 (WT → Drive)
@@ -114,9 +114,9 @@ class ComplexDrive(GeneticPreset):
         ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 
-    def zygote_modifier(self, population):
+    def zygote_modifier(self, host):
         ruleset = ZygoteConversionRuleSet("ComplexDrive_Embryo")
 
         # 胚胎阶段的额外修饰
@@ -127,7 +127,7 @@ class ComplexDrive(GeneticPreset):
             maternal_glab="cas9"  # 需要母源Cas9沉积
         )
 
-        return ruleset.to_zygote_modifier(population)
+        return ruleset.to_zygote_modifier(host)
 
     def fitness_patch(self):
         return {
@@ -163,9 +163,9 @@ class ComplexDrive(GeneticPreset):
 
 ```python
 class DebugPreset(GeneticPreset):
-    def gamete_modifier(self, population):
-        print(f"应用预设到物种: {population.species.name}")
-        print(f"可用等位基因: {list(population.species.gene_index.keys())}")
+    def gamete_modifier(self, host):
+        print(f"应用预设到物种: {host.species.name}")
+        print(f"可用等位基因: {list(host.species.gene_index.keys())}")
 
         # 创建修饰器并返回
         # ...

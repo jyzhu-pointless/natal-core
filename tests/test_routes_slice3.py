@@ -344,8 +344,8 @@ class TestGenoTensorShape:
         table = pop.params.meiosis_map.array
         table[0, 0, :] = [0.25, 0.75]
         pop.params.tensor_write("meiosis_map", table)
-        # Contract-name markers — the same names the modifier refresh and
-        # the Rust genetics-tensor set (_RUST_GENETICS_TENSORS) use.  The
+        # Contract-name markers — the same names the modifier refresh
+        # uses when marking rebuilt genetics tensors.  The
         # derived offspring tensor is recomputed and marked in the same
         # transaction, otherwise the engine would keep consuming the stale
         # table (audit finding C3).

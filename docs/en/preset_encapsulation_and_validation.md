@@ -38,7 +38,7 @@ class DrivePreset(GeneticPreset):
         super().__init__(name="DrivePreset")
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("drive_rules")
 
         def is_wd_heterozygote(genotype) -> bool:
@@ -48,7 +48,7 @@ class DrivePreset(GeneticPreset):
         ruleset.add_allele_convert(
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 ```
 
 ## Applying a Preset in the Builder
@@ -99,7 +99,7 @@ class ComplexDrive(GeneticPreset):
     def __init__(self):
         super().__init__(name="ComplexDrive")
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # Stage 1: Drive conversion (WT → Drive)
@@ -110,9 +110,9 @@ class ComplexDrive(GeneticPreset):
         ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 
-    def zygote_modifier(self, population):
+    def zygote_modifier(self, host):
         ruleset = ZygoteConversionRuleSet("ComplexDrive_Embryo")
 
         # Additional embryonic stage modification
@@ -123,7 +123,7 @@ class ComplexDrive(GeneticPreset):
             maternal_glab="cas9"  # requires maternal Cas9 deposition
         )
 
-        return ruleset.to_zygote_modifier(population)
+        return ruleset.to_zygote_modifier(host)
 
     def fitness_patch(self):
         return {
@@ -159,9 +159,9 @@ class ComplexDrive(GeneticPreset):
 
 ```python
 class DebugPreset(GeneticPreset):
-    def gamete_modifier(self, population):
-        print(f"Applying preset to species: {population.species.name}")
-        print(f"Available alleles: {list(population.species.gene_index.keys())}")
+    def gamete_modifier(self, host):
+        print(f"Applying preset to species: {host.species.name}")
+        print(f"Available alleles: {list(host.species.gene_index.keys())}")
 
         # Create modifier and return
         # ...

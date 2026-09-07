@@ -5,7 +5,7 @@ Public module — provides CytoplasmicPreset, Wolbachia, and TransgenicBackgroun
 
 # pyright: reportPrivateUsage=false
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -23,7 +23,7 @@ from ._base import GeneticPreset
 from ._types import PresetFitnessPatch
 
 if TYPE_CHECKING:
-    from natal.frontend.population.base import BasePopulation
+    from natal.frontend.genetics.compile import RecipeHost
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ class CytoplasmicPreset(GeneticPreset):
 
     _maternal_map: dict[str, str] = {}  # {slab_name: glab_name}
 
-    def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
+    def gamete_modifier(self, host: "RecipeHost") -> Optional[GameteModifier]:
         """Tag maternal gametes: default-glab → *glab_name* for matching slabs.
 
         Uses declarative :class:`GameteConversionRuleSet` with pre-compiled
@@ -64,7 +64,7 @@ class CytoplasmicPreset(GeneticPreset):
         if not self._maternal_map:
             return None
 
-        glab_to_idx = population.index_registry.glab_to_index
+        glab_to_idx = host.index_registry.glab_to_index
         # Filter: only keep slab→glab pairs where the glab is registered
         active_map = {
             slab: glab for slab, glab in self._maternal_map.items()
@@ -81,25 +81,25 @@ class CytoplasmicPreset(GeneticPreset):
             )
 
         # Pre-compile: one n_gtypes×n_gtypes matrix per rule
-        resolved = _resolve_rule_glabs(ruleset.rules, population)
+        resolved = _resolve_rule_glabs(ruleset.rules, host)
         glab_to_matrix: dict[str, NDArray[np.float64]] = {}
         for (rule, src_idx, tgt_idx), (_slab, glab_name) in zip(
             resolved, active_map.items()
         ):
             glab_to_matrix[glab_name] = _build_single_rule_matrix(
-                rule, src_idx, tgt_idx, population.registry,
+                rule, src_idx, tgt_idx, host.registry,
             )
 
         # Pre-compute ztype index lookup: slab_name → [ztype_idx, ...]
-        registry = population.registry
+        registry = host.registry
         slab_ztypes: dict[str, list[int]] = {}
         for zidx, (_gt, slab) in enumerate(registry.index_to_ztype):
             slab_ztypes.setdefault(slab, []).append(zidx)
 
         n_gtypes = registry.n_gtypes
-        z2g = population.config.zygotes_to_gametes_map
+        z2g = host.config.zygotes_to_gametes_map
         hgs = registry.index_to_haplo
-        n_glabs = int(population.config.n_glabs)
+        n_glabs = int(host.config.n_glabs)
 
         def modifier_func(*_args: object, **_kwargs: object) -> Dict[
             Tuple[int, int], Dict[int, float]
@@ -132,7 +132,7 @@ class CytoplasmicPreset(GeneticPreset):
 
         return modifier_func  # type: ignore[return-type]  # inner func matches GameteModifier protocol
 
-    def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host: "RecipeHost") -> Optional[ZygoteModifier]:
         """Redirect zygotes: tagged maternal gamete + any paternal → target slab.
 
         For each (slab_name, glab_name) in ``_maternal_map``: when the
@@ -143,7 +143,7 @@ class CytoplasmicPreset(GeneticPreset):
         if not self._maternal_map:
             return None
 
-        glab_to_idx = population.index_registry.glab_to_index
+        glab_to_idx = host.index_registry.glab_to_index
         # Filter: only keep slab→glab pairs where the glab is registered
         active_map = {
             slab: glab for slab, glab in self._maternal_map.items()
@@ -152,8 +152,8 @@ class CytoplasmicPreset(GeneticPreset):
         if not active_map:
             return None
 
-        registry = population.registry
-        g2z = population.config.gametes_to_zygotes_map
+        registry = host.registry
+        g2z = host.config.gametes_to_zygotes_map
         default_slab = registry.slab_labels[0]
         n_gtypes = g2z.shape[0]
 
@@ -322,11 +322,11 @@ class TransgenicBackground(GeneticPreset):
         self.fecundity_scaling = fecundity_scaling
         self.viability_scaling = viability_scaling
 
-    def gamete_modifier(self, population: 'BasePopulation[Any]') -> Optional[GameteModifier]:
+    def gamete_modifier(self, host: "RecipeHost") -> Optional[GameteModifier]:
         """Return no gamete modifier — transgenic background is slab-only."""
         return None
 
-    def zygote_modifier(self, population: 'BasePopulation[Any]') -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host: "RecipeHost") -> Optional[ZygoteModifier]:
         """Return no zygote modifier — transgenic background is slab-only."""
         return None
 
