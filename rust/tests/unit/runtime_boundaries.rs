@@ -1,15 +1,17 @@
 //! Boundary rejection must happen before state or persistent RNG changes.
 use std::collections::HashMap;
 
-use crate::config::SimConfig;
-use crate::contract::{Blueprint, Params, TensorSet};
-use crate::discrete::DiscreteConfig;
-use crate::hooks::HookProgram;
-use crate::rng::new_rng;
-use crate::spatial;
+use crate::hooks::interpreter::HookProgram;
+use crate::kernels::config::AgeStructuredConfig;
+use crate::kernels::discrete_generation::DiscreteGenerationConfig;
+use crate::kernels::rng::new_rng;
+use crate::kernels::spatial;
+use crate::model::blueprint::Blueprint;
+use crate::model::ecology::EcologyParams;
+use crate::model::genetics::GeneticsTensors;
 
 /// Minimal consistent pair (2 sexes, 2 ages, 2 ztypes, 2 gtypes).
-fn fixture() -> (Blueprint, Params, TensorSet) {
+fn fixture() -> (Blueprint, EcologyParams, GeneticsTensors) {
     let bp = Blueprint {
         n_sexes: 2,
         n_ages: 2,
@@ -34,7 +36,7 @@ fn fixture() -> (Blueprint, Params, TensorSet) {
         migration_dest_idx: vec![],
         migration_weights: vec![],
     };
-    let params = Params {
+    let params = EcologyParams {
         n_demes: 1,
         carrying_capacity: vec![400.0],
         eggs_per_female: vec![30.0],
@@ -53,7 +55,7 @@ fn fixture() -> (Blueprint, Params, TensorSet) {
         migration_rate: vec![],
         custom_slots: vec![HashMap::new()],
     };
-    let genetics = TensorSet {
+    let genetics = GeneticsTensors {
         viability_fitness: vec![1.0; 8],
         fecundity_fitness: vec![1.0; 4],
         sexual_selection_fitness: vec![1.0; 4],
@@ -78,7 +80,7 @@ fn scheduler_rejects_mismatched_stacked_state_before_calling_any_deme() {
         &mut rngs,
         &mut ind,
         &mut sperm,
-        &mut [0.0; crate::hooks::N_ECO_PARAMS],
+        &mut [0.0; crate::hooks::interpreter::N_ECO_PARAMS],
         2,
         1,
         1,
@@ -119,13 +121,13 @@ fn migration_rejects_missing_rng_stream_without_consuming_existing_stream() {
 #[test]
 fn spatial_kernels_reject_inconsistent_deme_metadata_before_mutation() {
     let (bp, mut params, genetics) = fixture();
-    let age = SimConfig::assemble(&bp, &params, &genetics).unwrap();
-    let discrete = DiscreteConfig::assemble(&bp, &params, &genetics).unwrap();
+    let age = AgeStructuredConfig::assemble(&bp, &params, &genetics).unwrap();
+    let discrete = DiscreteGenerationConfig::assemble(&bp, &params, &genetics).unwrap();
     let mut rngs = vec![new_rng(7)];
     let words = rngs[0].state_words();
     let mut ind = vec![11.0; 8];
     let mut sperm = vec![13.0; 8];
-    let mut eco = [0.0; crate::hooks::N_ECO_PARAMS];
+    let mut eco = [0.0; crate::hooks::interpreter::N_ECO_PARAMS];
     let hooks = HookProgram::default();
     let mut journal = vec![];
     let variants = [genetics];

@@ -1,18 +1,22 @@
 //! PyO3 session object owning the contract, RNG state, and the compiled CSR
 //! hook program.
 
-use crate::history::{HistoryStore, SharedHistory};
+use crate::output::history::{HistoryStore, SharedHistory};
 use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray4};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
 
-use crate::config::SimConfig;
-use crate::contract::{session_get_tensor, session_tensor_write, Blueprint, Params, TensorSet};
-use crate::hooks::HookProgram;
-use crate::lifecycle;
-use crate::rng::{new_rng, SessionRng};
+use crate::hooks::interpreter::HookProgram;
+use crate::kernels::config::AgeStructuredConfig;
+use crate::kernels::rng::{new_rng, SessionRng};
+use crate::model::blueprint::Blueprint;
+use crate::model::ecology::session_get_tensor;
+use crate::model::ecology::session_tensor_write;
+use crate::model::ecology::EcologyParams;
+use crate::model::genetics::GeneticsTensors;
+use crate::sessions::ecology_snapshot::{ecology_snapshot, restore_ecology};
 
 /// Validate and return mutable slices for age-structured state arrays.
 ///
@@ -35,69 +39,7 @@ use crate::rng::{new_rng, SessionRng};
 /// ## Returns
 /// A ``PyRuntimeError`` for Python callers.
 fn map_lifecycle_error(err: String) -> PyErr {
-    crate::hook_transaction::map_error(err)
-}
-
-/// Ecology scalar field names carried by a memory checkpoint —
-/// generated from the jsonc wire order with ``growth_mode`` and
-/// ``external_expected_eggs`` appended (plan 5.4: one source, no
-/// hand-written copies).
-use crate::eco_param_wire::ECOLOGY_SCALARS;
-
-/// Ecology vector field names carried by a memory checkpoint — the
-/// canonical definition lives next to ``Params`` in ``contract.rs``.
-use crate::contract::ECOLOGY_VECTORS;
-
-/// Copy the ecology section of *params* into a fresh Python dict.
-///
-/// The genetics section is deliberately excluded: a memory checkpoint is a
-/// save, not an uninstallation of genetic mods.
-pub(crate) fn ecology_snapshot<'py>(
-    py: Python<'py>,
-    params: &Params,
-) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    for name in ECOLOGY_SCALARS {
-        dict.set_item(name, params.get_scalar(name)?)?;
-    }
-    for name in ECOLOGY_VECTORS {
-        dict.set_item(name, params.get_tensor(py, name)?)?;
-    }
-    dict.set_item(
-        "custom_slots",
-        crate::contract::custom_slots_to_python(py, &params.custom_slots[0])?,
-    )?;
-    Ok(dict)
-}
-
-/// Write an ecology snapshot dict back into *params*.
-///
-/// ## Errors
-/// Returns ``PyValueError`` when a vector has the wrong size; each
-/// ``tensor_write`` validates before committing, so the previous contents
-/// are preserved for the failing field.
-pub(crate) fn restore_ecology(
-    params: &mut Params,
-    bp: &Blueprint,
-    ecology: &Bound<'_, PyAny>,
-) -> PyResult<()> {
-    let mut candidate = params.clone();
-    for name in ECOLOGY_SCALARS {
-        let value: f64 = ecology.get_item(name)?.extract()?;
-        candidate.apply(HashMap::from([(name.to_string(), value)]))?;
-    }
-    for name in ECOLOGY_VECTORS {
-        let values: Vec<f64> = ecology
-            .get_item(name)?
-            .extract::<numpy::PyReadonlyArray1<'_, f64>>()?
-            .as_slice()?
-            .to_vec();
-        candidate.tensor_write(bp, name, values)?;
-    }
-    candidate.custom_slots[0] =
-        crate::contract::custom_slots_from_python(&ecology.get_item("custom_slots")?)?;
-    *params = candidate;
-    Ok(())
+    crate::hooks::transaction::map_error(err)
 }
 
 /// Snapshot tuple: ``(tick, ind_flat, sperm_flat, rng_words, ecology)``.
@@ -112,24 +54,24 @@ pub type AgeSnapshot<'py> = (
 /// PyO3-exported stateful session for the age-structured Rust backend.
 ///
 /// Owns the frozen blueprint, the mutable params, the RNG, and a CSR hook
-/// program.  A flat [`SimConfig`] is assembled from the contracts at every
-/// tick-batch entry point, so [`Params`] writes take effect on the next
+/// program.  A flat [`AgeStructuredConfig`] is assembled from the contracts at every
+/// tick-batch entry point, so [`EcologyParams`] writes take effect on the next
 /// batch without rebuilding the session (the RNG keeps streaming).
 #[pyclass(name = "EngineSession")]
-pub struct EngineSession {
+pub struct AgeStructuredSession {
     blueprint: Blueprint,
-    params: Params,
-    genetics: TensorSet,
+    params: EcologyParams,
+    genetics: GeneticsTensors,
     rng: SessionRng,
     hooks: HookProgram,
     /// Audited set_param transitions accumulated across tick/run calls;
     /// drained by the Python adapter after each run so ``params_log`` and
     /// the draft stay synchronized with the session-owned columns.
-    eco_journal: Vec<crate::hooks::EcoJournalRow>,
+    eco_journal: Vec<crate::hooks::interpreter::EcoJournalRow>,
     /// Record-aligned full checkpoints (plan 13.1 R3): state + RNG words +
     /// ecology, captured at every recorded tick of a raw-mode run.  The
     /// public ``restore_checkpoint`` restores from here.
-    checkpoints: Vec<lifecycle::TickCheckpoint>,
+    checkpoints: Vec<crate::kernels::age_structured::TickCheckpoint>,
     /// Native history shared with the Python read-only adapter.
     history_store: Option<SharedHistory>,
     /// Session-owned live state (plan S2): flattened individual counts,
@@ -139,12 +81,12 @@ pub struct EngineSession {
     state_ind: Vec<f64>,
     state_sperm: Vec<f64>,
     state_tick: i64,
-    execution: crate::execution::Execution,
+    execution: crate::sessions::status::ExecutionStatus,
     phase: usize,
 }
 
 #[pymethods]
-impl EngineSession {
+impl AgeStructuredSession {
     /// Execute an explicit event on the same native state and RNG stream.
     #[pyo3(signature = (event, deme_id=0))]
     fn trigger_event(&mut self, event: usize, deme_id: i64) -> PyResult<i32> {
@@ -152,7 +94,7 @@ impl EngineSession {
             return Err(PyValueError::new_err("unknown hook event"));
         }
         let mut values = self.params.eco_values_row(0);
-        let mut ctx = Some(crate::lifecycle::EcoCtx {
+        let mut ctx = Some(crate::kernels::age_structured::EcoCtx {
             bp: &self.blueprint,
             params: &mut self.params,
             genetics: &self.genetics,
@@ -199,10 +141,10 @@ impl EngineSession {
                 let store = shared.lock().unwrap();
                 let mut log = store.log.lock().unwrap();
                 for (tick, id, old, new, phase) in context.journal.drain(..) {
-                    log.push(crate::history::LogEntry::from_phase(
+                    log.push(crate::output::parameter_log::LogEntry::from_phase(
                         (
                             tick,
-                            crate::contract::ECO_PARAM_COLUMNS[id].to_owned(),
+                            crate::generated::ecology_parameters::ECO_PARAM_COLUMNS[id].to_owned(),
                             old,
                             new,
                         ),
@@ -222,11 +164,11 @@ impl EngineSession {
             self.genetics = genetics;
         }
         if let Err(error) = operation {
-            self.execution = crate::execution::Execution::Failed;
+            self.execution = crate::sessions::status::ExecutionStatus::Failed;
             return Err(map_lifecycle_error(error));
         }
         if result != 0 {
-            self.execution = crate::execution::Execution::Stopped;
+            self.execution = crate::sessions::status::ExecutionStatus::Stopped;
         }
         Ok(result)
     }
@@ -237,7 +179,7 @@ impl EngineSession {
     }
     /// Mark an explicit user finish without discarding state or history.
     fn stop(&mut self) {
-        self.execution = crate::execution::Execution::Stopped;
+        self.execution = crate::sessions::status::ExecutionStatus::Stopped;
     }
 
     /// Create an age-structured session from the Python contract objects.
@@ -248,7 +190,7 @@ impl EngineSession {
     /// - `seed`: RNG seed.
     ///
     /// ## Returns
-    /// A new ``EngineSession`` owning copies of both contracts.
+    /// A new ``AgeStructuredSession`` owning copies of both contracts.
     ///
     /// ## Errors
     /// Returns ``PyValueError`` when either contract is inconsistent.
@@ -262,8 +204,8 @@ impl EngineSession {
         let bp = Blueprint::from_python(blueprint)?;
         // Panmictic sessions carry one deme: length-1 ecology columns and
         // the session-owned genetics tables split out of the contract.
-        let pr = Params::from_python(params, 1)?;
-        let genetics = TensorSet::from_python(params)?;
+        let pr = EcologyParams::from_python(params, 1)?;
+        let genetics = GeneticsTensors::from_python(params)?;
         bp.validate()?;
         pr.validate(&bp)?;
         genetics.validate(&bp)?;
@@ -292,7 +234,7 @@ impl EngineSession {
             state_ind,
             state_sperm,
             state_tick: 0,
-            execution: crate::execution::Execution::Ready,
+            execution: crate::sessions::status::ExecutionStatus::Ready,
             phase: 0,
         })
     }
@@ -325,13 +267,14 @@ impl EngineSession {
 
     /// Replace the custom dictionary atomically, retaining every declared type.
     fn set_custom_slots(&mut self, values: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.params.custom_slots[0] = crate::contract::custom_slots_from_python(values)?;
+        self.params.custom_slots[0] =
+            crate::model::custom_fields::custom_slots_from_python(values)?;
         Ok(())
     }
 
     /// Return a detached custom dictionary.
     fn get_custom_slots<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-        crate::contract::custom_slots_to_python(py, &self.params.custom_slots[0])
+        crate::model::custom_fields::custom_slots_to_python(py, &self.params.custom_slots[0])
     }
 
     /// Read a scalar param value from the owned params.
@@ -453,8 +396,8 @@ impl EngineSession {
 
     /// Run the reproduction stage in place on the session-owned state.
     fn reproduction(&mut self) -> PyResult<()> {
-        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
-        lifecycle::reproduction(
+        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        crate::kernels::age_structured::reproduction(
             &mut self.rng,
             &cfg,
             &mut self.state_ind,
@@ -469,8 +412,8 @@ impl EngineSession {
     /// - `ind`: Mutable individual-count array.
     /// - `sperm`: Mutable sperm-storage array.
     fn survival(&mut self) -> PyResult<()> {
-        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
-        lifecycle::survival(
+        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        crate::kernels::age_structured::survival(
             &mut self.rng,
             &cfg,
             &mut self.state_ind,
@@ -485,8 +428,8 @@ impl EngineSession {
     /// - `ind`: Mutable individual-count array.
     /// - `sperm`: Mutable sperm-storage array.
     fn aging(&mut self) -> PyResult<()> {
-        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
-        lifecycle::aging(&cfg, &mut self.state_ind, &mut self.state_sperm);
+        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        crate::kernels::age_structured::aging(&cfg, &mut self.state_ind, &mut self.state_sperm);
         Ok(())
     }
 
@@ -506,17 +449,17 @@ impl EngineSession {
     /// ``0`` or ``1``.
     #[pyo3(signature = (deme_id))]
     fn tick(&mut self, deme_id: i64) -> PyResult<i32> {
-        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         self.execution.begin()?;
         let tick = self.state_tick;
         let result = self.run_with_eco(&cfg, tick, deme_id);
         self.execution = match &result {
             Ok(0) => {
                 self.phase = 0;
-                crate::execution::Execution::Ready
+                crate::sessions::status::ExecutionStatus::Ready
             }
-            Ok(_) => crate::execution::Execution::Stopped,
-            Err(_) => crate::execution::Execution::Failed,
+            Ok(_) => crate::sessions::status::ExecutionStatus::Stopped,
+            Err(_) => crate::sessions::status::ExecutionStatus::Failed,
         };
         if matches!(result, Ok(0)) {
             // Only a completed tick advances; a stop freezes the tick
@@ -567,12 +510,12 @@ impl EngineSession {
             }
         }
         self.execution = match &outcome {
-            Ok(value) if value.2 => crate::execution::Execution::Stopped,
+            Ok(value) if value.2 => crate::sessions::status::ExecutionStatus::Stopped,
             Ok(_) => {
                 self.phase = 0;
-                crate::execution::Execution::Ready
+                crate::sessions::status::ExecutionStatus::Ready
             }
-            Err(_) => crate::execution::Execution::Failed,
+            Err(_) => crate::sessions::status::ExecutionStatus::Failed,
         };
         outcome
     }
@@ -593,7 +536,7 @@ impl EngineSession {
     /// Returns ``PyValueError`` when either vector has the wrong length.
     #[pyo3(signature = (ind_flat, sperm_flat, tick))]
     fn set_state(&mut self, ind_flat: Vec<f64>, sperm_flat: Vec<f64>, tick: i64) -> PyResult<()> {
-        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let want_ind = 2 * cfg.n_ages * cfg.n_ztypes;
         let want_sperm = cfg.n_ages * cfg.n_ztypes * cfg.n_ztypes;
         if ind_flat.len() != want_ind {
@@ -608,11 +551,11 @@ impl EngineSession {
                 sperm_flat.len()
             )));
         }
-        crate::contract::validate_state_values(&ind_flat, &sperm_flat, tick)?;
+        crate::model::validation::validate_state_values(&ind_flat, &sperm_flat, tick)?;
         self.state_ind = ind_flat;
         self.state_sperm = sperm_flat;
         self.state_tick = tick;
-        self.execution = crate::execution::Execution::Ready;
+        self.execution = crate::sessions::status::ExecutionStatus::Ready;
         self.phase = 0;
         Ok(())
     }
@@ -657,7 +600,7 @@ impl EngineSession {
         Ok((self.state_tick, ind_flat, sperm_flat, rng_words, ecology))
     }
 
-    /// Restore a memory checkpoint produced by [`EngineSession::snapshot_state`].    ///
+    /// Restore a memory checkpoint produced by [`AgeStructuredSession::snapshot_state`].    ///
     /// Writes the state arrays back in place, rebuilds the RNG from the
     /// captured state words (exact continuation), and restores the ecology
     /// params section.  The genetics section is untouched.
@@ -703,13 +646,13 @@ impl EngineSession {
                 "checkpoint arrays do not match the live state size",
             ));
         }
-        crate::contract::validate_state_values(ind_src, sperm_src, tick)?;
+        crate::model::validation::validate_state_values(ind_src, sperm_src, tick)?;
         let mut params = self.params.clone();
         restore_ecology(&mut params, &self.blueprint, ecology)?;
         self.state_ind.copy_from_slice(ind_src);
         self.state_sperm.copy_from_slice(sperm_src);
         self.state_tick = tick;
-        self.execution = crate::execution::Execution::Ready;
+        self.execution = crate::sessions::status::ExecutionStatus::Ready;
         self.phase = 0;
         let mut words = [0_u64; 4];
         words.copy_from_slice(&rng_words);
@@ -785,7 +728,7 @@ impl EngineSession {
         collapse_age: bool,
         aggregate: bool,
     ) -> PyResult<(i64, Bound<'py, PyArray1<f64>>)> {
-        let values = crate::history::project(
+        let values = crate::output::observation::project(
             &self.state_ind,
             mask.as_slice()?,
             [
@@ -827,17 +770,18 @@ impl EngineSession {
         }
         if added && history.raw {
             let (eco_scalars, eco_vectors) = self.params.ecology_snapshot_words()?;
-            self.checkpoints.push(crate::lifecycle::TickCheckpoint {
-                execution: self.execution,
-                phase: self.phase,
-                tick: self.state_tick,
-                ind: self.state_ind.clone(),
-                sperm: self.state_sperm.to_vec(),
-                rng_words: self.rng.state_words(),
-                eco_scalars,
-                eco_vectors,
-                custom_slots: self.params.custom_slots[0].clone(),
-            });
+            self.checkpoints
+                .push(crate::kernels::age_structured::TickCheckpoint {
+                    execution: self.execution,
+                    phase: self.phase,
+                    tick: self.state_tick,
+                    ind: self.state_ind.clone(),
+                    sperm: self.state_sperm.to_vec(),
+                    rng_words: self.rng.state_words(),
+                    eco_scalars,
+                    eco_vectors,
+                    custom_slots: self.params.custom_slots[0].clone(),
+                });
         }
         if let Some(row) = history.rows.front() {
             self.checkpoints.retain(|cp| cp.tick >= row[0] as i64);
@@ -870,7 +814,7 @@ impl EngineSession {
     }
 }
 
-impl EngineSession {
+impl AgeStructuredSession {
     /// Snapshot the canonical ECO param values for one deme column.
     ///
     /// ## Parameters
@@ -878,8 +822,8 @@ impl EngineSession {
     ///
     /// ## Returns
     /// A length-``N_ECO_PARAMS`` array in ``ECO_PARAM_COLUMNS`` order.
-    fn eco_values(&self, deme: usize) -> [f64; crate::hooks::N_ECO_PARAMS] {
-        let mut values = [0.0; crate::hooks::N_ECO_PARAMS];
+    fn eco_values(&self, deme: usize) -> [f64; crate::hooks::interpreter::N_ECO_PARAMS] {
+        let mut values = [0.0; crate::hooks::interpreter::N_ECO_PARAMS];
         for (id, slot) in values.iter_mut().enumerate() {
             *slot = self.params.eco_value(id, deme);
         }
@@ -892,7 +836,12 @@ impl EngineSession {
     /// at every event boundary and re-assembles the config for the same
     /// tick's later stages — the same granularity as the Python executor.
     /// The tick's journal rows are drained into the session audit trail.
-    fn run_with_eco(&mut self, cfg: &SimConfig, tick: i64, deme_id: i64) -> Result<i32, String> {
+    fn run_with_eco(
+        &mut self,
+        cfg: &AgeStructuredConfig,
+        tick: i64,
+        deme_id: i64,
+    ) -> Result<i32, String> {
         // Split borrows explicitly: the kernel mutates the session-owned
         // state buffers while the EcoCtx borrows the contracts.
         let Self {
@@ -908,7 +857,7 @@ impl EngineSession {
         } = self;
         let deme = 0;
         let mut eco_values = params.eco_values_row(deme);
-        let mut ctx = Some(lifecycle::EcoCtx {
+        let mut ctx = Some(crate::kernels::age_structured::EcoCtx {
             bp: blueprint,
             params,
             genetics,
@@ -918,7 +867,7 @@ impl EngineSession {
             tick,
             journal: Vec::new(),
         });
-        let result = lifecycle::run_tick(
+        let result = crate::kernels::age_structured::run_tick(
             rng,
             cfg,
             hooks,
@@ -1047,7 +996,7 @@ impl HookProgram {
         let has_set_param = extract_bool_scalar(program, "has_set_param")?
             || op_types
                 .iter()
-                .any(|&op| op == crate::hooks::OP_SET_PARAM_PUBLIC);
+                .any(|&op| op == crate::hooks::interpreter::OP_SET_PARAM_PUBLIC);
         Ok(Self {
             n_events: extract_i64_scalar(program, "n_events")?,
             n_hooks,
@@ -1081,7 +1030,7 @@ impl HookProgram {
     }
 }
 
-impl EngineSession {
+impl AgeStructuredSession {
     fn run_inner<'py>(
         &mut self,
         py: Python<'py>,
@@ -1095,7 +1044,7 @@ impl EngineSession {
         // directly on the session-owned state, and copy the flattened
         // history into a NumPy 2-D array.  Python passes control
         // parameters only (plan S2: the session owns counts and tick).
-        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let mask_vec = match observation_mask {
             Some(mask) => Some(
                 mask.as_slice()
@@ -1110,7 +1059,7 @@ impl EngineSession {
         // Borrowed EcoCtx: run_batch commits set_param writes at every event
         // boundary; after the batch the journal is drained into the
         // session-owned audit trail for the Python adapter.
-        let mut eco_ctx = Some(lifecycle::EcoCtx {
+        let mut eco_ctx = Some(crate::kernels::age_structured::EcoCtx {
             bp: &self.blueprint,
             params: &mut self.params,
             genetics: &self.genetics,
@@ -1132,10 +1081,12 @@ impl EngineSession {
                     if let Some(ctx) = eco_ctx.as_mut() {
                         let mut log = store.log.lock().unwrap();
                         for &(tick, parameter, old, new, phase) in &ctx.journal {
-                            log.push(crate::history::LogEntry::from_phase(
+                            log.push(crate::output::parameter_log::LogEntry::from_phase(
                                 (
                                     tick,
-                                    crate::contract::ECO_PARAM_COLUMNS[parameter].to_owned(),
+                                    crate::generated::ecology_parameters::ECO_PARAM_COLUMNS
+                                        [parameter]
+                                        .to_owned(),
                                     old,
                                     new,
                                 ),
@@ -1149,7 +1100,7 @@ impl EngineSession {
                         let added =
                             store.record(current_tick, &self.state_ind, &self.state_sperm, true)?;
                         if added && store.raw {
-                            crate::lifecycle::capture_checkpoint(
+                            crate::kernels::age_structured::capture_checkpoint(
                                 &self.rng,
                                 &self.state_ind,
                                 &self.state_sperm,
@@ -1167,7 +1118,7 @@ impl EngineSession {
                 if step == n_ticks || stopped {
                     break;
                 }
-                let (tick, _, _, was_stopped) = lifecycle::run_batch(
+                let (tick, _, _, was_stopped) = crate::kernels::age_structured::run_batch(
                     &mut self.rng,
                     &cfg,
                     &self.hooks,
@@ -1208,22 +1159,23 @@ impl EngineSession {
             ));
         }
 
-        let (final_tick, flat_history, n_rows, was_stopped) = lifecycle::run_batch(
-            &mut self.rng,
-            &cfg,
-            &self.hooks,
-            &mut self.state_ind,
-            &mut self.state_sperm,
-            self.state_tick,
-            n_ticks,
-            record_interval,
-            mask_vec.as_deref(),
-            &mut eco_values,
-            &mut eco_ctx,
-            checkpoint_every,
-            &mut self.checkpoints,
-        )
-        .map_err(map_lifecycle_error)?;
+        let (final_tick, flat_history, n_rows, was_stopped) =
+            crate::kernels::age_structured::run_batch(
+                &mut self.rng,
+                &cfg,
+                &self.hooks,
+                &mut self.state_ind,
+                &mut self.state_sperm,
+                self.state_tick,
+                n_ticks,
+                record_interval,
+                mask_vec.as_deref(),
+                &mut eco_values,
+                &mut eco_ctx,
+                checkpoint_every,
+                &mut self.checkpoints,
+            )
+            .map_err(map_lifecycle_error)?;
         self.state_tick = final_tick;
 
         if let Some(ctx) = eco_ctx.as_mut() {

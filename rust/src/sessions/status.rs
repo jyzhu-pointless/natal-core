@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 
 /// A session can resume only from a valid Ready boundary.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub enum Execution {
+pub enum ExecutionStatus {
     #[default]
     Ready,
     Running,
@@ -12,7 +12,7 @@ pub enum Execution {
     Failed,
 }
 
-impl Execution {
+impl ExecutionStatus {
     /// Check the transition before any model state can be mutated.
     pub fn begin(&mut self) -> PyResult<()> {
         if *self != Self::Ready {
@@ -36,21 +36,5 @@ impl Execution {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::Execution;
-
-    #[test]
-    fn begin_requires_ready_and_preserves_rejected_state() {
-        let mut ready = Execution::Ready;
-        assert!(ready.begin().is_ok());
-        assert_eq!(ready.name(), "Running");
-        for (mut state, name) in [
-            (Execution::Running, "Running"),
-            (Execution::Stopped, "Stopped"),
-            (Execution::Failed, "Failed"),
-        ] {
-            assert!(state.begin().is_err());
-            assert_eq!(state.name(), name);
-        }
-    }
-}
+#[path = "../../tests/unit/sessions/status.rs"]
+mod tests;

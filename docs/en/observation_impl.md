@@ -27,8 +27,10 @@ Core modules and responsibilities:
 | `output/observation.py` | Defines `Observation`, `ObservationResult`, `ObservationFilter`, and identity observations |
 | `output/history.py` | Defines immutable schemas, typed array views, and post-hoc projection of raw History |
 | `output/_recording.py` | Compiles the `RecordingPlan`, row width, and spatial layout at build time |
-| `rust/src/history.rs` | Owns history values, projection, retention budgets, and parameter logs |
-| `rust/src/spatial_session.rs` | Runs spatial lifecycle batches and records boundaries inside Rust |
+| `rust/src/output/history.rs` | Owns the history ring, its row data, retention budgets, and the shared history handle |
+| `rust/src/output/observation.rs` | Owns the numerical projection and the current-state observation entry point |
+| `rust/src/output/parameter_log.rs` | Owns the parameter log and log value conversion |
+| `rust/src/sessions/spatial.rs` | Runs spatial lifecycle batches and records boundaries inside Rust |
 | `spatial/population.py` | Passes run controls and selectors and wraps Rust observation query results |
 
 ## Build-Time Public Interface

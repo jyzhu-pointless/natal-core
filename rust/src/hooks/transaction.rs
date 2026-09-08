@@ -10,8 +10,12 @@ use rand::rand_core::TryRng;
 use rand::RngExt;
 use rand_distr::{Distribution, Normal};
 
-use crate::contract::{session_get_tensor, session_tensor_write, Blueprint, Params, TensorSet};
-use crate::rng::SessionRng;
+use crate::kernels::rng::SessionRng;
+use crate::model::blueprint::Blueprint;
+use crate::model::ecology::session_get_tensor;
+use crate::model::ecology::session_tensor_write;
+use crate::model::ecology::EcologyParams;
+use crate::model::genetics::GeneticsTensors;
 
 thread_local! {
     // Kernel error propagation remains independent of Python; only the original
@@ -42,8 +46,8 @@ pub struct HookTransaction {
     pub active: bool,
     pub parameters_changed: bool,
     pub blueprint: Blueprint,
-    pub params: Params,
-    pub genetics: TensorSet,
+    pub params: EcologyParams,
+    pub genetics: GeneticsTensors,
     pub rng: SessionRng,
     pub state_ind: Vec<f64>,
     pub state_sperm: Vec<f64>,
@@ -106,19 +110,20 @@ impl HookTransaction {
     /// Read current candidate ecology, detached from the session.
     fn ecology<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         self.ensure_active()?;
-        crate::session::ecology_snapshot(py, &self.params)
+        crate::sessions::ecology_snapshot::ecology_snapshot(py, &self.params)
     }
 
     /// Read isolated custom values from this event candidate.
     fn get_custom_slots<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         self.ensure_active()?;
-        crate::contract::custom_slots_to_python(py, &self.params.custom_slots[0])
+        crate::model::custom_fields::custom_slots_to_python(py, &self.params.custom_slots[0])
     }
 
     /// Validate and replace the complete event custom-slot candidate.
     fn set_custom_slots(&mut self, source: &Bound<'_, PyAny>) -> PyResult<()> {
         self.ensure_active()?;
-        self.params.custom_slots[0] = crate::contract::custom_slots_from_python(source)?;
+        self.params.custom_slots[0] =
+            crate::model::custom_fields::custom_slots_from_python(source)?;
         self.parameters_changed = true;
         Ok(())
     }
@@ -205,7 +210,7 @@ impl HookTransaction {
                     && a.fract() == 0.0
                     && (0.0..=1.0).contains(&b) =>
             {
-                Ok(crate::rng::binomial(&mut self.rng, a as i64, b))
+                Ok(crate::kernels::rng::binomial(&mut self.rng, a as i64, b))
             }
             _ => Err(PyValueError::new_err(
                 "invalid distribution or sampling arguments",

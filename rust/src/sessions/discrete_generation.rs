@@ -1,21 +1,25 @@
 //! PyO3 session object for the discrete-generation / Wright-Fisher backend.
 
-use crate::history::{HistoryStore, SharedHistory};
+use crate::output::history::{HistoryStore, SharedHistory};
 use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray4};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
 
-use crate::contract::{session_get_tensor, session_tensor_write, Blueprint, Params, TensorSet};
-use crate::discrete::{self, DiscreteConfig};
-use crate::hooks::HookProgram;
-use crate::rng::{new_rng, SessionRng};
-use crate::session::{ecology_snapshot, restore_ecology};
+use crate::hooks::interpreter::HookProgram;
+use crate::kernels::discrete_generation::DiscreteGenerationConfig;
+use crate::kernels::rng::{new_rng, SessionRng};
+use crate::model::blueprint::Blueprint;
+use crate::model::ecology::session_get_tensor;
+use crate::model::ecology::session_tensor_write;
+use crate::model::ecology::EcologyParams;
+use crate::model::genetics::GeneticsTensors;
+use crate::sessions::ecology_snapshot::{ecology_snapshot, restore_ecology};
 
 /// Convert internal kernel error strings into ``PyRuntimeError``.
 fn map_lifecycle_error(err: String) -> PyErr {
-    crate::hook_transaction::map_error(err)
+    crate::hooks::transaction::map_error(err)
 }
 
 /// Snapshot tuple for discrete sessions: ``(tick, ind_flat, rng_words, ecology)``.
@@ -29,34 +33,34 @@ type DiscreteSnapshot<'py> = (
 /// PyO3-exported stateful session for discrete-generation / Wright-Fisher.
 ///
 /// Owns the frozen blueprint, the mutable params, the RNG, and a CSR hook
-/// program.  A flat [`DiscreteConfig`] is assembled from the contracts at
+/// program.  A flat [`DiscreteGenerationConfig`] is assembled from the contracts at
 /// every tick-batch entry point, so params writes take effect on the next
 /// batch without rebuilding the session (the RNG keeps streaming).
 #[pyclass(name = "DiscreteEngineSession")]
-pub struct DiscreteEngineSession {
+pub struct DiscreteGenerationSession {
     blueprint: Blueprint,
-    params: Params,
-    genetics: TensorSet,
+    params: EcologyParams,
+    genetics: GeneticsTensors,
     rng: SessionRng,
     hooks: HookProgram,
     /// Audited set_param transitions accumulated across tick/run calls;
-    /// drained by the Python adapter after each run (see ``EngineSession``).
-    eco_journal: Vec<crate::hooks::EcoJournalRow>,
+    /// drained by the Python adapter after each run (see ``AgeStructuredSession``).
+    eco_journal: Vec<crate::hooks::interpreter::EcoJournalRow>,
     /// Record-aligned full checkpoints (plan 13.1 R3) — the discrete twin
-    /// of ``EngineSession::checkpoints``.
-    checkpoints: Vec<crate::lifecycle::TickCheckpoint>,
+    /// of ``AgeStructuredSession::checkpoints``.
+    checkpoints: Vec<crate::kernels::age_structured::TickCheckpoint>,
     /// Native history shared with the Python read-only adapter.
     history_store: Option<SharedHistory>,
     /// Session-owned live state (plan S2): flattened counts plus the
     /// authoritative tick; runs and ticks operate on these directly.
     state_ind: Vec<f64>,
     state_tick: i64,
-    execution: crate::execution::Execution,
+    execution: crate::sessions::status::ExecutionStatus,
     phase: usize,
 }
 
 #[pymethods]
-impl DiscreteEngineSession {
+impl DiscreteGenerationSession {
     /// Execute an explicit event on the same native state and RNG stream.
     #[pyo3(signature = (event, deme_id=0))]
     fn trigger_event(&mut self, event: usize, deme_id: i64) -> PyResult<i32> {
@@ -64,7 +68,7 @@ impl DiscreteEngineSession {
             return Err(PyValueError::new_err("unknown hook event"));
         }
         let mut values = self.params.eco_values_row(0);
-        let mut ctx = Some(crate::lifecycle::EcoCtx {
+        let mut ctx = Some(crate::kernels::age_structured::EcoCtx {
             bp: &self.blueprint,
             params: &mut self.params,
             genetics: &self.genetics,
@@ -111,10 +115,10 @@ impl DiscreteEngineSession {
                 let store = shared.lock().unwrap();
                 let mut log = store.log.lock().unwrap();
                 for (tick, id, old, new, phase) in context.journal.drain(..) {
-                    log.push(crate::history::LogEntry::from_phase(
+                    log.push(crate::output::parameter_log::LogEntry::from_phase(
                         (
                             tick,
-                            crate::contract::ECO_PARAM_COLUMNS[id].to_owned(),
+                            crate::generated::ecology_parameters::ECO_PARAM_COLUMNS[id].to_owned(),
                             old,
                             new,
                         ),
@@ -134,11 +138,11 @@ impl DiscreteEngineSession {
             self.genetics = genetics;
         }
         if let Err(error) = operation {
-            self.execution = crate::execution::Execution::Failed;
+            self.execution = crate::sessions::status::ExecutionStatus::Failed;
             return Err(map_lifecycle_error(error));
         }
         if result != 0 {
-            self.execution = crate::execution::Execution::Stopped;
+            self.execution = crate::sessions::status::ExecutionStatus::Stopped;
         }
         Ok(result)
     }
@@ -149,7 +153,7 @@ impl DiscreteEngineSession {
     }
     /// Mark an explicit user finish without discarding state or history.
     fn stop(&mut self) {
-        self.execution = crate::execution::Execution::Stopped;
+        self.execution = crate::sessions::status::ExecutionStatus::Stopped;
     }
 
     /// Create a session from the Python contract objects.
@@ -160,7 +164,7 @@ impl DiscreteEngineSession {
     /// - `seed`: RNG seed.
     ///
     /// ## Returns
-    /// A new ``DiscreteEngineSession`` owning copies of both contracts.
+    /// A new ``DiscreteGenerationSession`` owning copies of both contracts.
     ///
     /// ## Errors
     /// Returns ``PyValueError`` when either contract is inconsistent or the
@@ -175,13 +179,13 @@ impl DiscreteEngineSession {
         let bp = Blueprint::from_python(blueprint)?;
         // Panmictic sessions carry one deme: length-1 ecology columns and
         // the session-owned genetics tables split out of the contract.
-        let pr = Params::from_python(params, 1)?;
-        let genetics = TensorSet::from_python(params)?;
+        let pr = EcologyParams::from_python(params, 1)?;
+        let genetics = GeneticsTensors::from_python(params)?;
         bp.validate()?;
         pr.validate(&bp)?;
         genetics.validate(&bp)?;
         // Validate the discrete normalization once at construction.
-        DiscreteConfig::assemble(&bp, &pr, &genetics)?;
+        DiscreteGenerationConfig::assemble(&bp, &pr, &genetics)?;
         // Seed the session-owned state from the blueprint's frozen initial
         // population; enable_rust_backend follows with set_state carrying
         // the live Python state.
@@ -197,7 +201,7 @@ impl DiscreteEngineSession {
             history_store: None,
             state_ind,
             state_tick: 0,
-            execution: crate::execution::Execution::Ready,
+            execution: crate::sessions::status::ExecutionStatus::Ready,
             phase: 0,
         })
     }
@@ -242,13 +246,14 @@ impl DiscreteEngineSession {
 
     /// Replace the custom dictionary atomically, retaining every declared type.
     fn set_custom_slots(&mut self, values: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.params.custom_slots[0] = crate::contract::custom_slots_from_python(values)?;
+        self.params.custom_slots[0] =
+            crate::model::custom_fields::custom_slots_from_python(values)?;
         Ok(())
     }
 
     /// Return a detached custom dictionary.
     fn get_custom_slots<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-        crate::contract::custom_slots_to_python(py, &self.params.custom_slots[0])
+        crate::model::custom_fields::custom_slots_to_python(py, &self.params.custom_slots[0])
     }
 
     /// Read a scalar param value from the owned params.
@@ -299,7 +304,7 @@ impl DiscreteEngineSession {
     }
 
     /// Register Python callbacks fired at the first/early/late event
-    /// boundaries after the CSR hooks ran (see ``EngineSession``).
+    /// boundaries after the CSR hooks ran (see ``AgeStructuredSession``).
     #[pyo3(signature = (first, early, late, finish=None))]
     fn set_python_callbacks(
         &mut self,
@@ -390,12 +395,12 @@ impl DiscreteEngineSession {
             }
         }
         self.execution = match &outcome {
-            Ok(value) if value.2 => crate::execution::Execution::Stopped,
+            Ok(value) if value.2 => crate::sessions::status::ExecutionStatus::Stopped,
             Ok(_) => {
                 self.phase = 0;
-                crate::execution::Execution::Ready
+                crate::sessions::status::ExecutionStatus::Ready
             }
-            Err(_) => crate::execution::Execution::Failed,
+            Err(_) => crate::sessions::status::ExecutionStatus::Failed,
         };
         outcome
     }
@@ -403,7 +408,7 @@ impl DiscreteEngineSession {
     /// Capture a memory checkpoint of everything the session owns.
     ///
     /// Discrete populations have no sperm storage; see
-    /// ``EngineSession.snapshot_state`` for the checkpoint semantics
+    /// ``AgeStructuredSession.snapshot_state`` for the checkpoint semantics
     /// (RNG continuation via raw state words, ecology-only param rollback).
     ///
     /// ## Parameters
@@ -418,7 +423,8 @@ impl DiscreteEngineSession {
     /// Returns ``PyValueError`` when the vector has the wrong length.
     #[pyo3(signature = (ind_flat, tick))]
     fn set_state(&mut self, ind_flat: Vec<f64>, tick: i64) -> PyResult<()> {
-        let cfg = DiscreteConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        let cfg =
+            DiscreteGenerationConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let want = 2 * 2 * cfg.n_ztypes;
         if ind_flat.len() != want {
             return Err(PyValueError::new_err(format!(
@@ -426,10 +432,10 @@ impl DiscreteEngineSession {
                 ind_flat.len()
             )));
         }
-        crate::contract::validate_state_values(&ind_flat, &[], tick)?;
+        crate::model::validation::validate_state_values(&ind_flat, &[], tick)?;
         self.state_ind = ind_flat;
         self.state_tick = tick;
-        self.execution = crate::execution::Execution::Ready;
+        self.execution = crate::sessions::status::ExecutionStatus::Ready;
         self.phase = 0;
         Ok(())
     }
@@ -447,7 +453,7 @@ impl DiscreteEngineSession {
     }
 
     /// Restore a memory checkpoint produced by
-    /// [`DiscreteEngineSession::snapshot_state`].
+    /// [`DiscreteGenerationSession::snapshot_state`].
     ///
     /// ## Parameters
     /// - `individual_count`: Live state array, overwritten.
@@ -484,12 +490,12 @@ impl DiscreteEngineSession {
                 "checkpoint array does not match the live state size",
             ));
         }
-        crate::contract::validate_state_values(ind_src, &[], tick)?;
+        crate::model::validation::validate_state_values(ind_src, &[], tick)?;
         let mut params = self.params.clone();
         restore_ecology(&mut params, &self.blueprint, ecology)?;
         self.state_ind.copy_from_slice(ind_src);
         self.state_tick = tick;
-        self.execution = crate::execution::Execution::Ready;
+        self.execution = crate::sessions::status::ExecutionStatus::Ready;
         self.phase = 0;
         let mut words = [0_u64; 4];
         words.copy_from_slice(&rng_words);
@@ -500,7 +506,7 @@ impl DiscreteEngineSession {
 
     /// Restore the newest record-aligned checkpoint for *tick* (discrete).
     ///
-    /// Discrete twin of ``EngineSession::restore_from_checkpoint``: the
+    /// Discrete twin of ``AgeStructuredSession::restore_from_checkpoint``: the
     /// state array is written back in place, the RNG continues from the
     /// captured words, and the ecology section is restored.  Returns
     /// ``Some((tick, ecology))`` or ``None`` when the tick has no
@@ -538,7 +544,7 @@ impl DiscreteEngineSession {
             .ecology_restore_words(&self.blueprint, &cp.eco_scalars, &cp.eco_vectors)?;
         Ok(Some((
             cp.tick,
-            crate::session::ecology_snapshot(py, &self.params)?,
+            crate::sessions::ecology_snapshot::ecology_snapshot(py, &self.params)?,
         )))
     }
 
@@ -551,7 +557,7 @@ impl DiscreteEngineSession {
         collapse_age: bool,
         aggregate: bool,
     ) -> PyResult<(i64, Bound<'py, PyArray1<f64>>)> {
-        let values = crate::history::project(
+        let values = crate::output::observation::project(
             &self.state_ind,
             mask.as_slice()?,
             [
@@ -588,17 +594,18 @@ impl DiscreteEngineSession {
         }
         if added && history.raw {
             let (eco_scalars, eco_vectors) = self.params.ecology_snapshot_words()?;
-            self.checkpoints.push(crate::lifecycle::TickCheckpoint {
-                execution: self.execution,
-                phase: self.phase,
-                tick: self.state_tick,
-                ind: self.state_ind.clone(),
-                sperm: Vec::new(),
-                rng_words: self.rng.state_words(),
-                eco_scalars,
-                eco_vectors,
-                custom_slots: self.params.custom_slots[0].clone(),
-            });
+            self.checkpoints
+                .push(crate::kernels::age_structured::TickCheckpoint {
+                    execution: self.execution,
+                    phase: self.phase,
+                    tick: self.state_tick,
+                    ind: self.state_ind.clone(),
+                    sperm: Vec::new(),
+                    rng_words: self.rng.state_words(),
+                    eco_scalars,
+                    eco_vectors,
+                    custom_slots: self.params.custom_slots[0].clone(),
+                });
         }
         if let Some(row) = history.rows.front() {
             self.checkpoints.retain(|cp| cp.tick >= row[0] as i64);
@@ -623,13 +630,13 @@ impl DiscreteEngineSession {
     }
 }
 
-impl DiscreteEngineSession {
+impl DiscreteGenerationSession {
     /// Snapshot the canonical ECO param values (deme 0 column).
     ///
     /// ## Returns
     /// A length-``N_ECO_PARAMS`` array in ``ECO_PARAM_COLUMNS`` order.
-    fn eco_values(&self) -> [f64; crate::hooks::N_ECO_PARAMS] {
-        let mut values = [0.0; crate::hooks::N_ECO_PARAMS];
+    fn eco_values(&self) -> [f64; crate::hooks::interpreter::N_ECO_PARAMS] {
+        let mut values = [0.0; crate::hooks::interpreter::N_ECO_PARAMS];
         for (id, slot) in values.iter_mut().enumerate() {
             *slot = self.params.eco_value(id, 0);
         }
@@ -637,7 +644,7 @@ impl DiscreteEngineSession {
     }
 }
 
-impl DiscreteEngineSession {
+impl DiscreteGenerationSession {
     fn run_inner<'py>(
         &mut self,
         py: Python<'py>,
@@ -650,7 +657,8 @@ impl DiscreteEngineSession {
         // Assemble the config from the owned contracts at the batch entry,
         // then run a batch of discrete or WF ticks directly on the
         // session-owned state (plan S2: control parameters only).
-        let cfg = DiscreteConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        let cfg =
+            DiscreteGenerationConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let mask_vec = match observation_mask {
             Some(mask) => Some(
                 mask.as_slice()
@@ -660,7 +668,7 @@ impl DiscreteEngineSession {
             None => None,
         };
         let mut eco_values = self.eco_values();
-        let mut eco_ctx = Some(crate::lifecycle::EcoCtx {
+        let mut eco_ctx = Some(crate::kernels::age_structured::EcoCtx {
             bp: &self.blueprint,
             params: &mut self.params,
             genetics: &self.genetics,
@@ -681,10 +689,12 @@ impl DiscreteEngineSession {
                     if let Some(ctx) = eco_ctx.as_mut() {
                         let mut log = store.log.lock().unwrap();
                         for &(tick, parameter, old, new, phase) in &ctx.journal {
-                            log.push(crate::history::LogEntry::from_phase(
+                            log.push(crate::output::parameter_log::LogEntry::from_phase(
                                 (
                                     tick,
-                                    crate::contract::ECO_PARAM_COLUMNS[parameter].to_owned(),
+                                    crate::generated::ecology_parameters::ECO_PARAM_COLUMNS
+                                        [parameter]
+                                        .to_owned(),
                                     old,
                                     new,
                                 ),
@@ -697,7 +707,7 @@ impl DiscreteEngineSession {
                     if !stopped && record_interval > 0 && current_tick % record_interval == 0 {
                         let added = store.record(current_tick, &self.state_ind, &[], true)?;
                         if added && store.raw {
-                            crate::lifecycle::capture_checkpoint(
+                            crate::kernels::age_structured::capture_checkpoint(
                                 &self.rng,
                                 &self.state_ind,
                                 &[],
@@ -715,7 +725,7 @@ impl DiscreteEngineSession {
                 if step == n_ticks || stopped {
                     break;
                 }
-                let (tick, _, _, was_stopped) = discrete::run_batch(
+                let (tick, _, _, was_stopped) = crate::kernels::discrete_generation::run_batch(
                     &mut self.rng,
                     &cfg,
                     &self.hooks,
@@ -756,22 +766,23 @@ impl DiscreteEngineSession {
             ));
         }
 
-        let (final_tick, flat_history, n_rows, was_stopped) = discrete::run_batch(
-            &mut self.rng,
-            &cfg,
-            &self.hooks,
-            &mut self.state_ind,
-            self.state_tick,
-            n_ticks,
-            record_interval,
-            mask_vec.as_deref(),
-            wf,
-            &mut eco_values,
-            &mut eco_ctx,
-            checkpoint_every,
-            &mut self.checkpoints,
-        )
-        .map_err(map_lifecycle_error)?;
+        let (final_tick, flat_history, n_rows, was_stopped) =
+            crate::kernels::discrete_generation::run_batch(
+                &mut self.rng,
+                &cfg,
+                &self.hooks,
+                &mut self.state_ind,
+                self.state_tick,
+                n_ticks,
+                record_interval,
+                mask_vec.as_deref(),
+                wf,
+                &mut eco_values,
+                &mut eco_ctx,
+                checkpoint_every,
+                &mut self.checkpoints,
+            )
+            .map_err(map_lifecycle_error)?;
         self.state_tick = final_tick;
         if let Some(ctx) = eco_ctx.as_mut() {
             self.eco_journal.append(&mut ctx.journal);

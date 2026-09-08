@@ -3,7 +3,7 @@
 RUST_ONLY_REFACTOR_PLAN.md section 5.4: the parameter inventory and
 bounds must not be hand-written in more than one place.
 ``src/natal/parameters.jsonc`` is the single source; this script derives
-the Rust mirror (``rust/src/eco_param_wire.rs``) from it, in the fixed
+the Rust mirror (``rust/src/generated/ecology_parameters.rs``) from it, in the fixed
 ``ECO_PARAM_NAMES`` wire order shared with the Python hook compiler.
 
 Usage::
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from natal.frontend.utils.parameters import ParamDescriptor
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TARGET = REPO_ROOT / "rust" / "src" / "eco_param_wire.rs"
+TARGET = REPO_ROOT / "rust" / "src" / "generated" / "ecology_parameters.rs"
 
 HEADER = """\
 //! GENERATED FILE — DO NOT EDIT.
@@ -154,13 +154,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         if current != rendered:
             print(
-                "DRIFT: rust/src/eco_param_wire.rs is stale against "
-                "src/natal/parameters.jsonc — run "
+                "DRIFT: rust/src/generated/ecology_parameters.rs is stale "
+                "against src/natal/parameters.jsonc — run "
                 "python scripts/generate_param_tables.py",
                 file=sys.stderr,
             )
             return 1
-        print("rust/src/eco_param_wire.rs is fresh")
+        print("rust/src/generated/ecology_parameters.rs is fresh")
         return 0
 
     TARGET.write_text(rendered, encoding="utf-8")

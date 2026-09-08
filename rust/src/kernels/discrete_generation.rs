@@ -6,13 +6,15 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::contract::{Blueprint, Params, TensorSet};
-use crate::curves;
-use crate::hooks::HookProgram;
-use crate::rng::{
+use crate::hooks::interpreter::HookProgram;
+use crate::kernels::density_regulation;
+use crate::kernels::rng::{
     binomial, clamp01, continuous_binomial, continuous_multinomial, continuous_poisson,
     multinomial, poisson, SessionRng, EPS,
 };
+use crate::model::blueprint::Blueprint;
+use crate::model::ecology::EcologyParams;
+use crate::model::genetics::GeneticsTensors;
 
 /// Juvenile growth mode: no density regulation.
 const NO_COMPETITION: i64 = 0;
@@ -34,7 +36,7 @@ const WF_DETERMINISTIC: i64 = 3;
 /// - Discrete simulations always use two sexes and two ages.
 /// - Wright-Fisher fields such as ``extreme_speed_mode`` are stored here.
 #[derive(Clone)]
-pub struct DiscreteConfig {
+pub struct DiscreteGenerationConfig {
     // --- Dimensions and sampling flags ---
     pub n_ztypes: usize,
     pub stochastic: bool,
@@ -73,7 +75,7 @@ pub struct DiscreteConfig {
     pub male_only_by_sex_chrom: Vec<bool>,
 }
 
-impl DiscreteConfig {
+impl DiscreteGenerationConfig {
     /// Assemble the discrete kernel config from the owned contracts.
     ///
     /// Mirrors the discrete normalization of the legacy ``from_python``:
@@ -88,12 +90,16 @@ impl DiscreteConfig {
     /// - `genetics`: The shared genetics tables.
     ///
     /// ## Returns
-    /// A ``DiscreteConfig`` view consistent with the current contract values.
+    /// A ``DiscreteGenerationConfig`` view consistent with the current contract values.
     ///
     /// ## Errors
     /// Returns ``PyValueError`` when the blueprint is not discrete-shaped
     /// or a params vector disagrees with the blueprint-declared size.
-    pub fn assemble(bp: &Blueprint, params: &Params, genetics: &TensorSet) -> PyResult<Self> {
+    pub fn assemble(
+        bp: &Blueprint,
+        params: &EcologyParams,
+        genetics: &GeneticsTensors,
+    ) -> PyResult<Self> {
         if bp.n_ages != 2 {
             return Err(PyValueError::new_err(format!(
                 "discrete blueprint must have n_ages == 2, got {}",
@@ -103,7 +109,7 @@ impl DiscreteConfig {
         params.validate(bp)?;
         genetics.validate(bp)?;
         let (expected_competition_strength, expected_survival_rate) =
-            crate::equilibrate::equilibrium_metrics(bp, params, 0);
+            crate::kernels::equilibrium::equilibrium_metrics(bp, params, 0);
         // Panmictic/discrete sessions carry length-1 columns; deme 0 is the
         // only entry and its segment layout matches the pre-columnization
         // flat vectors bit-for-bit (validate above guarantees the sizes).
@@ -164,7 +170,11 @@ fn idx(sex: usize, age: usize, ztype: usize, n_ztypes: usize) -> usize {
 /// - `cfg`: Discrete config.
 /// - `male_counts`: Effective adult male counts.
 /// - `out`: Output matrix, overwritten.
-fn compute_mating_probability(cfg: &DiscreteConfig, male_counts: &[f64], out: &mut [f64]) {
+fn compute_mating_probability(
+    cfg: &DiscreteGenerationConfig,
+    male_counts: &[f64],
+    out: &mut [f64],
+) {
     // Same row-normalized mating probabilities as the age-structured path,
     // but for the discrete two-age adult class only.
     let g = cfg.n_ztypes;
@@ -197,7 +207,7 @@ fn compute_mating_probability(cfg: &DiscreteConfig, male_counts: &[f64], out: &m
 /// - `pair_counts`: Output mated pair counts, accumulated in place.
 fn mate_discrete(
     rng: &mut SessionRng,
-    cfg: &DiscreteConfig,
+    cfg: &DiscreteGenerationConfig,
     females: &[f64],
     mating_prob: &[f64],
     pair_counts: &mut [f64],
@@ -263,7 +273,7 @@ fn mate_discrete(
 /// - `n_m`: Output male age-0 counts.
 fn fertilize_discrete(
     rng: &mut SessionRng,
-    cfg: &DiscreteConfig,
+    cfg: &DiscreteGenerationConfig,
     pair_counts: &[f64],
     n_f: &mut [f64],
     n_m: &mut [f64],
@@ -408,7 +418,7 @@ fn fertilize_discrete(
 /// - `rng`: Random number generator.
 /// - `cfg`: Discrete config.
 /// - `ind`: Mutable discrete individual-count slice.
-pub fn reproduction(rng: &mut SessionRng, cfg: &DiscreteConfig, ind: &mut [f64]) {
+pub fn reproduction(rng: &mut SessionRng, cfg: &DiscreteGenerationConfig, ind: &mut [f64]) {
     // Discrete reproduction pipeline:
     // 1. Build effective adult males.
     // 2. Build mating probabilities and sample pair counts.
@@ -447,7 +457,7 @@ pub fn reproduction(rng: &mut SessionRng, cfg: &DiscreteConfig, ind: &mut [f64])
 ///
 /// ## Returns
 /// A non-negative scaling factor.
-fn scaling_factor(cfg: &DiscreteConfig, ind: &[f64]) -> f64 {
+fn scaling_factor(cfg: &DiscreteGenerationConfig, ind: &[f64]) -> f64 {
     // Juvenile density regulation for discrete populations;
     // identical growth-mode semantics to the age-structured engine.
     let g = cfg.n_ztypes;
@@ -457,7 +467,7 @@ fn scaling_factor(cfg: &DiscreteConfig, ind: &[f64]) -> f64 {
     if cfg.juvenile_growth_mode == NO_COMPETITION {
         return 1.0;
     }
-    curves::regulation_scaling(
+    density_regulation::regulation_scaling(
         cfg.juvenile_growth_mode,
         total_age_0,
         if cfg.juvenile_growth_mode == FIXED {
@@ -478,7 +488,12 @@ fn scaling_factor(cfg: &DiscreteConfig, ind: &[f64]) -> f64 {
 /// - `cfg`: Discrete config.
 /// - `ind`: Mutable discrete individual-count slice.
 /// - `scaling`: Scaling factor.
-fn recruit_juveniles(rng: &mut SessionRng, cfg: &DiscreteConfig, ind: &mut [f64], scaling: f64) {
+fn recruit_juveniles(
+    rng: &mut SessionRng,
+    cfg: &DiscreteGenerationConfig,
+    ind: &mut [f64],
+    scaling: f64,
+) {
     // Resample age-0 counts to the scaled total;
     // stochastic uses multinomial, deterministic scales proportionally.
     let g = cfg.n_ztypes;
@@ -546,7 +561,7 @@ fn recruit_juveniles(rng: &mut SessionRng, cfg: &DiscreteConfig, ind: &mut [f64]
 /// - `rng`: Random number generator.
 /// - `cfg`: Discrete config.
 /// - `ind`: Mutable discrete individual-count slice.
-pub fn survival(rng: &mut SessionRng, cfg: &DiscreteConfig, ind: &mut [f64]) {
+pub fn survival(rng: &mut SessionRng, cfg: &DiscreteGenerationConfig, ind: &mut [f64]) {
     // Discrete survival applies density scaling first, then viability
     // survival separately for female and male age-0 individuals.
     let g = cfg.n_ztypes;
@@ -590,7 +605,7 @@ pub fn survival(rng: &mut SessionRng, cfg: &DiscreteConfig, ind: &mut [f64]) {
 /// ## Parameters
 /// - `_cfg`: Discrete config (used for n_ztypes).
 /// - `ind`: Mutable discrete individual-count slice.
-pub fn aging(_cfg: &DiscreteConfig, ind: &mut [f64]) {
+pub fn aging(_cfg: &DiscreteGenerationConfig, ind: &mut [f64]) {
     // Move age-0 juveniles into age 1 and clear age 0.
     let g = _cfg.n_ztypes;
     for z in 0..g {
@@ -617,13 +632,13 @@ pub fn aging(_cfg: &DiscreteConfig, ind: &mut [f64]) {
 /// ``Ok(0)`` for continue, ``Ok(1)`` if a hook requested stop, or an error string.
 pub fn run_tick(
     rng: &mut SessionRng,
-    cfg: &DiscreteConfig,
+    cfg: &DiscreteGenerationConfig,
     hooks: &HookProgram,
     ind: &mut [f64],
     tick: i64,
     deme_id: i64,
     eco_values: &mut [f64],
-    eco_ctx: &mut Option<crate::lifecycle::EcoCtx<'_>>,
+    eco_ctx: &mut Option<crate::kernels::age_structured::EcoCtx<'_>>,
 ) -> Result<i32, String> {
     // One discrete tick follows: first hook -> reproduction -> early hook
     // -> survival -> late hook -> aging.
@@ -637,7 +652,7 @@ pub fn run_tick(
         ctx.tick = tick;
         ctx.phase = 0;
     }
-    let mut rebuilt: Option<DiscreteConfig> = None;
+    let mut rebuilt: Option<DiscreteGenerationConfig> = None;
 
     let mut result = hooks.execute_event(
         rng,
@@ -797,7 +812,7 @@ pub fn run_tick(
 /// ``Ok(())`` or an error string for an unknown WF mode.
 pub fn run_wf_tick(
     rng: &mut SessionRng,
-    cfg: &DiscreteConfig,
+    cfg: &DiscreteGenerationConfig,
     ind: &mut [f64],
 ) -> Result<(), String> {
     // Fused Wright-Fisher tick: only the first hook runs, then the entire
@@ -870,7 +885,7 @@ pub fn run_wf_tick(
         let total: f64 = expected_f.iter().chain(expected_m.iter()).sum();
         // Same curve dispatch as the staged tick; for the fused Wright-Fisher
         // update the "actual competition strength" is the full offspring total.
-        let sf = curves::regulation_scaling(
+        let sf = density_regulation::regulation_scaling(
             cfg.juvenile_growth_mode,
             total,
             if cfg.juvenile_growth_mode == FIXED {
@@ -938,7 +953,7 @@ pub fn run_wf_tick(
 /// ``(final_tick, flat_history, n_rows, was_stopped)``.
 pub fn run_batch(
     rng: &mut SessionRng,
-    cfg: &DiscreteConfig,
+    cfg: &DiscreteGenerationConfig,
     hooks: &HookProgram,
     ind: &mut [f64],
     tick: i64,
@@ -947,9 +962,9 @@ pub fn run_batch(
     observation_mask: Option<&[f64]>,
     wf: bool,
     eco_values: &mut [f64],
-    eco_ctx: &mut Option<crate::lifecycle::EcoCtx<'_>>,
+    eco_ctx: &mut Option<crate::kernels::age_structured::EcoCtx<'_>>,
     checkpoint_every: i64,
-    checkpoints: &mut Vec<crate::lifecycle::TickCheckpoint>,
+    checkpoints: &mut Vec<crate::kernels::age_structured::TickCheckpoint>,
 ) -> Result<(i64, Vec<f64>, usize, bool), String> {
     // Loop discrete or WF ticks in Rust with optional history recording.
     let g = cfg.n_ztypes;
@@ -1001,7 +1016,7 @@ pub fn run_batch(
         record(&mut history, ind, observation_mask, groups, current_tick);
         n_rows += 1;
         if checkpoint_every > 0 && current_tick % checkpoint_every == 0 {
-            crate::lifecycle::capture_checkpoint(
+            crate::kernels::age_structured::capture_checkpoint(
                 rng,
                 ind,
                 &[],
@@ -1063,7 +1078,7 @@ pub fn run_batch(
             record(&mut history, ind, observation_mask, groups, current_tick);
             n_rows += 1;
             if checkpoint_every > 0 && current_tick % checkpoint_every == 0 {
-                crate::lifecycle::capture_checkpoint(
+                crate::kernels::age_structured::capture_checkpoint(
                     rng,
                     ind,
                     &[],

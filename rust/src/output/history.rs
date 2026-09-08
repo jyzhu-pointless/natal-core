@@ -1,221 +1,21 @@
-//! Native history storage and the shared numerical observation projection.
+//! Ring storage for recorded history rows and the shared history handle.
 //!
-//! Rows stay in an independently owned ring. Python receives copies, so an
+//! Rows stay in an independently owned ring.  Python receives copies, so an
 //! exported array never aliases a row that a later run may evict or replace.
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 
-use crate::contract::CustomSlot;
 use numpy::{
     PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyFloat, PyInt};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
-/// Public log surface retains its existing four-column shape.
-pub type LogRow = (i64, String, f64, f64);
-/// Shared log ownership lets the session capture exact commit positions.
-pub type SharedLog = Arc<Mutex<Vec<LogEntry>>>;
-/// A successful commit with provenance retained alongside the legacy projection.
-#[derive(Clone)]
-pub struct LogEntry {
-    pub row: LogRow,
-    pub event: String,
-    pub deme: usize,
-    pub values: Option<(Option<CustomSlot>, Option<CustomSlot>)>,
-}
-impl LogEntry {
-    /// Translate the execution phase cursor into its named hook event.
-    pub fn from_phase(row: LogRow, phase: usize, deme: usize) -> Self {
-        let event = match phase {
-            0 => "first",
-            2 => "early",
-            4 => "late",
-            6 => "finish",
-            _ => "update",
-        };
-        Self {
-            row,
-            event: event.to_owned(),
-            deme,
-            values: None,
-        }
-    }
-}
+use crate::output::observation::project;
+use crate::output::parameter_log::{ParameterLog, SharedLog};
+
 /// Shared storage referenced by a session and its Python query adapter.
 pub type SharedHistory = Arc<Mutex<HistoryData>>;
-
-/// Native append-only parameter timeline, truncated by checkpoint cursors.
-#[pyclass]
-#[derive(Clone, Default)]
-pub struct ParameterLog {
-    pub(crate) rows: SharedLog,
-}
-
-#[pymethods]
-impl ParameterLog {
-    #[new]
-    fn new() -> Self {
-        Self::default()
-    }
-    /// Append an actual successful parameter change.
-    fn append(&self, row: LogRow) {
-        if row.2 != row.3 {
-            self.rows.lock().unwrap().push(LogEntry {
-                row,
-                event: "update".to_owned(),
-                deme: 0,
-                values: None,
-            });
-        }
-    }
-    /// Mark a callback transaction without copying the accumulated log.
-    fn mark(&self) -> usize {
-        self.rows.lock().unwrap().len()
-    }
-    /// Roll back only the entries added after a callback transaction mark.
-    fn rollback(&self, position: usize) -> PyResult<()> {
-        let mut rows = self.rows.lock().unwrap();
-        if position > rows.len() {
-            return Err(PyValueError::new_err(
-                "Invalid parameter log transaction mark",
-            ));
-        }
-        rows.truncate(position);
-        Ok(())
-    }
-    /// Copy the current valid timeline.
-    fn snapshot(&self) -> Vec<LogRow> {
-        self.rows
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|entry| {
-                entry.values.as_ref().is_none_or(|(old, new)| {
-                    audit_scalar(old).is_some() && audit_scalar(new).is_some()
-                })
-            })
-            .map(|entry| entry.row.clone())
-            .collect()
-    }
-    /// Commit a change with the responsible event and spatial deme.
-    fn append_detail(&self, row: LogRow, event: String, deme: usize) {
-        if row.2 != row.3 {
-            self.rows.lock().unwrap().push(LogEntry {
-                row,
-                event,
-                deme,
-                values: None,
-            });
-        }
-    }
-    /// Append typed scalar, tensor, or custom commits after native validation.
-    #[allow(clippy::too_many_arguments)] // One atomic audit entry with explicit provenance and values.
-    fn append_value(
-        &self,
-        tick: i64,
-        name: String,
-        old: &Bound<'_, PyAny>,
-        new: &Bound<'_, PyAny>,
-        event: String,
-        deme: usize,
-    ) -> PyResult<()> {
-        let old = audit_value(old)?;
-        let new = audit_value(new)?;
-        if old == new {
-            return Ok(());
-        }
-        let row = (
-            tick,
-            name,
-            audit_scalar(&old).unwrap_or(0.0),
-            audit_scalar(&new).unwrap_or(0.0),
-        );
-        self.rows.lock().unwrap().push(LogEntry {
-            row,
-            event,
-            deme,
-            values: Some((old, new)),
-        });
-        Ok(())
-    }
-    /// Export complete provenance; tensor values are independent native copies.
-    #[allow(clippy::type_complexity)] // Public six-column audit schema includes two heterogeneous values.
-    fn details(
-        &self,
-        py: Python<'_>,
-    ) -> PyResult<Vec<(i64, String, usize, String, Py<PyAny>, Py<PyAny>)>> {
-        self.rows
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|entry| {
-                let (old, new) = match &entry.values {
-                    Some((old, new)) => (audit_to_python(py, old)?, audit_to_python(py, new)?),
-                    None => (
-                        entry.row.2.into_pyobject(py)?.into_any().unbind(),
-                        entry.row.3.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                };
-                Ok((
-                    entry.row.0,
-                    entry.event.clone(),
-                    entry.deme,
-                    entry.row.1.clone(),
-                    old,
-                    new,
-                ))
-            })
-            .collect()
-    }
-    /// Remove all entries without changing the owning session.
-    fn clear(&self) {
-        self.rows.lock().unwrap().clear();
-    }
-}
-
-/// Read an audit value without retaining Python objects or borrowed buffers.
-fn audit_value(value: &Bound<'_, PyAny>) -> PyResult<Option<CustomSlot>> {
-    if value.is_none() {
-        return Ok(None);
-    }
-    let result = if value.is_instance_of::<PyBool>() {
-        CustomSlot::Bool(value.extract()?)
-    } else if value.is_instance_of::<PyInt>() {
-        CustomSlot::Int(value.extract()?)
-    } else if value.is_instance_of::<PyFloat>() {
-        CustomSlot::Float(value.extract()?)
-    } else {
-        let array = value.extract::<numpy::PyReadonlyArrayDyn<'_, f64>>()?;
-        CustomSlot::Array {
-            shape: array.shape().to_vec(),
-            values: array.as_array().iter().copied().collect(),
-        }
-    };
-    Ok(Some(result))
-}
-/// Preserve the historical scalar-only log projection without fabricating tensors.
-fn audit_scalar(value: &Option<CustomSlot>) -> Option<f64> {
-    match value {
-        Some(CustomSlot::Bool(value)) => Some(if *value { 1.0 } else { 0.0 }),
-        Some(CustomSlot::Int(value)) => Some(*value as f64),
-        Some(CustomSlot::Float(value)) => Some(*value),
-        _ => None,
-    }
-}
-/// Reuse the native typed-value serializer; every array owns a fresh buffer.
-fn audit_to_python(py: Python<'_>, value: &Option<CustomSlot>) -> PyResult<Py<PyAny>> {
-    let Some(value) = value else {
-        return Ok(py.None());
-    };
-    let values = std::collections::HashMap::from([("value".to_owned(), value.clone())]);
-    let dictionary = crate::contract::custom_slots_to_python(py, &values)?;
-    Ok(dictionary
-        .get_item("value")?
-        .expect("serializer includes the supplied key")
-        .unbind())
-}
 
 /// All numerical history data and the execution layout live here.
 pub struct HistoryData {
@@ -320,68 +120,6 @@ impl HistoryData {
         }
         Ok(())
     }
-}
-
-/// Project D/S/A/Z input into group/deme/sex/age output with explicit axes.
-pub fn project(
-    ind: &[f64],
-    mask: &[f64],
-    dims: [usize; 4],
-    selected: &[usize],
-    collapse: bool,
-    aggregate: bool,
-) -> PyResult<Vec<f64>> {
-    let [d, s, a, z] = dims;
-    let plane = s * a * z;
-    if plane == 0
-        || ind.len() != d * plane
-        || mask.len() % plane != 0
-        || selected.is_empty()
-        || selected.iter().any(|i| *i >= d)
-    {
-        return Err(PyValueError::new_err(
-            "Observation dimensions or deme selection do not match the population layout",
-        ));
-    }
-    let groups = mask.len() / plane;
-    let out_d = if aggregate { 1 } else { selected.len() };
-    let out_a = if collapse { 1 } else { a };
-    let mut values = vec![0.0; groups * out_d * s * out_a];
-    // Keep each reduction axis separate: genotype first, then age, then
-    // deme. Recording and later projections therefore share the same
-    // floating-point addition order as current-state observations.
-    for group in 0..groups {
-        for destination in 0..out_d {
-            for sex in 0..s {
-                for age_out in 0..out_a {
-                    let mut result = 0.0;
-                    let start_d = if aggregate { 0 } else { destination };
-                    let end_d = if aggregate {
-                        selected.len()
-                    } else {
-                        destination + 1
-                    };
-                    for &deme in &selected[start_d..end_d] {
-                        let mut deme_total = 0.0;
-                        let start_a = if collapse { 0 } else { age_out };
-                        let end_a = if collapse { a } else { age_out + 1 };
-                        for age in start_a..end_a {
-                            let mut genotype_total = 0.0;
-                            for genotype in 0..z {
-                                let offset = (sex * a + age) * z + genotype;
-                                genotype_total +=
-                                    ind[deme * plane + offset] * mask[group * plane + offset];
-                            }
-                            deme_total += genotype_total;
-                        }
-                        result += deme_total;
-                    }
-                    values[((group * out_d + destination) * s + sex) * out_a + age_out] = result;
-                }
-            }
-        }
-    }
-    Ok(values)
 }
 
 /// Query adapter around shared Rust storage; no Python-owned numerical rows.
@@ -629,28 +367,4 @@ impl HistoryStore {
         }
         Ok(())
     }
-}
-
-/// Apply the same native projection to a current-state snapshot.
-#[pyfunction]
-pub fn project_observation<'py>(
-    py: Python<'py>,
-    ind: PyReadonlyArray1<'py, f64>,
-    mask: PyReadonlyArray1<'py, f64>,
-    dimensions: [usize; 4],
-    selected: Vec<usize>,
-    collapse_age: bool,
-    aggregate: bool,
-) -> PyResult<Bound<'py, PyArray1<f64>>> {
-    Ok(PyArray1::from_vec(
-        py,
-        project(
-            ind.as_slice()?,
-            mask.as_slice()?,
-            dimensions,
-            &selected,
-            collapse_age,
-            aggregate,
-        )?,
-    ))
 }

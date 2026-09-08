@@ -4,23 +4,27 @@ use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray4, PyUntypedArrayMethods}
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::config::SimConfig;
-use crate::contract::{is_genetics_tensor, Blueprint, Params, TensorSet, GENETICS_TENSORS};
-use crate::discrete::DiscreteConfig;
-use crate::history::{HistoryStore, SharedHistory};
-use crate::hooks::HookProgram;
-use crate::rng::{new_rng, SessionRng};
+use crate::hooks::interpreter::HookProgram;
+use crate::kernels::config::AgeStructuredConfig;
+use crate::kernels::discrete_generation::DiscreteGenerationConfig;
+use crate::kernels::rng::{new_rng, SessionRng};
+use crate::model::blueprint::Blueprint;
+use crate::model::ecology::EcologyParams;
+use crate::model::genetics::is_genetics_tensor;
+use crate::model::genetics::GeneticsTensors;
+use crate::model::genetics::GENETICS_TENSORS;
+use crate::output::history::{HistoryStore, SharedHistory};
 
 /// Convert internal kernel error strings into ``PyRuntimeError``.
 fn map_lifecycle_error(err: String) -> PyErr {
-    crate::hook_transaction::map_error(err)
+    crate::hooks::transaction::map_error(err)
 }
 
 /// PyO3 session for heterogeneous spatial multi-deme runs.
 ///
 /// Slice-5 stage-2 variant bank: one shared blueprint, one columnized
-/// ecology set (per-deme ``Params`` columns), a bank of shared genetics
-/// [`TensorSet`] variants, and a per-deme variant index.  Blueprint,
+/// ecology set (per-deme ``EcologyParams`` columns), a bank of shared genetics
+/// [`GeneticsTensors`] variants, and a per-deme variant index.  Blueprint,
 /// ecology columns, and genetics are stored exactly once each — no
 /// per-deme contract clones.
 ///
@@ -37,7 +41,7 @@ fn map_lifecycle_error(err: String) -> PyErr {
 /// original stochastic trajectory.
 pub struct SpatialTickCheckpoint {
     /// Lifecycle status and cursor retained by manual snapshots.
-    pub execution: crate::execution::Execution,
+    pub execution: crate::sessions::status::ExecutionStatus,
     pub phase: usize,
     /// Tick the checkpoint was captured at.
     pub tick: i64,
@@ -48,14 +52,14 @@ pub struct SpatialTickCheckpoint {
     /// One 4-word Xoshiro256++ state per deme, in deme order.
     pub rng_words: Vec<[u64; 4]>,
     /// The complete ecology column set at capture time.
-    pub ecology: Params,
+    pub ecology: EcologyParams,
 }
 
 #[pyclass(name = "HeterogeneousSpatialEngineSession")]
-pub struct HeterogeneousSpatialEngineSession {
+pub struct SpatialSession {
     blueprint: Blueprint,
-    ecology: Params,
-    variants: Vec<TensorSet>,
+    ecology: EcologyParams,
+    variants: Vec<GeneticsTensors>,
     deme_variants: Vec<usize>,
     hooks: HookProgram,
     seed: u64,
@@ -63,7 +67,7 @@ pub struct HeterogeneousSpatialEngineSession {
     state_ind: Vec<f64>,
     state_sperm: Vec<f64>,
     state_tick: i64,
-    execution: crate::execution::Execution,
+    execution: crate::sessions::status::ExecutionStatus,
     phase: usize,
     /// Record-aligned restorable boundaries (plan S4 CheckpointStore).
     checkpoints: Vec<SpatialTickCheckpoint>,
@@ -78,11 +82,11 @@ pub struct HeterogeneousSpatialEngineSession {
     stay_after_send: bool,
     /// Audited per-deme set_param transitions accumulated across run
     /// calls; drained by the Python adapter after each run.
-    eco_journal: Vec<crate::spatial::SpatialEcoJournalRow>,
+    eco_journal: Vec<crate::kernels::spatial::SpatialEcoJournalRow>,
 }
 
 #[pymethods]
-impl HeterogeneousSpatialEngineSession {
+impl SpatialSession {
     /// Execute one explicit event against a managed deme's native state.
     fn trigger_deme_event(&mut self, deme: usize, event: usize) -> PyResult<i32> {
         if deme >= self.deme_variants.len() || event >= 4 {
@@ -96,7 +100,7 @@ impl HeterogeneousSpatialEngineSession {
         let sperm_stride = n_ages * z * z;
         let ind = &mut self.state_ind[deme * ind_stride..(deme + 1) * ind_stride];
         let sperm = &mut self.state_sperm[deme * sperm_stride..(deme + 1) * sperm_stride];
-        let mut ctx = Some(crate::lifecycle::EcoCtx {
+        let mut ctx = Some(crate::kernels::age_structured::EcoCtx {
             bp: &self.blueprint,
             params: &mut params,
             genetics: &self.variants[self.deme_variants[deme]],
@@ -143,18 +147,19 @@ impl HeterogeneousSpatialEngineSession {
                 let store = shared.lock().unwrap();
                 if let Some(log) = store.extra_logs.get(deme) {
                     for (tick, id, old, new, phase) in context.journal.drain(..) {
-                        log.lock()
-                            .unwrap()
-                            .push(crate::history::LogEntry::from_phase(
+                        log.lock().unwrap().push(
+                            crate::output::parameter_log::LogEntry::from_phase(
                                 (
                                     tick,
-                                    crate::contract::ECO_PARAM_COLUMNS[id].to_owned(),
+                                    crate::generated::ecology_parameters::ECO_PARAM_COLUMNS[id]
+                                        .to_owned(),
                                     old,
                                     new,
                                 ),
                                 phase,
                                 deme,
-                            ));
+                            ),
+                        );
                     }
                 }
             } else {
@@ -188,11 +193,11 @@ impl HeterogeneousSpatialEngineSession {
             .expect("callback queue poisoned")
             .clear();
         if let Err(error) = outcome {
-            self.execution = crate::execution::Execution::Failed;
+            self.execution = crate::sessions::status::ExecutionStatus::Failed;
             return Err(map_lifecycle_error(error));
         }
         if result != 0 {
-            self.execution = crate::execution::Execution::Stopped;
+            self.execution = crate::sessions::status::ExecutionStatus::Stopped;
         }
         Ok(result)
     }
@@ -203,7 +208,7 @@ impl HeterogeneousSpatialEngineSession {
     }
     /// Mark an explicit user finish without discarding state or history.
     fn stop(&mut self) {
-        self.execution = crate::execution::Execution::Stopped;
+        self.execution = crate::sessions::status::ExecutionStatus::Stopped;
     }
 
     /// Create a heterogeneous spatial session from columnized contracts.
@@ -226,7 +231,7 @@ impl HeterogeneousSpatialEngineSession {
     /// - `seed`: Base RNG seed; deme *d* streams from ``seed ^ d``.
     ///
     /// ## Returns
-    /// A new `HeterogeneousSpatialEngineSession`.
+    /// A new `SpatialSession`.
     ///
     /// ## Errors
     /// Returns ``PyValueError`` when any contract piece is inconsistent, a
@@ -251,11 +256,11 @@ impl HeterogeneousSpatialEngineSession {
         validate_state_tick(tick)?;
         let bp = Blueprint::from_python(blueprint)?;
         bp.validate()?;
-        let ecology = Params::from_columns(ecology_columns, bp.n_demes)?;
+        let ecology = EcologyParams::from_columns(ecology_columns, bp.n_demes)?;
         ecology.validate(&bp)?;
         let mut variants = Vec::new();
         for entry in tensor_bank.try_iter()? {
-            let tensors = TensorSet::from_dict(&entry?)?;
+            let tensors = GeneticsTensors::from_dict(&entry?)?;
             tensors.validate(&bp)?;
             variants.push(tensors);
         }
@@ -291,12 +296,12 @@ impl HeterogeneousSpatialEngineSession {
         let state_sperm = validate_stacked_sperm(sperm_storage_all, &bp, deme_variants.len())?;
         // Validate the model's config assembly once at construction.
         if discrete {
-            DiscreteConfig::assemble(&bp, &ecology.single_deme(0), &variants[0])?;
+            DiscreteGenerationConfig::assemble(&bp, &ecology.single_deme(0), &variants[0])?;
         } else {
-            SimConfig::assemble_deme(&bp, &ecology, &variants[0], 0)?;
+            AgeStructuredConfig::assemble_deme(&bp, &ecology, &variants[0], 0)?;
         }
         let rngs = (0..deme_variants.len())
-            .map(|deme| new_rng(crate::rng::stream_seed(seed, deme as i64)))
+            .map(|deme| new_rng(crate::kernels::rng::stream_seed(seed, deme as i64)))
             .collect();
         Ok(Self {
             blueprint: bp,
@@ -309,7 +314,7 @@ impl HeterogeneousSpatialEngineSession {
             state_ind,
             state_sperm,
             state_tick: tick,
-            execution: crate::execution::Execution::Ready,
+            execution: crate::sessions::status::ExecutionStatus::Ready,
             phase: 0,
             discrete,
             stay_after_send,
@@ -411,7 +416,8 @@ impl HeterogeneousSpatialEngineSession {
         if deme >= self.deme_variants.len() {
             return Err(PyValueError::new_err("deme out of range"));
         }
-        self.ecology.custom_slots[deme] = crate::contract::custom_slots_from_python(source)?;
+        self.ecology.custom_slots[deme] =
+            crate::model::custom_fields::custom_slots_from_python(source)?;
         Ok(())
     }
 
@@ -433,7 +439,7 @@ impl HeterogeneousSpatialEngineSession {
         if deme >= self.deme_variants.len() {
             return Err(PyValueError::new_err("deme out of range"));
         }
-        crate::contract::session_get_tensor(
+        crate::model::ecology::session_get_tensor(
             py,
             &self.ecology.single_deme(deme),
             &self.variants[self.deme_variants[deme]],
@@ -450,7 +456,7 @@ impl HeterogeneousSpatialEngineSession {
         if deme >= self.deme_variants.len() {
             return Err(PyValueError::new_err("deme out of range"));
         }
-        crate::contract::custom_slots_to_python(py, &self.ecology.custom_slots[deme])
+        crate::model::custom_fields::custom_slots_to_python(py, &self.ecology.custom_slots[deme])
     }
 
     /// Validate one deme's scalar candidates before replacing its column.
@@ -475,7 +481,7 @@ impl HeterogeneousSpatialEngineSession {
         }
         let mut params = self.ecology.single_deme(deme);
         let mut genetics = self.variants[self.deme_variants[deme]].clone();
-        crate::contract::session_tensor_write(
+        crate::model::ecology::session_tensor_write(
             &self.blueprint,
             &mut params,
             &mut genetics,
@@ -574,7 +580,7 @@ impl HeterogeneousSpatialEngineSession {
     fn reseed(&mut self, seed: u64) {
         self.seed = seed;
         self.rngs = (0..self.deme_variants.len())
-            .map(|deme| new_rng(crate::rng::stream_seed(seed, deme as i64)))
+            .map(|deme| new_rng(crate::kernels::rng::stream_seed(seed, deme as i64)))
             .collect();
     }
 
@@ -647,10 +653,11 @@ impl HeterogeneousSpatialEngineSession {
                 if let Some(log) = store.extra_logs.get(deme) {
                     log.lock()
                         .unwrap()
-                        .push(crate::history::LogEntry::from_phase(
+                        .push(crate::output::parameter_log::LogEntry::from_phase(
                             (
                                 tick,
-                                crate::contract::ECO_PARAM_COLUMNS[parameter].to_owned(),
+                                crate::generated::ecology_parameters::ECO_PARAM_COLUMNS[parameter]
+                                    .to_owned(),
                                 old,
                                 new,
                             ),
@@ -661,12 +668,12 @@ impl HeterogeneousSpatialEngineSession {
             }
         }
         self.execution = match &outcome {
-            Ok(value) if value == &before_tick => crate::execution::Execution::Stopped,
+            Ok(value) if value == &before_tick => crate::sessions::status::ExecutionStatus::Stopped,
             Ok(_) => {
                 self.phase = 0;
-                crate::execution::Execution::Ready
+                crate::sessions::status::ExecutionStatus::Ready
             }
-            Err(_) => crate::execution::Execution::Failed,
+            Err(_) => crate::sessions::status::ExecutionStatus::Failed,
         };
         outcome
     }
@@ -763,7 +770,7 @@ impl HeterogeneousSpatialEngineSession {
         collapse_age: bool,
         aggregate: bool,
     ) -> PyResult<(i64, Bound<'py, PyArray1<f64>>)> {
-        let values = crate::history::project(
+        let values = crate::output::observation::project(
             &self.state_ind,
             mask.as_slice()?,
             [
@@ -977,7 +984,7 @@ impl HeterogeneousSpatialEngineSession {
         self.state_ind = ind;
         self.state_sperm = sperm;
         self.state_tick = tick;
-        self.execution = crate::execution::Execution::Ready;
+        self.execution = crate::sessions::status::ExecutionStatus::Ready;
         self.phase = 0;
         Ok(())
     }
@@ -1045,15 +1052,16 @@ fn validate_stacked_sperm(
     Ok(values.to_vec())
 }
 
-impl HeterogeneousSpatialEngineSession {
+impl SpatialSession {
     fn run_inner(&mut self) -> PyResult<i64> {
         let n_demes = self.deme_variants.len();
         // Per-deme ECO scratch rows for OP_SET_PARAM; written back into
         // the ecology columns after all demes ticked.
-        let mut eco_all = vec![0.0; n_demes * crate::hooks::N_ECO_PARAMS];
+        let mut eco_all = vec![0.0; n_demes * crate::hooks::interpreter::N_ECO_PARAMS];
         for deme in 0..n_demes {
-            for id in 0..crate::hooks::N_ECO_PARAMS {
-                eco_all[deme * crate::hooks::N_ECO_PARAMS + id] = self.ecology.eco_value(id, deme);
+            for id in 0..crate::hooks::interpreter::N_ECO_PARAMS {
+                eco_all[deme * crate::hooks::interpreter::N_ECO_PARAMS + id] =
+                    self.ecology.eco_value(id, deme);
             }
         }
         let tick = self.state_tick;
@@ -1064,13 +1072,13 @@ impl HeterogeneousSpatialEngineSession {
                     .variants
                     .get(variant)
                     .ok_or_else(|| PyValueError::new_err("variant id out of range"))?;
-                configs.push(DiscreteConfig::assemble(
+                configs.push(DiscreteGenerationConfig::assemble(
                     &self.blueprint,
                     &self.ecology.single_deme(deme),
                     tensors,
                 )?);
             }
-            crate::spatial::run_spatial_tick_discrete(
+            crate::kernels::spatial::run_spatial_tick_discrete(
                 &configs,
                 &self.hooks,
                 &mut self.rngs,
@@ -1090,14 +1098,14 @@ impl HeterogeneousSpatialEngineSession {
                     .variants
                     .get(variant)
                     .ok_or_else(|| PyValueError::new_err("variant id out of range"))?;
-                configs.push(SimConfig::assemble_deme(
+                configs.push(AgeStructuredConfig::assemble_deme(
                     &self.blueprint,
                     &self.ecology,
                     tensors,
                     deme,
                 )?);
             }
-            crate::spatial::run_spatial_tick_heterogeneous(
+            crate::kernels::spatial::run_spatial_tick_heterogeneous(
                 &configs,
                 &self.hooks,
                 &mut self.rngs,
@@ -1122,11 +1130,11 @@ impl HeterogeneousSpatialEngineSession {
             .unwrap_or(0);
         if code.is_ok() {
             for deme in 0..n_demes {
-                for id in 0..crate::hooks::N_ECO_PARAMS {
+                for id in 0..crate::hooks::interpreter::N_ECO_PARAMS {
                     self.ecology.set_eco_value(
                         id,
                         deme,
-                        eco_all[deme * crate::hooks::N_ECO_PARAMS + id],
+                        eco_all[deme * crate::hooks::interpreter::N_ECO_PARAMS + id],
                     );
                 }
             }
@@ -1165,7 +1173,7 @@ impl HeterogeneousSpatialEngineSession {
         let all_zero = self.ecology.migration_rate.iter().all(|&rate| rate <= 0.0);
         if !all_zero {
             let (ind, sperm) = if self.blueprint.stochastic {
-                crate::spatial::migrate_csr_stochastic_rngs(
+                crate::kernels::spatial::migrate_csr_stochastic_rngs(
                     &mut self.rngs,
                     &self.state_ind,
                     &self.state_sperm,
@@ -1179,7 +1187,7 @@ impl HeterogeneousSpatialEngineSession {
                     self.blueprint.n_ztypes,
                 )
             } else {
-                crate::spatial::migrate_csr_deterministic(
+                crate::kernels::spatial::migrate_csr_deterministic(
                     &self.state_ind,
                     &self.state_sperm,
                     &self.blueprint.migration_indptr,

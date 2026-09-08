@@ -27,8 +27,10 @@ Population state
 | `output/observation.py` | 定义 `Observation`、`ObservationResult`、`ObservationFilter` 与恒等观测 |
 | `output/history.py` | 定义不可变 schema、类型化数组视图、raw History 的事后投影 |
 | `output/_recording.py` | 在构建阶段编译 `RecordingPlan`、行宽与空间布局 |
-| `rust/src/history.rs` | 拥有历史数值、投影实现、保留预算及参数日志 |
-| `rust/src/spatial_session.rs` | 批量运行空间生命周期，在 Rust 内记录边界 |
+| `rust/src/output/history.rs` | 拥有历史环形存储、行数据、保留预算及共享历史句柄 |
+| `rust/src/output/observation.rs` | 拥有数值投影及当前状态观测入口 |
+| `rust/src/output/parameter_log.rs` | 拥有参数日志及日志值转换 |
+| `rust/src/sessions/spatial.rs` | 批量运行空间生命周期，在 Rust 内记录边界 |
 | `spatial/population.py` | 传递运行控制与 selector，包装 Rust 观测查询结果 |
 
 ## 构建阶段的公开接口

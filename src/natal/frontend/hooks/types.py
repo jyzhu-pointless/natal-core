@@ -71,7 +71,7 @@ ECO_PARAM_NAMES: Tuple[str, ...] = (
 
 # RPN value-expression token kinds (``Op.set_param`` value payloads).
 # 0/1 push one operand (literal pool index / ECO param id); 2..5 are the
-# binary arithmetic operators.  Mirrored in ``rust/src/hooks.rs``.
+# binary arithmetic operators.  Mirrored in ``rust/src/hooks/interpreter.rs``.
 RPN_LITERAL = 0
 RPN_PARAM = 1
 RPN_ADD = 2

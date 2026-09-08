@@ -9,16 +9,18 @@
 //! The stage order mirrors ``natal.engine.lifecycle.run_structured_tick``:
 //! first hook → reproduction → early hook → survival → late hook → aging.
 
-use crate::rng::SessionRng;
+use crate::kernels::rng::SessionRng;
 
-use crate::config::SimConfig;
-use crate::contract::{Blueprint, Params, TensorSet};
-use crate::curves;
-use crate::hooks::HookProgram;
-use crate::rng::{
+use crate::hooks::interpreter::HookProgram;
+use crate::kernels::config::AgeStructuredConfig;
+use crate::kernels::density_regulation;
+use crate::kernels::rng::{
     binomial, clamp01, continuous_binomial, continuous_multinomial, continuous_poisson,
     multinomial, poisson, EPS,
 };
+use crate::model::blueprint::Blueprint;
+use crate::model::ecology::EcologyParams;
+use crate::model::genetics::GeneticsTensors;
 
 /// Juvenile growth mode: no density regulation.
 const NO_COMPETITION: i64 = 0;
@@ -65,7 +67,11 @@ fn sperm_idx(age: usize, female_ztype: usize, male_ztype: usize, n_ztypes: usize
 /// - `cfg`: Simulation config.
 /// - `male_counts`: Effective adult male counts per zygote type.
 /// - `out`: Output matrix of shape ``(n_ztypes, n_ztypes)``, overwritten.
-fn compute_mating_probability_matrix(cfg: &SimConfig, male_counts: &[f64], out: &mut [f64]) {
+fn compute_mating_probability_matrix(
+    cfg: &AgeStructuredConfig,
+    male_counts: &[f64],
+    out: &mut [f64],
+) {
     // Each female row is proportional to sexual_selection_fitness * male_count.
     // Rows are normalized; zero/non-finite rows become all-zero so no matings occur.
     let n_ztypes = cfg.n_ztypes;
@@ -102,7 +108,7 @@ fn compute_mating_probability_matrix(cfg: &SimConfig, male_counts: &[f64], out: 
 /// - `mating_prob`: Precomputed female x male mating probabilities.
 fn sample_mating(
     rng: &mut SessionRng,
-    cfg: &SimConfig,
+    cfg: &AgeStructuredConfig,
     female_counts: &[f64],
     sperm: &mut [f64],
     mating_prob: &[f64],
@@ -229,7 +235,7 @@ fn sample_mating(
 /// - `n_m`: Output male age-0 counts per zygote type.
 fn fertilize(
     rng: &mut SessionRng,
-    cfg: &SimConfig,
+    cfg: &AgeStructuredConfig,
     sperm: &[f64],
     n_f: &mut [f64],
     n_m: &mut [f64],
@@ -404,7 +410,7 @@ fn fertilize(
 /// ``Ok(())`` on success, or a descriptive error string for invalid states.
 pub fn reproduction(
     rng: &mut SessionRng,
-    cfg: &SimConfig,
+    cfg: &AgeStructuredConfig,
     ind: &mut [f64],
     sperm: &mut [f64],
 ) -> Result<(), String> {
@@ -494,7 +500,7 @@ pub fn reproduction(
 ///
 /// ## Returns
 /// A non-negative scaling factor.
-fn scaling_factor(cfg: &SimConfig, ind: &[f64]) -> f64 {
+fn scaling_factor(cfg: &AgeStructuredConfig, ind: &[f64]) -> f64 {
     // Juvenile density regulation by growth mode, dispatched through the
     // shared curve library with the Python reference operation order:
     // - NO_COMPETITION: 1.0 (no regulation).
@@ -515,8 +521,14 @@ fn scaling_factor(cfg: &SimConfig, ind: &[f64]) -> f64 {
             male_sum += ind[ind_idx(1, 0, ztype, cfg.n_ages, cfg.n_ztypes)];
         }
         let total_age_0 = female_sum + male_sum;
-        return curves::regulation_scaling(FIXED, total_age_0, cfg.carrying_capacity, 0.0, 0.0)
-            .unwrap_or(1.0);
+        return density_regulation::regulation_scaling(
+            FIXED,
+            total_age_0,
+            cfg.carrying_capacity,
+            0.0,
+            0.0,
+        )
+        .unwrap_or(1.0);
     }
     // Compensatory family: blend juvenile counts below adulthood by the
     // per-age competition weights, then evaluate the curve.
@@ -534,7 +546,7 @@ fn scaling_factor(cfg: &SimConfig, ind: &[f64]) -> f64 {
     for age in 0..cfg.new_adult_age {
         actual_comp += juvenile_counts[age] * cfg.age_based_relative_competition_strength[age];
     }
-    curves::regulation_scaling(
+    density_regulation::regulation_scaling(
         cfg.juvenile_growth_mode,
         actual_comp,
         cfg.expected_competition_strength,
@@ -554,7 +566,12 @@ fn scaling_factor(cfg: &SimConfig, ind: &[f64]) -> f64 {
 /// - `cfg`: Simulation config.
 /// - `ind`: Mutable individual-count flat slice.
 /// - `scaling`: Scaling factor from [`scaling_factor`].
-fn recruit_juveniles(rng: &mut SessionRng, cfg: &SimConfig, ind: &mut [f64], scaling: f64) {
+fn recruit_juveniles(
+    rng: &mut SessionRng,
+    cfg: &AgeStructuredConfig,
+    ind: &mut [f64],
+    scaling: f64,
+) {
     // Resample age-0 counts so the total equals total * scaling.
     // Stochastic mode uses multinomial/continuous multinomial;
     // deterministic mode scales each category proportionally.
@@ -651,7 +668,7 @@ fn recruit_juveniles(rng: &mut SessionRng, cfg: &SimConfig, ind: &mut [f64], sca
 /// ``Ok(())`` or an error if the state is inconsistent.
 fn sample_survival_with_sperm(
     rng: &mut SessionRng,
-    cfg: &SimConfig,
+    cfg: &AgeStructuredConfig,
     ind: &mut [f64],
     sperm: &mut [f64],
     s_combined_f: &[f64],
@@ -744,7 +761,7 @@ fn sample_survival_with_sperm(
 /// - `s_combined_f`: Combined female survival rates.
 /// - `s_combined_m`: Combined male survival rates.
 fn apply_survival_deterministic(
-    cfg: &SimConfig,
+    cfg: &AgeStructuredConfig,
     ind: &mut [f64],
     sperm: &mut [f64],
     s_combined_f: &[f64],
@@ -782,7 +799,7 @@ fn apply_survival_deterministic(
 /// ``Ok(())`` on success, or an error string for invalid states.
 pub fn survival(
     rng: &mut SessionRng,
-    cfg: &SimConfig,
+    cfg: &AgeStructuredConfig,
     ind: &mut [f64],
     sperm: &mut [f64],
 ) -> Result<(), String> {
@@ -834,7 +851,7 @@ pub fn survival(
 /// - `cfg`: Simulation config.
 /// - `ind`: Mutable individual-count flat slice.
 /// - `sperm`: Mutable sperm-storage flat slice.
-pub fn aging(cfg: &SimConfig, ind: &mut [f64], sperm: &mut [f64]) {
+pub fn aging(cfg: &AgeStructuredConfig, ind: &mut [f64], sperm: &mut [f64]) {
     // Shift every age class down by one, dropping the oldest class.
     // Then zero the newborn age class (age 0) for counts and sperm.
     let n_ages = cfg.n_ages;
@@ -868,7 +885,7 @@ pub fn aging(cfg: &SimConfig, ind: &mut [f64], sperm: &mut [f64]) {
 
 /// Per-deme ``OP_SET_PARAM`` write-back context.
 ///
-/// Owns a mutable borrow of the session's [`Params`] plus the immutable
+/// Owns a mutable borrow of the session's [`EcologyParams`] plus the immutable
 /// contract references needed to re-assemble a config.  After each event
 /// boundary the tick commits the ECO scratch into the deme's ecology
 /// column; when the hook program carries set_param ops, the tick also
@@ -880,11 +897,11 @@ pub struct EcoCtx<'a> {
     pub bp: &'a Blueprint,
     /// Session-owned ecology columns (written via ``set_eco_value``); for
     /// spatial ticks this is the deme's private single-deme local copy.
-    pub params: &'a mut Params,
+    pub params: &'a mut EcologyParams,
     /// Shared genetics tables for config assembly.
-    pub genetics: &'a TensorSet,
+    pub genetics: &'a GeneticsTensors,
     /// Candidate genetics committed by Python callbacks at this event.
-    pub updated_genetics: Option<TensorSet>,
+    pub updated_genetics: Option<GeneticsTensors>,
     /// Current within-tick stage, retained when a callback stops or fails.
     pub phase: usize,
     /// Deme column the writes target (0 for panmictic sessions and for
@@ -896,7 +913,7 @@ pub struct EcoCtx<'a> {
     /// row per event-boundary commit whose value actually changed.  The
     /// owning session drains this at batch end and hands it to the Python
     /// adapter so ``params_log`` stays complete on the Rust run path.
-    pub journal: Vec<crate::hooks::EcoJournalRow>,
+    pub journal: Vec<crate::hooks::interpreter::EcoJournalRow>,
 }
 
 impl EcoCtx<'_> {
@@ -915,10 +932,10 @@ impl EcoCtx<'_> {
     /// ``Ok(())``, or an error string for an invalid value.
     pub fn commit(&mut self, values: &[f64]) -> Result<(), String> {
         for (id, value) in values.iter().enumerate() {
-            if id >= crate::hooks::N_ECO_PARAMS {
+            if id >= crate::hooks::interpreter::N_ECO_PARAMS {
                 break;
             }
-            if let Err(reason) = crate::hooks::validate_eco_param(id, *value) {
+            if let Err(reason) = crate::hooks::interpreter::validate_eco_param(id, *value) {
                 return Err(format!(
                     "set_param value out of bounds: {reason} (tick {})",
                     self.tick
@@ -936,10 +953,10 @@ impl EcoCtx<'_> {
     /// Re-assemble the age-structured config from current ecology.
     ///
     /// ## Returns
-    /// A fresh [`SimConfig`] reflecting committed set_param writes, or an
+    /// A fresh [`AgeStructuredConfig`] reflecting committed set_param writes, or an
     /// error string when assembly validation fails.
-    pub fn assemble(&self) -> Result<SimConfig, String> {
-        SimConfig::assemble_deme(
+    pub fn assemble(&self) -> Result<AgeStructuredConfig, String> {
+        AgeStructuredConfig::assemble_deme(
             self.bp,
             self.params,
             self.updated_genetics.as_ref().unwrap_or(self.genetics),
@@ -951,11 +968,13 @@ impl EcoCtx<'_> {
     /// Re-assemble the discrete-generation config from current ecology.
     ///
     /// ## Returns
-    /// A fresh [`DiscreteConfig`] reflecting committed set_param writes,
+    /// A fresh [`DiscreteGenerationConfig`] reflecting committed set_param writes,
     /// or an error string when assembly validation fails.
-    pub fn assemble_discrete(&self) -> Result<crate::discrete::DiscreteConfig, String> {
-        // DiscreteConfig reads the deme-0 column (panmictic sessions).
-        crate::discrete::DiscreteConfig::assemble(
+    pub fn assemble_discrete(
+        &self,
+    ) -> Result<crate::kernels::discrete_generation::DiscreteGenerationConfig, String> {
+        // DiscreteGenerationConfig reads the deme-0 column (panmictic sessions).
+        crate::kernels::discrete_generation::DiscreteGenerationConfig::assemble(
             self.bp,
             self.params,
             self.updated_genetics.as_ref().unwrap_or(self.genetics),
@@ -986,7 +1005,7 @@ impl EcoCtx<'_> {
 /// ``Ok(0)`` for continue, ``Ok(1)`` if a hook requested stop, or an error string.
 pub fn run_tick(
     rng: &mut SessionRng,
-    cfg: &SimConfig,
+    cfg: &AgeStructuredConfig,
     hooks: &HookProgram,
     ind: &mut [f64],
     sperm: &mut [f64],
@@ -1007,7 +1026,7 @@ pub fn run_tick(
         ctx.tick = tick;
         ctx.phase = 0;
     }
-    let mut rebuilt: Option<SimConfig> = None;
+    let mut rebuilt: Option<AgeStructuredConfig> = None;
 
     let mut result = hooks.execute_event(
         rng,
@@ -1042,7 +1061,7 @@ pub fn run_tick(
         return Ok(result);
     }
 
-    let cfg_after_first: &SimConfig = rebuilt.as_ref().unwrap_or(cfg);
+    let cfg_after_first: &AgeStructuredConfig = rebuilt.as_ref().unwrap_or(cfg);
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 1;
     }
@@ -1084,7 +1103,7 @@ pub fn run_tick(
         return Ok(result);
     }
 
-    let cfg_after_early: &SimConfig = rebuilt.as_ref().unwrap_or(cfg);
+    let cfg_after_early: &AgeStructuredConfig = rebuilt.as_ref().unwrap_or(cfg);
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 3;
     }
@@ -1126,7 +1145,7 @@ pub fn run_tick(
         return Ok(result);
     }
 
-    let cfg_after_late: &SimConfig = rebuilt.as_ref().unwrap_or(cfg);
+    let cfg_after_late: &AgeStructuredConfig = rebuilt.as_ref().unwrap_or(cfg);
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 5;
     }
@@ -1169,7 +1188,7 @@ pub fn run_tick(
 #[derive(Clone)]
 pub struct TickCheckpoint {
     /// Lifecycle status and cursor distinguish partial snapshots.
-    pub execution: crate::execution::Execution,
+    pub execution: crate::sessions::status::ExecutionStatus,
     pub phase: usize,
     /// Tick the checkpoint was captured at.
     pub tick: i64,
@@ -1184,7 +1203,7 @@ pub struct TickCheckpoint {
     /// Ecology vectors in ``ECOLOGY_VECTORS`` order.
     pub eco_vectors: Vec<Vec<f64>>,
     /// User-defined ecology belongs to the same atomic checkpoint.
-    pub custom_slots: std::collections::HashMap<String, crate::contract::CustomSlot>,
+    pub custom_slots: std::collections::HashMap<String, crate::model::custom_fields::CustomSlot>,
 }
 
 /// Capture one checkpoint into *store* from the current batch state.
@@ -1212,7 +1231,7 @@ pub(crate) fn capture_checkpoint(
         None => (Vec::new(), Vec::new()),
     };
     store.push(TickCheckpoint {
-        execution: crate::execution::Execution::Ready,
+        execution: crate::sessions::status::ExecutionStatus::Ready,
         phase: 0,
         tick,
         ind: ind.to_vec(),
@@ -1230,7 +1249,7 @@ pub(crate) fn capture_checkpoint(
 
 pub fn run_batch(
     rng: &mut SessionRng,
-    cfg: &SimConfig,
+    cfg: &AgeStructuredConfig,
     hooks: &HookProgram,
     ind: &mut [f64],
     sperm: &mut [f64],

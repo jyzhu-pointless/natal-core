@@ -16,17 +16,19 @@
 
 use rayon::prelude::*;
 
-use crate::config::SimConfig;
-use crate::contract::{Blueprint, Params, TensorSet};
-use crate::discrete;
-use crate::discrete::DiscreteConfig;
-use crate::hooks::HookProgram;
-use crate::lifecycle;
-use crate::rng::{new_rng, SessionRng};
+use crate::hooks::interpreter::HookProgram;
+use crate::kernels::age_structured;
+use crate::kernels::config::AgeStructuredConfig;
+use crate::kernels::discrete_generation;
+use crate::kernels::discrete_generation::DiscreteGenerationConfig;
+use crate::kernels::rng::{new_rng, SessionRng};
+use crate::model::blueprint::Blueprint;
+use crate::model::ecology::EcologyParams;
+use crate::model::genetics::GeneticsTensors;
 
 /// One audited spatial set_param transition: ``(deme, tick, param_id, old,
 /// new)`` — the per-deme wrapper around
-/// [`crate::hooks::EcoJournalRow`], because spatial EcoCtx instances are
+/// [`crate::hooks::interpreter::EcoJournalRow`], because spatial EcoCtx instances are
 /// per-deme locals whose journals must carry the owning deme id.
 pub type SpatialEcoJournalRow = (usize, i64, usize, f64, f64, usize);
 
@@ -34,12 +36,12 @@ pub type SpatialEcoJournalRow = (usize, i64, usize, f64, f64, usize);
 ///
 /// When the program carries set_param ops, every parallel deme ticks
 /// against a private single-deme copy of its ecology column (parallel
-/// demes cannot share ``&mut Params``).  ``commit`` journals and writes
+/// demes cannot share ``&mut EcologyParams``).  ``commit`` journals and writes
 /// the local column, ``assemble`` re-reads it, so later stages of the
 /// **same tick** observe the write — the granularity the Python per-deme
 /// lifecycle has always had.  Programs without set_param get ``None``
 /// (zero overhead, identical numerics).
-fn local_params(hooks: &HookProgram, params: &Params, deme: usize) -> Option<Params> {
+fn local_params(hooks: &HookProgram, params: &EcologyParams, deme: usize) -> Option<EcologyParams> {
     if hooks.n_hooks > 0
         || hooks.has_set_param
         || hooks
@@ -97,7 +99,9 @@ where
 {
     let mut ind_chunks: Vec<&mut [f64]> = ind_all.chunks_mut(ind_stride).collect();
     let mut sperm_chunks: Vec<&mut [f64]> = sperm_all.chunks_mut(sperm_stride).collect();
-    let mut eco_chunks: Vec<&mut [f64]> = eco_all.chunks_mut(crate::hooks::N_ECO_PARAMS).collect();
+    let mut eco_chunks: Vec<&mut [f64]> = eco_all
+        .chunks_mut(crate::hooks::interpreter::N_ECO_PARAMS)
+        .collect();
     if ind_chunks.len() != n_demes || sperm_chunks.len() != n_demes || rngs.len() != n_demes {
         return Err(format!(
             "stacked state length mismatch: expected {n_demes} demes, got ind={} sperm={} rngs={}",
@@ -160,7 +164,7 @@ where
 #[allow(clippy::too_many_arguments)] // Per-deme boundary mirrors the panmictic tick API.
 fn tick_hetero_deme(
     deme_id: usize,
-    cfg: &SimConfig,
+    cfg: &AgeStructuredConfig,
     hooks: &HookProgram,
     rng: &mut SessionRng,
     ind: &mut [f64],
@@ -168,11 +172,11 @@ fn tick_hetero_deme(
     eco: &mut [f64],
     tick: i64,
     bp: &Blueprint,
-    params: &Params,
-    genetics: &TensorSet,
+    params: &EcologyParams,
+    genetics: &GeneticsTensors,
 ) -> (Result<i32, String>, Vec<SpatialEcoJournalRow>) {
     let mut local = local_params(hooks, params, deme_id);
-    let mut ctx = local.as_mut().map(|local_params| lifecycle::EcoCtx {
+    let mut ctx = local.as_mut().map(|local_params| age_structured::EcoCtx {
         bp,
         params: local_params,
         genetics,
@@ -183,7 +187,7 @@ fn tick_hetero_deme(
         tick,
         journal: Vec::new(),
     });
-    let result = lifecycle::run_tick(
+    let result = age_structured::run_tick(
         rng,
         cfg,
         hooks,
@@ -219,7 +223,7 @@ fn tick_hetero_deme(
         // The local copy's final values are the deme's tick result:
         // reflect them into the eco scratch row the session reads
         // for its column write-back (multi-event writes included).
-        for id in 0..crate::hooks::N_ECO_PARAMS {
+        for id in 0..crate::hooks::interpreter::N_ECO_PARAMS {
             eco[id] = ctx.params.eco_value(id, 0);
         }
         ctx.journal
@@ -258,7 +262,7 @@ fn tick_hetero_deme(
 /// caller freezes the tick), or an error string.
 #[allow(clippy::too_many_arguments)] // Session boundary mirror of the panmictic tick API.
 pub fn run_spatial_tick_heterogeneous(
-    configs: &[SimConfig],
+    configs: &[AgeStructuredConfig],
     hooks: &HookProgram,
     rngs: &mut [SessionRng],
     ind_all: &mut [f64],
@@ -266,8 +270,8 @@ pub fn run_spatial_tick_heterogeneous(
     tick: i64,
     eco_all: &mut [f64],
     bp: &Blueprint,
-    params: &Params,
-    variants: &[TensorSet],
+    params: &EcologyParams,
+    variants: &[GeneticsTensors],
     deme_variants: &[usize],
     journal: &mut Vec<SpatialEcoJournalRow>,
 ) -> Result<i32, String> {
@@ -289,7 +293,7 @@ pub fn run_spatial_tick_heterogeneous(
     }
     // Capture per-deme config references up front so the scheduler body
     // only carries the deme id and the disjoint mutable slices.
-    let deme_configs: Vec<&SimConfig> = configs.iter().collect();
+    let deme_configs: Vec<&AgeStructuredConfig> = configs.iter().collect();
     schedule_deme_ticks(
         hooks,
         rngs,
@@ -325,18 +329,18 @@ pub fn run_spatial_tick_heterogeneous(
 #[allow(clippy::too_many_arguments)] // Per-deme boundary mirror.
 fn tick_discrete_deme(
     deme_id: usize,
-    cfg: &DiscreteConfig,
+    cfg: &DiscreteGenerationConfig,
     hooks: &HookProgram,
     rng: &mut SessionRng,
     ind: &mut [f64],
     eco: &mut [f64],
     tick: i64,
     bp: &Blueprint,
-    params: &Params,
-    genetics: &TensorSet,
+    params: &EcologyParams,
+    genetics: &GeneticsTensors,
 ) -> (Result<i32, String>, Vec<SpatialEcoJournalRow>) {
     let mut local = local_params(hooks, params, deme_id);
-    let mut ctx = local.as_mut().map(|local_params| lifecycle::EcoCtx {
+    let mut ctx = local.as_mut().map(|local_params| age_structured::EcoCtx {
         bp,
         params: local_params,
         genetics,
@@ -347,7 +351,8 @@ fn tick_discrete_deme(
         tick,
         journal: Vec::new(),
     });
-    let result = discrete::run_tick(rng, cfg, hooks, ind, tick, deme_id as i64, eco, &mut ctx);
+    let result =
+        discrete_generation::run_tick(rng, cfg, hooks, ind, tick, deme_id as i64, eco, &mut ctx);
     let rows = ctx.map(|ctx| {
         if let Some(genetics) = ctx.updated_genetics.as_ref() {
             let mut commits = hooks
@@ -370,7 +375,7 @@ fn tick_discrete_deme(
                 .expect("phase queue poisoned")
                 .push(ctx.phase);
         }
-        for id in 0..crate::hooks::N_ECO_PARAMS {
+        for id in 0..crate::hooks::interpreter::N_ECO_PARAMS {
             eco[id] = ctx.params.eco_value(id, 0);
         }
         ctx.journal
@@ -396,15 +401,15 @@ fn tick_discrete_deme(
 /// ``Ok(0)`` continue / ``Ok(1)`` stopped / error string.
 #[allow(clippy::too_many_arguments)] // Session boundary mirror of the age kernel.
 pub fn run_spatial_tick_discrete(
-    configs: &[DiscreteConfig],
+    configs: &[DiscreteGenerationConfig],
     hooks: &HookProgram,
     rngs: &mut [SessionRng],
     ind_all: &mut [f64],
     tick: i64,
     eco_all: &mut [f64],
     bp: &Blueprint,
-    params: &Params,
-    variants: &[TensorSet],
+    params: &EcologyParams,
+    variants: &[GeneticsTensors],
     deme_variants: &[usize],
     journal: &mut Vec<SpatialEcoJournalRow>,
 ) -> Result<i32, String> {
@@ -426,7 +431,7 @@ pub fn run_spatial_tick_discrete(
     // A zero sperm plane satisfies the scheduler's chunking contract; the
     // discrete lifecycle never reads it.
     let mut sink = vec![0.0f64; ind_all.len().max(1)];
-    let deme_configs: Vec<&DiscreteConfig> = configs.iter().collect();
+    let deme_configs: Vec<&DiscreteGenerationConfig> = configs.iter().collect();
     schedule_deme_ticks(
         hooks,
         rngs,
@@ -799,7 +804,7 @@ pub fn migrate_csr_stochastic(
     n_ztypes: usize,
 ) -> Result<(Vec<f64>, Vec<f64>), String> {
     let mut rngs: Vec<SessionRng> = (0..n_demes)
-        .map(|deme| new_rng(crate::rng::stream_seed(seed, deme as i64)))
+        .map(|deme| new_rng(crate::kernels::rng::stream_seed(seed, deme as i64)))
         .collect();
     migrate_csr_stochastic_rngs(
         &mut rngs,
@@ -836,9 +841,9 @@ fn sample_outbound(rng: &mut SessionRng, value: f64, rate: f64, continuous_sampl
         return value;
     }
     if continuous_sampling {
-        return crate::rng::continuous_binomial(rng, value, rate);
+        return crate::kernels::rng::continuous_binomial(rng, value, rate);
     }
-    crate::rng::binomial(rng, value.round() as i64, rate)
+    crate::kernels::rng::binomial(rng, value.round() as i64, rate)
 }
 
 /// Distribute outbound migrants among the CSR destinations of one source row.
@@ -881,9 +886,14 @@ fn distribute_csr_outbound(
         probs[pos] *= inv_total;
     }
     if continuous_sampling {
-        crate::rng::continuous_multinomial(rng, outbound, &probs[..row_len], distributed);
+        crate::kernels::rng::continuous_multinomial(rng, outbound, &probs[..row_len], distributed);
     } else {
-        crate::rng::multinomial(rng, outbound.round() as i64, &probs[..row_len], distributed);
+        crate::kernels::rng::multinomial(
+            rng,
+            outbound.round() as i64,
+            &probs[..row_len],
+            distributed,
+        );
     }
     distributed[..row_len].iter().sum()
 }

@@ -26,7 +26,7 @@ from natal.frontend.utils.parameters import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GENERATOR_SCRIPT = REPO_ROOT / "scripts" / "generate_param_tables.py"
-WIRE_TABLE = REPO_ROOT / "rust" / "src" / "eco_param_wire.rs"
+WIRE_TABLE = REPO_ROOT / "rust" / "src" / "generated" / "ecology_parameters.rs"
 
 
 class TestParamDescriptor:
@@ -302,7 +302,7 @@ class TestRustWireTables:
     """The Rust wire tables are generated from this jsonc (plan 5.4)."""
 
     def test_rust_wire_tables_fresh_against_jsonc(self) -> None:
-        """``rust/src/eco_param_wire.rs`` matches the jsonc exactly.
+        """``rust/src/generated/ecology_parameters.rs`` matches the jsonc exactly.
 
         The bounds/names table must never be hand-written twice: this
         runs the generator in ``--check`` mode, so editing the jsonc
@@ -314,7 +314,7 @@ class TestRustWireTables:
             text=True,
         )
         assert result.returncode == 0, (
-            "rust/src/eco_param_wire.rs is stale against "
+            "rust/src/generated/ecology_parameters.rs is stale against "
             f"src/natal/parameters.jsonc:\n{result.stderr}"
         )
 
@@ -358,7 +358,7 @@ class TestRustWireTables:
     def test_wire_tables_have_no_handwritten_copy_in_rust_src(self) -> None:
         """Only the generated module may define the wire/layout tables.
 
-        ``use crate::eco_param_wire::...`` imports are the sanctioned
+        ``use crate::generated::ecology_parameters::...`` imports are the sanctioned
         access path; any other ``const ECO_PARAM_COLUMNS/BOUNDS/N_ECO_PARAMS
         = ...`` or ``ECOLOGY_SCALAR_COLUMNS/ECOLOGY_SCALARS = ...``
         definition in rust/src would reintroduce the manual sync
@@ -366,7 +366,7 @@ class TestRustWireTables:
         """
         offenders: list[str] = []
         for path in sorted((REPO_ROOT / "rust" / "src").rglob("*.rs")):
-            if path.name == "eco_param_wire.rs":
+            if path.name == "ecology_parameters.rs":
                 continue
             body = path.read_text(encoding="utf-8")
             if re.search(r"ECO_PARAM_(?:COLUMNS|BOUNDS)\s*:\s*\[", body) or re.search(
@@ -506,7 +506,7 @@ class TestParamTableGenerator:
 
         Two consecutive renders must be byte-identical (no timestamps or
         environment-dependent content), and both must equal the committed
-        rust/src/eco_param_wire.rs.
+        rust/src/generated/ecology_parameters.rs.
         """
         generator = _load_generator()
         by_name = {d.name: d for d in ALL_PARAMETERS.values()}

@@ -217,7 +217,7 @@ def _compile_plan(pop: AgeStructuredPopulation, ops: List[HookOp]) -> CompiledHo
 def test_eco_param_names_and_rpn_constants_are_a_wire_contract() -> None:
     """ECO table order and RPN opcode values are frozen cross-backend contracts.
 
-    The Python kernel and ``rust/src/hooks.rs`` both index
+    The Python kernel and ``rust/src/hooks/interpreter.rs`` both index
     the ecology-value array by position in ``ECO_PARAM_NAMES`` and decode
     RPN tokens by integer kind, so any change here silently corrupts every
     backend at once.  Lock both tables.

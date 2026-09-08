@@ -1,17 +1,19 @@
 //! The flat per-tick kernel configuration, assembled from owned contracts.
 //!
-//! Kernels consume [`SimConfig`] and never see Python objects.  Sessions no
+//! Kernels consume [`AgeStructuredConfig`] and never see Python objects.  Sessions no
 //! longer snapshot a Python config: they own a
-//! [`contract::Blueprint`](crate::contract::Blueprint) plus
-//! [`contract::Params`](crate::contract::Params) (columnized ecology) and a
-//! [`contract::TensorSet`](crate::contract::TensorSet) (genetics), and
-//! assemble a fresh ``SimConfig`` view at every tick-batch entry point, so
+//! [`contract::Blueprint`](crate::model::blueprint::Blueprint) plus
+//! [`contract::EcologyParams`](crate::model::ecology::EcologyParams) (columnized ecology) and a
+//! [`contract::GeneticsTensors`](crate::model::genetics::GeneticsTensors) (genetics), and
+//! assemble a fresh ``AgeStructuredConfig`` view at every tick-batch entry point, so
 //! parameter writes take effect on the next batch without any session
 //! rebuild.  Spatial sessions assemble one view *per deme* from the deme's
 //! ecology column entry and its shared genetics variant.
 
-use crate::contract::{Blueprint, Params, TensorSet};
-use crate::equilibrate::equilibrium_metrics;
+use crate::kernels::equilibrium::equilibrium_metrics;
+use crate::model::blueprint::Blueprint;
+use crate::model::ecology::EcologyParams;
+use crate::model::genetics::GeneticsTensors;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -20,15 +22,15 @@ use pyo3::prelude::*;
 /// This is a pure-copy structure (tens of KB): every field either mirrors a
 /// contract value or is derived on demand from it.  The derived equilibrium
 /// metrics ``expected_competition_strength`` / ``expected_survival_rate``
-/// are recomputed from the current params at every [`SimConfig::assemble`]
+/// are recomputed from the current params at every [`AgeStructuredConfig::assemble`]
 /// call, replacing the stored draft fields of the legacy ``from_python``
 /// path.
 ///
 /// ## Notes
 /// - All array fields are stored in row-major flat ``Vec`` layout.
-/// - Scalar fields are normalized by [`SimConfig::assemble`] before first use.
+/// - Scalar fields are normalized by [`AgeStructuredConfig::assemble`] before first use.
 #[derive(Clone)]
-pub struct SimConfig {
+pub struct AgeStructuredConfig {
     // --- Dimensions ---
     pub n_ages: usize,
     pub n_ztypes: usize,
@@ -79,15 +81,19 @@ fn deme_segment(column: &[f64], deme: usize, per_deme: usize) -> Vec<f64> {
     column[start..start + per_deme].to_vec()
 }
 
-impl SimConfig {
+impl AgeStructuredConfig {
     /// Assemble a kernel config from the owned contracts at deme 0.
     ///
     /// Panmictic and homogeneous callers own length-1 (or tiled) columns,
     /// so deme 0 carries the values every deme consumes.
     ///
     /// ## Errors
-    /// Same as [`SimConfig::assemble_deme`].
-    pub fn assemble(bp: &Blueprint, params: &Params, genetics: &TensorSet) -> PyResult<Self> {
+    /// Same as [`AgeStructuredConfig::assemble_deme`].
+    pub fn assemble(
+        bp: &Blueprint,
+        params: &EcologyParams,
+        genetics: &GeneticsTensors,
+    ) -> PyResult<Self> {
         Self::assemble_deme(bp, params, genetics, 0)
     }
 
@@ -105,7 +111,7 @@ impl SimConfig {
     /// - `deme`: Deme whose ecology column feeds the view.
     ///
     /// ## Returns
-    /// A ``SimConfig`` view consistent with the current contract values.
+    /// A ``AgeStructuredConfig`` view consistent with the current contract values.
     ///
     /// ## Errors
     /// Returns ``PyValueError`` when dimensions are invalid, the deme index
@@ -113,8 +119,8 @@ impl SimConfig {
     /// blueprint-declared size.
     pub fn assemble_deme(
         bp: &Blueprint,
-        params: &Params,
-        genetics: &TensorSet,
+        params: &EcologyParams,
+        genetics: &GeneticsTensors,
         deme: usize,
     ) -> PyResult<Self> {
         let n_ages = bp.n_ages;
@@ -156,8 +162,10 @@ impl SimConfig {
             fixed_egg_count: bp.fixed_egg_count,
             has_sex_chromosomes: bp.has_sex_chromosomes,
             eggs_per_female: deme0(&params.eggs_per_female).max(0.0),
-            sperm_displacement_rate: crate::rng::clamp01(deme0(&params.sperm_displacement_rate)),
-            sex_ratio: crate::rng::clamp01(deme0(&params.sex_ratio)),
+            sperm_displacement_rate: crate::kernels::rng::clamp01(deme0(
+                &params.sperm_displacement_rate,
+            )),
+            sex_ratio: crate::kernels::rng::clamp01(deme0(&params.sex_ratio)),
             carrying_capacity: deme0(&params.carrying_capacity),
             expected_competition_strength,
             expected_survival_rate,

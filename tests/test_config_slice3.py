@@ -860,7 +860,7 @@ class TestRouteTableIntegrity:
 
 
 def _ricker_scaling(x: float, r: float) -> float:
-    """g_ricker from rust/src/curves.rs: r ** (1 - x)."""
+    """g_ricker from rust/src/kernels/density_regulation.rs: r ** (1 - x)."""
     return r ** (1.0 - x)
 
 
@@ -870,7 +870,7 @@ def _manual_discrete_ricker_trajectory(
 ) -> list[NDArray[np.float64]]:
     """Hand-derive the deterministic discrete tick with ricker regulation.
 
-    Replicates rust/src/discrete.rs (mate -> fertilize -> survival ->
+    Replicates rust/src/kernels/discrete_generation.rs (mate -> fertilize -> survival ->
     aging) for the deterministic path, reading every driver from the
     population's own config so the only assumed fact under test is the
     regulation curve itself.

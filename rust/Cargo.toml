@@ -2,7 +2,7 @@
 name = "natal-engine-core"
 version = "0.1.0"
 edition = "2021"
-description = "Rust backend prototype for NATAL Core simulation kernels"
+description = "Rust simulation kernels for the NATAL Core engine"
 license = "MIT"
 
 [lib]
