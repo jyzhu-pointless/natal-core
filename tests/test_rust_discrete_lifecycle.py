@@ -1,13 +1,11 @@
-"""Parity and integration tests for the Rust discrete-generation backend."""
+"""Integration tests for the Rust discrete-generation backend."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
-from scipy import stats
 
 import natal as nt
-from natal.backends.reference.lifecycle import run_discrete_tick, run_wf_tick
 from natal.backends.rust.rust_backend import (
     RustDiscreteLifecycleBackend,
 )
@@ -39,10 +37,6 @@ def _empty_hook_program() -> HookProgram:
         deme_selector_offsets=np.zeros(1, dtype=np.int64),
         deme_selector_data=np.zeros(0, dtype=np.int64),
     )
-
-
-def _noop(state: object, config: object, deme_id: int) -> int:
-    return 0
 
 
 @nt.hook(event="first", priority=0)
@@ -77,51 +71,25 @@ def _state(config: ModelDraft, seed: int) -> DiscretePopulationState:
     return DiscretePopulationState(n_tick=10, individual_count=ind)
 
 
-def test_discrete_tick_matches_reference(config: ModelDraft) -> None:
-    state = _state(config, seed=1)
-    reference_state = DiscretePopulationState(
-        n_tick=state.n_tick,
-        individual_count=state.individual_count.copy(),
-    )
-    expected, expected_result, _cfg = run_discrete_tick(
-        reference_state, config, _empty_hook_program(), _noop, _noop, _noop
-    )
-    actual, actual_result = RustDiscreteLifecycleBackend(
-        config, _empty_hook_program(), seed=0
-    ).run_tick(state)
-    assert actual_result == expected_result
-    assert np.array_equal(actual.individual_count, expected.individual_count)
+def test_discrete_batch_equals_segmented_ticks(config: ModelDraft) -> None:
+    """run(n=3) is bitwise identical to three run_tick calls (same seed)."""
+    batch = RustDiscreteLifecycleBackend(config, _empty_hook_program(), seed=6)
+    batch.set_state(_state(config, seed=6))
+    _, history, stopped = batch.run(n_steps=3, record_every=1)
+    tick, ind_flat = batch.state_snapshot()
 
-
-def test_discrete_batch_matches_reference(config: ModelDraft) -> None:
-    state = _state(config, seed=2)
-    backend = RustDiscreteLifecycleBackend(config, _empty_hook_program(), seed=0)
-    # Session-owned surface (plan S2): install the explicit state, run the
-    # batch, and read the post-run container back from a fresh snapshot.
-    backend.set_state(state)
-    _, history, stopped = backend.run(n_steps=3, record_every=1)
-    tick, ind_flat = backend.state_snapshot()
-    actual = DiscretePopulationState(
-        n_tick=int(tick),
-        individual_count=ind_flat.reshape(state.individual_count.shape),
-    )
-    expected_state = DiscretePopulationState(
-        n_tick=state.n_tick,
-        individual_count=state.individual_count.copy(),
-    )
-    expected_rows = [
-        np.concatenate(([expected_state.n_tick], expected_state.flatten_all()[1:]))
-    ]
+    segmented = RustDiscreteLifecycleBackend(config, _empty_hook_program(), seed=6)
+    state = _state(config, seed=6)
     for _ in range(3):
-        expected_state, result, _cfg = run_discrete_tick(
-            expected_state, config, _empty_hook_program(), _noop, _noop, _noop
-        )
-        expected_rows.append(
-            np.concatenate(([expected_state.n_tick], expected_state.flatten_all()[1:]))
-        )
+        state, result = segmented.run_tick(state)
+        assert result == 0
+
     assert stopped is False
-    assert np.array_equal(actual.individual_count, expected_state.individual_count)
-    assert np.array_equal(history, np.asarray(expected_rows))
+    assert int(tick) == state.n_tick
+    np.testing.assert_array_equal(
+        ind_flat.reshape(state.individual_count.shape), state.individual_count
+    )
+    assert history.shape[0] == 4  # initial row + three ticks
 
 
 def test_discrete_tick_inplace_mutates_and_shares_array(
@@ -139,88 +107,9 @@ def test_discrete_tick_inplace_mutates_and_shares_array(
     assert not np.array_equal(state.individual_count, original)
 
 
-def test_wf_deterministic_matches_reference(config: ModelDraft) -> None:
-    wf_config = config._replace(extreme_speed_mode=3)
-    state = _state(wf_config, seed=3)
-    expected = DiscretePopulationState(
-        n_tick=state.n_tick,
-        individual_count=state.individual_count.copy(),
-    )
-    expected_state, expected_result, _cfg = run_wf_tick(
-        expected, wf_config, _empty_hook_program(), _noop, _noop, _noop
-    )
-    actual, actual_result = RustDiscreteLifecycleBackend(
-        wf_config, _empty_hook_program(), seed=0
-    ).run_tick(state)
-    assert actual_result == expected_result
-    assert np.array_equal(actual.individual_count, expected_state.individual_count)
-
-
-def test_real_discrete_population_matches_reference(species: Species) -> None:
-    def build(name: str) -> DiscreteGenerationPopulation:
-        return (
-            nt.DiscreteGenerationPopulation.setup(species, stochastic=False, name=name)
-            .initial_state(
-                individual_count={
-                    "female": {"A|A": 40, "A|B": 20},
-                    "male": {"A|A": 30, "A|B": 30},
-                }
-            )
-            .build()
-        )
-
-    reference = build("rust_discrete_reference")
-    rust_pop = build("rust_discrete_pop").enable_rust_backend(seed=4)
-    reference.run(5, record_every=1, clear_history_on_start=True)
-    rust_pop.run(5, record_every=1, clear_history_on_start=True)
-    assert rust_pop.using_rust_backend is True
-    assert np.array_equal(
-        rust_pop.state.individual_count, reference.state.individual_count
-    )
-    assert np.array_equal(
-        rust_pop.history.individual_count, reference.history.individual_count
-    )
-
-
-def test_real_wf_population_matches_reference(species: Species) -> None:
-    """A real DiscreteGenerationPopulation in WF mode must match the reference."""
-
-    def build_wf(name: str) -> DiscreteGenerationPopulation:
-        pop = (
-            nt.DiscreteGenerationPopulation.setup(species, stochastic=False, name=name)
-            .initial_state(
-                individual_count={
-                    "female": {"A|A": 40, "A|B": 20},
-                    "male": {"A|A": 30, "A|B": 30},
-                }
-            )
-            .competition(juvenile_growth_mode=1, carrying_capacity=80)
-            .build()
-        )
-        pop.import_config(pop.config._replace(extreme_speed_mode=3))
-        return pop
-
-    reference = build_wf("rust_wf_reference")
-    rust_pop = build_wf("rust_wf_pop").enable_rust_backend(seed=5)
-    reference.run(5, record_every=1, clear_history_on_start=True)
-    rust_pop.run(5, record_every=1, clear_history_on_start=True)
-    assert rust_pop.using_rust_backend is True
-    assert np.allclose(
-        rust_pop.state.individual_count,
-        reference.state.individual_count,
-        rtol=1e-12,
-        atol=1e-12,
-    )
-    assert np.allclose(
-        rust_pop.history.individual_count,
-        reference.history.individual_count,
-        rtol=1e-12,
-        atol=1e-12,
-    )
-
-
-def test_stochastic_discrete_is_distributionally_equivalent(species: Species) -> None:
-    """Compare final total population moments across independent replicates."""
+def test_stochastic_discrete_multi_seed_statistics(species: Species) -> None:
+    """Multi-seed statistical pins: seed reproducibility, active randomness,
+    and finite positive totals across independent replicates."""
     stochastic_config = (
         Configurator.from_species(species, discrete=True)
         .setup(stochastic=True, name="rust_discrete_stochastic")
@@ -231,64 +120,60 @@ def test_stochastic_discrete_is_distributionally_equivalent(species: Species) ->
         .config
     )
     ticks = 3
-    rust_totals = []
-    reference_totals = []
 
-    for index in range(24):
-        state = _state(stochastic_config, seed=100 + index)
+    def replicate(seed: int) -> float:
+        state = _state(stochastic_config, seed=seed)
         backend = RustDiscreteLifecycleBackend(
-            stochastic_config, _empty_hook_program(), seed=200 + index
+            stochastic_config, _empty_hook_program(), seed=seed
         )
         for _ in range(ticks):
             state, result = backend.run_tick(state)
             assert result == 0
-        rust_totals.append(float(state.individual_count.sum()))
+            assert np.isfinite(state.individual_count).all()
+        total = float(state.individual_count.sum())
+        assert total > 0.0
+        return total
 
-        reference_state = _state(stochastic_config, seed=100 + index)
-        for _ in range(ticks):
-            reference_state, result, _cfg = run_discrete_tick(
-                reference_state,
-                stochastic_config,
-                _empty_hook_program(),
-                _noop,
-                _noop,
-                _noop,
-            )
-            assert result == 0
-        reference_totals.append(float(reference_state.individual_count.sum()))
-
-    rust_mean = float(np.mean(rust_totals))
-    reference_mean = float(np.mean(reference_totals))
-    t_test = stats.ttest_ind(rust_totals, reference_totals, equal_var=False)
-    assert t_test.pvalue > 0.01
-    assert abs(rust_mean - reference_mean) < max(5.0, 0.15 * reference_mean)
+    first_run = [replicate(100 + i) for i in range(24)]
+    replay = [replicate(100 + i) for i in range(24)]
+    # Same seed reproduces the trajectory exactly.
+    np.testing.assert_array_equal(first_run, replay)
+    # Different seeds diverge: the randomness is actually consumed.
+    assert np.std(first_run) > 0.0
 
 
 def test_runtime_config_update_syncs_before_run(species: Species) -> None:
-    """Runtime config sync: pop.update() changes are picked up before the next run."""
+    """Runtime config sync: pop.update() changes are picked up before the
+    next run — the K=500 run retains strictly more mass than the K=80 one."""
 
     def build(name: str) -> DiscreteGenerationPopulation:
         return (
             nt.DiscreteGenerationPopulation.setup(species, stochastic=False, name=name)
             .initial_state(
                 individual_count={
-                    "female": {"A|A": 40, "A|B": 20},
-                    "male": {"A|A": 30, "A|B": 30},
+                    "female": {"A|A": [0, 40], "A|B": [0, 20]},
+                    "male": {"A|A": [0, 30], "A|B": [0, 30]},
                 }
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(
+                eggs_per_female=8.0,
+                female_adult_mating_rate=1.0,
+                male_adult_mating_rate=1.0,
             )
             .competition(juvenile_growth_mode=1, carrying_capacity=80)
             .build()
         )
 
-    reference = build("discrete_runtime_ref")
-    rust_pop = build("discrete_runtime_rust")
-    reference.update().competition(carrying_capacity=500.0)
-    rust_pop.update().competition(carrying_capacity=500.0)
-    reference.run(5, record_every=1, clear_history_on_start=True)
-    rust_pop.run(5, record_every=1, clear_history_on_start=True)
-    assert rust_pop.using_rust_backend is True
-    assert np.array_equal(
-        rust_pop.state.individual_count, reference.state.individual_count
+    baseline = build("discrete_runtime_base")
+    updated = build("discrete_runtime_updated")
+    updated.update().competition(carrying_capacity=500.0)
+    baseline.run(5, record_every=1, clear_history_on_start=True)
+    updated.run(5, record_every=1, clear_history_on_start=True)
+    baseline_total = float(baseline.state.individual_count.sum())
+    updated_total = float(updated.state.individual_count.sum())
+    assert updated_total > baseline_total, (
+        "the K=500 update did not reach the engine session"
     )
 
 
@@ -302,6 +187,5 @@ def test_custom_hooks_work_with_discrete_rust(species: Species) -> None:
         .build()
     )
     pop.enable_rust_backend(seed=0)
-    assert pop.using_rust_backend is True
     pop.run(2)
     assert pop.tick == 2

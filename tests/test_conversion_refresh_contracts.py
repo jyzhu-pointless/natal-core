@@ -12,18 +12,8 @@ from numpy.typing import NDArray
 import natal as nt
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 
-from contextlib import contextmanager
 
 
-@contextmanager
-def python_reference():
-    """Portable stand-in for the retired compiled-backend disable guard.
-
-    The only non-Rust execution vehicle is the pure-Python reference;
-    this context manager is a semantic no-op kept so test bodies that
-    previously forced the Python path stay readable.
-    """
-    yield
 from natal.frontend.population.base import BasePopulation
 
 PopulationKind: TypeAlias = Literal["age", "discrete"]
@@ -241,8 +231,7 @@ class _ConfigSensitivePreset(nt.GeneticPreset):
 @pytest.fixture(autouse=True)
 def _use_python_path() -> Iterator[None]:
     """Keep this configuration-contract matrix independent of JIT codegen."""
-    with python_reference():
-        yield
+    yield
 
 
 def _make_species(name: str, *, extra_glab: bool = False) -> nt.Species:

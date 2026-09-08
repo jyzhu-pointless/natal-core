@@ -14,13 +14,13 @@ written reference, not against the implementation's own readout:
 - **Contract sentinels** — panmictic defaults, the 1-deme self-loop, the
   ``(0, 0, 0)`` not-declared rate sentinel, frozen Blueprint fields, and
   materialization copy isolation.
-- **Two-backend consistency** — Python and Rust produce
-  bit-identical deterministic migration from the same CSR + rate column
-  (single-lane accumulation keeps the order sequential, so
-  bitwise comparison is meaningful).
+- **Engine vs manual math** — the engine produces bit-identical
+  deterministic migration to the test-local manual CSR + rate column
+  accumulation (single-lane keeps the order sequential, so bitwise
+  comparison is meaningful).
 - **Per-deme/per-sex consumption** — an asymmetric ``tensor_write`` rate
   column is consumed at exactly the written entries by population-level
-  runs on all three execution paths.
+  runs.
 - **Boundary semantics unification** — a boundary deme of a kernel-mode
   grid emits its full ``rate * value`` outbound over the shared CSR
   (reference semantics), not the abandoned pre-slice-5 Rust
@@ -39,23 +39,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-
-from contextlib import contextmanager
-
-
-@contextmanager
-def python_reference():
-    """Portable stand-in for the retired compiled-backend disable guard.
-
-    The only non-Rust execution vehicle is the pure-Python reference;
-    this context manager is a semantic no-op kept so test bodies that
-    previously forced the Python path stay readable.
-    """
-    yield
-from natal.backends.reference.migration.adjacency import (
-    _apply_csr_migration_internal,
-    apply_csr_migration,
-)
+from natal.backends.rust.rust_backend import rust_migrate_csr_deterministic
 from natal.contracts.materialize import SpatialMigration, materialize
 from natal.frontend.genetics import Species
 from natal.frontend.spatial import (
@@ -73,6 +57,7 @@ from natal.frontend.spatial.migration import (
     resolve_migration_mode,
 )
 
+
 def _rust_available() -> bool:
     try:
         from natal.backends.rust.rust_backend import rust_backend_available
@@ -84,8 +69,6 @@ def _rust_available() -> bool:
 
 _RUST_OK = _rust_available()
 
-#: The pure-Python migration body (single sequential lane).
-_python_migration_body = _apply_csr_migration_internal
 
 
 # ---------------------------------------------------------------------------
@@ -268,23 +251,19 @@ def _run_engine(
     sperm: NDArray[np.float64],
     csr: MigrationCSR,
     rate: NDArray[np.float64],
-    backend: str,
+    backend: str = "rust",
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Run one deterministic migration step on the named in-process backend."""
-    if backend == "python":
-        return _python_migration_body(
-            ind.copy(),
-            sperm.copy(),
-            csr.indptr,
-            csr.dest_idx,
-            csr.weights,
-            rate,
-            False,
-            False,
-            csr.stay_after_send,
-            1,
-        )
-    raise ValueError(f"unknown backend {backend!r}")
+    """Run one deterministic migration step on the Rust kernel."""
+    _ = backend
+    return rust_migrate_csr_deterministic(
+        ind.copy(),
+        sperm.copy(),
+        csr.indptr,
+        csr.dest_idx,
+        csr.weights,
+        rate,
+        csr.stay_after_send,
+    )
 
 
 def _reconstruct_kernel_rows(
@@ -365,10 +344,9 @@ class TestAdjacencyFoldEquivalence:
         expected_ind, expected_sperm = _apply_reference(
             ind, sperm, _csr_rows(csr), rate, stay_after_send=False
         )
-        for backend in ("python",):
-            got_ind, got_sperm = _run_engine(ind, sperm, csr, rate, backend)
-            assert np.array_equal(got_ind, expected_ind), backend
-            assert np.array_equal(got_sperm, expected_sperm), backend
+        got_ind, got_sperm = _run_engine(ind, sperm, csr, rate)
+        assert np.array_equal(got_ind, expected_ind)
+        assert np.array_equal(got_sperm, expected_sperm)
         # Row-normalized adjacency conserves the total mass.
         assert np.isclose(
             expected_ind.sum() + expected_sperm.sum(),
@@ -391,7 +369,7 @@ class TestAdjacencyFoldEquivalence:
         sperm = np.zeros((2, 2, 1, 1))
         rate = np.full((2, 2, 2), 0.5)
 
-        got_ind, got_sperm = _run_engine(ind, sperm, csr, rate, "python")
+        got_ind, got_sperm = _run_engine(ind, sperm, csr, rate)
         # Same expression order as the engine, written out per bucket.
         for age, value in ((0, 1000.0), (1, 2000.0)):
             assert got_ind[1, 1, age, 0] == (value * 0.5) * 0.3
@@ -408,7 +386,7 @@ class TestAdjacencyFoldEquivalence:
         sperm[0, 1, 0, 0] = 500.0
         rate = np.full((2, 2, 2), 0.5)
 
-        got_ind, got_sperm = _run_engine(ind, sperm, csr, rate, "python")
+        got_ind, got_sperm = _run_engine(ind, sperm, csr, rate)
         assert (got_ind >= 0.0).all()
         assert (got_sperm >= 0.0).all()
         # The clamped virgin contributes zero outbound (the -5e-10 drift is
@@ -423,9 +401,9 @@ class TestAdjacencyFoldEquivalence:
         """An all-zero rate column returns the state unchanged, bit-for-bit."""
         csr = _fold_adjacency(np.array([[0.0, 1.0], [1.0, 0.0]]))
         ind, sperm = _valid_state(n_demes=2, n_ages=2, n_ztypes=2, seed=707)
-        got = apply_csr_migration(
+        got = rust_migrate_csr_deterministic(
             ind.copy(), sperm.copy(), csr.indptr, csr.dest_idx, csr.weights,
-            np.zeros((2, 2, 2)), False, False, csr.stay_after_send,
+            np.zeros((2, 2, 2)), csr.stay_after_send,
         )
         assert np.array_equal(got[0], ind)
         assert np.array_equal(got[1], sperm)
@@ -455,10 +433,9 @@ class TestKernelFoldEquivalence:
         expected_ind, expected_sperm = _apply_reference(
             ind, sperm, expected_rows, rate, stay_after_send=True
         )
-        for backend in ("python",):
-            got_ind, got_sperm = _run_engine(ind, sperm, csr, rate, backend)
-            assert np.array_equal(got_ind, expected_ind), backend
-            assert np.array_equal(got_sperm, expected_sperm), backend
+        got_ind, got_sperm = _run_engine(ind, sperm, csr, rate)
+        assert np.array_equal(got_ind, expected_ind)
+        assert np.array_equal(got_sperm, expected_sperm)
 
     def test_wrap_narrow_grid_duplicate_destinations_bitwise(self) -> None:
         """A kernel wider than the grid emits duplicate destinations; order holds.
@@ -489,10 +466,9 @@ class TestKernelFoldEquivalence:
         expected_ind, expected_sperm = _apply_reference(
             ind, sperm, expected_rows, rate, stay_after_send=True
         )
-        for backend in ("python",):
-            got_ind, got_sperm = _run_engine(ind, sperm, csr, rate, backend)
-            assert np.array_equal(got_ind, expected_ind), backend
-            assert np.array_equal(got_sperm, expected_sperm), backend
+        got_ind, got_sperm = _run_engine(ind, sperm, csr, rate)
+        assert np.array_equal(got_ind, expected_ind)
+        assert np.array_equal(got_sperm, expected_sperm)
         assert np.isclose(
             got_ind.sum() + got_sperm.sum(),
             ind.sum() + sperm.sum(),
@@ -522,7 +498,7 @@ class TestKernelFoldEquivalence:
         ind, _ = _valid_state(n_demes=2, n_ages=2, n_ztypes=2, seed=404)
         sperm = np.zeros((2, 2, 2, 2))
         got_ind, got_sperm = _run_engine(
-            ind, sperm, csr, np.full((2, 2, 2), 0.4), "python"
+            ind, sperm, csr, np.full((2, 2, 2), 0.4)
         )
         assert np.array_equal(got_ind, ind)
         assert np.array_equal(got_sperm, sperm)
@@ -564,13 +540,13 @@ class TestKernelFoldEquivalence:
         dest_idx = np.array([1], dtype=np.int64)
         weights = np.array([0.3])
 
-        stay_ind, stay_sperm = apply_csr_migration(
+        stay_ind, stay_sperm = rust_migrate_csr_deterministic(
             ind.copy(), sperm.copy(), indptr, dest_idx, weights, rate,
-            False, False, False,
+            False,
         )
-        send_ind, send_sperm = apply_csr_migration(
+        send_ind, send_sperm = rust_migrate_csr_deterministic(
             ind.copy(), sperm.copy(), indptr, dest_idx, weights, rate,
-            False, False, True,
+            True,
         )
         # Stay-first: the full outbound leaves, only rate*weight arrives.
         assert stay_ind[0, 1, 0, 0] == 1000.0 - 1000.0 * 0.5
@@ -848,16 +824,16 @@ class TestContractSentinels:
 
 
 # ---------------------------------------------------------------------------
-# 4. Three-backend consistency (bitwise)
+# 4. Engine vs manual CSR math (bitwise)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not _RUST_OK, reason="natal._engine_rs not built")
-class TestThreeBackendConsistency:
-    """Python == Rust on identical CSR + rate column inputs."""
+class TestEngineMatchesManualCsr:
+    """The engine reproduces the manual CSR migration math bitwise."""
 
     @staticmethod
-    def _assert_three_backends_bitwise(
+    def _assert_rust_matches_manual(
         csr: MigrationCSR, rate: NDArray[np.float64], seed: int
     ) -> None:
         ind, sperm = _valid_state(
@@ -866,17 +842,18 @@ class TestThreeBackendConsistency:
             n_ztypes=2,
             seed=seed,
         )
-        from natal.backends.rust.rust_backend import rust_migrate_csr_deterministic
-
-        py_ind, py_sperm = _run_engine(ind, sperm, csr, rate, "python")
+        rows = _csr_rows(csr)
+        expected_ind, expected_sperm = _apply_reference(
+            ind, sperm, rows, rate, stay_after_send=csr.stay_after_send
+        )
         rs_ind, rs_sperm = rust_migrate_csr_deterministic(
             ind, sperm, csr.indptr, csr.dest_idx, csr.weights, rate,
             csr.stay_after_send,
         )
-        assert np.array_equal(py_ind, rs_ind)
-        assert np.array_equal(py_sperm, rs_sperm)
+        assert np.array_equal(rs_ind, expected_ind)
+        assert np.array_equal(rs_sperm, expected_sperm)
 
-    def test_adjacency_csr_three_backends_bitwise(self) -> None:
+    def test_adjacency_csr_rust_bitwise(self) -> None:
         adjacency = np.array(
             [
                 [0.0, 0.6, 0.4, 0.0],
@@ -889,14 +866,15 @@ class TestThreeBackendConsistency:
         rate[:, 0, :] = 0.1
         rate[:, 1, 0] = np.array([0.0, 0.2, 0.4, 0.6])
         rate[:, 1, 1] = 0.15
-        self._assert_three_backends_bitwise(_fold_adjacency(adjacency), rate, seed=505)
+        self._assert_rust_matches_manual(_fold_adjacency(adjacency), rate, seed=505)
 
-    def test_empty_row_isolated_deme_three_backends_bitwise(self) -> None:
+    def test_empty_row_isolated_deme_rust_bitwise(self) -> None:
         """An isolated deme (empty CSR row) keeps ALL its mass on every backend.
 
         Regression guard for the Rust deterministic kernel, which used to
         evaporate ``value * rate`` for empty rows in the stay_after=False
-        bookkeeping order while the Python reference kept everything.
+        bookkeeping order while the retired Python reference kept
+        everything.
         An isolated deme makes no outbound moves; inbound moves are legal.
         """
         # 2 demes, explicit adjacency: deme 1 is isolated (empty row),
@@ -914,36 +892,26 @@ class TestThreeBackendConsistency:
         ind[:, 1, :, 0] = 100.0
         ind[:, 1, :, 1] = 40.0
         sperm = np.zeros((2, n_ages, 2, 2), dtype=np.float64)
-        from natal.backends.rust.rust_backend import rust_migrate_csr_deterministic
 
-        py_ind, py_sperm = _run_engine(ind, sperm, csr, rate, "python")
         rs_ind, rs_sperm = rust_migrate_csr_deterministic(
             ind, sperm, csr.indptr, csr.dest_idx, csr.weights, rate,
             csr.stay_after_send,
         )
-        # Mass conservation across every backend.
-        for name, (mi, ms) in {
-            "python": (py_ind, py_sperm),
-            "rust": (rs_ind, rs_sperm),
-        }.items():
-            assert mi.sum() == pytest.approx(ind.sum() + sperm.sum()), name
+        # Mass conservation.
+        assert rs_ind.sum() == pytest.approx(ind.sum() + sperm.sum())
         # Isolated deme 1 sends nothing out but still receives deme 0's
         # outflow (value * 0.3): original [100, 40] per age + [30, 12].
-        for name, mi in {"python": py_ind, "rust": rs_ind}.items():
-            assert np.array_equal(mi[1, 1, :, 0], [130.0, 130.0]), name
-            assert np.array_equal(mi[1, 1, :, 1], [52.0, 52.0]), name
-        # And both backends agree bitwise.
-        assert np.array_equal(py_ind, rs_ind)
-        assert np.array_equal(py_sperm, rs_sperm)
+        assert np.array_equal(rs_ind[1, 1, :, 0], [130.0, 130.0])
+        assert np.array_equal(rs_ind[1, 1, :, 1], [52.0, 52.0])
 
-    def test_kernel_wrap_csr_three_backends_bitwise(self) -> None:
+    def test_kernel_wrap_csr_rust_bitwise(self) -> None:
         topology = SquareGrid(rows=3, cols=2, neighborhood="von_neumann", wrap=True)
         kernel = np.array([[2.0, 1.0, 4.0], [8.0, 0.0, 16.0], [32.0, 64.0, 128.0]])
         csr = _fold_kernel(topology, kernel)
         rate = np.full((6, 2, 2), 0.2)
         rate[2, 1, :] = 0.45
         rate[4, :, 0] = 0.0
-        self._assert_three_backends_bitwise(csr, rate, seed=606)
+        self._assert_rust_matches_manual(csr, rate, seed=606)
 
 
 # ---------------------------------------------------------------------------
@@ -999,10 +967,7 @@ def _probe_population(
 class TestPerDemePerSexConsumption:
     """The rate column is consumed per (deme, sex, age) by live runs."""
 
-    @pytest.mark.parametrize("backend", ["python_dispatch", "rust"])
-    def test_asymmetric_rate_column_moves_exactly_its_entries(
-        self, backend: str
-    ) -> None:
+    def test_asymmetric_rate_column_moves_exactly_its_entries(self) -> None:
         """Only deme-0 adult buckets migrate; every other bucket is untouched.
 
         Aging runs before migration, so the seeded age-1 cohort is subject
@@ -1012,19 +977,14 @@ class TestPerDemePerSexConsumption:
         rate = np.zeros((2, 2, 3))
         rate[0, 0, 2] = 0.5  # deme 0, female, post-aging adult age
         rate[0, 1, 2] = 0.9  # deme 0, male, post-aging adult age
-        use_rust = backend == "rust"
 
         def run(name: str, column: NDArray[np.float64] | None):
-            pop = _probe_population(name, column, rust=use_rust)
-            if backend == "python_dispatch":
-                with python_reference():
-                    pop.run_tick()
-            else:
-                pop.run_tick()
+            pop = _probe_population(name, column, rust=True)
+            pop.run_tick()
             return np.stack([d.state.individual_count for d in pop.demes])
 
-        control = run(f"ctl_{backend}", None)
-        treatment = run(f"trt_{backend}", rate)
+        control = run("ctl", None)
+        treatment = run("trt", rate)
 
         # Buckets whose rate entry is 0 stay bit-identical to the control,
         # including the aged juvenile cohorts (age < 2).
@@ -1082,7 +1042,7 @@ class TestBoundarySemanticsUnification:
         ind[:, 1, 0, 0] = [1000.0, 500.0, 250.0]
         sperm = np.zeros((3, 1, 1, 1))
         rate = np.full((3, 2, 1), 0.4)
-        got_ind, got_sperm = _run_engine(ind, sperm, csr, rate, "python")
+        got_ind, got_sperm = _run_engine(ind, sperm, csr, rate)
         # Deme 0 (one valid neighbor) moves its full outbound to deme 1
         # and still receives deme 1's cross-share.
         assert got_ind[0, 1, 0, 0] == 1000.0 - 1000.0 * 0.4 + 500.0 * 0.4 * 0.5
@@ -1134,10 +1094,10 @@ class TestRemovedSurfaceHard:
         "module_name",
         [
             "natal.backends.reference.migration.kernel",
-            "natal.backends.reference.migration.kernel",
+            "natal.backends.reference.migration.adjacency",
         ],
     )
-    def test_kernel_module_is_unimportable(self, module_name: str) -> None:
+    def test_migration_module_is_unimportable(self, module_name: str) -> None:
         with pytest.raises(ImportError):
             importlib.import_module(module_name)
 
@@ -1171,11 +1131,9 @@ class TestRemovedSurfaceHard:
             assert not hasattr(topology_module, symbol)
             assert symbol not in getattr(topology_module, "__all__", ())
             assert not hasattr(spatial_module, symbol)
-        migration_package = importlib.import_module(
-            "natal.backends.reference.migration"
-        )
-        assert "kernel" not in getattr(migration_package, "__all__", ())
-        assert not hasattr(migration_package, "apply_spatial_kernel_migration")
+        # The whole reference migration package was deleted (S6).
+        with pytest.raises(ImportError):
+            importlib.import_module("natal.backends.reference.migration")
 
 
 # ---------------------------------------------------------------------------

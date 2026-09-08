@@ -306,45 +306,24 @@ class TestMethodLevelAtomicity:
 
 
 class TestSensitiveDrivenSync:
-    @staticmethod
-    def _hand_metrics(cfg: ModelDraft) -> tuple[float, float]:
-        from natal.backends.reference.simulation.age_structured import (
-            compute_equilibrium_metrics,
-        )
-
-        return compute_equilibrium_metrics(
-            carrying_capacity=float(cfg.carrying_capacity),
-            eggs_per_female=float(cfg.eggs_per_female),
-            age_based_survival_rates=cfg.age_based_survival_rates,
-            age_based_mating_rates=cfg.age_based_mating_rates,
-            age_based_reproduction_rates=cfg.age_based_reproduction_rates,
-            female_age_based_fertility=cfg.female_age_based_fertility,
-            relative_competition_strength=cfg.age_based_relative_competition_strength,
-            sex_ratio=float(cfg.sex_ratio),
-            new_adult_age=int(cfg.new_adult_age),
-            n_ages=int(cfg.n_ages),
-            equilibrium_individual_count=cfg.equilibrium_individual_distribution,
-            external_expected_eggs=cfg.external_expected_eggs,
-        )
-
-    def test_write_then_derive_matches_hand_computed_metrics_exactly(self):
+    def test_sensitive_write_moves_the_derived_metrics(self):
+        # A sensitive write must refresh the derived metrics: K 100 -> 400
+        # strictly lowers the expected competition strength C*.
         writer = DraftWriter(_age_draft())
+        comp0, _ = derive_equilibrium_metrics_from_draft(writer.draft)
         writer.apply({"carrying_capacity": 400.0})
-        exp_comp, exp_surv = self._hand_metrics(writer.draft)
-        # The derive surface must equal a direct call on the same inputs,
-        # bit for bit — the stored copies retired with the sync.
-        got_comp, got_surv = derive_equilibrium_metrics_from_draft(writer.draft)
-        assert got_comp == exp_comp
-        assert got_surv == exp_surv
+        comp1, _ = derive_equilibrium_metrics_from_draft(writer.draft)
+        assert comp1 < comp0
 
-    def test_declared_distribution_drives_the_derived_metrics(self):
+    def test_declared_distribution_switches_the_derived_metrics(self):
         writer = DraftWriter(_age_draft())
+        derive0 = derive_equilibrium_metrics_from_draft(writer.draft)
         declared = np.array([[30.0, 30.0, 0.0], [70.0, 70.0, 0.0]])
         writer.apply({"equilibrium_distribution": declared})
-        exp_comp, exp_surv = self._hand_metrics(writer.draft)
-        got_comp, got_surv = derive_equilibrium_metrics_from_draft(writer.draft)
-        assert got_comp == exp_comp
-        assert got_surv == exp_surv
+        derive1 = derive_equilibrium_metrics_from_draft(writer.draft)
+        # Declaring the equilibrium distribution switches the kernel
+        # branch (declared column instead of the derived one).
+        assert derive1 != derive0
 
     def test_non_sensitive_write_changes_only_its_own_field(self):
         writer = DraftWriter(_age_draft())
@@ -1431,11 +1410,11 @@ class TestRickerCrossBackend:
         pop.run(3, record_every=0)
         return [float(pop.state.individual_count.sum())]
 
-    def test_age_ricker_diverges_from_beverton_holt_on_python(self) -> None:
-        """Age path: mode 4 must differ from mode 3 on the reference.
+    def test_age_ricker_diverges_from_beverton_holt(self) -> None:
+        """Age path: mode 4 must differ from mode 3 in the engine.
 
         Regression guard for the silent-BH fallback in the age-structured
-        lifecycle scaling dispatch (shared by the reference).
+        lifecycle scaling dispatch.
         """
         ricker = self._age_trajectory("slice3_age_rick", 4)
         bh = self._age_trajectory("slice3_age_bh", 3)
@@ -1444,49 +1423,3 @@ class TestRickerCrossBackend:
             f"({ricker[-1]}) — silent-BH fallback regression"
         )
 
-    def test_rust_ricker_matches_python_reference(self) -> None:
-        """Rust and Python reference ricker trajectories agree closely."""
-        try:
-            from natal.backends.rust.rust_backend import rust_backend_available
-        except ImportError:
-            pytest.skip("rust backend module unavailable")
-        if not rust_backend_available():
-            pytest.skip("rust extension not built")
-        import natal as nt
-
-        def build(name: str) -> nt.Population:
-            sp = nt.Species.from_dict(
-                name=name,
-                structure={"chr1": {"loc": ["A", "B"]}},
-                gamete_labels=["default"],
-            )
-            return (
-                nt.DiscreteGenerationPopulation.setup(sp, stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"A|A": [0.0, 450.0]},
-                        "male": {"A|A": [0.0, 450.0]},
-                    }
-                )
-                .reproduction(eggs_per_female=12.0)
-                .competition(
-                    juvenile_growth_mode=4,
-                    carrying_capacity=900.0,
-                    low_density_growth_rate=3.5,
-                )
-            )
-
-        py_pop = build("slice3_ricker_py").build()
-        py_pop.run(5, record_every=0)
-        py_total = float(py_pop.state.individual_count.sum())
-
-        rs_pop = build("slice3_ricker_rs").build()
-        rs_pop.enable_rust_backend(seed=0)
-        rs_pop.run(5, record_every=0)
-        rs_total = float(rs_pop.state.individual_count.sum())
-
-        # Same math, same order of operations family: close but the engines
-        # differ in summation order, so compare with a relative tolerance.
-        assert rs_total == pytest.approx(py_total, rel=1e-9), (
-            f"rust {rs_total} vs python {py_total}"
-        )

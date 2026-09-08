@@ -34,12 +34,6 @@ from natal.frontend.output.history import (
 from natal.frontend.output.observation import Observation, ObservationFilter, apply_rule
 from natal.frontend.patterns import IndividualSelector
 
-
-@pytest.fixture(autouse=True)
-def _reference_only() -> None:
-    """Keep the pure-Python reference path active (a no-op nowadays)."""
-    yield
-
 # ============================================================================
 # Helpers
 # ============================================================================

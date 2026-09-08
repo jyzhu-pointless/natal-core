@@ -18,14 +18,15 @@ The contract under test::
 is checked with an independent einsum oracle (which never touches
 ``offspring_tensor``) at four layers:
 
-1. the production fold (``compute_offspring_probability_tensor``) on
-   hand-built maps, including asymmetric (drive-biased) meiosis and
-   zygote-lethal fusion tables whose rows sum to less than one;
+1. the production fold (``recompute_offspring_tensor``, the Rust-backed
+   single owner of the derivation) on hand-built maps, including
+   asymmetric (drive-biased) meiosis and zygote-lethal fusion tables
+   whose rows sum to less than one;
 2. the same identity on a Configurator-built draft's maps;
-3. the Wright-Fisher fused kernels (reference and Rust, deterministic
-   mode 3) must reproduce the map-direct contraction weighted by the
-   replicated pair weights — i.e. consuming the folded tensor is
-   semantically identical to consuming the two maps directly;
+3. the Wright-Fisher fused kernel (Rust, deterministic mode 3) must
+   reproduce the map-direct contraction weighted by the replicated pair
+   weights — i.e. consuming the folded tensor is semantically identical
+   to consuming the two maps directly;
 4. after a Toxin-Antidote drive preset (with a Cas9 deposition gamete
    label) rewrites both stages, the fold identity and the kernel
    alignment must still hold — the regression guard behind "edit the
@@ -38,15 +39,12 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from natal.backends.reference.lifecycle import run_discrete_tick, run_wf_tick
-from natal.backends.reference.simulation.age_structured import (
-    compute_offspring_probability_tensor,
-)
 from natal.backends.rust.rust_backend import (
     RustDiscreteLifecycleBackend,
     rust_backend_available,
 )
 from natal.frontend.data import DiscretePopulationState, ModelDraft
+from natal.frontend.data._engine import recompute_offspring_tensor
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.types import HookProgram
 from natal.frontend.population.discrete_generation import (
@@ -58,10 +56,6 @@ _requires_rust = pytest.mark.skipif(
     not rust_backend_available(),
     reason="natal._engine_rs is not built; run `maturin develop` first",
 )
-
-
-def _noop(state: object, config: object, deme_id: int) -> int:
-    return 0
 
 
 def _empty_hook_program() -> HookProgram:
@@ -148,7 +142,7 @@ def _wf_expected_from_maps(cfg: ModelDraft) -> NDArray[np.float64]:
     pair weights from fecundity / adult mating rates / sexual selection,
     gamete-pool contraction through the fusion table, sex split, age-0
     viability.  The new generation is placed directly at the adult age,
-    matching both kernels.  Never reads ``cfg.offspring_tensor``.
+    matching the kernel.  Never reads ``cfg.offspring_tensor``.
     """
     assert cfg.juvenile_growth_mode == 0, "oracle assumes no density regulation"
     z = cfg.n_ztypes
@@ -270,13 +264,7 @@ def plain_config() -> ModelDraft:
 def test_fold_matches_independent_contraction() -> None:
     meiosis = _mendelian_meiosis(2)
     g2z, _ = _onehot_fusion(2)
-    folded = compute_offspring_probability_tensor(
-        meiosis_f=meiosis,
-        meiosis_m=meiosis,
-        haplo_to_genotype_map=g2z,
-        n_ztypes=3,
-        n_gtypes=2,
-    )
+    folded = recompute_offspring_tensor(np.stack([meiosis, meiosis]), g2z)
     np.testing.assert_allclose(
         folded, _two_step_tensor(meiosis, meiosis, g2z), rtol=0.0, atol=1e-15
     )
@@ -290,12 +278,8 @@ def test_fold_matches_contraction_with_asymmetric_meiosis() -> None:
     meiosis_f[1, :] = np.array([0.9, 0.1])  # drive-biased female segregation
     meiosis_m = _mendelian_meiosis(2)
     g2z, _ = _onehot_fusion(2)
-    folded = compute_offspring_probability_tensor(
-        meiosis_f=meiosis_f,
-        meiosis_m=meiosis_m,
-        haplo_to_genotype_map=g2z,
-        n_ztypes=3,
-        n_gtypes=2,
+    folded = recompute_offspring_tensor(
+        np.stack([meiosis_f, meiosis_m]), g2z
     )
     np.testing.assert_allclose(
         folded, _two_step_tensor(meiosis_f, meiosis_m, g2z), rtol=0.0, atol=1e-15
@@ -307,13 +291,7 @@ def test_fold_preserves_zygote_lethality_semantics() -> None:
     g2z, _ = _onehot_fusion(2)
     g2z = g2z.copy()
     g2z[1, 1, 2] = 0.4  # a x a cross: aa zygotes 60% lethal
-    folded = compute_offspring_probability_tensor(
-        meiosis_f=meiosis,
-        meiosis_m=meiosis,
-        haplo_to_genotype_map=g2z,
-        n_ztypes=3,
-        n_gtypes=2,
-    )
+    folded = recompute_offspring_tensor(np.stack([meiosis, meiosis]), g2z)
     np.testing.assert_allclose(
         folded, _two_step_tensor(meiosis, meiosis, g2z), rtol=0.0, atol=1e-15
     )
@@ -343,23 +321,7 @@ def test_production_draft_fold_matches_contraction(
     )
 
 
-# ------------------------------- layer 3: WF kernels consume the maps ----
-def test_reference_wf_tick_aligns_with_map_direct_oracle(
-    plain_config: ModelDraft,
-) -> None:
-    cfg = plain_config._replace(extreme_speed_mode=3)
-    state = DiscretePopulationState(
-        n_tick=0, individual_count=cfg.initial_individual_count.copy()
-    )
-    expected = _wf_expected_from_maps(cfg)
-    reference_state, _, _ = run_wf_tick(
-        state, cfg, _empty_hook_program(), _noop, _noop, _noop
-    )
-    np.testing.assert_allclose(
-        reference_state.individual_count, expected, rtol=1e-10, atol=1e-8
-    )
-
-
+# ------------------------------- layer 3: WF kernel consumes the maps ----
 @_requires_rust
 def test_rust_wf_tick_aligns_with_map_direct_oracle(
     plain_config: ModelDraft,
@@ -419,24 +381,6 @@ def _standard_tick_expected_from_maps(
     return out
 
 
-def test_reference_standard_tick_aligns_with_map_direct_oracle(
-    plain_config: ModelDraft,
-) -> None:
-    cfg = plain_config._replace(
-        initial_individual_count=_single_pair_state(plain_config)
-    )
-    state = DiscretePopulationState(
-        n_tick=0, individual_count=cfg.initial_individual_count.copy()
-    )
-    expected = _standard_tick_expected_from_maps(cfg, "A|B", "A|B")
-    reference_state, _, _ = run_discrete_tick(
-        state, cfg, _empty_hook_program(), _noop, _noop, _noop
-    )
-    np.testing.assert_allclose(
-        reference_state.individual_count, expected, rtol=1e-10, atol=1e-8
-    )
-
-
 @_requires_rust
 def test_rust_standard_tick_aligns_with_map_direct_oracle(
     plain_config: ModelDraft,
@@ -483,21 +427,6 @@ def test_drive_preset_rewrites_both_stages_and_keeps_fold_identity() -> None:
     # the hand-built fusion table in the lethality test above.
     row_sums = cfg.offspring_tensor.sum(axis=2)
     assert (row_sums <= 1.0 + 1e-12).all()
-
-
-def test_reference_wf_tick_aligns_after_drive_preset() -> None:
-    cfg = _build_ta_population("align_ta_wf", with_preset=True).config
-    cfg = cfg._replace(extreme_speed_mode=3)
-    state = DiscretePopulationState(
-        n_tick=0, individual_count=cfg.initial_individual_count.copy()
-    )
-    expected = _wf_expected_from_maps(cfg)
-    reference_state, _, _ = run_wf_tick(
-        state, cfg, _empty_hook_program(), _noop, _noop, _noop
-    )
-    np.testing.assert_allclose(
-        reference_state.individual_count, expected, rtol=1e-10, atol=1e-8
-    )
 
 
 @_requires_rust

@@ -1,13 +1,11 @@
-"""Execution backends implementing the contract interface.
+"""Native execution backend adapter.
 
-Each subpackage is one interchangeable implementation of the pure-function
-engine ``run(blueprint, program, params, state, rng, n) -> result``:
+The ``rust`` subpackage adapts the native ``natal._engine_rs`` extension —
+the only simulation engine. It consumes contract data (blueprint, params,
+state, RNG) and never imports frontend modules.
 
-- ``reference``: pure-Python golden reference (always available).
-- ``rust``: the native ``natal._engine_rs`` extension adapter.
-
-Backends never import frontend modules; they consume contract data only.
-The capability table and selector live in ``natal.contracts``.
+The engine session owns the run state; this package only bridges calls
+across the language boundary.
 """
 
 __all__: list[str] = []

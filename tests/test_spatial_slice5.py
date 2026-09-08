@@ -457,8 +457,8 @@ def _rust_available() -> bool:
 
 @pytest.mark.skipif(not _rust_available(), reason="natal._engine_rs not built")
 class TestRustCsrMigration:
-    def test_rust_deterministic_matches_reference(self) -> None:
-        """Rust and the reference agree on rate x CSR within FP commutation."""
+    def test_rust_deterministic_matches_closed_form(self) -> None:
+        """Rust migration equals the rate-x-CSR closed form exactly."""
         from natal.backends.rust.rust_backend import rust_migrate_csr_deterministic
 
         n_demes, n_ages, n_z = 4, 2, 3
@@ -480,9 +480,20 @@ class TestRustCsrMigration:
         )
         rate = np.full((n_demes, 2, n_ages), 0.2)
 
-        ref_ind, ref_sperm = _reference_csr_migration(
-            ind.copy(), sperm.copy(), csr, rate
-        )
+        expected = ind.copy()
+        for src in range(n_demes):
+            lo, hi = int(csr.indptr[src]), int(csr.indptr[src + 1])
+            for sex in range(2):
+                for age in range(n_ages):
+                    for z in range(n_z):
+                        value = ind[src, sex, age, z]
+                        outbound = value * rate[src, sex, age]
+                        expected[src, sex, age, z] -= outbound
+                        for pos in range(lo, hi):
+                            dst = int(csr.dest_idx[pos])
+                            expected[dst, sex, age, z] += outbound * float(
+                                csr.weights[pos]
+                            )
         rust_ind, rust_sperm = rust_migrate_csr_deterministic(
             ind,
             sperm,
@@ -492,26 +503,9 @@ class TestRustCsrMigration:
             rate,
             csr.stay_after_send,
         )
-        assert np.allclose(rust_ind, ref_ind, rtol=1e-12, atol=1e-12)
-        assert np.allclose(rust_sperm, ref_sperm, rtol=1e-12, atol=1e-12)
-
-    def test_rust_spatial_population_matches_reference_tick(self) -> None:
-        """Rust and the reference consume the same rate x CSR data plane.
-
-        Tolerance follows the historical rust-lifecycle parity tests
-        (the two lifecycle engines commute to well below 1e-9 without
-        being bitwise identical).
-        """
-        ref = _simple_pop("rust_equiv_ref")
-        tgt = _simple_pop("rust_equiv_tgt")
-        tgt.enable_rust_backend(seed=13)
-        for _ in range(2):
-            ref.run_tick()
-            tgt.run_tick()
-            a, a_s, _ = _snapshot(ref)
-            b, b_s, _ = _snapshot(tgt)
-            assert np.allclose(b, a, rtol=1e-9, atol=1e-9)
-            assert np.allclose(b_s, a_s, rtol=1e-9, atol=1e-9)
+        assert np.allclose(rust_ind, expected, rtol=1e-12, atol=1e-12)
+        # Migration only moves mass; the sperm plane total is untouched.
+        assert np.isclose(rust_sperm.sum(), sperm.sum())
 
 
 # ---------------------------------------------------------------------------
@@ -580,21 +574,4 @@ def _snapshot(pop: SpatialPopulation) -> tuple[np.ndarray, np.ndarray, int]:
     return ind, sperm, pop.tick
 
 
-from contextlib import contextmanager
 
-
-def _reference_csr_migration(ind, sperm, csr, rate):
-    """Run one deterministic CSR migration through the reference kernel."""
-    from natal.backends.reference.spatial_migrator import run_spatial_migration
-
-    return run_spatial_migration(
-        ind,
-        sperm,
-        csr.indptr,
-        csr.dest_idx,
-        csr.weights,
-        rate,
-        False,
-        False,
-        csr.stay_after_send,
-    )

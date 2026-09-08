@@ -25,7 +25,6 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.backends.reference.lifecycle as lifecycle_engine
 from natal.frontend.data import ModelDraft, PopulationState
 from natal.frontend.genetics import Genotype, Species
 from natal.frontend.population.base import BasePopulation
@@ -521,8 +520,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         backend = self._rust_lifecycle_backend
         if backend is not None and self._state is not None:
             # The session owns the runtime state: the reset container
-            # becomes the new session state (RNG keeps its current stream;
-            # the explicit reseed/reset of the stream is refresh_rust_backend).
+            # becomes the new session state (RNG keeps its current stream).
             backend.set_state(self._state)
             self._state_cache_stale = False
 
@@ -764,8 +762,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         session through the writers (no rebuild, no RNG reset); in-run
         writes defer to the draft and the run boundary flushes them.
         Structural changes (hooks, blueprint flags) rebuild the session
-        before the next run, or go through :meth:`refresh_rust_backend`,
-        the explicit full-refresh escape hatch.
+        before the next run.
 
         Args:
             seed: Seed for the Rust RNG used in stochastic simulations.
@@ -794,10 +791,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             seed=seed,
         )
         self._register_rust_callbacks(backend)
-        # Capture the state BEFORE the field switch: under a rebuild
-        # (refresh_rust_backend) the lazy pull must read the OLD session,
-        # not the freshly constructed one whose state is the blueprint
-        # initial population again.
+        # Capture the state BEFORE the field switch: under a structural
+        # rebuild the lazy pull must read the OLD session, not the freshly
+        # constructed one whose state is the blueprint initial population
+        # again.
         state_to_install = self._live_state()
         self._rust_lifecycle_backend = backend
         self._rust_backend_seed = seed
@@ -809,63 +806,17 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._state_cache_stale = False
         return self
 
-    def disable_rust_backend(self) -> AgeStructuredPopulation:
-        """Disable the Rust backend and return to the reference path.
-
-        The session-owned state is pulled back into the Python container
-        first, so disabling mid-simulation keeps every count and the tick.
-
-        Returns:
-            Self for chaining.
-        """
-        if self._rust_lifecycle_backend is not None:
-            self._refresh_state_cache_from_session()
-        self._rust_lifecycle_backend = None
-        self._rust_backend_seed = None
-        self._state_cache_stale = False
-        return self
-
-    def refresh_rust_backend(self) -> AgeStructuredPopulation:
-        """Rebuild the Rust backend from the current config and hooks.
-
-        Explicit full-refresh escape hatch: rebuilds the session from a
-        fresh materialization (RNG resets to the original seed).  Value-only
-        changes do not need this — the writers push them straight to the
-        session, and the run-boundary ecology flush covers in-run writes.
-
-        Returns:
-            Self for chaining.
-
-        Raises:
-            RuntimeError: If the backend was never enabled or custom hooks
-                are now registered.
-        """
-        if self._rust_backend_seed is None:
-            raise RuntimeError(
-                "Rust backend is not enabled; call enable_rust_backend() first."
-            )
-        return self.enable_rust_backend(seed=self._rust_backend_seed)
-
-    @property
-    def using_rust_backend(self) -> bool:
-        """Return whether the Rust lifecycle backend is currently enabled.
-
-        Returns:
-            True when ``enable_rust_backend()`` has been called.
-        """
-        return self._rust_lifecycle_backend is not None
-
     def _run_startup_sync(self) -> None:
         """Rebuild the session when structural changes requested it.
 
         Hook registration, modifier-map rebuilds, and blueprint-flag writes
         are session structure, not values: the live session must be
-        rebuilt (RNG reseeds to the original seed for rebuilds — the
-        documented refresh semantics).
+        rebuilt before the next run (RNG reseeds to the original seed —
+        the documented rebuild semantics).
         """
         if self._rust_needs_rebuild:
             self._rust_needs_rebuild = False
-            self.refresh_rust_backend()
+            self.enable_rust_backend(seed=int(self._rust_backend_seed or 0))
 
     def _flush_runtime_fields_after_run(self) -> None:
         """Sync the draft's runtime fields (ecology AND genetics) back into the session after a run.
@@ -897,9 +848,13 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._run_startup_sync()
         backend = self._rust_lifecycle_backend
         if backend is None:
-            raise RuntimeError(
-                "Rust backend is not enabled; call enable_rust_backend() first."
-            )
+            # Instances that skipped ``build()`` (clones, direct
+            # construction) lazily create their engine session at the
+            # first run boundary; ``enable_rust_backend`` installs the
+            # current live state into the fresh session.
+            self.enable_rust_backend(seed=int(self._rust_backend_seed or 0))
+            backend = self._rust_lifecycle_backend
+            assert backend is not None  # enable either returns or raises
 
         observation_mask = self._observation_mask
         # Raw-mode runs keep a full record-aligned checkpoint per recorded
@@ -960,7 +915,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         finish: bool = False,
         clear_history_on_start: bool = False,
     ) -> AgeStructuredPopulation:
-        """Run multi-step evolution using the unified lifecycle engine.
+        """Run multi-step evolution through the Rust engine session.
 
         Args:
             n_steps: Number of steps to evolve.
@@ -973,7 +928,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             AgeStructuredPopulation: Self for chaining.
 
         Raises:
-            RuntimeError: If the population is already finished and cannot continue.
+            RuntimeError: If the population is already finished and cannot
+                continue, or if the native engine extension is unavailable
+                (the session is created by ``build()`` or lazily at the
+                first run).
         """
         if self._finished:
             raise RuntimeError(
@@ -986,21 +944,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             if record_every is None:
                 record_every = self.record_every
 
-            if self._rust_lifecycle_backend is not None:
-                return self._run_rust_lifecycle(
-                    n_steps=n_steps,
-                    record_every=record_every,
-                    finish=finish,
-                    clear_history_on_start=clear_history_on_start,
-                )
-
-            # Non-Rust path: the pure-Python reference lifecycle, where the
-            # CSR interpreter and the Python callbacks alternate per event.
-            # set_param ops also force this path because their writes must
-            # reach the route table / dirty bridge / params snapshot log,
-            # which only the Python write channel has.
-            return self._run_python_lifecycle(
-                tick_fn=lifecycle_engine.run_structured_tick,
+            return self._run_rust_lifecycle(
                 n_steps=n_steps,
                 record_every=record_every,
                 finish=finish,
@@ -1008,105 +952,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             )
         finally:
             self._running = False
-
-    def _run_python_lifecycle(
-        self,
-        tick_fn: Callable[..., tuple[PopulationState, int, ModelDraft]],
-        n_steps: int,
-        record_every: int,
-        finish: bool,
-        clear_history_on_start: bool,
-    ) -> AgeStructuredPopulation:
-        """Run the pure-Python unified lifecycle loop.
-
-        Hook execution is delegated to ``trigger_event`` so the CSR
-        interpreter and single-parameter Python callbacks alternate per
-        event.  The CSR registry passed to the lifecycle loop is therefore
-        the empty program.
-
-        Args:
-            tick_fn: Unified single-tick function.
-            n_steps: Number of ticks to execute.
-            record_every: Recording interval.  ``0`` disables recording.
-            finish: Whether to finish the population after the run.
-            clear_history_on_start: Whether to clear history first.
-
-        Returns:
-            This population after the run.
-        """
-        self.ensure_hook_executor()
-        from natal.frontend.hooks.types import empty_hook_program
-
-        registry = empty_hook_program()
-
-        def first_hook(state: PopulationState, config: ModelDraft, deme_id: int) -> int:
-            """Execute the ``first`` event against *state*."""
-            _ = config, deme_id
-            self._state = state
-            self._tick = int(state.n_tick)
-            return self.trigger_event("first", deme_id=deme_id)
-
-        def refresh_config(_config: ModelDraft) -> ModelDraft:
-            """Return the population's current config (write-channel rebind)."""
-            return self.config
-
-        def early_hook(state: PopulationState, config: ModelDraft, deme_id: int) -> int:
-            """Execute the ``early`` event against *state*."""
-            _ = config, deme_id
-            self._state = state
-            self._tick = int(state.n_tick)
-            return self.trigger_event("early", deme_id=deme_id)
-
-        def late_hook(state: PopulationState, config: ModelDraft, deme_id: int) -> int:
-            """Execute the ``late`` event against *state*."""
-            _ = config, deme_id
-            self._state = state
-            self._tick = int(state.n_tick)
-            return self.trigger_event("late", deme_id=deme_id)
-
-        if clear_history_on_start:
-            self.clear_history()
-
-        if record_every > 0 and (self.tick % record_every == 0):
-            self._record_current_snapshot(allow_existing=True)
-
-        def record_fn(state: PopulationState) -> None:
-            """Record *state* through the normal History path."""
-            self._state = state
-            self._tick = int(state.n_tick)
-            self._record_current_snapshot(allow_existing=True)
-
-        input_config = self.config
-        final_state, was_stopped, config = lifecycle_engine.run(
-            tick_fn=tick_fn,
-            state=self._live_state(),
-            config=self.config,
-            registry=registry,
-            first_hook=first_hook,
-            early_hook=early_hook,
-            late_hook=late_hook,
-            deme_id=self._deme_id,
-            n_steps=n_steps,
-            record_every=record_every,
-            record_fn=record_fn,
-            config_refresh=refresh_config,
-        )
-        self._state = final_state
-        self._tick = int(final_state.n_tick)
-        # The lifecycle rebuilds the config only when its in-kernel CSR
-        # flush fired; hook-executor writes already republished through
-        # set_config, so rebinding the stale lifecycle config here would
-        # clobber them.
-        if config is not input_config:
-            self.set_config(config)
-
-        if was_stopped:
-            self._finished = True
-            self.trigger_event("finish", deme_id=self._deme_id)
-        elif finish:
-            self.finish_simulation()
-
-        return self
 
     def run_tick(self) -> AgeStructuredPopulation:
         """

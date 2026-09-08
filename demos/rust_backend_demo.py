@@ -1,18 +1,12 @@
 """Run a real AgeStructuredPopulation through the Rust lifecycle backend.
 
-The demo builds two identical deterministic populations:
-
-1. ``reference`` keeps the default Numba lifecycle path.
-2. ``rust_pop`` calls ``enable_rust_backend()`` before running.
-
-After 10 recorded ticks the two states and histories are compared
-element-by-element.  A declarative CSR hook is registered on both
-populations first, so the comparison also covers hook execution inside Rust.
+The demo builds one deterministic population, registers a declarative CSR
+hook, enables the engine session, and runs 10 recorded ticks.  Between
+ticks the trajectory stays a deterministic function of the seed, so the
+final state and the recorded history are printed as the run summary.
 """
 
 from __future__ import annotations
-
-import numpy as np
 
 import natal as nt
 from natal.backends.rust.rust_backend import rust_backend_available
@@ -27,7 +21,7 @@ if not rust_backend_available():
     raise SystemExit(0)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 1. 准备 Species 与 Population 构建函数
+# 1. 准备 Species 与 Population
 # ═══════════════════════════════════════════════════════════════════════════════
 
 sp = nt.Species.from_dict(
@@ -36,90 +30,63 @@ sp = nt.Species.from_dict(
     gamete_labels=["default"],
 )
 
-
-def build_population(name: str):
-    """Build one deterministic age-structured population."""
-    return (
-        nt.AgeStructuredPopulation.setup(sp, stochastic=False, name=name)
-        .initial_state(
-            individual_count={
-                "female": {"A|A": 200, "A|B": 100},
-                "male": {"A|A": 150, "A|B": 150},
-            }
-        )
-        .reproduction(
-            eggs_per_female=10.0,
-            sex_ratio=0.5,
-            female_age_based_mating_rate=1.0,
-            male_age_based_mating_rate=1.0,
-            age_based_reproduction_rate=1.0,
-            female_age_based_fertility=1.0,
-            fixed_egg_count=True,
-        )
-        .survival(female_age_based_survival=0.9, male_age_based_survival=0.9)
-        .competition(juvenile_growth_mode=1, carrying_capacity=500)
-        .build()
+pop = (
+    nt.AgeStructuredPopulation.setup(sp, stochastic=False, name="rust_demo_pop")
+    .initial_state(
+        individual_count={
+            "female": {"A|A": 200, "A|B": 100},
+            "male": {"A|A": 150, "A|B": 150},
+        }
     )
-
-
-reference = build_population("rust_demo_reference")
-rust_pop = build_population("rust_demo_pop")
+    .reproduction(
+        eggs_per_female=10.0,
+        sex_ratio=0.5,
+        female_age_based_mating_rate=1.0,
+        male_age_based_mating_rate=1.0,
+        age_based_reproduction_rate=1.0,
+        female_age_based_fertility=1.0,
+        fixed_egg_count=True,
+    )
+    .survival(female_age_based_survival=0.9, male_age_based_survival=0.9)
+    .competition(juvenile_growth_mode=1, carrying_capacity=500)
+    .build()
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 2. 注册同一个 CSR declarative hook（两个种群保持一致）
+# 2. 注册一个 CSR declarative hook
 # ═══════════════════════════════════════════════════════════════════════════════
 
 control_ops = [
     nt.Op.scale(genotypes="*", ages="*", sex="both", factor=0.98),
     nt.Op.add(genotypes="A|A", ages=1, sex="female", delta=5.0, when="tick >= 2"),
 ]
-
-for pop in (reference, rust_pop):
-    pop.register_hooks(control_ops, event="early", name="demo_control")
+pop.register_hooks(control_ops, event="early", name="demo_control")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3. 启用 Rust 后端并运行
+# 3. 启用引擎会话并运行
 # ═══════════════════════════════════════════════════════════════════════════════
 
-rust_pop.enable_rust_backend(seed=2026)
-print("Rust backend enabled:", rust_pop.using_rust_backend)
+pop.enable_rust_backend(seed=2026)
 
 n_steps = 10
-reference.run(n_steps, record_every=1, clear_history_on_start=True)
-rust_pop.run(n_steps, record_every=1, clear_history_on_start=True)
+pop.run(n_steps, record_every=1, clear_history_on_start=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 4. 对比结果
+# 4. 输出结果
 # ═══════════════════════════════════════════════════════════════════════════════
 
-ind_equal = np.array_equal(
-    rust_pop.state.individual_count,
-    reference.state.individual_count,
-)
-rust_sperm = getattr(rust_pop.state, "sperm_storage", None)
-ref_sperm = getattr(reference.state, "sperm_storage", None)
-sperm_equal = (
-    isinstance(rust_sperm, np.ndarray) and isinstance(ref_sperm, np.ndarray)
-    and np.array_equal(
-        np.asarray(rust_sperm, dtype=np.float64),
-        np.asarray(ref_sperm, dtype=np.float64),
-    )
-)
-history_equal = np.array_equal(
-    rust_pop.history.individual_count,
-    reference.history.individual_count,
-)
+sperm = getattr(pop.state, "sperm_storage", None)
 
 print("=" * 64)
-print("Rust backend vs Python reference (deterministic, 10 ticks)")
+print("Deterministic engine run (10 recorded ticks)")
 print("=" * 64)
-print(f"  final tick                     : {rust_pop.tick}")
-print(f"  total population               : {rust_pop.get_total_count():.1f}")
-print(f"  individual_count identical     : {ind_equal}")
-print(f"  sperm_storage identical        : {sperm_equal}")
-print(f"  recorded history identical     : {history_equal}")
+print(f"  final tick               : {pop.tick}")
+print(f"  total population         : {pop.get_total_count():.1f}")
+print(f"  history rows             : {pop.history.individual_count.shape[0]}")
+if sperm is not None:
+    print(f"  sperm storage total      : {float(sum(sperm.ravel())):.1f}")
 
-if not (ind_equal and sperm_equal and history_equal):
-    raise RuntimeError("Rust backend diverged from the Python reference.")
+if pop.tick != n_steps:
+    raise RuntimeError("The run stopped before the requested tick count.")
 
 print("\nDemo finished successfully.")

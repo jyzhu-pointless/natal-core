@@ -219,20 +219,21 @@ class TestCarryingCapacityResolution:
             n_ages=n_ages,
         )
 
-        from natal.backends.reference.simulation.age_structured import compute_equilibrium_metrics
         from natal.frontend.data import build_population_config
+        from natal.frontend.data._engine import equilibrium_metrics_dispatch
 
-        comp, surv = compute_equilibrium_metrics(
-            carrying_capacity=K,
-            eggs_per_female=eggs_per_female,
-            age_based_survival_rates=survival,
-            age_based_mating_rates=mating,
-            female_age_based_fertility=fertility,
-            relative_competition_strength=np.ones(n_ages, dtype=np.float64),
-            sex_ratio=sex_ratio,
-            new_adult_age=new_adult_age,
-            n_ages=n_ages,
-            equilibrium_individual_count=dist,
+        comp, surv = equilibrium_metrics_dispatch(
+            K,
+            eggs_per_female,
+            sex_ratio,
+            survival,
+            mating[0],
+            fertility,
+            np.ones(n_ages, dtype=np.float64),
+            new_adult_age,
+            n_ages,
+            dist,
+            None,
         )
 
         assert comp >= 0.0
@@ -283,20 +284,20 @@ class TestCarryingCapacityResolution:
             n_ages=n_ages,
         )
 
-        from natal.backends.reference.simulation.age_structured import compute_equilibrium_metrics
+        from natal.frontend.data._engine import equilibrium_metrics_dispatch
 
-        comp, surv = compute_equilibrium_metrics(
-            carrying_capacity=K,
-            eggs_per_female=eggs_per_female,
-            age_based_survival_rates=survival,
-            age_based_mating_rates=mating,
-            female_age_based_fertility=fertility,
-            relative_competition_strength=np.ones(n_ages, dtype=np.float64),
-            sex_ratio=sex_ratio,
-            new_adult_age=new_adult_age,
-            n_ages=n_ages,
-            equilibrium_individual_count=dist,
-            external_expected_eggs=external_eggs,
+        comp, surv = equilibrium_metrics_dispatch(
+            K,
+            eggs_per_female,
+            sex_ratio,
+            survival,
+            mating[0],
+            fertility,
+            np.ones(n_ages, dtype=np.float64),
+            new_adult_age,
+            n_ages,
+            dist,
+            external_eggs,
         )
 
         # The survival rate should use external_eggs, not distribution's eggs
@@ -618,8 +619,9 @@ class TestChamperModel:
         assert eggs == pytest.approx(1050.0)
 
     def test_competition_and_survival_consistency_explicit_dist(self) -> None:
-        """End-to-end: compute_equilibrium_metrics with explicit distribution is self-consistent."""
-        from natal.backends.reference.simulation.age_structured import compute_equilibrium_metrics
+        """End-to-end: the equilibrium kernel with an explicit distribution
+        is self-consistent with the hand computation."""
+        from natal.frontend.data._engine import equilibrium_metrics_dispatch
 
         dist = np.array([self.equilibrium_female, self.equilibrium_male], dtype=np.float64)
         mating = np.array([
@@ -629,19 +631,18 @@ class TestChamperModel:
         survival_f = np.array(self.female_survival[:self.n_ages], dtype=np.float64)
         fertility = np.ones(self.n_ages, dtype=np.float64)
 
-        comp, surv = compute_equilibrium_metrics(
-            carrying_capacity=self.K,
-            eggs_per_female=self.eggs_per_female,
-            age_based_survival_rates=self.survival_rates,
-            age_based_mating_rates=mating,
-            female_age_based_fertility=fertility,
-            relative_competition_strength=np.array(
-                [1.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64
-            ),
-            sex_ratio=self.sex_ratio,
-            new_adult_age=self.new_adult_age,
-            n_ages=self.n_ages,
-            equilibrium_individual_count=dist,
+        comp, surv = equilibrium_metrics_dispatch(
+            self.K,
+            self.eggs_per_female,
+            self.sex_ratio,
+            self.survival_rates,
+            mating[0],
+            fertility,
+            np.array([1.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64),
+            self.new_adult_age,
+            self.n_ages,
+            dist,
+            None,
         )
 
         assert comp == pytest.approx(1110.0)
@@ -653,7 +654,7 @@ class TestChamperModel:
 
     def test_competition_and_survival_external_eggs(self) -> None:
         """End-to-end: external_expected_eggs affects survival, not competition."""
-        from natal.backends.reference.simulation.age_structured import compute_equilibrium_metrics
+        from natal.frontend.data._engine import equilibrium_metrics_dispatch
 
         dist = np.array([self.equilibrium_female, self.equilibrium_male], dtype=np.float64)
         mating = np.array([
@@ -665,20 +666,18 @@ class TestChamperModel:
         # 21 females at age 2 → 3675 external eggs
         external_eggs = 3675.0
 
-        comp, surv = compute_equilibrium_metrics(
-            carrying_capacity=self.K,
-            eggs_per_female=self.eggs_per_female,
-            age_based_survival_rates=self.survival_rates,
-            age_based_mating_rates=mating,
-            female_age_based_fertility=fertility,
-            relative_competition_strength=np.array(
-                [1.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64
-            ),
-            sex_ratio=self.sex_ratio,
-            new_adult_age=self.new_adult_age,
-            n_ages=self.n_ages,
-            equilibrium_individual_count=dist,
-            external_expected_eggs=external_eggs,
+        comp, surv = equilibrium_metrics_dispatch(
+            self.K,
+            self.eggs_per_female,
+            self.sex_ratio,
+            self.survival_rates,
+            mating[0],
+            fertility,
+            np.array([1.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64),
+            self.new_adult_age,
+            self.n_ages,
+            dist,
+            external_eggs,
         )
 
         # Competition still uses distribution's eggs (1050)

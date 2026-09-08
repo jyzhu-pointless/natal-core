@@ -449,10 +449,10 @@ def state_view_for(
 ) -> Any:
     """Wrap flat engine arrays into the population's state NamedTuple shape.
 
-    No data is copied: the returned state borrows the caller's memory.  On
-    the Rust backend the flat arrays are per-callback copies that Rust
-    writes back after the call; on the Python/reference paths they *are* the
-    live arrays.
+    No data is copied: the returned state borrows the caller's memory.
+    Inside engine ticks the flat arrays are per-callback copies that Rust
+    writes back after the call; out-of-band callers (``trigger_event``,
+    finish events) pass their own live arrays.
 
     Args:
         pop: The owning population (decides discrete vs structured shape).
@@ -486,13 +486,12 @@ class HookRunner:
 
     The runner holds the callback descriptors grouped per event (sorted by
     priority) and materializes a :class:`TickContext` per callback.  It is
-    the single Python-side execution path shared by all three backends:
+    the single Python-side callback dispatch path:
 
-    - reference/python: called directly from ``trigger_event``.
-    - reference: called from the Python lifecycle orchestration after the CSR
-      interpreter ran.
-    - rust: adapted into the ``(ind, sperm, tick, deme_id)`` callback
-      signature and fired by the Rust engine at event boundaries.
+    - out-of-band: called directly from ``trigger_event`` and the
+      finish-event executor.
+    - in-tick: adapted into the ``(ind, sperm, tick, deme_id)`` callback
+      signature and fired by the engine at event boundaries.
     """
 
     def __init__(self, pop: BasePopulation[Any]) -> None:

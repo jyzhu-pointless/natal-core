@@ -23,8 +23,8 @@ angles that file does not reach:
    declaration order is observable, and probability boundary values.
 5. Compile-time validation addenda — zero-match *target*, group
    registration atomicity for convert.
-6. Three-backend bitwise parity with a non-zero ``start`` and a ``when``
-   clause, compared per tick across separate ``run()`` call boundaries.
+6. Schedule-state persistence with a non-zero ``start`` and a ``when``
+   clause, verified per tick across separate ``run()`` call boundaries.
 7. Write-channel integrity — exact ``(tick, name, old, new)`` rows on an
    ``every=2`` schedule, snapshot ownership of ``params_log``, and
    schedule persistence across ``run`` call boundaries.
@@ -1045,79 +1045,47 @@ def test_convert_group_registration_atomic_on_bad_op() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section F — three-backend bitwise parity (non-zero start + when)
+# Section F — schedule-state persistence across run boundaries
 # ---------------------------------------------------------------------------
 
 
-def _parity_backends() -> List[Tuple[str, AgeStructuredPopulation]]:
-    """Build python/rust populations with a shared mixed program."""
-    pops: List[Tuple[str, AgeStructuredPopulation]] = []
-    for backend in ("python", "rust"):
-        if backend == "rust" and not RUST_AVAILABLE:
-            continue
-        species = _fresh_species()
-        pop = _build_age_structured(species, f"addparity_{backend}")
-        pop.register_hooks(
-            [
-                Op.set_param(
-                    "carrying_capacity",
-                    "K * 0.9",
-                    every=2,
-                    start=1,
-                    when="tick >= 1",
-                ),
-                Op.convert("A|A", "A|a", probability=0.25),
-                Op.kill(genotypes="A|a", prob=0.1),
-            ],
-            event="early",
-            name="addparity_program",
-        )
-        if backend == "python":
-            pop._python_backend = True  # noqa: SLF001 — forcing the reference path
-        elif backend == "rust":
-            pop.enable_rust_backend(seed=11)
-        pops.append((backend, pop))
-    return pops
-
-
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
-def test_three_backend_parity_start1_every2_when_per_tick() -> None:
-    """python / rust agree bitwise with start=1, every=2, when.
+def test_start1_every2_when_schedule_persists_across_run_calls() -> None:
+    """start=1, every=2, ``when`` schedules survive run-call boundaries.
 
-    Extends the existing start=0 parity test with a non-zero start and a
-    ``when`` clause.  Every tick runs through a separate ``run()`` call,
-    so schedule state (tick counter, session column, draft value) must
-    persist across run-call boundaries on both backends.  The Rust
-    session column is compared against the Python draft after every tick.
+    Every tick runs through a separate ``run()`` call, so schedule state
+    (tick counter, session column, draft value) must persist across
+    run-call boundaries.  The engine session column is compared against
+    the population draft and the hand-compounded ``K * 0.9`` chain after
+    every tick.
     """
-    backends = _parity_backends()
-    assert len(backends) == 2
-    py_pop = backends[0][1]
-    rust_pop = backends[1][1]
-    session = rust_pop._rust_lifecycle_backend._session  # noqa: SLF001 — bridge
+    species = _fresh_species()
+    pop = _build_age_structured(species, "addparity_rust")
+    pop.register_hooks(
+        [
+            Op.set_param(
+                "carrying_capacity",
+                "K * 0.9",
+                every=2,
+                start=1,
+                when="tick >= 1",
+            ),
+            Op.convert("A|A", "A|a", probability=0.25),
+            Op.kill(genotypes="A|a", prob=0.1),
+        ],
+        event="early",
+        name="addparity_program",
+    )
+    pop.enable_rust_backend(seed=11)
+    session = pop._rust_lifecycle_backend._session  # noqa: SLF001 — bridge
 
     k_manual = 800.0
     for tick in range(8):
-        states = []
-        for _name, pop in backends:
-            pop.run(1, record_every=0)
-            states.append(
-                (
-                    pop.state.individual_count.copy(),
-                    pop.state.sperm_storage.copy(),
-                )
-            )
-        for (name, _pop), (ind, sperm) in zip(backends[1:], states[1:]):
-            np.testing.assert_array_equal(
-                states[0][0], ind, err_msg=f"{name} ind mismatch at tick {tick}"
-            )
-            np.testing.assert_array_equal(
-                states[0][1], sperm, err_msg=f"{name} sperm mismatch at tick {tick}"
-            )
+        pop.run(1, record_every=0)
         if tick >= 1 and (tick - 1) % 2 == 0:
             k_manual = k_manual * 0.9
         rust_k = float(session.get_scalar("carrying_capacity"))
-        assert rust_k == py_pop.params.carrying_capacity, f"tick {tick}"
+        assert rust_k == pop.params.carrying_capacity, f"tick {tick}"
         assert rust_k == k_manual, f"tick {tick}"
 
 
@@ -1206,6 +1174,7 @@ def test_spatial_set_param_selector_writes_only_selected_deme_columns() -> None:
 
     demes = [build_deme(f"addsp_d{d}") for d in range(3)]
     spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
     spatial.register_hooks(
         [Op.set_param("carrying_capacity", 321.0, every=1)],
         event="early",
@@ -1235,6 +1204,7 @@ def test_spatial_convert_applies_per_deme_independently() -> None:
 
     demes = [build_deme(f"addconv_d{d}") for d in range(3)]
     spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
     spatial.register_hooks(
         [Op.convert("A|A", "A|a", probability=0.25)], event="early"
     )
@@ -1349,27 +1319,21 @@ def _hb_spatial_pop(name: str, event: str):
     )
 
 
-class TestHb1SpatialEventLevelParity:
-    """HB-1: rust spatial set_param must be event-level, like python.
+class TestHb1SpatialEventLevelSemantics:
+    """HB-1: spatial set_param must be event-level.
 
-    Before the fix the rust spatial kernels committed set_param writes only
+    Before the fix the spatial kernels committed set_param writes only
     at tick granularity, so a first-event write could not influence the
     same tick's reproduction/survival (tick 0 diverged silently).
     """
 
     @pytest.mark.parametrize("event", ["first", "early", "late"])
-    def test_rust_spatial_set_param_semantics(self, event: str) -> None:
-        """Event-level commits compound per deme on both backends.
+    def test_spatial_set_param_semantics(self, event: str) -> None:
+        """Event-level commits compound per deme within each tick.
 
-        Semantics assertions (backend-independent truths):
-        the K chain halves once per tick per deme, every write lands in
-        the audit journal at its own tick, and the dynamics stay alive.
-        The two populations are built back-to-back and run under the
-        formerly order-sensitive interleaving (rust enable before the
-        python run); the retired compiled-backend codegen was the
-        cross-population shared-state source, so post-removal the
-        cross-backend parity must hold bitwise without construction-order
-        restrictions.
+        Semantics assertions: the K chain halves once per tick per deme,
+        every write lands in the audit journal at its own tick, and the
+        dynamics stay alive.
         """
         try:
             from natal.backends.rust.rust_backend import rust_backend_available
@@ -1378,34 +1342,19 @@ class TestHb1SpatialEventLevelParity:
         if not rust_backend_available():
             pytest.skip("rust extension not built")
 
-        py = _hb_spatial_pop(f"hb1_sem_py_{event}", event)
-        rs = _hb_spatial_pop(f"hb1_sem_rs_{event}", event)
-        rs.enable_rust_backend(seed=0)
-        py.run(3, record_every=0)
-        rs.run(3, record_every=0)
-        py_total = float(np.asarray(py.deme(0).state.individual_count).sum())
-        rs_total = float(np.asarray(rs.deme(0).state.individual_count).sum())
+        pop = _hb_spatial_pop(f"hb1_sem_{event}", event)
+        pop.run(3, record_every=0)
+        total = float(np.asarray(pop.deme(0).state.individual_count).sum())
 
         # K chain: exactly one halving per tick, on every deme draft.
         np.testing.assert_array_equal(
-            np.asarray(py.params.carrying_capacity), [100.0, 100.0]
+            np.asarray(pop.params.carrying_capacity), [100.0, 100.0]
         )
-        # Audit: one change row per fired tick per deme (python path logs
-        # per deme; rows carry the commit tick).
-        rows = [r for r in py.demes[0].params_log if r[1] == "carrying_capacity"]
+        # Audit: one change row per fired tick per deme; rows carry the
+        # commit tick.
+        rows = [r for r in pop.demes[0].params_log if r[1] == "carrying_capacity"]
         assert [(r[0], r[3]) for r in rows] == [(0, 400.0), (1, 200.0), (2, 100.0)]
-        assert py_total > 0.0
-
-        np.testing.assert_array_equal(
-            np.asarray(rs.params.carrying_capacity), [100.0, 100.0]
-        )
-        assert rs_total > 0.0
-
-        # Cross-backend bitwise parity under the interleaved order.
-        np.testing.assert_array_equal(
-            np.asarray(py.deme(0).state.individual_count),
-            np.asarray(rs.deme(0).state.individual_count),
-        )
+        assert total > 0.0
 
 
 class TestHb2RustRunChannelMerge:
@@ -1433,8 +1382,8 @@ class TestHb2RustRunChannelMerge:
 
         op = nt.Op.set_param("carrying_capacity", "carrying_capacity * 0.5")
 
-        py_pop = (
-            self._panmictic("hb2_py")
+        pop = (
+            self._panmictic("hb2_run")
             .competition(
                 juvenile_growth_mode="beverton_holt",
                 carrying_capacity=800.0,
@@ -1444,30 +1393,18 @@ class TestHb2RustRunChannelMerge:
             .hooks(op, event="early")
             .build()
         )
-        py_pop.run(3, record_every=0)
+        pop.run(3, record_every=0)
 
-        rs_pop = (
-            self._panmictic("hb2_rs")
-            .competition(
-                juvenile_growth_mode="beverton_holt",
-                carrying_capacity=800.0,
-                low_density_growth_rate=2.0,
-            )
-            .reproduction(eggs_per_female=10.0)
-            .hooks(op, event="early")
-            .build()
-        )
-        rs_pop.enable_rust_backend(seed=0)
-        rs_pop.run(3, record_every=0)
-
-        # The draft reflects the final session value, same as python path.
-        assert rs_pop.params.carrying_capacity == py_pop.params.carrying_capacity
-        # The audit log has one change row per fired tick, identical rows.
-        rs_rows = [r for r in rs_pop.params_log if r[1] == "carrying_capacity"]
-        py_rows = [r for r in py_pop.params_log if r[1] == "carrying_capacity"]
-        assert len(rs_rows) == len(py_rows) == 3
-        for py_row, rs_row in zip(py_rows, rs_rows):
-            assert py_row == rs_row
+        # The draft reflects the final session value: 800 halved per tick.
+        assert pop.params.carrying_capacity == 100.0
+        # The audit log has one change row per fired tick with the
+        # hand-compounded chain 800 -> 400 -> 200 -> 100.
+        rows = [r for r in pop.params_log if r[1] == "carrying_capacity"]
+        assert rows == [
+            (0, "carrying_capacity", 800.0, 400.0),
+            (1, "carrying_capacity", 400.0, 200.0),
+            (2, "carrying_capacity", 200.0, 100.0),
+        ]
 
     def test_rust_run_inf_expression_raises_with_param_name(self) -> None:
         try:

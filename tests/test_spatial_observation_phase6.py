@@ -10,20 +10,9 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.backends.reference.spatial_simulator import run_spatial_steps_with_migration
-
-from contextlib import contextmanager
 
 
-@contextmanager
-def python_reference():
-    """Portable stand-in for the retired compiled-backend disable guard.
 
-    The only non-Rust execution vehicle is the pure-Python reference;
-    this context manager is a semantic no-op kept so test bodies that
-    previously forced the Python path stay readable.
-    """
-    yield
 from natal.frontend.patterns import IndividualSelector
 
 DemeMode: TypeAlias = Literal["preserve", "aggregate"]
@@ -672,55 +661,33 @@ def test_spatial_observation_history_identical_across_builds(
         deme_mode: ``"preserve"`` or ``"aggregate"`` (from parametrize).
         collapse_age: Whether to sum over the age axis (from parametrize).
     """
-    with python_reference():
-        kernel = _build_discrete(
-            f"phase6_kernel_{deme_mode}_{collapse_age}",
-            demes=[2, 0],
-            deme_mode=deme_mode,
-            collapse_age=collapse_age,
-        )
-    python = _build_discrete(
-        f"phase6_python_{deme_mode}_{collapse_age}",
+    population = _build_discrete(
+        f"phase6_run_{deme_mode}_{collapse_age}",
         demes=[2, 0],
         deme_mode=deme_mode,
         collapse_age=collapse_age,
     )
-    kernel_counts = _install_coordinate_counts(kernel)
-    python_counts = _install_coordinate_counts(python)
-    np.testing.assert_array_equal(kernel_counts, python_counts)
+    counts = _install_coordinate_counts(population)
     expected_initial = _manual_spatial_projection(
-        kernel,
-        kernel_counts,
+        population,
+        counts,
         deme_mode=deme_mode,
         collapse_age=collapse_age,
     )
 
-    with python_reference():
-        kernel.run(2, record_every=1)
-    with python_reference():
-        python.run(2, record_every=1)
+    population.run(2, record_every=1)
 
-    assert kernel.history.ticks == python.history.ticks == (0, 1, 2)
-    assert kernel.history.axes == python.history.axes
-    assert kernel.history.values.shape == python.history.values.shape
-    np.testing.assert_array_equal(kernel.history.values, python.history.values)
-    kernel_final = np.stack(
-        [deme.state.individual_count for deme in kernel.demes]
-    )
-    python_final = np.stack(
-        [deme.state.individual_count for deme in python.demes]
-    )
-    np.testing.assert_array_equal(kernel_final, python_final)
+    assert population.history.ticks == (0, 1, 2)
+    final = np.stack([deme.state.individual_count for deme in population.demes])
     expected_final = _manual_spatial_projection(
-        kernel,
-        kernel_final,
+        population,
+        final,
         deme_mode=deme_mode,
         collapse_age=collapse_age,
     )
-    np.testing.assert_array_equal(kernel.history.values[0], expected_initial)
-    np.testing.assert_array_equal(kernel.history.values[-1], expected_final)
-    np.testing.assert_array_equal(kernel.observe().values, expected_final)
-    np.testing.assert_array_equal(python.observe().values, expected_final)
+    np.testing.assert_array_equal(population.history.values[0], expected_initial)
+    np.testing.assert_array_equal(population.history.values[-1], expected_final)
+    np.testing.assert_array_equal(population.observe().values, expected_final)
 
 
 def test_spatial_apply_rebuilds_lazy_mask_for_default_all_demes() -> None:
@@ -886,96 +853,6 @@ def test_configurator_rejects_invalid_integer_deme_selections(
         )
 
 
-def test_raw_spatial_engine_transport_serializes_regular_state_rows() -> None:
-    """The generic spatial engine records exact raw boundary tensors."""
-    population = _build_age("phase6_raw_engine_transport")
-    counts = _install_coordinate_counts(population)
-    sperm = np.stack(
-        [deme.state.sperm_storage.copy() for deme in population.demes]
-    )
-    expected_initial = np.concatenate(
-        (
-            np.array([0.0]),
-            counts.ravel(),
-            sperm.ravel(),
-        )
-    )
-
-    with python_reference():
-        # No migration routing: an all-empty CSR and an all-zero rate.
-        empty_indptr = np.zeros(4, dtype=np.int64)
-        final_state, history, was_stopped = run_spatial_steps_with_migration(
-            counts,
-            sperm,
-            population.deme(0).config,
-            tick=0,
-            n_steps=1,
-            indptr=empty_indptr,
-            dest_idx=np.zeros(0, dtype=np.int64),
-            weights=np.zeros(0, dtype=np.float64),
-            migration_rate=np.zeros((3, 2, 2), dtype=np.float64),
-            stochastic=False,
-            continuous_sampling=False,
-            record_interval=1,
-        )
-
-    final_counts, final_sperm, final_tick = final_state
-    expected_final = np.concatenate(
-        (
-            np.array([1.0]),
-            final_counts.ravel(),
-            final_sperm.ravel(),
-        )
-    )
-    assert history is not None
-    assert history.shape == (2, expected_initial.size)
-    assert final_tick == 1
-    assert was_stopped is False
-    np.testing.assert_array_equal(history[0], expected_initial)
-    np.testing.assert_array_equal(history[1], expected_final)
-
-
-def test_spatial_raw_history_identical_across_builds() -> None:
-    """Both backends serialize every raw deme coordinate at each boundary."""
-    with python_reference():
-        kernel = _build_discrete(
-            "phase6_kernel_raw",
-            demes=[2, 0],
-            deme_mode="aggregate",
-            history_mode="raw",
-        )
-    python = _build_discrete(
-        "phase6_python_raw",
-        demes=[2, 0],
-        deme_mode="aggregate",
-        history_mode="raw",
-    )
-    initial = _install_coordinate_counts(kernel)
-    python_initial = _install_coordinate_counts(python)
-    np.testing.assert_array_equal(python_initial, initial)
-
-    with python_reference():
-        kernel.run(2, record_every=1)
-    with python_reference():
-        python.run(2, record_every=1)
-
-    kernel_final = np.stack(
-        [deme.state.individual_count for deme in kernel.demes]
-    )
-    python_final = np.stack(
-        [deme.state.individual_count for deme in python.demes]
-    )
-    assert kernel.history.ticks == python.history.ticks == (0, 1, 2)
-    assert kernel.history.individual_count.shape == (3, *initial.shape)
-    assert python.history.individual_count.shape == (3, *initial.shape)
-    np.testing.assert_array_equal(kernel.history._to_numpy(), python.history._to_numpy())
-    np.testing.assert_array_equal(kernel.history.individual_count[0], initial)
-    np.testing.assert_array_equal(python.history.individual_count[0], initial)
-    np.testing.assert_array_equal(kernel_final, python_final)
-    np.testing.assert_array_equal(kernel.history.individual_count[-1], kernel_final)
-    np.testing.assert_array_equal(python.history.individual_count[-1], python_final)
-
-
 @pytest.mark.parametrize("history_mode", ["raw", "observation"])
 def test_age_spatial_backends_continue_with_sparse_exact_history(
     history_mode: Literal["raw", "observation"],
@@ -985,19 +862,12 @@ def test_age_spatial_backends_continue_with_sparse_exact_history(
     Args:
         history_mode: ``"raw"`` or ``"observation"`` (from parametrize).
     """
-    with python_reference():
-        kernel = _build_age(
-            f"phase6_age_kernel_{history_mode}",
-            history_mode=history_mode,
-        )
-    python = _build_age(
-        f"phase6_age_python_{history_mode}",
+    population = _build_age(
+        f"phase6_age_run_{history_mode}",
         history_mode=history_mode,
     )
-    initial_counts = _install_coordinate_counts(kernel)
-    python_counts = _install_coordinate_counts(python)
-    initial_sperm = _install_valid_coordinate_sperm(kernel, initial_counts)
-    python_sperm = _install_valid_coordinate_sperm(python, python_counts)
+    initial_counts = _install_coordinate_counts(population)
+    initial_sperm = _install_valid_coordinate_sperm(population, initial_counts)
     expected_counts, expected_sperm = _age_state_sequence(
         initial_counts,
         initial_sperm,
@@ -1005,45 +875,35 @@ def test_age_spatial_backends_continue_with_sparse_exact_history(
     )
     expected_ticks = (0, 1, 2, 4)
 
-    np.testing.assert_array_equal(python_counts, initial_counts)
-    np.testing.assert_array_equal(python_sperm, initial_sperm)
     np.testing.assert_array_equal(
         initial_sperm.sum(axis=-1),
         initial_counts[:, 0] * 3.0 / 8.0,
     )
 
-    with python_reference():
-        kernel.run(1, record_every=1)
-    with python_reference():
-        python.run(1, record_every=1)
+    population.run(1, record_every=1)
 
-    assert kernel.tick == python.tick == 1
-    for population in (kernel, python):
-        boundary_counts = np.stack(
-            [deme.state.individual_count for deme in population.demes]
-        )
-        boundary_sperm = np.stack(
-            [deme.state.sperm_storage for deme in population.demes]
-        )
-        np.testing.assert_array_equal(boundary_counts, expected_counts[1])
-        np.testing.assert_array_equal(boundary_sperm, expected_sperm[1])
+    assert population.tick == 1
+    boundary_counts = np.stack(
+        [deme.state.individual_count for deme in population.demes]
+    )
+    boundary_sperm = np.stack(
+        [deme.state.sperm_storage for deme in population.demes]
+    )
+    np.testing.assert_array_equal(boundary_counts, expected_counts[1])
+    np.testing.assert_array_equal(boundary_sperm, expected_sperm[1])
 
-    with python_reference():
-        kernel.run(4, record_every=2)
-    with python_reference():
-        python.run(4, record_every=2)
+    population.run(4, record_every=2)
 
-    assert kernel.tick == python.tick == 5
-    assert kernel.history.ticks == python.history.ticks == expected_ticks
-    for population in (kernel, python):
-        final_counts = np.stack(
-            [deme.state.individual_count for deme in population.demes]
-        )
-        final_sperm = np.stack(
-            [deme.state.sperm_storage for deme in population.demes]
-        )
-        np.testing.assert_array_equal(final_counts, expected_counts[5])
-        np.testing.assert_array_equal(final_sperm, expected_sperm[5])
+    assert population.tick == 5
+    assert population.history.ticks == expected_ticks
+    final_counts = np.stack(
+        [deme.state.individual_count for deme in population.demes]
+    )
+    final_sperm = np.stack(
+        [deme.state.sperm_storage for deme in population.demes]
+    )
+    np.testing.assert_array_equal(final_counts, expected_counts[5])
+    np.testing.assert_array_equal(final_sperm, expected_sperm[5])
 
     if history_mode == "raw":
         expected_history_counts = np.stack(
@@ -1052,51 +912,44 @@ def test_age_spatial_backends_continue_with_sparse_exact_history(
         expected_history_sperm = np.stack(
             [expected_sperm[tick] for tick in expected_ticks]
         )
-        for population in (kernel, python):
-            assert population.history.axes == (
-                "record",
-                "deme",
-                "sex",
-                "age",
-                "ztype",
-            )
-            np.testing.assert_array_equal(
-                population.history.individual_count,
-                expected_history_counts,
-            )
-            assert population.history.sperm_storage is not None
-            np.testing.assert_array_equal(
-                population.history.sperm_storage,
-                expected_history_sperm,
-            )
+        assert population.history.axes == (
+            "record",
+            "deme",
+            "sex",
+            "age",
+            "ztype",
+        )
+        np.testing.assert_array_equal(
+            population.history.individual_count,
+            expected_history_counts,
+        )
+        assert population.history.sperm_storage is not None
+        np.testing.assert_array_equal(
+            population.history.sperm_storage,
+            expected_history_sperm,
+        )
     else:
         expected_history_values = np.stack(
             [
-                _manual_groups(kernel, expected_counts[tick])[:, [1]].sum(axis=1)
+                _manual_groups(population, expected_counts[tick])[:, [1]].sum(axis=1)
                 for tick in expected_ticks
             ]
         )
-        for population in (kernel, python):
-            assert population.history.axes == (
-                "record",
-                "group",
-                "sex",
-                "age",
-            )
-            np.testing.assert_array_equal(
-                population.history.values,
-                expected_history_values,
-            )
-            with pytest.raises(
-                ValueError,
-                match="^sperm_storage is only available in raw mode$",
-            ):
-                _ = population.history.sperm_storage
-
-    np.testing.assert_array_equal(
-        kernel.history._to_numpy(),
-        python.history._to_numpy(),
-    )
+        assert population.history.axes == (
+            "record",
+            "group",
+            "sex",
+            "age",
+        )
+        np.testing.assert_array_equal(
+            population.history.values,
+            expected_history_values,
+        )
+        with pytest.raises(
+            ValueError,
+            match="^sperm_storage is only available in raw mode$",
+        ):
+            _ = population.history.sperm_storage
 
 
 def test_spatial_observation_has_no_compact_or_sentinel_representation() -> None:

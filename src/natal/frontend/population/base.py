@@ -238,11 +238,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         # Parameter snapshot log (tick, name, old, new) appended by the
         # runtime writers on every committed scalar change.
         self._params_log: List[ParamChange] = []
-        # Frozen per-deme ecology snapshot for spatial python dispatch:
-        # homogeneous demes share one draft, so Op.set_param operands must
-        # read the deme's OWN pre-tick column value, not the shared draft
-        # another deme may already have written this tick.
-        self._eco_value_override: Optional[NDArray[np.float64]] = None
 
         # Hooks queued for deferred registration after subclass
         # initialization (declarative ops need the IndexRegistry).
@@ -255,19 +250,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         # Session ownership flags live in the model subclasses (their
         # backends are concrete types); base-class consumers reach them via
         # getattr so the annotation stays unclaimed here.
-
-    def set_eco_value_override(self, values: Optional[NDArray[np.float64]]) -> None:
-        """Freeze or clear the Op.set_param operand snapshot.
-
-        The spatial python-dispatch tick sets each deme's snapshot to the
-        deme's own pre-tick ecology column so shared-draft writes by one
-        deme cannot feed another deme's same-tick expression.
-
-        Args:
-            values: Frozen row (length ``len(ECO_PARAM_NAMES)``) or
-                ``None`` to read live values again.
-        """
-        self._eco_value_override = values
 
     def _finalize_hooks(self) -> None:
         """Register deferred hook items after subclass initialization.
@@ -331,6 +313,8 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
             ("_rust_backend_seed", None),
             ("_rust_run_active", False),
             ("_state_cache_stale", False),
+            ("_rust_needs_rebuild", False),
+            ("_rust_deferred_writes", False),
         ):
             object.__setattr__(clone, _attr, _value)
 

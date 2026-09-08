@@ -60,6 +60,7 @@ def test_spatial_population_run_tick_with_real_demes_updates_state(simple_specie
         adjacency=adjacency,
         migration_rate=0.5,
     )
+    spatial.enable_rust_backend(seed=0)
 
     spatial.run_tick()
 
@@ -86,6 +87,7 @@ def test_spatial_population_kernel_migration_updates_state(simple_species: nt.Sp
         migration_kernel=np.array([[1.0, 0.0, 1.0]], dtype=np.float64),
         migration_rate=0.5,
     )
+    spatial.enable_rust_backend(seed=0)
 
     row = spatial.migration_row(1)
     assert np.isclose(row.sum(), 1.0)
@@ -121,6 +123,7 @@ def test_spatial_population_kernel_migration_row_renormalizes_border_weights(
         migration_kernel=np.array([[1.0, 0.0, 1.0]], dtype=np.float64),
         migration_rate=1.0,
     )
+    spatial.enable_rust_backend(seed=0)
 
     row = spatial.migration_row(0)
     expected = np.array([0.0, 1.0, 0.0], dtype=np.float64)
@@ -152,6 +155,7 @@ def test_spatial_population_hex_kernel_row_matches_valid_border_offsets(
         ),
         migration_rate=1.0,
     )
+    spatial.enable_rust_backend(seed=0)
 
     row = spatial.migration_row(0)
     expected = np.zeros(9, dtype=np.float64)
@@ -184,6 +188,7 @@ def test_spatial_population_hex_kernel_run_tick_matches_border_distribution(
         ),
         migration_rate=1.0,
     )
+    spatial.enable_rust_backend(seed=0)
 
     spatial.run_tick()
 
@@ -217,6 +222,7 @@ def test_spatial_population_heterogeneous_kernel_bank_routes_per_source(
         deme_kernel_ids=np.array([0, 1, 0], dtype=np.int64),
         migration_rate=1.0,
     )
+    spatial.enable_rust_backend(seed=0)
 
     row0 = spatial.migration_row(0)
     row1 = spatial.migration_row(1)
@@ -250,6 +256,7 @@ def test_spatial_population_run_tick_supports_heterogeneous_deme_configs(
         adjacency=np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
         migration_rate=0.0,
     )
+    spatial.enable_rust_backend(seed=0)
 
     spatial.run_tick()
 
@@ -275,10 +282,11 @@ def test_spatial_population_migration_rejects_inconsistent_sampling_modes(
         adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
         migration_rate=0.5,
     )
+    spatial.enable_rust_backend(seed=0)
 
     with pytest.raises(ValueError, match="migration requires consistent"):
         spatial.run_tick()
-def test_spatial_population_heterogeneous_configs_use_python_hook_dispatch(
+def test_spatial_population_heterogeneous_configs_use_engine_hook_dispatch(
     simple_species: nt.Species,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -294,15 +302,16 @@ def test_spatial_population_heterogeneous_configs_use_python_hook_dispatch(
         adjacency=np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
         migration_rate=0.0,
     )
+    spatial.enable_rust_backend(seed=0)
 
-    original = SpatialPopulation._run_python_dispatch_tick
+    original = SpatialPopulation._run_rust_spatial_tick
     calls = {"count": 0}
 
     def _wrapped(spatial_population: SpatialPopulation) -> bool:
         calls["count"] += 1
         return bool(original(spatial_population))
 
-    monkeypatch.setattr(SpatialPopulation, "_run_python_dispatch_tick", _wrapped)
+    monkeypatch.setattr(SpatialPopulation, "_run_rust_spatial_tick", _wrapped)
 
     spatial.run_tick()
     assert calls["count"] == 1
@@ -324,15 +333,16 @@ def test_spatial_population_heterogeneous_configs_run_uses_hook_dispatch_each_st
         adjacency=np.eye(3, dtype=np.float64),
         migration_rate=0.0,
     )
+    spatial.enable_rust_backend(seed=0)
 
-    original = SpatialPopulation._run_python_dispatch_tick
+    original = SpatialPopulation._run_rust_spatial_tick
     calls = {"count": 0}
 
     def _wrapped(spatial_population: SpatialPopulation) -> bool:
         calls["count"] += 1
         return bool(original(spatial_population))
 
-    monkeypatch.setattr(SpatialPopulation, "_run_python_dispatch_tick", _wrapped)
+    monkeypatch.setattr(SpatialPopulation, "_run_rust_spatial_tick", _wrapped)
 
     spatial.run(n_steps=3)
 
@@ -371,6 +381,7 @@ def test_spatial_population_comprehensive_matches_two_deme_migration_theory(
         adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
         migration_rate=migration_rate,
     )
+    spatial.enable_rust_backend(seed=0)
 
     initial_totals = [float(deme.state.individual_count.sum()) for deme in spatial.demes]
     assert np.isclose(sum(initial_totals), 200.0)

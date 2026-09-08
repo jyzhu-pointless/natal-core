@@ -11,8 +11,8 @@ Five test families:
 3. ``Op.set_param`` numerical semantics (RPN equals a hand-written
    Python expression per tick, every/start scheduling, params_log rows,
    per-deme column writes on spatial populations).
-4. Two-backend bitwise parity (python / rust) on one shared
-   program, per tick.
+4. Mixed-program run contract: the engine session column tracks the
+   population draft against hand-compounded expectations.
 5. Mixed registration with existing ops (priority-ordered execution).
 """
 
@@ -460,6 +460,7 @@ def test_set_param_spatial_per_deme_columns() -> None:
             event="early",
         )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
     spatial.run(1, record_every=0)
 
     # The python dispatch path writes every deme's own draft via its
@@ -483,6 +484,7 @@ def test_set_param_spatial_per_deme_columns() -> None:
             event="early",
         )
     spatial2 = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
+    spatial2.enable_rust_backend(seed=0)
     spatial2.run(1, record_every=0)
     assert d0.params.carrying_capacity == 222.0
     assert d2.params.carrying_capacity == 222.0
@@ -490,66 +492,40 @@ def test_set_param_spatial_per_deme_columns() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Family 4: three-backend bitwise parity
+# Family 4: mixed-program run contract
 # ---------------------------------------------------------------------------
 
 
-def _run_backends() -> list[tuple[str, AgeStructuredPopulation]]:
-    """Build one population per backend with the same shared program."""
-    pops: list[tuple[str, AgeStructuredPopulation]] = []
-    for backend in ("python", "rust"):
-        if backend == "rust" and not RUST_AVAILABLE:
-            continue
-        species = _fresh_species()
-        pop = _build_age_structured(species, f"parity_{backend}")
-        pop.register_hooks(
-            [
-                Op.set_param("carrying_capacity", "K * 0.9", every=1),
-                Op.convert("A|A", "A|a", probability=0.25),
-                Op.scale(genotypes="a|a", factor=0.5, sex="male"),
-            ],
-            event="early",
-            name="parity_program",
-        )
-        if backend == "python":
-            pop._python_backend = True  # noqa: SLF001 — forcing the reference path
-        elif backend == "rust":
-            pop.enable_rust_backend(seed=11)
-        pops.append((backend, pop))
-    return pops
-
-
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
-def test_two_backend_bitwise_parity_per_tick() -> None:
-    """python / rust agree bit-for-bit on states and params."""
-    backends = _run_backends()
-    assert len(backends) == 2
+def test_mixed_program_session_column_tracks_draft() -> None:
+    """A shared mixed program keeps the session column equal to the draft.
 
-    for tick in range(6):
-        states = []
-        for _name, pop in backends:
-            pop.run(1, record_every=0)
-            states.append(
-                (
-                    pop.state.individual_count.copy(),
-                    pop.state.sperm_storage.copy(),
-                )
-            )
-        for (name, _pop), (ind, sperm) in zip(backends[1:], states[1:]):
-            np.testing.assert_array_equal(
-                states[0][0], ind, err_msg=f"{name} ind mismatch at tick {tick}"
-            )
-            np.testing.assert_array_equal(
-                states[0][1], sperm, err_msg=f"{name} sperm mismatch at tick {tick}"
-            )
+    ``K * 0.9 every=1`` over 6 single-tick ``run()`` calls compounds the
+    carrying capacity; after each batch the engine session column must
+    equal the population draft, and the final value must equal the
+    hand-compounded ``800 * 0.9**6``.
+    """
+    species = _fresh_species()
+    pop = _build_age_structured(species, "mixed_program_contract")
+    pop.register_hooks(
+        [
+            Op.set_param("carrying_capacity", "K * 0.9", every=1),
+            Op.convert("A|A", "A|a", probability=0.25),
+            Op.scale(genotypes="a|a", factor=0.5, sex="male"),
+        ],
+        event="early",
+        name="mixed_program",
+    )
+    pop.enable_rust_backend(seed=11)
+    session = pop._rust_lifecycle_backend._session  # noqa: SLF001
 
-    # Parameter trajectory: draft values on python; the rust session
-    # column via the backend session API.
-    py_pop = backends[0][1]
-    rust_pop = backends[1][1]
-    session = rust_pop._rust_lifecycle_backend._session  # noqa: SLF001
-    k_rust = float(session.get_scalar("carrying_capacity"))
-    assert k_rust == py_pop.params.carrying_capacity
+    k_manual = 800.0
+    for _tick in range(6):
+        pop.run(1, record_every=0)
+        k_manual *= 0.9
+        rust_k = float(session.get_scalar("carrying_capacity"))
+        assert rust_k == pop.params.carrying_capacity
+        assert rust_k == k_manual
 
 
 # ---------------------------------------------------------------------------

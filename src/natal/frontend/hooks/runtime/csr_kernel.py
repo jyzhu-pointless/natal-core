@@ -1,13 +1,11 @@
-"""CSR interpreter — reference-oracle declarative hook kernel.
+"""CSR interpreter — Python-side declarative hook kernel.
 
-Role since slice 4 (26 decisions): this module is the **reference oracle**
-for declarative CSR hooks.  The Rust ``hooks.rs`` interpreter is the
-primary executor for the Rust backend; this Python interpreter
-serves the reference backend (inside the lifecycle
-wrappers via ``execute_csr_event_program_with_state``, and from the
-Python orchestration layer via ``HookExecutor``) and provides the
-parity baseline the Rust executor is tested against.  Full retirement of
-the duplicate interpreter is deferred to slice 6.
+Role since slice 4 (26 decisions): the Rust ``hooks.rs`` interpreter is
+the in-tick executor inside the engine session; this Python interpreter
+serves the out-of-band surfaces — the finish-event executor
+(:class:`~natal.frontend.hooks.runtime.fallback.HookExecutor`) and direct
+``trigger_event`` calls — plus the samplers the finish-event programs
+draw from (:mod:`natal.frontend.hooks.runtime.sampling`).
 
 Return value protocol
 ---------------------

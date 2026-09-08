@@ -170,16 +170,16 @@ MUST_NOT_EXIST: tuple[RemovalEntry, ...] = (
         item_id="backends.reference",
         description="production pure-Python reference engine package",
         owner_stage="S6",
-        status="pending",
+        status="removed",
     ),
     RemovalEntry(
         item_id="backend-selector",
         description=(
             "backend= selection (removed at S6 batch A), enable/disable "
-            "facades, and their exports/stubs"
+            "facades, and their exports/stubs (facades removed at S6 batch B)"
         ),
         owner_stage="S6",
-        status="pending",
+        status="removed",
     ),
     RemovalEntry(
         item_id="python-authoritative-state",
@@ -227,7 +227,7 @@ MUST_NOT_EXIST: tuple[RemovalEntry, ...] = (
         item_id="same-path-parity-tests",
         description="parity tests that compare a path against itself",
         owner_stage="S6",
-        status="pending",
+        status="removed",
     ),
 )
 
@@ -325,6 +325,69 @@ def _removed_probe_per_run_session_rebuild() -> None:
         )
 
 
+def _removed_probe_backends_reference() -> None:
+    """The reference engine package must not exist, statically or dynamically."""
+    assert importlib.util.find_spec("natal.backends.reference") is None, (
+        "natal.backends.reference resolves to an import spec — the package "
+        "(or a stale bytecode directory) is back on disk"
+    )
+    assert not _module_importable("natal.backends.reference"), (
+        "natal.backends.reference imports again — the reference engine returned"
+    )
+
+
+def _removed_probe_backend_selector() -> None:
+    """Backend selection and the enable/disable facades are gone for good.
+
+    The three ``setup()`` signatures carry no ``backend`` kwarg, the
+    ``disable_rust_backend`` / ``refresh_rust_backend`` facades and the
+    ``using_rust_backend`` property are absent from every population class,
+    and ``enable_rust_backend`` remains as the engine initialization entry.
+    """
+    from natal.frontend.configurator._base import Configurator
+    from natal.frontend.population.age_structured import AgeStructuredPopulation
+    from natal.frontend.population.discrete_generation import (
+        DiscreteGenerationPopulation,
+    )
+    from natal.frontend.spatial.population import SpatialPopulation
+
+    for cls in (AgeStructuredPopulation, DiscreteGenerationPopulation):
+        assert "backend" not in inspect.signature(cls.setup).parameters, (
+            f"{cls.__name__}.setup carries the retired backend= selector kwarg"
+        )
+    assert "backend" not in inspect.signature(Configurator.setup).parameters, (
+        "Configurator.setup carries the retired backend= selector kwarg"
+    )
+    for cls in (
+        AgeStructuredPopulation,
+        DiscreteGenerationPopulation,
+        SpatialPopulation,
+    ):
+        for attr in ("disable_rust_backend", "refresh_rust_backend", "using_rust_backend"):
+            assert not hasattr(cls, attr), (
+                f"{cls.__name__}.{attr} is reachable again — backend "
+                "selection returned"
+            )
+        assert hasattr(cls, "enable_rust_backend"), (
+            f"{cls.__name__}.enable_rust_backend must remain as the engine "
+            "initialization entry"
+        )
+
+
+def _removed_probe_same_path_parity_tests() -> None:
+    """The same-path parity suites are physically deleted."""
+    for name in (
+        "test_rust_lifecycle.py",
+        "test_sampling_consistency.py",
+        "test_random_sampling_consistency.py",
+        "test_improved_sampling.py",
+        "test_lifecycle_unified.py",
+    ):
+        assert not (REPO_ROOT / "tests" / name).is_file(), (
+            f"{name} is back — the same-path parity suite must stay deleted"
+        )
+
+
 def _removed_probe_discrete_spatial_hookless_backend() -> None:
     """The hook-less discrete-spatial construction is unreachable."""
     from natal.frontend.spatial.population import SpatialPopulation
@@ -350,6 +413,9 @@ def _removed_probe_discrete_spatial_hookless_backend() -> None:
 REMOVED_PROBES: dict[str, Callable[[], None]] = {
     "output.record": _removed_probe_output_record,
     "build_observation_row_panmictic": _removed_probe_build_observation_row_panmictic,
+    "backends.reference": _removed_probe_backends_reference,
+    "backend-selector": _removed_probe_backend_selector,
+    "same-path-parity-tests": _removed_probe_same_path_parity_tests,
     "configcontext-population-clone": _removed_probe_configcontext_population_clone,
     "rust-dirty-bridge": _removed_probe_rust_dirty_bridge,
     "per-run-session-rebuild": _removed_probe_per_run_session_rebuild,
@@ -372,46 +438,6 @@ def test_removed_entries_are_unreachable() -> None:
             "unreachability probe — the removal would be silently unverified"
         )
         probe()
-
-
-def _pending_probe_backends_reference() -> None:
-    """The reference engine package must still import until S6 deletes it."""
-    assert _module_importable("natal.backends.reference"), (
-        "natal.backends.reference no longer imports — flip this entry to "
-        '"removed" and register an unreachability probe in the same batch'
-    )
-
-
-def _pending_probe_backend_selector() -> None:
-    """The backend= kwarg is gone; the enable/disable facades remain until S6.
-
-    S6 batch A removed the ``backend=`` selection kwarg from every ``setup``
-    signature (plan must-not-exist item 2).  The enable/disable facades and
-    their exports/stubs still exist until batch B deletes the reference
-    engine; this pending probe pins both halves of that split.
-    """
-    from natal.frontend.configurator._base import Configurator
-    from natal.frontend.population.age_structured import AgeStructuredPopulation
-    from natal.frontend.population.discrete_generation import (
-        DiscreteGenerationPopulation,
-    )
-    from natal.frontend.spatial.population import SpatialPopulation
-
-    for cls in (AgeStructuredPopulation, DiscreteGenerationPopulation):
-        assert "backend" not in inspect.signature(cls.setup).parameters, (
-            f"{cls.__name__}.setup still carries the retired backend= selector "
-            "kwarg — the S6 batch A removal regressed"
-        )
-    assert "backend" not in inspect.signature(Configurator.setup).parameters, (
-        "Configurator.setup still carries the retired backend= selector kwarg"
-    )
-    for cls in (
-        AgeStructuredPopulation,
-        DiscreteGenerationPopulation,
-        SpatialPopulation,
-    ):
-        assert hasattr(cls, "enable_rust_backend")
-        assert hasattr(cls, "disable_rust_backend")
 
 
 def _pending_probe_python_authoritative_state() -> None:
@@ -451,22 +477,9 @@ def _pending_probe_python_history_append_store() -> None:
     )
 
 
-def _pending_probe_same_path_parity_tests() -> None:
-    """The cross-backend parity framework artifacts must still exist."""
-    assert (REPO_ROOT / "scripts" / "slice5_parity_baseline.py").is_file(), (
-        "the slice-5 parity baseline generator is gone"
-    )
-    assert (REPO_ROOT / "tests" / "test_rust_population_integration.py").is_file(), (
-        "the rust-vs-reference comparison suite is gone"
-    )
-
-
 PENDING_PROBES: dict[str, Callable[[], None]] = {
-    "backends.reference": _pending_probe_backends_reference,
-    "backend-selector": _pending_probe_backend_selector,
     "python-authoritative-state": _pending_probe_python_authoritative_state,
     "python-history-append-store": _pending_probe_python_history_append_store,
-    "same-path-parity-tests": _pending_probe_same_path_parity_tests,
 }
 
 
@@ -524,7 +537,7 @@ INVARIANTS: tuple[InvariantEntry, ...] = (
     ),
     InvariantEntry(
         area="density curves g(1)=1, monotone non-increasing, compensated g(0)=r",
-        owning_tests=("test_algorithms_coverage.py", "test_config_slice3.py"),
+        owning_tests=("test_config_slice3.py",),  # curve properties pinned by rust curves::tests
     ),
     InvariantEntry(
         area="random streams advance; split run == single run; restore replays",
@@ -655,8 +668,7 @@ def test_offspring_derivation_has_a_single_spelling() -> None:
     compression, species blueprint, build-time maps).
     """
     allowed = {
-        "natal/backends/reference/simulation/age_structured.py",  # kernel
-        "natal/frontend/data/_engine.py",  # single wrapper
+        "natal/frontend/data/_engine.py",  # single wrapper (Rust kernel)
     }
     src_root = REPO_ROOT / "src"
     offenders: list[str] = []

@@ -23,10 +23,6 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-import natal.backends.reference.lifecycle as lifecycle_engine
-from natal.backends.reference.spatial_simulator import (
-    run_spatial_migration,
-)
 from natal.contracts.blueprint import Blueprint
 from natal.contracts.materialize import SpatialMigration, materialize
 from natal.contracts.params import Params
@@ -182,9 +178,8 @@ class DemeSlice:
     Writes follow the stage-3 data plane:
 
     - ``write_ecology`` writes the deme's ecology column entry AND the
-      deme's draft (per-field clone-on-write), so every execution path —
-      Python dispatch and the Rust session columns —
-      sees the same value.
+      deme's draft (per-field clone-on-write), so the Rust session columns
+      and every Python reader see the same value.
     - ``write_genetics`` forks the deme's genetics variant (Rust bank) and
       clones the draft arrays, so divergence at one deme never leaks into
       the demes that previously shared its tables.
@@ -1196,35 +1191,6 @@ class SpatialPopulation:
         return self._demes[idx]
 
     # -- stage-3 write channels (ecology columns + genetics fork) --------
-
-    def _sync_ecology_columns_from_rows(self, rows: list[NDArray[np.float64]]) -> None:
-        """Commit per-deme tick-local ecology chains to columns and draft.
-
-        Called after a python-dispatch tick whose program carried
-        ``Op.set_param``.  The container columns (the authoritative spatial
-        ecology store, mirroring the Rust columnized Params) take each
-        deme's final local value.  The shared draft is deliberately not
-        written here (a ``_replace`` would split the object shared across
-        demes); per-deme drafts already hold their own values via the
-        flush-time ``set_config`` propagation.
-
-        Args:
-            rows: Per-deme final local rows (index-aligned with demes).
-        """
-        from natal.frontend.hooks.types import ECO_PARAM_NAMES
-
-        for pid, name in enumerate(ECO_PARAM_NAMES):
-            column = self._ecology_columns.get(name)
-            if column is None:
-                continue
-            arr = np.asarray(column)
-            if arr.ndim == 1 and arr.size == len(rows):
-                for deme_index, row in enumerate(rows):
-                    arr[deme_index] = float(row[pid])
-        # Draft sync is deliberately skipped: the NamedTuple draft is
-        # immutable (_replace would split the shared object across demes)
-        # and the container columns are the authoritative spatial ecology
-        # store that pop.params and materialize both read.
 
     def _collect_ecology_columns(self) -> dict[str, NDArray[np.float64]]:
         """Gather the (n_demes, ...) ecology columns from the deme drafts.
@@ -2343,11 +2309,11 @@ class SpatialPopulation:
         Uses the **compact** execution plan so that demes sharing identical
         hook sequences produce a single wildcard descriptor instead of one
         per-deme descriptor.  The aggregate bundle carries the CSR registry
-        consumed by the Python dispatch path.
+        handed to the Rust session at enable/rebuild time.
 
         Returns:
             CompiledEventHooks: per-event hook callables plus the CSR
-            registry used by ``_run_python_dispatch_tick``.
+            registry consumed by the engine session.
 
         Implementation detail:
             This function is the single rebuild entrypoint used by
@@ -2714,16 +2680,6 @@ class SpatialPopulation:
                 continue
         return False
 
-    def _should_use_python_dispatch(self) -> bool:
-        """Return whether spatial runtime must use Python event dispatch.
-
-        Returns:
-            Always ``True``: with the compiled lifecycle wrappers retired,
-            every non-Rust spatial run uses the per-deme Python dispatch
-            path.  The Rust backend is the only other execution vehicle.
-        """
-        return True
-
     def _ensure_demes_runnable(self, *, context: str) -> None:
         """Raise if any deme is already finished before execution."""
         for idx, deme in enumerate(self._demes):
@@ -2769,106 +2725,6 @@ class SpatialPopulation:
         for deme in self._demes:
             deme._finished = True  # type: ignore[attr-defined]
             deme.trigger_event("finish", deme_id=deme._deme_id)  # pyright: ignore[reportPrivateUsage]  # SpatialPopulation owns its demes; finish hooks must observe the firing deme's own index.
-
-    def _run_python_dispatch_tick(self) -> bool:
-        """Run one tick via per-deme lifecycle and shared migration.
-
-        Spatial History belongs to this container, so the delegated deme
-        lifecycle must not record a second, pre-migration snapshot.
-
-        For programs carrying ``Op.set_param``, each deme runs against its
-        own tick-local ecology chain (a mutable row shared with the
-        executor): expressions read and write the deme's OWN chain, so
-        events compound within the tick (matching the Rust local EcoCtx)
-        while homogeneous demes sharing one draft object cannot contaminate
-        each other.  After the tick the container columns take each deme's
-        final local value and the shared draft takes deme 0's.
-
-        Returns:
-            ``True`` when a deme stops the simulation during its lifecycle;
-            otherwise ``False`` after migration is applied.
-        """
-        from natal.frontend.hooks.types import ECO_PARAM_NAMES
-
-        registry = self._hooks.registry
-        has_set_param = registry is not None and bool(registry.has_set_param)
-        local_rows: list[NDArray[np.float64]] = []
-        if has_set_param:
-            for deme_index, deme in enumerate(self._demes):
-                row = np.zeros(len(ECO_PARAM_NAMES), dtype=np.float64)
-                for pid, name in enumerate(ECO_PARAM_NAMES):
-                    column = self._ecology_columns.get(name)
-                    if column is not None and np.asarray(column).ndim == 1:
-                        row[pid] = float(np.asarray(column)[deme_index])
-                    else:
-                        row[pid] = float(getattr(deme.config, name))
-                deme.set_eco_value_override(row)
-                local_rows.append(row)
-        try:
-            return self._python_dispatch_tick_inner()
-        finally:
-            if has_set_param:
-                for deme in self._demes:
-                    deme.set_eco_value_override(None)
-                self._sync_ecology_columns_from_rows(local_rows)
-
-    def _python_dispatch_tick_inner(self) -> bool:
-        """The original per-deme loop (see _run_python_dispatch_tick)."""
-        from natal.frontend.hooks.types import ECO_PARAM_NAMES
-
-        for deme in self._demes:
-            chain = getattr(deme, "_eco_value_override", None)
-            if chain is not None:
-                # Reset the shared draft to THIS deme's chain value so the
-                # lifecycle kernels (which read the draft) start each deme
-                # from its own column value; event-level writes by an
-                # earlier deme cannot feed this deme's operands.
-                deme.set_config(
-                    deme.config._replace(
-                        **{
-                            name: float(chain[pid])
-                            for pid, name in enumerate(ECO_PARAM_NAMES)
-                        }
-                    )
-                )
-            run_lifecycle = getattr(deme, "_run_python_lifecycle", None)
-            if run_lifecycle is not None:
-                if hasattr(deme.state, "sperm_storage"):
-                    tick_fn = lifecycle_engine.run_structured_tick
-                else:
-                    tick_fn = lifecycle_engine.run_discrete_tick
-                run_lifecycle(
-                    tick_fn=tick_fn,
-                    n_steps=1,
-                    record_every=0,
-                    finish=False,
-                    clear_history_on_start=False,
-                )
-            else:
-                # Lightweight test doubles and third-party deme adapters keep
-                # implementing ``run_tick()`` directly.
-                deme.run_tick()
-            if bool(getattr(deme, "_finished", False)):
-                return True
-
-        self._tick = int(self._demes[0].tick)
-
-        ind_all, sperm_all = self._stack_deme_state_arrays()
-
-        # Runtime migration = rate column x frozen CSR (slice-5 data plane).
-        ind_all, sperm_all = run_spatial_migration(
-            ind_count_all=ind_all,
-            sperm_store_all=sperm_all,
-            indptr=self._migration_csr.indptr,
-            dest_idx=self._migration_csr.dest_idx,
-            weights=self._migration_csr.weights,
-            migration_rate=self._params.migration_rate,
-            stochastic=bool(self._blueprint.stochastic),
-            continuous_sampling=bool(self._blueprint.continuous_sampling),
-            stay_after_send=self._migration_csr.stay_after_send,
-        )
-        self._apply_stacked_state(ind_all, sperm_all, int(self._tick))
-        return False
 
     def enable_rust_backend(self, seed: int = 0) -> SpatialPopulation:
         """Enable the Rust spatial backend for subsequent runs.
@@ -3033,31 +2889,6 @@ class SpatialPopulation:
                 *cast("list[list[Callable[..., int]]]", bridges)
             )
 
-    def disable_rust_backend(self) -> SpatialPopulation:
-        """Disable the Rust spatial backend.
-
-        The session owns the authoritative state while enabled, so the
-        latest snapshot is pulled back into the per-deme caches before the
-        backend is dropped.
-
-        Returns:
-            Self for chaining.
-        """
-        self._ensure_rust_states_fresh()
-        self._rust_spatial_backend = None
-        self._rust_spatial_seed = None
-        self._rust_states_dirty = False
-        return self
-
-    @property
-    def using_rust_backend(self) -> bool:
-        """Return whether the Rust spatial backend is enabled.
-
-        Returns:
-            True when the session-owned Rust backend is enabled.
-        """
-        return getattr(self, "_rust_spatial_backend", None) is not None
-
     def _absorb_rust_spatial_journal(self, backend: object) -> None:
         """Split a drained spatial journal into per-deme plain-name rows.
 
@@ -3076,7 +2907,7 @@ class SpatialPopulation:
             deme = int(deme_part[len("deme") :])
             per_deme.setdefault(deme, []).append((tick, name, old, new))
             # Mirror the write into the authoritative container columns so
-            # the python-dispatch surface (pop.params) stays identical.
+            # the params surface (pop.params) stays identical.
             column = self._ecology_columns.get(name)
             if column is not None:
                 arr = np.asarray(column)
@@ -3104,11 +2935,15 @@ class SpatialPopulation:
         """
         backend = getattr(self, "_rust_spatial_backend", None)
         if backend is None:
-            raise RuntimeError("Rust spatial backend is not enabled.")
+            # Directly constructed containers (no configurator ``build()``)
+            # lazily create their session at the first tick boundary; the
+            # session stacks the demes' current state as its own.
+            self.enable_rust_backend(
+                seed=int(getattr(self, "_rust_spatial_seed", None) or 0)
+            )
         self._rebuild_stale_spatial_session()
         backend = self._rust_spatial_backend
-        if backend is None:  # pragma: no cover - rebuild guarantees a session
-            raise RuntimeError("Rust spatial backend vanished during rebuild.")
+        assert backend is not None  # enable either returns or raises
         previous_tick = int(self._tick)
         next_tick = int(backend.run_tick())
         # Deferred-write sync (plan 7.2): a Python hook that wrote params
@@ -3242,23 +3077,21 @@ class SpatialPopulation:
         return was_stopped
 
     def run_tick(self) -> SpatialPopulation:
-        """Run one spatial tick via the spatial kernel.
+        """Run one spatial tick through the session-owned Rust kernel.
 
         Returns:
             This spatial population instance after in-place state update.
 
         Raises:
-            RuntimeError: If any deme has already finished.
+            RuntimeError: If any deme has already finished or the native
+                engine extension is unavailable (the session is created by
+                ``SpatialConfigurator.build()`` or lazily at the first
+                tick).
         """
         self._ensure_demes_runnable(context="run spatial tick")
         self._assert_consistent_migration_flags()
 
-        if self.using_rust_backend:
-            was_stopped = self._run_rust_spatial_tick()
-        else:
-            # Non-Rust path: per-deme Python dispatch keeps local hook
-            # semantics and the shared migration stage.
-            was_stopped = self._run_python_dispatch_tick()
+        was_stopped = self._run_rust_spatial_tick()
         if was_stopped:
             self._mark_all_demes_stopped()
         return self
@@ -3270,7 +3103,7 @@ class SpatialPopulation:
         finish: bool = False,
         clear_history_on_start: bool = False,
     ) -> SpatialPopulation:
-        """Run multiple spatial ticks via the spatial kernel.
+        """Run multiple spatial ticks through the session-owned Rust kernel.
 
         Args:
             n_steps: Number of ticks to execute.
@@ -3286,7 +3119,10 @@ class SpatialPopulation:
 
         Raises:
             ValueError: If ``n_steps`` is negative.
-            RuntimeError: If any deme has already finished.
+            RuntimeError: If any deme has already finished or the native
+                engine extension is unavailable (the session is created by
+                ``SpatialConfigurator.build()`` or lazily at the first
+                tick).
         """
         if n_steps < 0:
             raise ValueError("n_steps must be >= 0")
@@ -3299,24 +3135,11 @@ class SpatialPopulation:
             if clear_history_on_start:
                 self.clear_history()
 
-            if self.using_rust_backend:
-                was_stopped = self._run_rust_spatial_steps(
-                    n_steps,
-                    record_every=record_every,
-                    clear_history_on_start=False,
-                )
-            else:
-                # Non-Rust path: per-deme Python dispatch keeps local hook
-                # timeline semantics.
-                was_stopped = False
-                if record_every > 0 and (self._tick % record_every == 0):
-                    self._record_snapshot(allow_existing=True)
-                for _ in range(n_steps):
-                    if self._run_python_dispatch_tick():
-                        was_stopped = True
-                        break
-                    if record_every > 0 and (self._tick % record_every == 0):
-                        self._record_snapshot(allow_existing=True)
+            was_stopped = self._run_rust_spatial_steps(
+                n_steps,
+                record_every=record_every,
+                clear_history_on_start=False,
+            )
             if bool(was_stopped):
                 self._mark_all_demes_stopped()
             elif finish:

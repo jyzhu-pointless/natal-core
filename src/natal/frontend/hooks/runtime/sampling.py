@@ -1,15 +1,12 @@
 """Sampling helpers for the finish-event CSR interpreter.
 
-Moved from ``natal.backends.reference.sampling.py`` for the finish-event
-CSR interpreter: the declarative-hook interpreter needs a small,
-self-contained sampler set (discrete binomial plus the NATAL-specific
-continuous binomial surrogate) so the hook runtime does not depend on
-the reference engine package.
+The declarative-hook interpreter needs a small, self-contained sampler
+set (discrete binomial plus the NATAL-specific continuous binomial
+surrogate) so the hook runtime stays independent of the engine session.
 
 The discrete sampler delegates directly to NumPy's native generator.
 The continuous sampler implements the NATAL-specific moment-matching
-surrogate as plain Python math; its formula is bit-for-bit identical to
-the implementation it was moved from.
+surrogate as plain Python math.
 """
 
 from __future__ import annotations

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from contextlib import contextmanager
 
 import numpy as np
 import pytest
@@ -20,15 +19,6 @@ from natal.frontend.spatial.configurator import (
 from natal.frontend.ui.spatial_dashboard import SpatialDashboard
 
 
-@contextmanager
-def python_reference():
-    """Portable stand-in for the retired compiled-backend disable guard.
-
-    The only non-Rust execution vehicle is the pure-Python reference;
-    this context manager is a semantic no-op kept so test bodies that
-    previously forced the Python path stay readable.
-    """
-    yield
 
 
 def _species(name: str) -> nt.Species:
@@ -189,18 +179,17 @@ def _stack_sperm_storage(population: nt.SpatialPopulation) -> NDArray[np.float64
 
 def test_nonspatial_observation_history_equals_direct_projection_each_tick() -> None:
     """Recorded collapsed values equal the canonical projection at every tick."""
-    with python_reference():
-        population = _discrete_population(
-            "nonspatial_observation_history",
-            observation_history=True,
-        )
-        expected_tick_zero = population.observation.apply(
-            population.state.individual_count.copy()
-        )
-        population.run(n_steps=1, record_every=1)
-        expected_tick_one = population.observation.apply(
-            population.state.individual_count.copy()
-        )
+    population = _discrete_population(
+        "nonspatial_observation_history",
+        observation_history=True,
+    )
+    expected_tick_zero = population.observation.apply(
+        population.state.individual_count.copy()
+    )
+    population.run(n_steps=1, record_every=1)
+    expected_tick_one = population.observation.apply(
+        population.state.individual_count.copy()
+    )
 
     expected = np.stack((expected_tick_zero, expected_tick_one))
     assert population.history.ticks == (0, 1)
@@ -210,14 +199,13 @@ def test_nonspatial_observation_history_equals_direct_projection_each_tick() -> 
 
 def test_spatial_raw_history_preserves_exact_discrete_deme_snapshots() -> None:
     """Public spatial raw History retains every deme coordinate at each tick."""
-    with python_reference():
-        population = _spatial_discrete(
-            "spatial_raw_history",
-            observation_history=False,
-        )
-        expected_tick_zero = _stack_individual_count(population)
-        population.run(1, record_every=1)
-        expected_tick_one = _stack_individual_count(population)
+    population = _spatial_discrete(
+        "spatial_raw_history",
+        observation_history=False,
+    )
+    expected_tick_zero = _stack_individual_count(population)
+    population.run(1, record_every=1)
+    expected_tick_one = _stack_individual_count(population)
 
     assert isinstance(population.history, History)
     assert population.history.ticks == (0, 1)
@@ -228,11 +216,10 @@ def test_spatial_raw_history_preserves_exact_discrete_deme_snapshots() -> None:
 
 def test_spatial_observe_is_group_first_and_preserves_deme_coordinates() -> None:
     """Spatial projection maps known ZTypes to group,deme,sex,age exactly."""
-    with python_reference():
-        population = _spatial_discrete(
-            "spatial_observe_axes",
-            observation_history=False,
-        )
+    population = _spatial_discrete(
+        "spatial_observe_axes",
+        observation_history=False,
+    )
     counts = np.arange(1.0, 25.0).reshape(2, 2, 2, 3)
     for deme_index, deme in enumerate(population.demes):
         # State writes go through the explicit import entry (snapshot
@@ -251,14 +238,13 @@ def test_spatial_observe_is_group_first_and_preserves_deme_coordinates() -> None
 
 def test_spatial_collapsed_observation_history_equals_each_stable_projection() -> None:
     """Spatial observation History stores group,deme,sex without losing a deme."""
-    with python_reference():
-        population = _spatial_discrete(
-            "spatial_observation_history",
-            observation_history=True,
-        )
-        expected_tick_zero = population.observe().values.copy()
-        population.run(1, record_every=1)
-        expected_tick_one = population.observe().values.copy()
+    population = _spatial_discrete(
+        "spatial_observation_history",
+        observation_history=True,
+    )
+    expected_tick_zero = population.observe().values.copy()
+    population.run(1, record_every=1)
+    expected_tick_one = population.observe().values.copy()
 
     expected = np.stack((expected_tick_zero, expected_tick_one))
     assert population.history.ticks == (0, 1)
@@ -268,57 +254,56 @@ def test_spatial_collapsed_observation_history_equals_each_stable_projection() -
 
 def test_spatial_age_raw_history_preserves_exact_sperm_and_count_snapshots() -> None:
     """Age-structured raw History retains the full per-deme sperm tensor."""
-    with python_reference():
-        population = (
-            nt.SpatialPopulation.builder(
-                _species("spatial_age_raw_species"),
-                n_demes=2,
-                topology=None,
-                pop_type="age_structured",
-            )
-            .setup(name="spatial_age_raw", stochastic=False)
-            .age_structure(n_ages=4, new_adult_age=2)
-            .initial_state(
-                individual_count=batch_setting(
-                    [
-                        {
-                            "female": {"WT|WT": [1.0, 2.0, 3.0, 4.0]},
-                            "male": {"WT|WT": [5.0, 6.0, 7.0, 8.0]},
-                        },
-                        {
-                            "female": {"WT|WT": [9.0, 10.0, 11.0, 12.0]},
-                            "male": {"WT|WT": [13.0, 14.0, 15.0, 16.0]},
-                        },
-                    ]
-                ),
-                sperm_storage=batch_setting(
-                    [
-                        {"WT|WT": {"WT|WT": {2: 17.0, 3: 18.0}}},
-                        {"WT|WT": {"WT|WT": {2: 19.0, 3: 20.0}}},
-                    ]
-                ),
-            )
-            .survival(
-                female_age_based_survival=[1.0, 0.9, 0.8, 0.0],
-                male_age_based_survival=[1.0, 0.9, 0.8, 0.0],
-            )
-            .reproduction(
-                eggs_per_female=2.0,
-                female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
-                male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
-            )
-            .competition(
-                carrying_capacity=1000.0,
-                expected_num_new_adult_females=10.0,
-            )
-            .record_history(mode="raw")
-            .build()
+    population = (
+        nt.SpatialPopulation.builder(
+            _species("spatial_age_raw_species"),
+            n_demes=2,
+            topology=None,
+            pop_type="age_structured",
         )
-        expected_count_zero = _stack_individual_count(population)
-        expected_sperm_zero = _stack_sperm_storage(population)
-        population.run(1, record_every=1)
-        expected_count_one = _stack_individual_count(population)
-        expected_sperm_one = _stack_sperm_storage(population)
+        .setup(name="spatial_age_raw", stochastic=False)
+        .age_structure(n_ages=4, new_adult_age=2)
+        .initial_state(
+            individual_count=batch_setting(
+                [
+                    {
+                        "female": {"WT|WT": [1.0, 2.0, 3.0, 4.0]},
+                        "male": {"WT|WT": [5.0, 6.0, 7.0, 8.0]},
+                    },
+                    {
+                        "female": {"WT|WT": [9.0, 10.0, 11.0, 12.0]},
+                        "male": {"WT|WT": [13.0, 14.0, 15.0, 16.0]},
+                    },
+                ]
+            ),
+            sperm_storage=batch_setting(
+                [
+                    {"WT|WT": {"WT|WT": {2: 17.0, 3: 18.0}}},
+                    {"WT|WT": {"WT|WT": {2: 19.0, 3: 20.0}}},
+                ]
+            ),
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.8, 0.0],
+            male_age_based_survival=[1.0, 0.9, 0.8, 0.0],
+        )
+        .reproduction(
+            eggs_per_female=2.0,
+            female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
+            male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
+        )
+        .competition(
+            carrying_capacity=1000.0,
+            expected_num_new_adult_females=10.0,
+        )
+        .record_history(mode="raw")
+        .build()
+    )
+    expected_count_zero = _stack_individual_count(population)
+    expected_sperm_zero = _stack_sperm_storage(population)
+    population.run(1, record_every=1)
+    expected_count_one = _stack_individual_count(population)
+    expected_sperm_one = _stack_sperm_storage(population)
 
     sperm_storage = population.history.sperm_storage
     assert sperm_storage is not None
@@ -336,11 +321,10 @@ def test_spatial_age_raw_history_preserves_exact_sperm_and_count_snapshots() -> 
 
 def test_nonspatial_kernel_rows_collapse_age_before_history_commit() -> None:
     """Kernel observation rows are reduced to the frozen collapsed schema."""
-    with python_reference():
-        population = _discrete_population(
-            "nonspatial_kernel_collapse",
-            observation_history=True,
-        )
+    population = _discrete_population(
+        "nonspatial_kernel_collapse",
+        observation_history=True,
+    )
     uncollapsed = np.arange(1.0, 9.0).reshape(2, 2, 2)
     row = np.concatenate((np.array([7.0]), uncollapsed.ravel()))[np.newaxis, :]
 
@@ -359,15 +343,14 @@ def test_nonspatial_kernel_rows_collapse_age_before_history_commit() -> None:
 
 def test_spatial_kernel_rows_project_observation_and_trim_raw_transport() -> None:
     """Spatial engine transport commits only the values declared by each schema."""
-    with python_reference():
-        observed_population = _spatial_discrete(
-            "spatial_kernel_observation",
-            observation_history=True,
-        )
-        raw_population = _spatial_discrete(
-            "spatial_kernel_raw",
-            observation_history=False,
-        )
+    observed_population = _spatial_discrete(
+        "spatial_kernel_observation",
+        observation_history=True,
+    )
+    raw_population = _spatial_discrete(
+        "spatial_kernel_raw",
+        observation_history=False,
+    )
 
     observed_counts = _stack_individual_count(observed_population)
     observed_row = np.concatenate(
@@ -421,22 +404,20 @@ def test_spatial_output_accessors_reject_unbuilt_state_and_shape_empty_history()
     with pytest.raises(RuntimeError, match="History is not initialized"):
         _ = unbuilt.history
 
-    with python_reference():
-        built = _spatial_discrete(
-            "spatial_empty_history",
-            observation_history=False,
-        )
+    built = _spatial_discrete(
+        "spatial_empty_history",
+        observation_history=False,
+    )
     assert built.history._to_numpy().shape == (0, built.history.schema.row_size)
 
 
 def test_spatial_dashboard_rebuilds_exact_totals_from_typed_raw_history() -> None:
     """Spatial charts consume History tensors without legacy flat-row parsing."""
-    with python_reference():
-        population = _spatial_discrete(
-            "spatial_dashboard_history",
-            observation_history=False,
-        )
-        population.run(1, record_every=1)
+    population = _spatial_discrete(
+        "spatial_dashboard_history",
+        observation_history=False,
+    )
+    population.run(1, record_every=1)
 
     dashboard = object.__new__(SpatialDashboard)
     dashboard.pop = population
@@ -459,47 +440,46 @@ def test_spatial_dashboard_rebuilds_exact_totals_from_typed_raw_history() -> Non
 
 def test_age_structured_snapshot_collapses_canonical_observation_exactly() -> None:
     """Age snapshot recording removes only age and preserves group and sex."""
-    with python_reference():
-        population = (
-            nt.AgeStructuredPopulation.setup(
-                species=_species("age_snapshot_species"),
-                name="age_snapshot",
-                stochastic=False,
-                continuous_sampling=False,
-            )
-            .age_structure(n_ages=4, new_adult_age=1)
-            .initial_state(
-                individual_count={
-                    "female": {"WT|WT": [1.0, 2.0, 3.0, 4.0]},
-                    "male": {"Dr|Dr": [5.0, 6.0, 7.0, 8.0]},
-                }
-            )
-            .reproduction(
-                female_age_based_mating_rate=[0.0, 1.0, 1.0, 1.0],
-                male_age_based_mating_rate=[0.0, 1.0, 1.0, 1.0],
-                eggs_per_female=2.0,
-            )
-            .survival(
-                female_age_based_survival=[1.0, 0.9, 0.8],
-                male_age_based_survival=[1.0, 0.9, 0.8],
-            )
-            .competition(
-                juvenile_growth_mode="beverton_holt",
-                old_juvenile_carrying_capacity=500.0,
-                expected_num_new_adult_females=10.0,
-            )
-            .with_observation(
-                groups=OrderedDict(
-                    (
-                        ("wild", IndividualSelector(ztype="WT|WT")),
-                        ("drive", IndividualSelector(ztype="Dr|Dr")),
-                    )
-                ),
-                collapse_age=True,
-            )
-            .record_history(mode="observation")
-            .build()
+    population = (
+        nt.AgeStructuredPopulation.setup(
+            species=_species("age_snapshot_species"),
+            name="age_snapshot",
+            stochastic=False,
+            continuous_sampling=False,
         )
+        .age_structure(n_ages=4, new_adult_age=1)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [1.0, 2.0, 3.0, 4.0]},
+                "male": {"Dr|Dr": [5.0, 6.0, 7.0, 8.0]},
+            }
+        )
+        .reproduction(
+            female_age_based_mating_rate=[0.0, 1.0, 1.0, 1.0],
+            male_age_based_mating_rate=[0.0, 1.0, 1.0, 1.0],
+            eggs_per_female=2.0,
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.8],
+            male_age_based_survival=[1.0, 0.9, 0.8],
+        )
+        .competition(
+            juvenile_growth_mode="beverton_holt",
+            old_juvenile_carrying_capacity=500.0,
+            expected_num_new_adult_females=10.0,
+        )
+        .with_observation(
+            groups=OrderedDict(
+                (
+                    ("wild", IndividualSelector(ztype="WT|WT")),
+                    ("drive", IndividualSelector(ztype="Dr|Dr")),
+                )
+            ),
+            collapse_age=True,
+        )
+        .record_history(mode="observation")
+        .build()
+    )
     expected = population.observation.apply(population.state.individual_count)
 
     population.record_snapshot()

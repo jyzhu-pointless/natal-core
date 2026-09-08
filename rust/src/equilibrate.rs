@@ -1,9 +1,9 @@
-//! Equilibrium calibration ported bit-for-bit from the Python reference.
+//! Equilibrium calibration.
 //!
-//! [`equilibrium_metrics`] mirrors
-//! ``natal.backends.reference.simulation.age_structured.compute_equilibrium_metrics``
-//! operation by operation: same multiplication order, same branches, same
-//! guards.  It is evaluated on demand from the owned contract
+//! [`equilibrium_metrics`] computes the equilibrium metrics operation by
+//! operation with fixed multiplication order, branches, and guards (the
+//! numerics were originally ported bit-for-bit from the retired
+//! pure-Python reference engine).  It is evaluated on demand from the owned contract
 //! ([`crate::contract::Blueprint`] + [`crate::contract::Params`]) whenever a
 //! tick batch assembles its [`crate::config::SimConfig`], so parameter
 //! changes take effect without any stored derived state.  Columnized params

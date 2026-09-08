@@ -9,7 +9,6 @@ import natal as nt
 from natal.frontend.configurator import Configurator
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.entry.declarative import Op
-from natal.frontend.patterns import IndividualSelector
 from natal.frontend.population.age_structured import AgeStructuredPopulation
 
 
@@ -30,7 +29,7 @@ def _custom_noop_hook(pop: object) -> int:
     return 0
 
 
-def _build_population(species: Species, name: str) -> AgeStructuredPopulation:
+def _build_population(species: Species, name: str, k: float = 80.0) -> AgeStructuredPopulation:
     """Build an identical deterministic age-structured population."""
     return (
         Configurator.from_species(species)
@@ -38,57 +37,26 @@ def _build_population(species: Species, name: str) -> AgeStructuredPopulation:
         .setup(stochastic=False, name=name)
         .initial_state(
             individual_count={
-                "female": {"A|A": 20, "A|B": 10},
-                "male": {"A|A": 15, "A|B": 15},
+                "female": {"A|A": [0, 0, 20, 0], "A|B": [0, 0, 10, 0]},
+                "male": {"A|A": [0, 0, 15, 0], "A|B": [0, 0, 15, 0]},
             }
         )
-        .competition(juvenile_growth_mode=1, carrying_capacity=80)
+        .survival(
+            female_age_based_survival=[0.5, 0.9, 0.9, 0.9],
+            male_age_based_survival=[0.5, 0.9, 0.9, 0.9],
+        )
+        .competition(juvenile_growth_mode=1, carrying_capacity=k)
+        .reproduction(
+            eggs_per_female=6.0,
+            female_adult_mating_rate=1.0,
+            male_adult_mating_rate=1.0,
+        )
         .build()
     )
 
 
-def test_real_population_matches_reference_backend(species: Species) -> None:
-    """A real population run through Rust must match the reference exactly."""
-    reference = _build_population(species, "reference")
-    rust_pop = _build_population(species, "rust").enable_rust_backend(seed=123)
-
-    reference.run(5, record_every=1, clear_history_on_start=True)
-    rust_pop.run(5, record_every=1, clear_history_on_start=True)
-
-    assert rust_pop.using_rust_backend is True
-    assert rust_pop.tick == reference.tick
-    assert np.array_equal(
-        rust_pop.state.individual_count, reference.state.individual_count
-    )
-    assert np.array_equal(rust_pop.state.sperm_storage, reference.state.sperm_storage)
-    assert np.array_equal(
-        rust_pop.history.individual_count, reference.history.individual_count
-    )
-
-
-def test_population_with_declarative_hook_matches_reference(species: Species) -> None:
-    """CSR declarative hooks registered on a population run inside Rust."""
-    reference = _build_population(species, "reference_hook")
-    rust_pop = _build_population(species, "rust_hook")
-    ops = [
-        Op.scale(genotypes="*", ages="*", sex="both", factor=0.5),
-        Op.add(genotypes="A|A", ages=1, sex="female", delta=3.0, when="tick >= 0"),
-    ]
-    for pop in (reference, rust_pop):
-        pop.register_hooks(ops, event="early", name="early_control")
-
-    rust_pop.enable_rust_backend(seed=7)
-    reference.run(4, record_every=1)
-    rust_pop.run(4, record_every=1)
-
-    assert np.array_equal(
-        rust_pop.state.individual_count, reference.state.individual_count
-    )
-    assert np.array_equal(rust_pop.state.sperm_storage, reference.state.sperm_storage)
-
-
-def test_run_tick_uses_rust_backend_when_enabled(species: Species) -> None:
-    """The single-tick entry point must also route through Rust."""
+def test_run_tick_routes_through_engine(species: Species) -> None:
+    """The single-tick entry point routes through the engine session."""
     pop = _build_population(species, "tick_pop").enable_rust_backend(seed=9)
     before = pop.state.individual_count.copy()
 
@@ -98,35 +66,32 @@ def test_run_tick_uses_rust_backend_when_enabled(species: Species) -> None:
     assert not np.array_equal(pop.state.individual_count, before)
 
 
-def test_observation_mode_history_matches_reference(species: Species) -> None:
-    """Kernel-side observation rows must match the reference history."""
+def test_declarative_hooks_registered_after_build_run_in_engine(
+    species: Species,
+) -> None:
+    """CSR declarative hooks registered post-build run inside Rust.
 
-    def build_observed(name: str):
-        return (
-            Configurator.from_species(species)
-            .age_structure(4, 2)
-            .setup(stochastic=False, name=name)
-            .initial_state(
-                individual_count={
-                    "female": {"A|A": 20, "A|B": 10},
-                    "male": {"A|A": 15, "A|B": 15},
-                }
-            )
-            .with_observation(groups={"aa": IndividualSelector(ztype="A|A")})
-            .record_history(mode="observation")
-            .build()
-        )
+    The scale hook halves every stage-1 count at the first event, so a
+    run with the hook must land strictly below the hook-free baseline.
+    """
+    ops = [
+        Op.scale(genotypes="*", ages="*", sex="both", factor=0.5),
+        Op.add(genotypes="A|A", ages=1, sex="female", delta=3.0, when="tick >= 0"),
+    ]
 
-    reference = build_observed("reference_observation")
-    rust_pop = build_observed("rust_observation").enable_rust_backend(seed=5)
-    reference.run(5, record_every=1, clear_history_on_start=True)
-    rust_pop.run(5, record_every=1, clear_history_on_start=True)
+    baseline = _build_population(species, "hook_baseline")
+    hooked = _build_population(species, "hooked")
+    hooked.register_hooks(ops, event="early", name="early_control")
+    hooked.enable_rust_backend(seed=7)
 
-    assert np.array_equal(
-        rust_pop.state.individual_count, reference.state.individual_count
+    baseline.run(4, record_every=1)
+    hooked.run(4, record_every=1)
+
+    baseline_total = float(baseline.state.individual_count.sum())
+    hooked_total = float(hooked.state.individual_count.sum())
+    assert hooked_total < baseline_total, (
+        "declarative hooks had no effect on the engine trajectory"
     )
-    assert np.array_equal(rust_pop.state.sperm_storage, reference.state.sperm_storage)
-    assert np.array_equal(rust_pop.history._rows, reference.history._rows)
 
 
 def test_setup_custom_hooks_run_on_rust_from_build(species: Species) -> None:
@@ -139,24 +104,30 @@ def test_setup_custom_hooks_run_on_rust_from_build(species: Species) -> None:
         .hooks(_custom_noop_hook)
         .build()
     )
-    assert pop.using_rust_backend is True
     pop.run(2)
     assert pop.tick == 2
 
 
-def test_runtime_config_update_rebuilds_rust_backend(species: Species) -> None:
-    """pop.update() in-place changes must be picked up before the next run."""
-    reference = _build_population(species, "runtime_ref")
-    rust_pop = _build_population(species, "runtime_rust").enable_rust_backend(seed=11)
-    reference.update().competition(carrying_capacity=500.0)
-    rust_pop.update().competition(carrying_capacity=500.0)
-    reference.run(5, record_every=1, clear_history_on_start=True)
-    rust_pop.run(5, record_every=1, clear_history_on_start=True)
-    assert rust_pop.using_rust_backend is True
-    assert np.array_equal(
-        rust_pop.state.individual_count, reference.state.individual_count
+def test_runtime_config_update_reaches_the_engine(species: Species) -> None:
+    """pop.update() in-place changes must be picked up before the next run.
+
+    The K=500 run must land strictly above the K=80 baseline (larger
+    carrying capacity retains more adults), proving the write crossed
+    the language boundary instead of being swallowed by the draft.
+    """
+    baseline = _build_population(species, "runtime_base")
+    updated = _build_population(species, "runtime_updated").enable_rust_backend(
+        seed=11
     )
-    assert np.array_equal(rust_pop.state.sperm_storage, reference.state.sperm_storage)
+    baseline.run(5, record_every=1, clear_history_on_start=True)
+    updated.update().competition(carrying_capacity=500.0)
+    updated.run(5, record_every=1, clear_history_on_start=True)
+
+    baseline_total = float(baseline.state.individual_count.sum())
+    updated_total = float(updated.state.individual_count.sum())
+    assert updated_total > baseline_total, (
+        "the K=500 update did not reach the engine session"
+    )
 
 
 def test_custom_hooks_work_with_rust_backend(species: Species) -> None:
@@ -177,6 +148,5 @@ def test_custom_hooks_work_with_rust_backend(species: Species) -> None:
 
     pop.enable_rust_backend(seed=0)
 
-    assert pop.using_rust_backend is True
     pop.run(2)
     assert pop.tick == 2

@@ -94,7 +94,6 @@ def test_single_param_hook_state_write_and_read() -> None:
         return 0
 
     pop = _build_discrete("s4_state", hook_items=[boost_males])
-    assert pop.using_rust_backend
     pop.run(n_steps=1)
 
     assert seen["before"] == 100.0

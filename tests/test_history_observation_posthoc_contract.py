@@ -10,18 +10,8 @@ from numpy.typing import NDArray
 
 import natal as nt
 
-from contextlib import contextmanager
 
 
-@contextmanager
-def python_reference():
-    """Portable stand-in for the retired compiled-backend disable guard.
-
-    The only non-Rust execution vehicle is the pure-Python reference;
-    this context manager is a semantic no-op kept so test bodies that
-    previously forced the Python path stay readable.
-    """
-    yield
 from natal.frontend.output import History
 from natal.frontend.patterns import IndividualSelector
 from natal.frontend.spatial.configurator import batch_setting
@@ -197,12 +187,11 @@ def _configured_spatial_discrete(name: str) -> nt.SpatialPopulation:
 
 def test_direct_spatial_constructor_installs_identity_observation_and_raw_history() -> None:
     """Direct construction records exact typed snapshots without a configurator."""
-    with python_reference():
-        population = _direct_spatial_discrete("direct_output_defaults")
-        initial_counts = _stack_counts(population)
-        initial_projection = population.observe()
-        population.run(1, record_every=1)
-        final_counts = _stack_counts(population)
+    population = _direct_spatial_discrete("direct_output_defaults")
+    initial_counts = _stack_counts(population)
+    initial_projection = population.observe()
+    population.run(1, record_every=1)
+    final_counts = _stack_counts(population)
 
     expected_identity = np.moveaxis(initial_counts, -1, 0)
     assert population.observation.labels == (
@@ -229,16 +218,15 @@ def test_direct_spatial_constructor_installs_identity_observation_and_raw_histor
 def test_nonspatial_raw_history_posthoc_collapse_equals_each_projection() -> None:
     """Post-hoc collapse projects every raw record with the supplied rule."""
     species = _species("posthoc_nonspatial_species")
-    with python_reference():
-        population = _discrete_deme(
-            species,
-            "posthoc_nonspatial",
-            female_wild=11.0,
-            male_wild=23.0,
-            custom_observation=True,
-            collapse_age=True,
-        )
-        population.run(1, record_every=1)
+    population = _discrete_deme(
+        species,
+        "posthoc_nonspatial",
+        female_wild=11.0,
+        male_wild=23.0,
+        custom_observation=True,
+        collapse_age=True,
+    )
+    population.run(1, record_every=1)
     observation = population.observation
 
     expected = np.stack(
@@ -258,9 +246,8 @@ def test_nonspatial_raw_history_posthoc_collapse_equals_each_projection() -> Non
 
 def test_spatial_raw_history_posthoc_observation_preserves_every_deme() -> None:
     """Post-hoc spatial values are group-first and exact for every record/deme."""
-    with python_reference():
-        population = _configured_spatial_discrete("posthoc_spatial")
-        population.run(1, record_every=1)
+    population = _configured_spatial_discrete("posthoc_spatial")
+    population.run(1, record_every=1)
     observation = population.observation
 
     expected = np.stack(
@@ -337,53 +324,52 @@ def test_foreign_same_shape_observation_is_rejected_by_layout_fingerprint() -> N
 
 def test_spatial_age_restore_checkpoint_restores_all_demes_and_truncates() -> None:
     """Checkpoint restore resets counts, sperm, all ticks, and future records."""
-    with python_reference():
-        population = (
-            nt.SpatialPopulation.builder(
-                _species("restore_spatial_age_species"),
-                n_demes=2,
-                topology=None,
-                pop_type="age_structured",
-            )
-            .setup(name="restore_spatial_age", stochastic=False)
-            .age_structure(n_ages=4, new_adult_age=2)
-            .initial_state(
-                individual_count=batch_setting(
-                    [
-                        {
-                            "female": {"WT|WT": [1.0, 2.0, 3.0, 4.0]},
-                            "male": {"WT|WT": [5.0, 6.0, 7.0, 8.0]},
-                        },
-                        {
-                            "female": {"WT|WT": [9.0, 10.0, 11.0, 12.0]},
-                            "male": {"WT|WT": [13.0, 14.0, 15.0, 16.0]},
-                        },
-                    ]
-                ),
-                sperm_storage=batch_setting(
-                    [
-                        {"WT|WT": {"WT|WT": {2: 17.0, 3: 18.0}}},
-                        {"WT|WT": {"WT|WT": {2: 19.0, 3: 20.0}}},
-                    ]
-                ),
-            )
-            .survival(
-                female_age_based_survival=[1.0, 0.9, 0.8, 0.0],
-                male_age_based_survival=[1.0, 0.9, 0.8, 0.0],
-            )
-            .reproduction(
-                eggs_per_female=2.0,
-                female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
-                male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
-            )
-            .competition(
-                carrying_capacity=1000.0,
-                expected_num_new_adult_females=10.0,
-            )
-            .record_history(mode="raw")
-            .build()
+    population = (
+        nt.SpatialPopulation.builder(
+            _species("restore_spatial_age_species"),
+            n_demes=2,
+            topology=None,
+            pop_type="age_structured",
         )
-        population.run(2, record_every=1)
+        .setup(name="restore_spatial_age", stochastic=False)
+        .age_structure(n_ages=4, new_adult_age=2)
+        .initial_state(
+            individual_count=batch_setting(
+                [
+                    {
+                        "female": {"WT|WT": [1.0, 2.0, 3.0, 4.0]},
+                        "male": {"WT|WT": [5.0, 6.0, 7.0, 8.0]},
+                    },
+                    {
+                        "female": {"WT|WT": [9.0, 10.0, 11.0, 12.0]},
+                        "male": {"WT|WT": [13.0, 14.0, 15.0, 16.0]},
+                    },
+                ]
+            ),
+            sperm_storage=batch_setting(
+                [
+                    {"WT|WT": {"WT|WT": {2: 17.0, 3: 18.0}}},
+                    {"WT|WT": {"WT|WT": {2: 19.0, 3: 20.0}}},
+                ]
+            ),
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.8, 0.0],
+            male_age_based_survival=[1.0, 0.9, 0.8, 0.0],
+        )
+        .reproduction(
+            eggs_per_female=2.0,
+            female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
+            male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
+        )
+        .competition(
+            carrying_capacity=1000.0,
+            expected_num_new_adult_females=10.0,
+        )
+        .record_history(mode="raw")
+        .build()
+    )
+    population.run(2, record_every=1)
 
     assert population.history.ticks == (0, 1, 2)
     expected_counts = population.history.individual_count[1].copy()

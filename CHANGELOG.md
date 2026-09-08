@@ -4,11 +4,18 @@
 
 ### Breaking Changes
 
+- **The Rust engine is the only execution backend**: the pure-Python
+  reference package (`natal.backends.reference`) is deleted together with
+  the `backend=` selector and the `disable_rust_backend` /
+  `refresh_rust_backend` / `using_rust_backend` facades;
+  `enable_rust_backend` remains the engine-session init entry, called by
+  `build()` and lazily at the first run/tick boundary. Populations that
+  skipped `build()` (clones, direct `SpatialPopulation` construction)
+  create their session from their current state on the first run.
 - **Numba backend removed**: the `natal.numba` package, the `backend="numba"`
   selector, `njit_switch`, `enable_numba/disable_numba`, the numba cache and
-  codegen pipeline are gone. The default backend `auto` now prefers the Rust
-  native extension and falls back to the pure-Python reference;
-  `backend="numba"` raises `ValueError` with a migration hint.
+  codegen pipeline are gone. `backend="numba"` raises `ValueError` with a
+  migration hint.
 - **Spatial `pop.update()` chain removed**: `SpatialPopulation.update()` and the
   private `_SpatialUpdate` facade are gone; runtime spatial writes go through
   `pop.params.tensor_write(...)` and `deme(i).write_ecology(...)` /

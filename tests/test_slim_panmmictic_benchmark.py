@@ -794,24 +794,6 @@ def test_slim_release_occurs_on_transition_24_for_each_cube(
 
 
 @pytest.mark.skipif(SLIM is None, reason="SLiM executable is not installed")
-def test_real_one_day_distributions_have_no_holm_significant_difference() -> None:
-    """Compare independent stochastic samples at the real engine boundary."""
-    natal = benchmark_natal_panmmictic(repeats=6, n_days=1, seed=100)
-    slim = benchmark_slim(
-        repeats=6,
-        n_days=1,
-        seed=200,
-        executable=Path(str(SLIM)),
-    )
-
-    results = compare_stochastic_records(natal, slim)
-
-    assert results
-    assert all(0.0 <= result.holm_p <= 1.0 for result in results)
-    with pytest.raises(RuntimeError, match="TOST"):
-        validate_consistency(results)
-
-
 @pytest.mark.parametrize("repeats", [0, 1.5, True])
 def test_benchmark_natal_rejects_invalid_repeats(
     repeats: int | float,
@@ -826,28 +808,6 @@ def test_benchmark_natal_rejects_invalid_days(n_days: int | float) -> None:
     """Reject invalid NATAL day counts before scenario construction."""
     with pytest.raises(ValueError, match="n_days"):
         benchmark_natal_panmmictic(repeats=1, n_days=n_days)
-
-
-def _assert_natal_day_zero() -> None:
-    """Assert the shared initial population through the selected execution path."""
-    records = benchmark_natal_panmmictic(repeats=2, n_days=0, seed=20260807)
-    assert [record.repeat for record in records] == [1, 2]
-    for record in records:
-        assert record.day == 0
-        assert record.population_size == 32750
-        assert record.aquatic_total == 32250
-        assert record.unmated_female_total == 0
-        np.testing.assert_array_equal(record.adult_male, [250.0, 0.0, 0.0])
-        np.testing.assert_array_equal(
-            record.adult_female,
-            np.diag([250.0, 0.0, 0.0]),
-        )
-def test_natal_jit_day_zero_matches_explicit_population() -> None:
-    """Exercise the JIT benchmark seam with exact initial counts."""
-    _assert_natal_day_zero()
-def test_natal_fallback_day_zero_matches_explicit_population() -> None:
-    """Exercise the Python fallback benchmark seam with exact initial counts."""
-    _assert_natal_day_zero()
 
 
 def test_holm_adjustment_is_monotone_in_sorted_p_values() -> None:

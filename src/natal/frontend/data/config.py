@@ -8,8 +8,7 @@ vectors), so no ``isinstance`` fork survives downstream.
 
 Discipline:
     - Scalar fields are plain Python floats/ints (the 0-d ndarray idiom
-      retired with the Numba removal).  The 0-d idiom retires with the reference-backend
-      freeze of the plan.
+      retired with the Numba removal).
     - Array contents may be mutated in place; scalar metadata requires
       ``_replace``.
     - The draft is a *draft*: ``build()`` materializes it into the

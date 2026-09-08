@@ -675,7 +675,6 @@ class TestMeiosisDerivedRecompute:
             "__slice3_c3d_rust__",
             {"female": {"WT|WT": 10}, "male": {"WT|WT": 10}},
         ).enable_rust_backend(seed=42)
-        assert rst.using_rust_backend
 
         for pop in (ref, rst):
             biased = pop.params.meiosis_map.array

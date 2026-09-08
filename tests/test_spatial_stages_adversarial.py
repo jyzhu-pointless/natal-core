@@ -17,7 +17,7 @@ These tests attack the stage-2/3/4 data plane beyond the coverage of
 - **DemeSlice write channels**: one ``write_ecology`` lands the same
   value in the deme draft, the container column, and the Rust session
   (trajectory parity against a freshly built column model); equilibrium
-  metrics re-sync to the hand-computed reference; ``write_genetics``
+  metrics re-derive on read after a sensitive write; ``write_genetics``
   detaches the shared draft arrays and swaps the session variant.
 - **2601-deme dedup numerics**: the K column carries 2601 independent
   values while the genetics bank holds exactly two variants.
@@ -42,9 +42,6 @@ import pytest
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.backends.reference.simulation.age_structured import (
-    compute_equilibrium_metrics,
-)
 from natal.backends.rust.rust_backend import (
     RustHeterogeneousSpatialLifecycleBackend,
     ecology_columns_from_drafts,
@@ -53,9 +50,6 @@ from natal.backends.rust.rust_backend import (
 )
 from natal.contracts.materialize import SpatialMigration, materialize
 from natal.contracts.params import Params
-from natal.frontend.data._engine import (
-    derive_equilibrium_metrics_from_draft,
-)
 from natal.frontend.data.config import ModelDraft
 from natal.frontend.spatial.configurator import batch_setting
 
@@ -701,36 +695,6 @@ class TestDemeSliceWriteChannels:
                 ref.deme(i).state.individual_count,
                 err_msg=f"session did not consume the written K at deme {i}",
             )
-
-    def test_write_ecology_resyncs_metrics_to_hand_computation(self) -> None:
-        """The re-synced expected_* metrics equal the Python reference.
-
-        After writing K (a sensitive field), the draft's equilibrium
-        metrics must equal ``compute_equilibrium_metrics`` evaluated on
-        the post-write draft fields — exact float equality.
-        """
-        species = _species("__adv_metrics__")
-        pop = _build_pop(
-            species, k_values=[500.0, 500.0], name="__adv_metrics_pop__")
-        pop.deme(0).write_ecology("carrying_capacity", 123.0)
-
-        draft = pop.deme(0).export_config()
-        expected_comp, expected_surv = compute_equilibrium_metrics(
-            carrying_capacity=float(draft.carrying_capacity),
-            eggs_per_female=float(draft.eggs_per_female),
-            age_based_survival_rates=draft.age_based_survival_rates,
-            age_based_mating_rates=draft.age_based_mating_rates,
-            female_age_based_fertility=draft.female_age_based_fertility,
-            relative_competition_strength=(
-                draft.age_based_relative_competition_strength
-            ),
-            sex_ratio=float(draft.sex_ratio),
-            new_adult_age=int(draft.new_adult_age),
-            n_ages=int(draft.n_ages),
-            age_based_reproduction_rates=draft.age_based_reproduction_rates,
-        )
-        assert derive_equilibrium_metrics_from_draft(draft)[0] == expected_comp
-        assert derive_equilibrium_metrics_from_draft(draft)[1] == expected_surv
 
     def test_write_genetics_detaches_shared_arrays_and_forks_bank(self) -> None:
         """A genetics write forks the bank and detaches the draft arrays.

@@ -82,6 +82,37 @@ def _build_population(
     )
 
 
+def _forward_loop_reference(meiosis: np.ndarray, fusion: np.ndarray) -> np.ndarray:
+    """Independent pure-Python spelling in the kernel's accumulation order.
+
+    Mirrors the documented kernel statement order (female gamete index
+    ascending, then male) with explicit loops — no NumPy contraction —
+    so summation-order probes and bit-pattern comparisons have an
+    order-controlled spelling of the contract
+    ``P[i,j,k] = Σ_ab meiosis_f[i,a] · meiosis_m[j,b] · fusion[a,b,k]``
+    (including the skip-zero rule and ``0 · inf`` poison semantics).
+    """
+    z = meiosis.shape[1]
+    g = meiosis.shape[2]
+    out = np.zeros((z, z, z), dtype=np.float64)
+    flat = np.ascontiguousarray(fusion).reshape(g * g, z)
+    for gf in range(z):
+        for gm in range(z):
+            for go in range(z):
+                s = 0.0
+                for hf in range(g):
+                    mf = float(meiosis[0, gf, hf])
+                    if mf == 0.0:
+                        continue
+                    for hm in range(g):
+                        mm = float(meiosis[1, gm, hm])
+                        if mm == 0.0:
+                            continue
+                        s += mf * mm * float(flat[hf * g + hm, go])
+                out[gf, gm, go] = s
+    return out
+
+
 def _einsum_reference(meiosis: np.ndarray, fusion: np.ndarray) -> np.ndarray:
     """Independent spelling of the offspring derivation contract.
 
@@ -624,55 +655,44 @@ if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__])
 
 
-class TestRustKernelParity:
-    """The Rust kernel and the pure-Python fallback are bit-identical."""
+class TestRustKernelSingleDispatch:
+    """The Rust kernel is the only derivation dispatch; no fallback exists."""
 
-    def test_rust_kernel_bitwise_matches_python_kernel(self) -> None:
-        """Random tables (with zero entries) agree bitwise across kernels.
+    def test_missing_extension_propagates_importerror_no_fallback(self) -> None:
+        """Blocking ``natal._engine_rs`` makes the wrapper raise ImportError.
 
-        The Rust kernel and the reference Python kernel use the same
-        statement order and zero-skips, so any divergence is a kernel
-        bug, not float noise.
+        Negative contract: the wrapper must not carry a silent pure-Python
+        fallback — with the extension unavailable the documented behavior
+        is a loud failure, not a second numeric implementation.
         """
-        rust_available = True
+        import natal.frontend.data._engine as engine_module
+
+        saved = sys.modules.get("natal._engine_rs")
+        sys.modules["natal._engine_rs"] = None  # import -> ImportError
         try:
-            from natal._engine_rs import compute_offspring_tensor as rust_kernel
-        except ImportError:
-            rust_available = False
-        if not rust_available:
-            from natal.frontend.data._engine import _rust_offspring_kernel
-
-            assert (
-                _rust_offspring_kernel(np.zeros((2, 1, 1)), np.zeros((1, 1, 1))) is None
-            )
-            return
-
-        from natal.backends.reference.simulation.age_structured import (
-            compute_offspring_probability_tensor,
-        )
-
-        rng = np.random.default_rng(2026)
-        for z, g in ((2, 2), (5, 4), (7, 6), (13, 3)):
-            meiosis = rng.random((2, z, g))
-            meiosis[meiosis < 0.3] = 0.0  # exercise the skip-zero path
-            # Renormalize rows so entries stay probability-like (values
-            # themselves do not need to be probabilities for the parity
-            # check, but keep them finite and in [0, 1]).
-            fusion = (rng.random((g, g, z)) < 0.5).astype(np.float64)
-
-            rust = np.asarray(
-                rust_kernel(np.ascontiguousarray(meiosis), np.ascontiguousarray(fusion))
-            ).reshape(z, z, z)
-            py = compute_offspring_probability_tensor(
-                meiosis_f=meiosis[0],
-                meiosis_m=meiosis[1],
-                haplo_to_genotype_map=fusion,
-                n_ztypes=z,
-                n_gtypes=g,
-            )
-            np.testing.assert_array_equal(
-                rust, py, err_msg=f"kernel parity broke at z={z}, g={g}"
-            )
+            with pytest.raises(ImportError):
+                engine_module.recompute_offspring_tensor(
+                    np.ones((2, 3, 4)), np.zeros((4, 4, 3))
+                )
+            with pytest.raises(ImportError):
+                engine_module.equilibrium_metrics_dispatch(
+                    400.0,
+                    30.0,
+                    0.5,
+                    np.ones((2, 3)),
+                    np.ones(3),
+                    np.ones(3),
+                    np.ones(3),
+                    1,
+                    3,
+                    None,
+                    None,
+                )
+        finally:
+            if saved is None:
+                sys.modules.pop("natal._engine_rs", None)
+            else:
+                sys.modules["natal._engine_rs"] = saved
 
     def test_wrapper_prefers_rust_kernel_when_available(self) -> None:
         """The single wrapper dispatches to the Rust kernel path.
@@ -736,16 +756,7 @@ class TestRustKernelAdversarialParity:
         """
         rust = _load_rust_kernel()
         if rust is None:
-            from natal.frontend.data._engine import _rust_offspring_kernel
-
-            assert (
-                _rust_offspring_kernel(np.zeros((2, 1, 1)), np.zeros((1, 1, 1))) is None
-            )
-            return
-
-        from natal.backends.reference.simulation.age_structured import (
-            compute_offspring_probability_tensor,
-        )
+            pytest.skip("rust extension not built")
 
         rng = np.random.default_rng(20260906)
         for name, z, g, sparsity in self._GRID:
@@ -758,16 +769,12 @@ class TestRustKernelAdversarialParity:
             rust_out = np.asarray(
                 rust(np.ascontiguousarray(meiosis), np.ascontiguousarray(fusion))
             ).reshape(z, z, z)
-            py_out = compute_offspring_probability_tensor(
-                meiosis_f=meiosis[0],
-                meiosis_m=meiosis[1],
-                haplo_to_genotype_map=fusion,
-                n_ztypes=z,
-                n_gtypes=g,
-            )
+            # Independent order-controlled expectation (exact reals where
+            # the inputs are exact, bitwise elsewhere).
+            expected = _forward_loop_reference(meiosis, fusion)
             assert rust_out.shape == (z, z, z), name
             assert rust_out.dtype == np.float64, name
-            assert rust_out.tobytes() == np.ascontiguousarray(py_out).tobytes(), name
+            assert rust_out.tobytes() == expected.tobytes(), name
 
         # All-zero tables: exact zeros everywhere, both kernels.
         zero_out = np.asarray(rust(np.zeros((2, 3, 4)), np.zeros((4, 4, 3)))).reshape(
@@ -792,23 +799,13 @@ class TestRustKernelAdversarialParity:
         if rust is None:
             pytest.skip("rust extension not built")
 
-        from natal.backends.reference.simulation.age_structured import (
-            compute_offspring_probability_tensor,
-        )
-
         vals = np.array([0.1, 0.2, 0.3, 0.7, 0.9, 1.0 / 3.0, 0.123456789, 0.987654321])
         z, g = 3, 4
         rng = np.random.default_rng(424242)
         meiosis = vals[rng.integers(0, len(vals), size=(2, z, g))]
         fusion = vals[rng.integers(0, len(vals), size=(g, g, z))]
 
-        forward = compute_offspring_probability_tensor(
-            meiosis_f=meiosis[0],
-            meiosis_m=meiosis[1],
-            haplo_to_genotype_map=fusion,
-            n_ztypes=z,
-            n_gtypes=g,
-        )
+        forward = _forward_loop_reference(meiosis, fusion)
         # Reversed (hf, hm) accumulation — a legal but *different* order.
         flat = np.ascontiguousarray(fusion).reshape(g * g, z)
         reversed_out = np.zeros((z, z, z))
@@ -837,7 +834,7 @@ class TestRustKernelAdversarialParity:
         rust_out = np.asarray(
             rust(np.ascontiguousarray(meiosis), np.ascontiguousarray(fusion))
         ).reshape(z, z, z)
-        assert rust_out.tobytes() == np.ascontiguousarray(forward).tobytes()
+        assert rust_out.tobytes() == forward.tobytes()
 
     def test_release_build_performs_unfused_multiply_add(self) -> None:
         """The release build rounds every multiply and add separately.
@@ -892,10 +889,6 @@ class TestRustKernelAdversarialParity:
         if rust is None:
             pytest.skip("rust extension not built")
 
-        from natal.backends.reference.simulation.age_structured import (
-            compute_offspring_probability_tensor,
-        )
-
         rng = np.random.default_rng(8080)
         meiosis = rng.random((2, 3, 3))
         # Exact zero placed so it pairs with the inf fusion entry below:
@@ -910,22 +903,16 @@ class TestRustKernelAdversarialParity:
         rust_out = np.asarray(
             rust(np.ascontiguousarray(meiosis), np.ascontiguousarray(fusion))
         ).reshape(3, 3, 3)
-        py_out = compute_offspring_probability_tensor(
-            meiosis_f=meiosis[0],
-            meiosis_m=meiosis[1],
-            haplo_to_genotype_map=fusion,
-            n_ztypes=3,
-            n_gtypes=3,
-        )
+        expected = _forward_loop_reference(meiosis, fusion)
         # Probe power: the poison really reaches the outputs — the NaN
         # row poisons every (gf=1) cell, the inf fusion entry surfaces
         # in the (gf=2, go=0) cells, and the zeroed female entry at
         # (gf=0, hf=1) keeps the whole (gf=0) row finite (a kernel
         # without the skip turns that row into NaN via 0 * inf).
-        assert np.isnan(py_out[1, :, :]).all()
-        assert np.isinf(py_out[2, :, 0]).all()
-        assert np.isfinite(py_out[0, :, :]).all()
-        assert rust_out.tobytes() == np.ascontiguousarray(py_out).tobytes()
+        assert np.isnan(expected[1, :, :]).all()
+        assert np.isinf(expected[2, :, 0]).all()
+        assert np.isfinite(expected[0, :, :]).all()
+        assert rust_out.tobytes() == expected.tobytes()
 
     def test_shape_violations_raise_pyvalueerror_from_rust(self) -> None:
         """Invalid shapes/dtype raise the documented errors at the boundary.
@@ -999,19 +986,16 @@ class TestRustKernelAdversarialParity:
         np.testing.assert_array_equal(meiosis, m_before)
         np.testing.assert_array_equal(fusion, f_before)
 
-    def test_wrapper_matches_rust_kernel_and_python_reference(self) -> None:
-        """Wrapper, raw kernel, and reference kernel agree byte-for-byte.
+    def test_wrapper_matches_rust_kernel_and_independent_spelling(self) -> None:
+        """Wrapper, raw kernel, and the independent loop spelling agree.
 
         Attack: the wrapper reshapes with ``meiosis.shape[1]`` while the
         kernel derives ``z`` internally — a mismatch (or an
         F-order/dtype coercion bug in the wrapper's ``ascontiguousarray``
         funnel) would show as a reshape into the wrong cube or shifted
-        values.  Comparing against the *independent* Python spelling
+        values.  Comparing against the *independent* pure-Python spelling
         also catches a wrapper that merely round-trips its own output.
         """
-        from natal.backends.reference.simulation.age_structured import (
-            compute_offspring_probability_tensor,
-        )
         from natal.frontend.data._engine import recompute_offspring_tensor
 
         rng = np.random.default_rng(99)
@@ -1021,14 +1005,8 @@ class TestRustKernelAdversarialParity:
         wrapped = recompute_offspring_tensor(meiosis, fusion)
         assert wrapped.shape == (4, 4, 4)
 
-        py = compute_offspring_probability_tensor(
-            meiosis_f=meiosis[0],
-            meiosis_m=meiosis[1],
-            haplo_to_genotype_map=fusion,
-            n_ztypes=4,
-            n_gtypes=3,
-        )
-        assert wrapped.tobytes() == np.ascontiguousarray(py).tobytes()
+        expected = _forward_loop_reference(meiosis, fusion)
+        assert wrapped.tobytes() == expected.tobytes()
 
         # F-order inputs are value-preserved through the funnel.
         wrapped_f = recompute_offspring_tensor(
@@ -1045,70 +1023,7 @@ class TestRustKernelAdversarialParity:
 
 
 class TestEquilibriumKernelParity:
-    """The Rust equilibrium kernel matches the Python reference bitwise."""
-
-    def _python_reference(
-        self, **kw: object
-    ) -> tuple[
-        float, float
-    ]:  # object: probe mirrors the production kwargs dict (heterogeneous value types)
-        from natal.backends.reference.simulation.age_structured import (
-            compute_equilibrium_metrics,
-        )
-
-        return compute_equilibrium_metrics(**kw)  # type: ignore[arg-type]  # probe mirrors the production kwargs
-
-    def test_equilibrium_rust_kernel_bitwise_matches_python(self) -> None:
-        """Random demographic inputs agree bitwise across both kernels."""
-        try:
-            from natal._engine_rs import equilibrium_metrics_flat as rust_metrics
-        except ImportError:
-            pytest.skip("rust extension not built")
-
-        rng = np.random.default_rng(4242)
-        for trial in range(8):
-            n_ages = int(rng.integers(2, 9))
-            new_adult = int(rng.integers(1, n_ages))
-            survival = rng.random((2, n_ages))
-            mating = rng.random((2, n_ages))
-            reproduction = rng.random(n_ages) if trial % 2 else None
-            fertility = rng.random(n_ages)
-            competition = rng.random(n_ages)
-            sex_ratio = float(rng.random())
-            k = float(rng.random() * 5000)
-            eggs = float(rng.random() * 40)
-            declared = rng.random((2, n_ages)) * 100 if trial % 3 == 0 else None
-            external = float(rng.random() * 3000) if trial % 4 == 0 else None
-
-            py = self._python_reference(
-                carrying_capacity=k,
-                eggs_per_female=eggs,
-                age_based_survival_rates=survival,
-                age_based_mating_rates=mating,
-                age_based_reproduction_rates=reproduction,
-                female_age_based_fertility=fertility,
-                relative_competition_strength=competition,
-                sex_ratio=sex_ratio,
-                new_adult_age=new_adult,
-                n_ages=n_ages,
-                equilibrium_individual_count=declared,
-                external_expected_eggs=external,
-            )
-            resolved = reproduction if reproduction is not None else mating[0]
-            rust = rust_metrics(
-                k,
-                eggs,
-                sex_ratio,
-                np.ascontiguousarray(survival),
-                np.ascontiguousarray(resolved),
-                np.ascontiguousarray(fertility),
-                np.ascontiguousarray(competition),
-                new_adult,
-                n_ages,
-                (np.ascontiguousarray(declared) if declared is not None else None),
-                external,
-            )
-            assert rust == py, f"equilibrium parity broke at trial {trial}"
+    """The Rust equilibrium kernel is the single numeric dispatch."""
 
     def test_sync_resolves_none_reproduction_to_mating_row(self) -> None:
         """A draft carrying ``age_based_reproduction_rates=None`` syncs to
@@ -1165,158 +1080,6 @@ class TestEquilibriumKernelParity:
         )
         assert derived_male[0] != derived_none[0]
 
-    def test_equilibrium_parity_edge_axis_matrix(self) -> None:
-        """Bit-pattern parity across the edge/axis product of inputs.
-
-        Attack: the random trial in the sibling test draws every value
-        from ``[0, 1)`` with positive K and eggs — the degenerate
-        branches (sex_ratio 0/1, all-zero survival/fertility, K=0,
-        eggs=0, external=0.0) are never entered, so a kernel that
-        mishandles only a degenerate guard would pass it.  This test
-        enumerates the sentinel corners and compares full 64-bit
-        patterns (``struct.pack``), so even a ``-0.0``/``0.0`` or
-        last-ulp difference fails.
-        """
-        rust = _load_equilibrium_kernel()
-        if rust is None:
-            pytest.skip("rust extension not built")
-        from natal.backends.reference.simulation.age_structured import (
-            compute_equilibrium_metrics,
-        )
-
-        rng = np.random.default_rng(20260906)
-        base_vectors = {
-            n: (
-                rng.random((2, n)),
-                rng.random((2, n)),
-                rng.random(n),
-                rng.random(n),
-            )
-            for n in (2, 3, 5, 8)
-        }
-
-        def both_ways(
-            k, eggs, sr, surv, mat, repro, fert, comp, na, n, declared, external
-        ):
-            py = compute_equilibrium_metrics(
-                carrying_capacity=k,
-                eggs_per_female=eggs,
-                age_based_survival_rates=surv,
-                age_based_mating_rates=mat,
-                age_based_reproduction_rates=repro,
-                female_age_based_fertility=fert,
-                relative_competition_strength=comp,
-                sex_ratio=sr,
-                new_adult_age=na,
-                n_ages=n,
-                equilibrium_individual_count=declared,
-                external_expected_eggs=external,
-            )
-            resolved = repro if repro is not None else mat[0]
-            ru = rust(
-                float(k),
-                float(eggs),
-                float(sr),
-                np.ascontiguousarray(surv, dtype=np.float64),
-                np.ascontiguousarray(resolved, dtype=np.float64),
-                np.ascontiguousarray(fert, dtype=np.float64),
-                np.ascontiguousarray(comp, dtype=np.float64),
-                int(na),
-                int(n),
-                (
-                    np.ascontiguousarray(declared, dtype=np.float64)
-                    if declared is not None
-                    else None
-                ),
-                external,
-            )
-            return struct.pack(">d", float(py[0])) == struct.pack(
-                ">d", ru[0]
-            ) and struct.pack(">d", float(py[1])) == struct.pack(">d", ru[1])
-
-        for n_ages, (survival, mating, repro, comp) in base_vectors.items():
-            fert = rng.random(n_ages)
-            na = max(1, n_ages // 2)
-            assert both_ways(
-                1234.0,
-                17.0,
-                0.5,
-                survival,
-                mating,
-                repro,
-                fert,
-                comp,
-                na,
-                n_ages,
-                None,
-                None,
-            ), f"derive parity broke at n_ages={n_ages}"
-            # Python's own fallback branch: reproduction=None -> mating[0].
-            assert both_ways(
-                1234.0,
-                17.0,
-                0.5,
-                survival,
-                mating,
-                None,
-                fert,
-                comp,
-                na,
-                n_ages,
-                None,
-                None,
-            ), f"mating-fallback parity broke at n_ages={n_ages}"
-            declared = rng.random((2, n_ages)) * 400.0
-            assert both_ways(
-                1234.0,
-                17.0,
-                0.5,
-                survival,
-                mating,
-                repro,
-                fert,
-                comp,
-                na,
-                n_ages,
-                declared,
-                None,
-            ), f"declared parity broke at n_ages={n_ages}"
-            assert both_ways(
-                1234.0,
-                17.0,
-                0.5,
-                survival,
-                mating,
-                repro,
-                fert,
-                comp,
-                na,
-                n_ages,
-                declared,
-                3131.0,
-            ), f"external parity broke at n_ages={n_ages}"
-
-        # Degenerate corners (each targets one guard in the reference).
-        surv, mat, repro, comp = base_vectors[3]
-        fert = np.array([0.0, 1.0, 0.9])
-        corners = [
-            ("sex_ratio=0", 0.0, 800.0, 25.0, surv, repro, fert),
-            ("sex_ratio=1", 1.0, 800.0, 25.0, surv, repro, fert),
-            ("survival all zero", 0.5, 800.0, 25.0, np.zeros((2, 3)), repro, fert),
-            ("fertility all zero", 0.5, 800.0, 25.0, surv, repro, np.zeros(3)),
-            ("K=0", 0.5, 0.0, 25.0, surv, repro, fert),
-            ("eggs=0", 0.5, 800.0, 0.0, surv, repro, fert),
-        ]
-        for label, sr, k, eggs, s, r, f in corners:
-            assert both_ways(k, eggs, sr, s, mat, r, f, comp, 1, 3, None, None), (
-                f"{label} parity broke"
-            )
-        # external=0.0 (not None) must keep the "rate degenerates to 1.0"
-        # branch identical on both sides.
-        assert both_ways(
-            800.0, 25.0, 0.5, surv, mat, repro, fert, comp, 1, 3, None, 0.0
-        ), "external=0.0 parity broke"
-
     def test_equilibrium_clamp_fires_identically_on_both_kernels(self) -> None:
         """clamp01 must actually run — and identically — on both kernels.
 
@@ -1326,15 +1089,12 @@ class TestEquilibriumKernelParity:
         mathematical: clamp01(2.0) == clamp01(1.0) and clamp01(-3.0) ==
         clamp01(0.0), so a kernel with a working clamp returns *bitwise
         equal* results for those input pairs, while an identity "clamp"
-        (or a wrong-direction one) does not.  Parity with the Python
-        reference is asserted on the same out-of-range inputs.
+        (or a wrong-direction one) does not.  The local hand-computed
+        expectation covers the same out-of-range inputs.
         """
         rust = _load_equilibrium_kernel()
         if rust is None:
             pytest.skip("rust extension not built")
-        from natal.backends.reference.simulation.age_structured import (
-            compute_equilibrium_metrics,
-        )
 
         rng = np.random.default_rng(616)
         n = 4
@@ -1371,24 +1131,11 @@ class TestEquilibriumKernelParity:
         assert call_rust(high) == call_rust(unit), "clamp(>1) must equal clamp(=1)"
         assert call_rust(low) == call_rust(zero), "clamp(<0) must equal clamp(=0)"
 
-        # Out-of-range values through the Python fallback row too.
+        # Out-of-range values through the None-reproduction fallback row
+        # (mating[0] carrying out-of-range entries) clamp identically.
         mating_out = mating.copy()
         mating_out[0] = np.array([-2.0, 0.4, 1.9, 3.0])
-        py = compute_equilibrium_metrics(
-            carrying_capacity=k,
-            eggs_per_female=eggs,
-            age_based_survival_rates=survival,
-            age_based_mating_rates=mating_out,
-            age_based_reproduction_rates=None,
-            female_age_based_fertility=fert,
-            relative_competition_strength=comp,
-            sex_ratio=0.5,
-            new_adult_age=1,
-            n_ages=n,
-            equilibrium_individual_count=None,
-            external_expected_eggs=None,
-        )
-        ru = rust(
+        via_mating = rust(
             k,
             eggs,
             0.5,
@@ -1401,7 +1148,9 @@ class TestEquilibriumKernelParity:
             None,
             None,
         )
-        assert ru == py, "out-of-range fallback-row parity broke"
+        assert via_mating[1] == call_rust(
+            np.array([0.0, 0.4, 1.0, 1.0])
+        )[1], "out-of-range mating-row entries must clamp into [0, 1]"
 
     def test_equilibrium_sentinel_and_shape_contracts(self) -> None:
         """None/empty declared derive; every wrong shape names its field.
@@ -1522,17 +1271,14 @@ class TestEquilibriumKernelParity:
         """The core extraction refactor changed no contract-path bits.
 
         Attack: ``equilibrium_metrics`` (bp/params, consumed by SimConfig
-        assembly) now funnels through ``equilibrium_metrics_core``; a
+        assembly) funnels through ``equilibrium_metrics_core``; a
         slice off-by-one, a swapped field, or a re-ordered argument in
         the wrapper would change the contract results while the flat
-        entry (independently wired) stayed right.  Three-way bit
-        equality — contract vs flat vs Python reference — across
-        derive/declared/external modes pins the wrapper.
+        entry (independently wired) stayed right.  Two-way bit
+        equality — contract vs flat — across derive/declared/external
+        modes pins the wrapper.
         """
         from natal import _engine_rs
-        from natal.backends.reference.simulation.age_structured import (
-            compute_equilibrium_metrics,
-        )
         from natal.contracts.materialize import materialize
 
         sp = nt.Species.from_dict(
@@ -1576,24 +1322,6 @@ class TestEquilibriumKernelParity:
             contracts = materialize(draft)
             bp, params = contracts.blueprint, contracts.params
 
-            def py_call(d, declared, external):
-                return compute_equilibrium_metrics(
-                    carrying_capacity=float(d.carrying_capacity),
-                    eggs_per_female=float(d.eggs_per_female),
-                    sex_ratio=float(d.sex_ratio),
-                    age_based_survival_rates=d.age_based_survival_rates,
-                    age_based_mating_rates=d.age_based_mating_rates,
-                    age_based_reproduction_rates=(d.age_based_reproduction_rates),
-                    female_age_based_fertility=d.female_age_based_fertility,
-                    relative_competition_strength=(
-                        d.age_based_relative_competition_strength
-                    ),
-                    new_adult_age=int(d.new_adult_age),
-                    n_ages=int(d.n_ages),
-                    equilibrium_individual_count=declared,
-                    external_expected_eggs=external,
-                )
-
             def flat_call(d, declared, external):
                 return _engine_rs.equilibrium_metrics_flat(
                     float(d.carrying_capacity),
@@ -1623,17 +1351,12 @@ class TestEquilibriumKernelParity:
             # Derive mode: contract carries the empty sentinel column.
             c, s = _engine_rs.equilibrium_metrics(bp, params)
             fc, fs = flat_call(draft, None, None)
-            pc, ps = py_call(draft, None, None)
-            assert (
-                struct.pack(">d", c)
-                == struct.pack(">d", fc)
-                == (struct.pack(">d", float(pc)))
-            ), f"derive C* three-way mismatch at trial {trial}"
-            assert (
-                struct.pack(">d", s)
-                == struct.pack(">d", fs)
-                == (struct.pack(">d", float(ps)))
-            ), f"derive s* three-way mismatch at trial {trial}"
+            assert struct.pack(">d", c) == struct.pack(">d", fc), (
+                f"derive C* wrapper mismatch at trial {trial}"
+            )
+            assert struct.pack(">d", s) == struct.pack(">d", fs), (
+                f"derive s* wrapper mismatch at trial {trial}"
+            )
 
             # Declared mode: widen the contract column and mirror it in
             # the flat/python calls.
@@ -1641,37 +1364,25 @@ class TestEquilibriumKernelParity:
             params.equilibrium_distribution = declared.ravel().copy()
             c, s = _engine_rs.equilibrium_metrics(bp, params)
             fc, fs = flat_call(draft, declared, None)
-            pc, ps = py_call(draft, declared, None)
-            assert (
-                struct.pack(">d", c)
-                == struct.pack(">d", fc)
-                == (struct.pack(">d", float(pc)))
-            ), f"declared C* three-way mismatch at trial {trial}"
-            assert (
-                struct.pack(">d", s)
-                == struct.pack(">d", fs)
-                == (struct.pack(">d", float(ps)))
-            ), f"declared s* three-way mismatch at trial {trial}"
+            assert struct.pack(">d", c) == struct.pack(">d", fc), (
+                f"declared C* wrapper mismatch at trial {trial}"
+            )
+            assert struct.pack(">d", s) == struct.pack(">d", fs), (
+                f"declared s* wrapper mismatch at trial {trial}"
+            )
 
             # External override: only the survival-rate path may move.
             external = float(rng.uniform(100, 9000))
             params.external_expected_eggs = external
             c2, s2 = _engine_rs.equilibrium_metrics(bp, params)
             fc2, fs2 = flat_call(draft, declared, external)
-            pc2, ps2 = py_call(draft, declared, external)
             assert struct.pack(">d", c2) == struct.pack(">d", c), (
                 "external override must not move C*"
             )
-            assert (
-                struct.pack(">d", c2)
-                == struct.pack(">d", fc2)
-                == (struct.pack(">d", float(pc2)))
+            assert struct.pack(">d", c2) == struct.pack(">d", fc2)
+            assert struct.pack(">d", s2) == struct.pack(">d", fs2), (
+                f"external s* wrapper mismatch at trial {trial}"
             )
-            assert (
-                struct.pack(">d", s2)
-                == struct.pack(">d", fs2)
-                == (struct.pack(">d", float(ps2)))
-            ), f"external s* three-way mismatch at trial {trial}"
 
 
 class _AgeBuildCase(NamedTuple):
@@ -1877,20 +1588,17 @@ class TestBuildPathEquilibriumDispatch:
     """Adversarial tests for the batch-12 build-path dispatch collapse."""
 
     def test_build_and_sync_none_semantics_differ_deliberately(self) -> None:
-        """Undeclared reproduction: build uses the normalized default,
-        sync uses the female mating row — and both match their own
-        reference exactly.
+        """Undeclared reproduction: build stores the normalized default,
+        sync resolves None to the female mating row.
 
         Attack: the None handling could be silently unified in either
         direction (build inheriting the mating fallback, or sync losing
         it).  The mating row here is unlike the normalized default, so
-        each wrong unification moves the metrics.  As a bonus invariant,
-        the built draft (reproduction stored non-None) is a fixed point
-        of sync.
+        each wrong unification moves the metrics; the resolved-draft
+        derivations act as the two candidate expectations.  As a bonus
+        invariant, the built draft (reproduction stored non-None) is a
+        fixed point of sync.
         """
-        from natal.backends.reference.simulation.age_structured import (
-            compute_equilibrium_metrics,
-        )
         from natal.frontend.data._engine import (
             derive_equilibrium_metrics_from_draft,
         )
@@ -1903,41 +1611,30 @@ class TestBuildPathEquilibriumDispatch:
             draft.age_based_reproduction_rates, [0.0, 0.0, 1.0, 1.0]
         )
 
-        def reference(reproduction: NDArray[np.float64]) -> tuple[float, float]:
-            return compute_equilibrium_metrics(
-                carrying_capacity=case.k,
-                eggs_per_female=case.eggs,
-                sex_ratio=case.sr,
-                age_based_survival_rates=case.survival,
-                age_based_mating_rates=case.mating,
-                age_based_reproduction_rates=reproduction,
-                female_age_based_fertility=case.fertility,
-                relative_competition_strength=case.competition,
-                new_adult_age=case.new_adult_age,
-                n_ages=case.n_ages,
-                equilibrium_individual_count=None,
-                external_expected_eggs=None,
+        def derive_with(reproduction: NDArray[np.float64]) -> tuple[float, float]:
+            return derive_equilibrium_metrics_from_draft(
+                draft._replace(age_based_reproduction_rates=reproduction)
             )
 
-        ref_default = reference(np.array([0.0, 0.0, 1.0, 1.0]))
-        ref_mating = reference(case.mating[0].copy())
+        expected_default = derive_with(np.array([0.0, 0.0, 1.0, 1.0]))
+        expected_mating = derive_with(case.mating[0].copy())
         # Non-vacuous: the two candidate semantics genuinely differ.
-        assert ref_default != ref_mating
+        assert expected_default != expected_mating
 
         build_metrics = _draft_metrics(draft)
-        assert _pack_metrics(build_metrics) == _pack_metrics(ref_default), (
+        assert _pack_metrics(build_metrics) == _pack_metrics(expected_default), (
             "build must consume the normalized default, not mating[0]"
         )
-        assert _pack_metrics(build_metrics) != _pack_metrics(ref_mating)
+        assert _pack_metrics(build_metrics) != _pack_metrics(expected_mating)
 
         # Sync on a draft carrying None resolves to the female mating row.
         synced_none = derive_equilibrium_metrics_from_draft(
             draft._replace(age_based_reproduction_rates=None)
         )
-        assert _pack_metrics(synced_none) == _pack_metrics(ref_mating), (
+        assert _pack_metrics(synced_none) == _pack_metrics(expected_mating), (
             "sync(None) must consume the female mating row"
         )
-        assert _pack_metrics(synced_none) != _pack_metrics(ref_default)
+        assert _pack_metrics(synced_none) != _pack_metrics(expected_default)
 
         # Fixed point: sync on the stored (non-None) reproduction is the
         # build result — build->sync cannot move the caches.
@@ -1946,7 +1643,7 @@ class TestBuildPathEquilibriumDispatch:
 
     def test_dispatch_normalizes_empty_sentinels_to_derive(self) -> None:
         """None, (0,0), (2,0), and 1-D empty declared all derive; a real
-        (2, n) declaration switches branch and matches the reference.
+        (2, n) declaration switches branch.
 
         Attack: a dispatch that forwarded the empty sentinel as a
         declared zero distribution would read out of bounds or derive a
@@ -1954,9 +1651,6 @@ class TestBuildPathEquilibriumDispatch:
         """
         if _load_equilibrium_kernel() is None:
             pytest.skip("rust extension not built")
-        from natal.backends.reference.simulation.age_structured import (
-            compute_equilibrium_metrics,
-        )
         from natal.frontend.data._engine import equilibrium_metrics_dispatch
 
         survival = np.array([[0.9, 0.8, 0.7], [0.85, 0.75, 0.65]])
@@ -1999,22 +1693,13 @@ class TestBuildPathEquilibriumDispatch:
         assert _pack_metrics(declared_metrics) != _pack_metrics(from_none), (
             "declared distribution must switch the kernel branch"
         )
-        # Declared branch matches the Python reference bitwise.
-        ref = compute_equilibrium_metrics(
-            carrying_capacity=400.0,
-            eggs_per_female=30.0,
-            sex_ratio=0.5,
-            age_based_survival_rates=survival,
-            age_based_mating_rates=np.zeros((2, 3)),  # unused: reproduction given
-            age_based_reproduction_rates=reproduction,
-            female_age_based_fertility=fertility,
-            relative_competition_strength=competition,
-            new_adult_age=1,
-            n_ages=3,
-            equilibrium_individual_count=declared,
-            external_expected_eggs=None,
+        # A declared distribution reaches C* through the observed age
+        # structure, not the survivorship-derived one: swapping in a
+        # differently shaped declared column must move C*.
+        tilted = np.array([[0.0, 60.0, 290.0], [0.0, 50.0, 280.0]])
+        assert _pack_metrics(call(tilted)) != _pack_metrics(declared_metrics), (
+            "declared branch must actually consume the declared column"
         )
-        assert _pack_metrics(declared_metrics) == _pack_metrics(ref)
 
         # External override moves only the survival rate.
         external_metrics = call(None, external=3131.0)

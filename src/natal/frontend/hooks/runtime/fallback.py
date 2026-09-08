@@ -2,20 +2,17 @@
 
 ``HookExecutor`` is the single Python-side execution path for events: it
 runs CSR declarative plans through the CSR interpreter
-(:mod:`natal.frontend.hooks.runtime.csr_kernel`, the reference-oracle
-kernel shared with the njit templates) and then fires single-parameter
-Python callbacks with a
+(:mod:`natal.frontend.hooks.runtime.csr_kernel`) and then fires
+single-parameter Python callbacks with a
 :class:`~natal.frontend.hooks.tick_context.TickContext`.
 
-Backend wiring:
+Wiring:
 
-- **reference/python**: called directly from ``trigger_event``.
-- **reference**: called from the Python lifecycle orchestration layer
-  (``_run_python_lifecycle``) when the population carries Python
-  callbacks; CSR-only populations instead run the CSR interpreter inside
-  the njit lifecycle wrappers.
-- **rust**: CSR runs in the Rust engine; only the callback half is used,
-  adapted to the ``(ind, sperm, tick, deme_id)`` bridge signature.
+- **finish events**: fired Python-side after a run stops or finishes —
+  the executor runs the finish-event CSR plans and callbacks directly.
+- **rust in-tick events**: CSR runs inside the Rust engine; only the
+  callback half is used, adapted to the ``(ind, sperm, tick, deme_id)``
+  bridge signature.
 """
 
 from __future__ import annotations
@@ -63,10 +60,6 @@ def _read_eco_values(population: BasePopulation[Any]) -> np.ndarray:
         A fresh float64 array of length ``len(ECO_PARAM_NAMES)``.
     """
     from natal.frontend.population._params_view import ParamsView
-
-    override = getattr(population, "_eco_value_override", None)
-    if override is not None:
-        return np.asarray(override, dtype=np.float64).copy()
 
     view = ParamsView(population)
     values = np.zeros(len(ECO_PARAM_NAMES), dtype=np.float64)
@@ -135,34 +128,6 @@ def _flush_eco_writes(
         fired_names: Canonical names fired at this tick (from
             ``_fired_set_param_names``).
     """
-    override = getattr(population, "_eco_value_override", None)
-    if override is not None:
-        # Spatial per-deme local chain: the operand view is the deme's own
-        # tick-local column copy.  Advance it in place and journal the
-        # (local old -> new) transition, so a later event in the same tick
-        # compounds on this deme's own write — exactly the Rust local-EcoCtx
-        # semantics.  The container columns and the shared draft are synced
-        # once at tick end (see _run_python_dispatch_tick); writing the
-        # shared draft here would let one deme's write feed another deme's
-        # expression in the same tick.
-        for name in fired_names:
-            pid = ECO_PARAM_NAMES.index(name)
-            new = float(eco_values[pid])
-            old = float(override[pid])
-            if old != new:
-                override[pid] = new
-                population.log_param_change(name, old, new)
-                # Propagate to the deme's live draft so the LATER stages of
-                # this deme's tick observe the write (event-level semantics,
-                # Rust EcoCtx parity — the equilibrium metrics are derived
-                # on read everywhere, so no cache refresh is needed).  The
-                # per-deme tick preamble resets the draft to the deme's own
-                # column value, so this write cannot leak into another deme.
-                population.set_config(
-                    population.config._replace(**{name: new})
-                )
-        return
-
     from natal.frontend.population._params_view import ParamsView
 
     view = ParamsView(population)

@@ -124,7 +124,7 @@ def _scan_unit(module_name: str, allow_legacy_key: bool) -> list[str]:
 # ``contracts`` itself.  A unit joins the public lazy-export index when its
 # ``__init__.py`` declares a non-empty literal ``__all__``; an empty (or
 # missing) ``__all__`` marks the package as private/structural (e.g.
-# ``frontend`` itself, ``backends``, ``backends.reference``).
+# ``frontend`` itself and ``backends``).
 package_dir = Path(__file__).resolve().parent
 
 # Every first-level package of the real tree, sorted for deterministic

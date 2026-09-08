@@ -162,7 +162,6 @@ class TestBlueprintFrozenArrays:
         """A frozen blueprint crosses the PyO3 boundary and runs a tick."""
         pop = _build_discrete("R4RustFeed")
         pop.enable_rust_backend(seed=7)
-        assert pop.using_rust_backend
         pop.run(1)
         # Deterministic model: 10 females x 2 eggs x 0.5 sex ratio -> 10
         # juveniles of each sex replacing the adults; adults all survive.
@@ -566,12 +565,12 @@ class TestDirectedRefreshUnderFrozenBlueprint:
     """Reconfiguration must survive the frozen-contract materialize path.
 
     ``pop.update()`` marks contract fields dirty and the next ``run``
-    re-materializes the draft (Python dispatch) or refreshes the live
-    Rust session in place (directed refresh).  A freeze that crossed the
-    PyO3 boundary incorrectly would break exactly this path.
+    refreshes the live engine session in place (directed refresh).  A
+    freeze that crossed the PyO3 boundary incorrectly would break exactly
+    this path.
     """
 
-    def test_update_competition_then_run_matches_fresh_build_python(
+    def test_update_competition_then_run_matches_fresh_build(
         self,
     ) -> None:
         """Directed refresh reproduces a from-scratch build bitwise.
@@ -581,13 +580,13 @@ class TestDirectedRefreshUnderFrozenBlueprint:
         (built with K=1e5, run 4) — the third twin proves the capacity
         genuinely binds, so the equality is not vacuous.
         """
-        refreshed = _build_beverton("R4RefreshPy", 100000.0)
+        refreshed = _build_beverton("R4Refresh", 100000.0)
         refreshed.update().competition(carrying_capacity=8.0)
         refreshed.run(4)
 
-        twin = _build_beverton("R4RefreshPyTwin", 8.0)
+        twin = _build_beverton("R4RefreshTwin", 8.0)
         twin.run(4)
-        unrefreshed = _build_beverton("R4RefreshPyOld", 100000.0)
+        unrefreshed = _build_beverton("R4RefreshOld", 100000.0)
         unrefreshed.run(4)
 
         np.testing.assert_array_equal(
@@ -604,19 +603,19 @@ class TestDirectedRefreshUnderFrozenBlueprint:
     def test_update_competition_then_run_matches_fresh_build_rust(self) -> None:
         """The Rust value channel refreshes through materialize safely.
 
-        Same twin design as the Python channel, but with the Rust session
-        enabled: the writer pushes the new K straight into the live
-        session and the run consumes it in place.
+        Same twin design, but the writer pushes the new K straight into
+        the live session (``enable_rust_backend`` before the update) and
+        the run consumes it in place.
         """
-        refreshed = _build_beverton("R4RefreshRs", 100000.0)
+        refreshed = _build_beverton("R4RefreshDirect", 100000.0)
         refreshed.enable_rust_backend(seed=3)
         refreshed.update().competition(carrying_capacity=8.0)
         refreshed.run(4)
 
-        twin = _build_beverton("R4RefreshRsTwin", 8.0)
+        twin = _build_beverton("R4RefreshDirectTwin", 8.0)
         twin.enable_rust_backend(seed=3)
         twin.run(4)
-        unrefreshed = _build_beverton("R4RefreshRsOld", 100000.0)
+        unrefreshed = _build_beverton("R4RefreshDirectOld", 100000.0)
         unrefreshed.enable_rust_backend(seed=3)
         unrefreshed.run(4)
 
@@ -627,7 +626,6 @@ class TestDirectedRefreshUnderFrozenBlueprint:
             refreshed.state.individual_count,
             unrefreshed.state.individual_count,
         )
-        assert refreshed.using_rust_backend
 
     def test_in_hook_update_deferred_through_boundary_flush_matches_direct_push(
         self,
@@ -798,6 +796,7 @@ class TestR5SnapshotChannelAttacks:
         spatial = nt.SpatialPopulation(
             [d0, d1], migration_rate=0.0, name="R5SpatialLive"
         )
+        spatial.enable_rust_backend(seed=0)
         counts_before = spatial.demes[0].state.individual_count.copy()
         total_before = spatial.get_total_count()
         assert total_before == 80
@@ -848,6 +847,7 @@ class TestR5SnapshotChannelAttacks:
             migration_rate=0.0,
             name="R5SpatialTwin",
         )
+        twin.enable_rust_backend(seed=0)
         spatial.run(1)
         twin.run(1)
         assert float(spatial.demes[0].state.individual_count.sum()) == 0.0

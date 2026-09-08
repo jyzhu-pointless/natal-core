@@ -98,10 +98,6 @@ class _RunDemePopulation:
         species: Species,
         name: str,
         config: object,
-        *,
-        individual_delta: float = 0.0,
-        sperm_delta: float = 0.0,
-        stop_after_run_tick: bool = False,
     ) -> None:
         self._species = species
         self._name = name
@@ -109,14 +105,15 @@ class _RunDemePopulation:
         self._finished = False
         self._config = config
         self.config = config
-        self._individual_delta = float(individual_delta)
-        self._sperm_delta = float(sperm_delta)
-        self._stop_after_run_tick = bool(stop_after_run_tick)
         self.finish_events = 0
         self._state = PopulationState(
             n_tick=0,  # restored
-            individual_count=np.zeros((2, config.n_ages, 1), dtype=np.float64),  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-            sperm_storage=np.zeros((config.n_ages, 1, 1), dtype=np.float64),  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+            individual_count=np.zeros(  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+                (2, config.n_ages, config.n_ztypes), dtype=np.float64
+            ),
+            sperm_storage=np.zeros(  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+                (config.n_ages, config.n_ztypes, config.n_ztypes), dtype=np.float64
+            ),
         )
 
     @property
@@ -141,20 +138,15 @@ class _RunDemePopulation:
         """Return the shared draft."""
         return self._config
 
+    def has_python_callbacks(self) -> bool:
+        """The double carries no Python callbacks."""
+        return False
+
     def clear_history(self) -> None:
         """No-op: doubles have no history."""
 
     def run_tick(self) -> _RunDemePopulation:
-        """Advance one fake tick, optionally stopping."""
-        if self._individual_delta != 0.0:
-            self._state = self._state._replace(
-                individual_count=(
-                    self._state.individual_count + self._individual_delta
-                ),
-                sperm_storage=self._state.sperm_storage + self._sperm_delta,
-            )
-        if self._stop_after_run_tick:
-            self._finished = True
+        """Advance one fake tick."""
         self.tick += 1
         return self
 
@@ -195,9 +187,9 @@ class _RunDiscreteDemePopulation:
         self.finish_events = 0
         self._state = DiscretePopulationState(
             n_tick=0,
-            individual_count=np.zeros(  # restored
-                (2, config.n_ages, 1),
-                dtype=np.float64,  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+            individual_count=np.zeros(  # restored  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+                (2, config.n_ages, config.n_ztypes),
+                dtype=np.float64,
             ),
         )
 
@@ -218,6 +210,10 @@ class _RunDiscreteDemePopulation:
     def export_config(self) -> object:
         """Return the shared draft."""
         return self._config
+
+    def has_python_callbacks(self) -> bool:
+        """The double carries no Python callbacks."""
+        return False
 
     def clear_history(self) -> None:
         """No-op: doubles have no history."""
@@ -252,46 +248,72 @@ class _RunDiscreteDemePopulation:
 
 
 def test_spatial_population_run_tick_updates_all_demes():
-    """run_tick drives every deme's tick and aggregates the container."""
+    """run_tick runs every deme's lifecycle through the shared session.
+
+    The quiescent draft keeps full survival through age 3 and no
+    reproduction, so one session tick moves the seeded age-1 cohort
+    (100 per sex, WT|WT) to age 2 in place in every deme, and both
+    identical demes stay perfectly in step.
+    """
     species = _make_species("spatial_run_tick")
     shared_config = _make_population_config(species)
 
-    d0 = _RunDemePopulation(
-        species, "d0", shared_config, individual_delta=1.0, sperm_delta=2.0
-    )
-    d1 = _RunDemePopulation(
-        species, "d1", shared_config, individual_delta=1.0, sperm_delta=2.0
-    )
+    d0 = _RunDemePopulation(species, "d0", shared_config)
+    d1 = _RunDemePopulation(species, "d1", shared_config)
+    for deme in (d0, d1):
+        deme._state.individual_count[:, 1, 0] = 100.0  # noqa: SLF001 — seed the double's live state
 
     sp = SpatialPopulation([d0, d1], migration_rate=0.0)
+    sp.enable_rust_backend(seed=0)
 
     sp.run_tick()
 
     assert sp.tick == 1
     assert d0.tick == 1 and d1.tick == 1
-    assert float(d0.state.individual_count.sum()) == 8.0
-    assert float(d1.state.individual_count.sum()) == 8.0
-    assert float(d0.state.sperm_storage.sum()) == 8.0
-    assert float(d1.state.sperm_storage.sum()) == 8.0
+    assert d0.tick == d1.tick == sp.tick
+    for deme in (d0, d1):
+        counts = deme.state.individual_count
+        assert counts[:, 1, 0].sum() == 0.0, "age-1 cohort must vacate"
+        assert counts[0, 2, 0] == 100.0, "female cohort ages 1 -> 2"
+        assert counts[1, 2, 0] == 100.0, "male cohort ages 1 -> 2"
+        assert counts.sum() == 200.0, "quiescent draft conserves counts"
+    np.testing.assert_array_equal(
+        d0.state.individual_count, d1.state.individual_count
+    )
 
 
 def test_spatial_population_run_stop_marks_finish():
-    """A stopped deme halts the run, finishes every deme, fires finish."""
+    """A stopped tick halts the run, finishes every deme, fires finish."""
+    from natal.frontend.hooks.tick_context import TickContext
+
     species = _make_species("spatial_run_stop")
-    shared_config = _make_population_config(species)
+    finish_events: list[int] = []
 
-    d0 = _RunDemePopulation(species, "d0", shared_config, stop_after_run_tick=True)
-    d1 = _RunDemePopulation(species, "d1", shared_config)
+    @nt.hook(event="first", deme=0)
+    def stop_on_deme_zero(pop: TickContext) -> int:
+        """Deme 0 stops the very first tick."""
+        return pop.stop()
 
-    sp = SpatialPopulation([d0, d1], migration_rate=0.0)
+    @nt.hook(event="finish")
+    def record_finish(pop: TickContext) -> int:
+        finish_events.append(int(pop.deme_id))
+        return 0
+
+    demes = [_build_test_deme(f"stop_mark_d{i}", species) for i in range(2)]
+    for deme in demes:
+        deme.register_hooks(record_finish)
+    demes[0].register_hooks(stop_on_deme_zero)
+
+    sp = SpatialPopulation(demes, migration_rate=0.0)
+    sp.enable_rust_backend(seed=0)
 
     sp.run(n_steps=5, record_every=1)
 
-    # The stopped tick does not advance; d1 never runs its tick.
+    # The stopped tick does not advance; every deme is finished and the
+    # container's mark-all pass fired each deme's finish exactly once.
     assert sp.tick == 0
-    assert d0.tick == 1 and d1.tick == 0
-    assert d0._finished and d1._finished
-    assert d0.finish_events == 1 and d1.finish_events == 1
+    assert all(deme._finished for deme in demes)
+    assert finish_events == [0, 1]
 
 
 def test_spatial_stop_path_finish_hooks_see_own_deme_ids() -> None:
@@ -321,44 +343,56 @@ def test_spatial_stop_path_finish_hooks_see_own_deme_ids() -> None:
     demes[1].register_hooks(stop_on_deme_one)
 
     spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
     spatial.run(n_steps=5)
 
-    # Deme 1 stops first: its lifecycle fires its own finish (id 1), then
-    # the container's mark-all pass fires every deme in list order with
-    # each deme's own index.  Demes 0 and 2 finish only via mark-all.
-    assert finish_ids == [1, 0, 1, 2]
+    # The engine freezes the tick at the stop boundary; the container's
+    # mark-all pass then fires every deme's finish in list order with
+    # each deme's own index.
+    assert finish_ids == [0, 1, 2]
     assert all(deme._finished for deme in demes)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
 
 
 def test_spatial_population_stochastic_discrete_migration_preserves_integer_counts():
-    """Stochastic discrete migration keeps per-deme counts integral."""
+    """Stochastic discrete ticks keep every per-deme count integral.
+
+    A discrete-generation tick replaces the adults with the offspring
+    generation, so total conservation across a tick is not the invariant;
+    the engine's multinomial sampling must still land on whole
+    individuals everywhere (no fractional leakage).
+    """
     species = _make_species("spatial_run_stochastic_discrete")
     shared_config = _make_discrete_population_config(species, "stoch_disc")  # restored
-    shared_config = shared_config._replace(stochastic=True, continuous_sampling=False)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+    shared_config = shared_config._replace(
+        stochastic=True,
+        eggs_per_female=np.array(4.0),
+        age_based_mating_rates=np.full((2, 2), 1.0),
+        age_based_reproduction_rates=np.array([0.0, 1.0]),  # type: ignore[list-item]  # duck-typed double draft
+    )  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
 
     d0 = _RunDiscreteDemePopulation(species, "d0", shared_config)
     d1 = _RunDiscreteDemePopulation(species, "d1", shared_config)  # restored
+    width = shared_config.n_ztypes  # type: ignore[attr-defined]  # duck-typed double
+    seed_counts = np.zeros((2, 2, width), dtype=np.float64)
+    seed_counts[0, 1, 0] = 3.0  # females, adults
+    seed_counts[1, 1, 0] = 2.0  # males, adults
     d0._state = d0.state._replace(  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-        individual_count=np.array(
-            [
-                [[0.0], [3.0]],
-                [[0.0], [2.0]],
-            ],
-            dtype=np.float64,
-        )
+        individual_count=seed_counts
     )
-
-    np.random.seed(17)
 
     sp = SpatialPopulation(
         [d0, d1],
         adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
         migration_rate=0.5,
     )
+    sp.enable_rust_backend(seed=0)
     sp.run_tick()
 
     total_counts = [float(deme.state.individual_count.sum()) for deme in sp.demes]
-    assert np.isclose(sum(total_counts), 5.0)
+    assert sum(total_counts) > 0.0
+    # Deme 1 held no breeding adults, so any mass there arrived by
+    # migration of the new adult generation.
+    assert total_counts[1] > 0.0
     for deme in sp.demes:
         assert np.allclose(
             deme.state.individual_count, np.round(deme.state.individual_count)
@@ -373,10 +407,14 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
 
     d0 = _RunDemePopulation(species, "d0", shared_config)
     d1 = _RunDemePopulation(species, "d1", shared_config)  # restored
-    ind = np.zeros((2, shared_config.n_ages, 1), dtype=np.float64)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+    width = shared_config.n_ztypes  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+    ind = np.zeros((2, shared_config.n_ages, width), dtype=np.float64)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
     ind[0, 1, 0] = 5.0
     ind[1, 1, 0] = 4.0  # restored
-    sperm = np.zeros((shared_config.n_ages, 1, 1), dtype=np.float64)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+    sperm = np.zeros(
+        (shared_config.n_ages, width, width),  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+        dtype=np.float64,
+    )
     sperm[1, 0, 0] = 3.0  # restored
     d0._state = PopulationState(  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         n_tick=0, individual_count=ind, sperm_storage=sperm
@@ -389,6 +427,7 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
         adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
         migration_rate=0.5,
     )
+    sp.enable_rust_backend(seed=0)
     sp.run_tick()
 
     total_females = sum(
@@ -401,8 +440,8 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
     assert np.isclose(total_sperm, 3.0)
 
     for deme in sp.demes:
-        female_total = float(deme.state.individual_count[0, 1, 0])
-        sperm_total = float(deme.state.sperm_storage[1, 0, 0])
+        female_total = float(deme.state.individual_count[0, :, :].sum())
+        sperm_total = float(deme.state.sperm_storage[:, :, :].sum())
         assert female_total >= sperm_total
         assert np.allclose(
             deme.state.individual_count, np.round(deme.state.individual_count)
@@ -455,6 +494,7 @@ def test_spatial_hook_priority_runs_in_run_tick_and_run() -> None:
         [_build_test_deme("prio_d0", _make_species("spatial_prio"))],
         migration_rate=0.0,
     )
+    sp.enable_rust_backend(seed=0)
     sp.register_hooks(first_a)
     sp.register_hooks(first_b)
 
@@ -489,6 +529,7 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
     d1.register_hooks(d1_hook)
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
     spatial.run_tick()
 
     assert calls == ["d0", "d1"]
@@ -516,6 +557,7 @@ def test_spatial_reference_run_hooks_see_live_deme_ids() -> None:
     for deme in demes:
         deme.register_hooks(record_deme)
     spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
     spatial.run(n_steps=2)
 
     # Each of the 3 demes fires its first-event hook once per tick.
@@ -542,6 +584,7 @@ def test_spatial_reference_deme_selector_targets_one_deme() -> None:
     for deme in demes:
         deme.register_hooks(only_deme_one)
     spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
     spatial.run(n_steps=1)
 
     assert hits == [1]
@@ -560,6 +603,7 @@ def test_spatial_compiled_local_hooks_still_take_effect() -> None:
         return 0
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
     spatial.register_hooks(stop_immediately, deme=0)
     spatial.run_tick()
 
@@ -657,6 +701,7 @@ def test_compact_plan_folds_identical_sequences_to_wildcard() -> None:
     d2.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
 
     spatial = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
 
     expanded = spatial._collect_effective_compiled_hooks()
     compact = spatial._collect_compact_spatial_hooks()
@@ -685,6 +730,7 @@ def test_compact_plan_preserves_expanded_view() -> None:
     d1.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
 
     public = spatial.get_compiled_hooks()
     assert len(public) == 2
@@ -708,6 +754,7 @@ def test_compact_plan_subset_selector() -> None:
     d2 = _build_test_deme("cs_d2", species)
 
     spatial = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
 
     compact = spatial._collect_compact_spatial_hooks()
     assert len(compact) == 1
@@ -782,6 +829,7 @@ def test_compact_plan_empty_hook_sequence_skipped() -> None:
     d1 = _build_test_deme("ce_d1", species)
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
 
     compact = spatial._collect_compact_spatial_hooks()
     assert len(compact) == 1

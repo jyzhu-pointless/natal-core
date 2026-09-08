@@ -177,29 +177,6 @@ class TestSessionOwnership:
         pop.run(3)
         assert pop.tick == 5
 
-    def test_disable_pulls_the_session_state_back(self) -> None:
-        """Disabling keeps every count and the tick on the reference path."""
-        pop = _build_discrete("OwnDisable")
-        pop.enable_rust_backend(seed=3)
-        pop.run(2)
-        expected = pop.state.individual_count.copy()
-        pop.disable_rust_backend()
-        np.testing.assert_array_equal(pop.state.individual_count, expected)
-        assert pop.tick == 2
-
-    def test_refresh_rebuild_keeps_state_round_trip(self) -> None:
-        """refresh_rust_backend captures the old session state first."""
-        pop = _build_discrete("OwnRefresh")
-        pop.enable_rust_backend(seed=3)
-        pop.run(3)
-        before = pop.state.individual_count.copy()
-        pop.refresh_rust_backend()
-        # The rebuilt session starts from the pre-refresh state (only the
-        # RNG reseeded to the same original seed).
-        pop.run(1)
-        assert pop.tick == 4
-        assert not np.array_equal(pop.state.individual_count, before)
-
     def test_hetero_spatial_uses_the_explicit_state_round_trip(self) -> None:
         """Spatial's per-tick data plane runs backends through run_tick(state)."""
         sp = _species("OwnSpatial")
@@ -247,7 +224,7 @@ class TestSessionRngOwnership:
     Stochastic age-structured trajectories are deterministic functions of
     one seeded session RNG: ``enable_rust_backend(seed=S)`` starts the
     stream at *S*, every run call keeps consuming it, and only a backend
-    rebuild (``refresh_rust_backend`` / re-``enable``) resets it.  State
+    rebuild (a same-seed re-``enable``) resets it.  State
     pushes (``set_state``/``import_state``) never touch the stream.  All
     comparisons below are bitwise over the full state (counts + sperm).
     """
@@ -278,10 +255,11 @@ class TestSessionRngOwnership:
         assert split.tick == 2
         assert atomic.tick == 2
 
-    def test_refresh_after_run_diverges_from_the_continuation(self) -> None:
-        """refresh rebuilds the session: the RNG restarts while the state continues.
+    def test_reenable_after_run_diverges_from_the_continuation(self) -> None:
+        """A same-seed re-enable rebuilds the session: the RNG restarts
+        while the state continues.
 
-        After ``run(1)`` (state at tick 1) a same-seed refresh hands the
+        After ``run(1)`` (state at tick 1) a same-seed re-enable hands the
         tick-1 state to a brand-new stream that starts at seed 13 again,
         whereas a fresh ``run(2)`` plays the same stream against the tick-0
         state.  The two end states are bitwise different: the rebuild did
@@ -290,7 +268,7 @@ class TestSessionRngOwnership:
         pop = _build_age("RngRefresh", stochastic=True)
         pop.enable_rust_backend(seed=13)
         pop.run(1)
-        pop.refresh_rust_backend()
+        pop.enable_rust_backend(seed=13)
         pop.run(1)
 
         fresh = _build_age("RngRefreshRef", stochastic=True)
@@ -303,13 +281,12 @@ class TestSessionRngOwnership:
             pop.state.individual_count, fresh.state.individual_count
         )
 
-    def test_re_enable_matches_refresh_and_differs_from_continuation(self) -> None:
+    def test_re_enable_rebuilds_rng_and_preserves_state(self) -> None:
         """A second same-seed ``enable`` is a rebuild, not a no-op.
 
-        ``enable(seed=13)`` after ``run(1)`` must behave exactly like
-        ``refresh_rust_backend()`` (state preserved, RNG restarted): the
-        two end states are bitwise equal and both differ from the pure
-        continuation.
+        ``enable(seed=13)`` after ``run(1)`` preserves the state while
+        restarting the RNG at the original seed: the end state differs
+        bitwise from the pure continuation run(2).
         """
         pop = _build_age("RngReenable", stochastic=True)
         pop.enable_rust_backend(seed=13)
@@ -317,51 +294,18 @@ class TestSessionRngOwnership:
         pop.enable_rust_backend(seed=13)
         pop.run(1)
 
-        refreshed = _build_age("RngReenableRef", stochastic=True)
-        refreshed.enable_rust_backend(seed=13)
-        refreshed.run(1)
-        refreshed.refresh_rust_backend()
-        refreshed.run(1)
+        continuation = _build_age("RngReenableCont", stochastic=True)
+        continuation.enable_rust_backend(seed=13)
+        continuation.run(2)
 
         continuation = _build_age("RngReenableCont", stochastic=True)
         continuation.enable_rust_backend(seed=13)
         continuation.run(2)
 
-        np.testing.assert_array_equal(
-            pop.state.individual_count, refreshed.state.individual_count
-        )
-        np.testing.assert_array_equal(
-            pop.state.sperm_storage, refreshed.state.sperm_storage
-        )
         assert not np.array_equal(
             pop.state.individual_count, continuation.state.individual_count
         )
         assert pop.tick == 2
-
-    def test_disable_re_enable_loses_the_rng_stream(self) -> None:
-        """The stream is session-owned: disabling discards it.
-
-        ``enable(seed=13); run(1); disable; enable(seed=13); run(1)`` ends
-        at tick 2 but draws the seed-13 stream's first segment against the
-        tick-1 state, so it cannot reproduce the atomic ``run(2)``.  A
-        cached/carry-over RNG would reproduce it exactly.
-        """
-        pop = _build_age("RngDisable", stochastic=True)
-        pop.enable_rust_backend(seed=13)
-        pop.run(1)
-        pop.disable_rust_backend()
-        pop.enable_rust_backend(seed=13)
-        pop.run(1)
-
-        fresh = _build_age("RngDisableRef", stochastic=True)
-        fresh.enable_rust_backend(seed=13)
-        fresh.run(2)
-
-        assert pop.tick == 2
-        assert fresh.tick == 2
-        assert not np.array_equal(
-            pop.state.individual_count, fresh.state.individual_count
-        )
 
     def test_state_rollback_keeps_stream_but_checkpoint_rollback_rewinds(self) -> None:
         """set_state moves state alone; only a checkpoint moves both.
@@ -997,8 +941,8 @@ class TestStructuralRebuildChain:
         rebuild the backend from the current state with the ORIGINAL
         seed, so the second tick draws a fresh seed-S stream against the
         tick-1 state — bitwise different from the atomic two-tick run,
-        and bitwise equal to an explicit ``refresh_rust_backend`` (the
-        documented refresh semantics).
+        and bitwise equal to a same-seed re-``enable`` (the documented
+        rebuild semantics).
         """
         pop = _build_age("RebuildChain", stochastic=True)
         pop.enable_rust_backend(seed=13)
@@ -1023,17 +967,17 @@ class TestStructuralRebuildChain:
         )
 
         # The rebuild resets the stream to the original seed: same end
-        # state as the explicit refresh path, bitwise.
-        refreshed = _build_age("RebuildRef", stochastic=True)
-        refreshed.enable_rust_backend(seed=13)
-        refreshed.run(1)
-        refreshed.refresh_rust_backend()
-        refreshed.run(1)
+        # state as a same-seed re-enable, bitwise.
+        reenabled = _build_age("RebuildRef", stochastic=True)
+        reenabled.enable_rust_backend(seed=13)
+        reenabled.run(1)
+        reenabled.enable_rust_backend(seed=13)
+        reenabled.run(1)
         np.testing.assert_array_equal(
-            pop.state.individual_count, refreshed.state.individual_count
+            pop.state.individual_count, reenabled.state.individual_count
         )
         np.testing.assert_array_equal(
-            pop.state.sperm_storage, refreshed.state.sperm_storage
+            pop.state.sperm_storage, reenabled.state.sperm_storage
         )
 
 

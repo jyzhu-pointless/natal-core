@@ -1,8 +1,10 @@
-"""Rust backend adapter for the optional native extension ``natal._engine_rs``.
+"""Adapter for the native engine extension ``natal._engine_rs``.
 
-The module exposes both the original standalone aging kernels and the stateful
-``RustLifecycleBackend`` for full age-structured ticks.  If the native
-extension is missing, the pure-Python reference backend remains unaffected.
+The module exposes the stateful lifecycle backends that own run state
+inside engine sessions (panmictic and spatial) plus the checkpoint
+snapshot tuples they surface.  The extension is the only simulation
+engine: when it is missing, population construction raises instead of
+falling back to another execution path.
 """
 
 from __future__ import annotations
@@ -116,7 +118,7 @@ def rust_run_age_structured_aging(
 ) -> PopulationState:
     """Run the age-structured aging stage in Rust.
 
-    The Python-owned state is copied first, matching the reference
+    The Python-owned state is copied first, keeping the engine's
     ``run_aging`` semantics; the Rust kernel then mutates the copies in place
     through zero-copy NumPy views.
 
@@ -154,7 +156,7 @@ def rust_run_discrete_aging(
 ) -> DiscretePopulationState:
     """Run the discrete-generation aging stage in Rust.
 
-    The Python-owned state is copied first, matching the reference
+    The Python-owned state is copied first, keeping the engine's
     ``run_discrete_aging`` semantics; the Rust kernel then mutates the copy in
     place through a zero-copy NumPy view.
 
@@ -194,7 +196,7 @@ class RustLifecycleBackend:
     program; runtime value changes flow through
     :meth:`refresh_params` (directed pull, no rebuild, no RNG reset).
     State arrays stay Python-owned and are copied before each tick,
-    preserving the reference lifecycle's immutable-input contract.
+    preserving the engine's immutable-input contract.
 
     Single-parameter Python callbacks are supported through the session's
     ``python_callbacks`` channel; the population bridges them at
@@ -388,7 +390,7 @@ class RustLifecycleBackend:
         """Run one full age-structured tick in Rust.
 
         The stage order is first hook → reproduction → early hook → survival →
-        late hook → aging, matching ``natal.backends.reference.lifecycle.run_structured_tick``.
+        late hook → aging.
 
         Args:
             state: Current population state.  It is not modified; the returned

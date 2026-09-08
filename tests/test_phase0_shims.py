@@ -193,6 +193,20 @@ def test_legacy_engine_paths_not_importable(legacy_path: str) -> None:
         importlib.import_module(legacy_path)
 
 
+def test_reference_backend_removed() -> None:
+    """The deleted reference backend is gone statically and dynamically.
+
+    Invariant: ``natal.backends.reference`` has no importable spec (the
+    package directory was physically removed) and importing it raises
+    ``ModuleNotFoundError`` — no silent fallback reappears.
+    """
+    import importlib.util
+
+    assert importlib.util.find_spec("natal.backends.reference") is None
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("natal.backends.reference")
+
+
 def test_no_legacy_packages_left_on_disk() -> None:
     """The physical shim directories are gone from the package tree.
 
@@ -282,10 +296,10 @@ import natal.frontend.genetics
 assert natal.frontend.hooks.HookProgram is natal.frontend.hooks.HookProgram
 assert natal.frontend.genetics.Species is natal.frontend.genetics.Species
 """,
-    # Reference backend first, then the contract layer feeding it: both are
-    # independent of the frontend initialization order.
-    "reference-then-contracts": """
-import natal.backends.reference.simulation.age_structured
+    # Rust backend adapter first, then the contract layer feeding it: both
+    # are independent of the frontend initialization order.
+    "rust-backend-then-contracts": """
+import natal.backends.rust.rust_backend
 import natal.contracts
 assert natal.contracts.CONTRACTS_VERSION == 2
 """,

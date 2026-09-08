@@ -8,10 +8,6 @@ from time import perf_counter
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.backends.reference.simulation.mgdrive1_compatible import (
-    advance_mgdrive1_lifecycle,
-)
-from natal.backends.reference.spatial_migrator import run_spatial_migration
 from natal.frontend.spatial.migration import fold_migration_csr, normalize_migration_rate
 from natal.frontend.spatial.topology import GridTopology, HexGrid, build_gaussian_kernel
 
@@ -202,6 +198,13 @@ def _advance_lifecycle(
     Returns:
         State after local population dynamics and before migration.
     """
+    # The MGDrivE1-compatible reference lifecycle retired with the
+    # reference backend (S6): invoking the cross-engine benchmark now
+    # fails loudly instead of silently comparing against a shadow engine.
+    from natal.backends.reference.simulation.mgdrive1_compatible import (
+        advance_mgdrive1_lifecycle,
+    )
+
     n_demes = int(state.aquatic.shape[0])
     n_genotypes = int(state.aquatic.shape[1])
     aquatic_duration = int(state.aquatic.shape[2])
@@ -304,7 +307,11 @@ def _migrate_adults(
     individuals[:, 1, 0] = state.adult_male
     sperm = state.adult_female[:, np.newaxis, :, :].copy()
     # Slice 5: fold the kernel routing to CSR once, then run the pure
-    # numeric migration stage (rate column x fixed CSR).
+    # numeric migration stage (rate column x fixed CSR).  The numeric
+    # migration kernel retired with the reference backend (S6); the
+    # function-level import below fails loudly on invocation.
+    from natal.backends.reference.spatial_migrator import run_spatial_migration
+
     csr = fold_migration_csr(
         n_demes=n_demes,
         topology=GridTopology(rows=rows, cols=cols, wrap=False),

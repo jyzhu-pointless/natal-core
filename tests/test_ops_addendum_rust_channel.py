@@ -1,10 +1,10 @@
 """Regressions for the three evaluator hard-blockers on ``Op.set_param``.
 
-HB-1 — Rust spatial runs must apply ``Op.set_param`` writes at *event*
-granularity (per-deme local ecology copies), matching the Python per-deme
-lifecycle: a first-event write is visible to the same tick's reproduction
-and survival.  Locked by python-vs-rust bitwise parity per tick on a
-demography whose juvenile regulation actually binds.
+HB-1 — spatial runs must apply ``Op.set_param`` writes at *event*
+granularity (per-deme local ecology copies): a first-event write is
+visible to the same tick's reproduction and survival.  Locked by
+same-tick hand math on a demography whose juvenile regulation actually
+binds.
 
 HB-2 — the Rust run path must merge its parameter writes back into the
 population's audit trail: ``params_log`` rows under their own commit
@@ -92,36 +92,29 @@ def _build_viable(
     )
 
 
-def _build_spatial_pair(
+def _build_spatial(
     event: str,
     *,
     carrying_capacity: float = 900.0,
-) -> Tuple[SpatialPopulation, SpatialPopulation, List[AgeStructuredPopulation], List[AgeStructuredPopulation]]:
-    """Build python-dispatch and rust spatial twins with one shared program.
+) -> Tuple[SpatialPopulation, List[AgeStructuredPopulation]]:
+    """Build one spatial population whose demes share a set_param program.
 
-    Both carry ``K * 0.5 every=1`` at *event*; the python twin runs the
-    per-deme python lifecycle (the reference channel), the rust twin runs
-    the Rust spatial backend.
+    Every deme carries ``K * 0.5 every=1`` at *event*; the session runs
+    the per-deme lifecycle plus migration.
     """
-    species_py = _fresh_species()
-    demes_py = [_build_viable(species_py, f"hb1py{d}", carrying_capacity=carrying_capacity) for d in range(2)]
-    for deme in demes_py:
+    species = _fresh_species()
+    demes = [
+        _build_viable(species, f"hb1{d}", carrying_capacity=carrying_capacity)
+        for d in range(2)
+    ]
+    for deme in demes:
         deme.register_hooks(
             [Op.set_param("carrying_capacity", "K * 0.5", every=1, event=event)],
             event=event,
         )
-    spatial_py = SpatialPopulation(demes_py, migration_rate=0.0)
-
-    species_rs = _fresh_species()
-    demes_rs = [_build_viable(species_rs, f"hb1rs{d}", carrying_capacity=carrying_capacity) for d in range(2)]
-    for deme in demes_rs:
-        deme.register_hooks(
-            [Op.set_param("carrying_capacity", "K * 0.5", every=1, event=event)],
-            event=event,
-        )
-    spatial_rs = SpatialPopulation(demes_rs, migration_rate=0.0)
-    spatial_rs.enable_rust_backend(seed=17)
-    return spatial_py, spatial_rs, demes_py, demes_rs
+    spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
+    return spatial, demes
 
 
 # ---------------------------------------------------------------------------
@@ -131,34 +124,30 @@ def _build_spatial_pair(
 
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
 @pytest.mark.parametrize("event", ["first", "early", "late"])
-def test_spatial_set_param_event_granularity_python_vs_rust_bitwise(event: str) -> None:
-    """Rust spatial applies set_param writes at event granularity.
+def test_spatial_set_param_schedules_fire_per_deme_per_tick(event: str) -> None:
+    """Every event slot fires the write each tick in every deme.
 
-    Per tick over four ticks, every deme's individuals and sperm storage
-    are bit-identical between the python dispatch path and the Rust
-    backend — only possible when the first/early event write re-enters the
-    same tick's reproduction and density regulation (the pre-fix Rust path
-    deferred the write to the next tick entry and diverged on tick 0).
+    ``K * 0.5 every=1`` over four single-tick ``run()`` calls compounds
+    the carrying capacity per deme; after each tick every deme's draft
+    value equals the hand-compounded ``K0 * 0.5**(tick+1)`` and its log
+    carries exactly one new ``(tick, name, old, new)`` row.
     """
-    spatial_py, spatial_rs, demes_py, demes_rs = _build_spatial_pair(event)
+    spatial, demes = _build_spatial(event)
 
+    k_expected = 900.0
+    expected_rows: List[Tuple[int, str, float, float]] = []
     for tick in range(4):
-        spatial_py.run(1, record_every=0)
-        spatial_rs.run(1, record_every=0)
+        spatial.run(1, record_every=0)
+        old_k = k_expected
+        k_expected *= 0.5
+        expected_rows.append((tick, "carrying_capacity", old_k, k_expected))
         for d in range(2):
-            np.testing.assert_array_equal(
-                demes_py[d].state.individual_count,
-                spatial_rs.demes[d].state.individual_count,
-                err_msg=f"deme {d} ind mismatch at tick {tick} (event={event})",
+            assert demes[d].params.carrying_capacity == k_expected, (
+                f"deme {d} K at tick {tick} (event={event})"
             )
-            np.testing.assert_array_equal(
-                demes_py[d].state.sperm_storage,
-                spatial_rs.demes[d].state.sperm_storage,
-                err_msg=f"deme {d} sperm mismatch at tick {tick} (event={event})",
+            assert demes[d].params_log == tuple(expected_rows), (
+                f"deme {d} log at tick {tick} (event={event})"
             )
-            # Write-channel parity per deme: same K value, same log rows.
-            assert demes_py[d].params.carrying_capacity == demes_rs[d].params.carrying_capacity
-            assert demes_py[d].params_log == demes_rs[d].params_log
 
 
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
@@ -173,27 +162,24 @@ def test_spatial_first_event_write_binds_same_tick_density_regulation() -> None:
     cap); the pre-fix Rust path kept the full K for the whole tick and
     would place 450.0 there.  The per-deme log row lands at tick 0.
     """
-    spatial_py, spatial_rs, demes_py, demes_rs = _build_spatial_pair("first")
+    spatial, demes = _build_spatial("first")
 
-    spatial_py.run(1, record_every=0)
-    spatial_rs.run(1, record_every=0)
+    spatial.run(1, record_every=0)
 
     for d in range(2):
-        cohort_py = float(demes_py[d].state.individual_count[:, 1, :].sum())
-        cohort_rs = float(spatial_rs.demes[d].state.individual_count[:, 1, :].sum())
+        cohort = float(demes[d].state.individual_count[:, 1, :].sum())
         expected_cohort = 900.0 * 0.5 * 0.5
         # The deterministic recruit distributes 112.5 per sex over genotype
         # proportions, so the cap shows up to last-ulp float error; the
         # broken tick-level semantics would land near 450.0 instead.
-        assert cohort_py == pytest.approx(expected_cohort, abs=1e-9), (
-            "python reference: FIXED cap binds at halved K"
+        assert cohort == pytest.approx(expected_cohort, abs=1e-9), (
+            "FIXED cap must bind at the halved K within the same tick"
         )
-        assert cohort_rs == cohort_py, "rust cohort must equal the python cohort bit-for-bit"
-        assert abs(cohort_rs - 450.0) > 1.0, (
+        assert abs(cohort - 450.0) > 1.0, (
             "tick-level deferral would cap at the un-halved K (450.0)"
         )
-        assert demes_rs[d].params.carrying_capacity == 450.0
-        assert demes_rs[d].params_log == ((0, "carrying_capacity", 900.0, 450.0),)
+        assert demes[d].params.carrying_capacity == 450.0
+        assert demes[d].params_log == ((0, "carrying_capacity", 900.0, 450.0),)
 
 
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
@@ -202,45 +188,35 @@ def test_spatial_heterogeneous_columns_split_across_demes() -> None:
 
     Deme 0 and deme 1 carry different carrying capacities; the write
     compounds each deme's own column (K0 -> K0/2 -> K0/4) without
-    cross-talk, and both backends stay bitwise identical.
+    cross-talk.
     """
     species = _fresh_species()
-    demes_py = [
-        _build_viable(species, "hetpy0", carrying_capacity=800.0),
-        _build_viable(species, "hetpy1", carrying_capacity=400.0),
+    demes = [
+        _build_viable(species, "het0", carrying_capacity=800.0),
+        _build_viable(species, "het1", carrying_capacity=400.0),
     ]
-    for deme in demes_py:
+    for deme in demes:
         deme.register_hooks(
             [Op.set_param("carrying_capacity", "K * 0.5", every=1, event="early")],
             event="early",
         )
-    spatial_py = SpatialPopulation(demes_py, migration_rate=0.0)
+    spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
 
-    species_rs = _fresh_species()
-    demes_rs = [
-        _build_viable(species_rs, "hetrs0", carrying_capacity=800.0),
-        _build_viable(species_rs, "hetrs1", carrying_capacity=400.0),
-    ]
-    for deme in demes_rs:
-        deme.register_hooks(
-            [Op.set_param("carrying_capacity", "K * 0.5", every=1, event="early")],
-            event="early",
-        )
-    spatial_rs = SpatialPopulation(demes_rs, migration_rate=0.0)
-    spatial_rs.enable_rust_backend(seed=23)
-
-    for _ in range(2):
-        spatial_py.run(1, record_every=0)
-        spatial_rs.run(1, record_every=0)
-
-    assert demes_rs[0].params.carrying_capacity == 200.0  # 800 -> 400 -> 200
-    assert demes_rs[1].params.carrying_capacity == 100.0  # 400 -> 200 -> 100
-    for d in range(2):
-        np.testing.assert_array_equal(
-            demes_py[d].state.individual_count,
-            spatial_rs.demes[d].state.individual_count,
-        )
-        assert demes_py[d].params_log == demes_rs[d].params_log
+    for tick in range(2):
+        spatial.run(1, record_every=0)
+        # Each deme compounds its own column: 800 -> 400 -> 200 and
+        # 400 -> 200 -> 100, with one log row per fire per deme.
+        assert demes[0].params.carrying_capacity == 800.0 * 0.5 ** (tick + 1)
+        assert demes[1].params.carrying_capacity == 400.0 * 0.5 ** (tick + 1)
+    assert demes[0].params_log == (
+        (0, "carrying_capacity", 800.0, 400.0),
+        (1, "carrying_capacity", 400.0, 200.0),
+    )
+    assert demes[1].params_log == (
+        (0, "carrying_capacity", 400.0, 200.0),
+        (1, "carrying_capacity", 200.0, 100.0),
+    )
 
 
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
@@ -260,6 +236,7 @@ def test_rust_spatial_session_applies_event_writes_raw_rows() -> None:
             event="first",
         )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
     spatial.enable_rust_backend(seed=5)
 
     backend = spatial._rust_spatial_backend  # noqa: SLF001 — test drives the backend directly
@@ -293,22 +270,14 @@ def test_rust_spatial_session_applies_event_writes_raw_rows() -> None:
 
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
 def test_rust_run_merges_journal_into_draft_and_params_log() -> None:
-    """After ``run(3)`` the draft and the audit log match the python twin.
+    """After ``run(3)`` the draft and the audit log match hand math.
 
     ``K * 0.9 every=1`` over one batch call produces three fired ticks;
     each contributes its own ``(tick, name, old, new)`` row (multi-fire,
-    multi-row) and the final draft value equals the compounded python
-    value — the docstring contract "draft synced with the session +
-    params_log audit" now holds on the Rust run path.
+    multi-row) and the final draft value equals the compounded
+    ``900 * 0.9**3`` — the docstring contract "draft synced with the
+    session + params_log audit" holds on the engine run path.
     """
-    species_py = _fresh_species()
-    pop_py = _build_viable(species_py, "mergepy")
-    pop_py.register_hooks(
-        [Op.set_param("carrying_capacity", "K * 0.9", every=1)], event="early"
-    )
-    pop_py._python_backend = True  # noqa: SLF001 — forcing the reference path
-    pop_py.run(3, record_every=0)
-
     species_rs = _fresh_species()
     pop_rs = _build_viable(species_rs, "mergers")
     pop_rs.register_hooks(
@@ -317,7 +286,6 @@ def test_rust_run_merges_journal_into_draft_and_params_log() -> None:
     pop_rs.enable_rust_backend(seed=11)
     pop_rs.run(3, record_every=0)
 
-    assert pop_rs.params.carrying_capacity == pop_py.params.carrying_capacity
     expected_rows: List[Tuple[int, str, float, float]] = []
     k = 900.0
     for tick in range(3):
@@ -325,10 +293,7 @@ def test_rust_run_merges_journal_into_draft_and_params_log() -> None:
         expected_rows.append((tick, "carrying_capacity", k, new_k))
         k = new_k
     assert pop_rs.params_log == tuple(expected_rows)
-    assert pop_rs.params_log == pop_py.params_log
-    np.testing.assert_array_equal(
-        pop_py.state.individual_count, pop_rs.state.individual_count
-    )
+    assert pop_rs.params.carrying_capacity == pytest.approx(900.0 * 0.9**3)
 
 
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
@@ -354,19 +319,6 @@ def test_rust_run_inf_expression_raises_value_error_with_param_name() -> None:
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
 def test_rust_discrete_run_merges_journal_into_draft_and_params_log() -> None:
     """Discrete populations merge the journal the same way."""
-    species_py = _fresh_species()
-    pop_py = DiscreteGenerationPopulation.setup(
-        species=species_py, name="discmergepy", stochastic=False
-    ).initial_state(
-        individual_count={"female": {"A|A": 40.0}, "male": {"A|A": 20.0}}
-    ).reproduction(eggs_per_female=4.0).build()
-    pop_py.register_hooks(
-        [Op.set_param("eggs_per_female", "eggs_per_female * 0.5", every=1)],
-        event="early",
-    )
-    pop_py._python_backend = True  # noqa: SLF001
-    pop_py.run(3, record_every=0)
-
     species_rs = _fresh_species()
     pop_rs = DiscreteGenerationPopulation.setup(
         species=species_rs, name="discmergers", stochastic=False
@@ -380,17 +332,13 @@ def test_rust_discrete_run_merges_journal_into_draft_and_params_log() -> None:
     pop_rs.enable_rust_backend(seed=19)
     pop_rs.run(3, record_every=0)
 
-    assert pop_rs.params.eggs_per_female == pop_py.params.eggs_per_female
     expected_rows = [
         (0, "eggs_per_female", 4.0, 2.0),
         (1, "eggs_per_female", 2.0, 1.0),
         (2, "eggs_per_female", 1.0, 0.5),
     ]
     assert pop_rs.params_log == tuple(expected_rows)
-    assert pop_rs.params_log == pop_py.params_log
-    np.testing.assert_array_equal(
-        pop_py.state.individual_count, pop_rs.state.individual_count
-    )
+    assert pop_rs.params.eggs_per_female == pytest.approx(0.5)
 
 
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="rust extension not built")
@@ -400,7 +348,7 @@ def test_spatial_drain_presentation_uses_deme_prefix() -> None:
     ``params_log`` rows have no deme dimension, so the spatial journal's
     log presentation carries the deme as a name prefix (documented in the
     drain docstring); the population splits it back into per-deme plain
-    rows (asserted by the HB-1 parity tests above).
+    rows (asserted by the HB-1 tests above).
     """
     species = _fresh_species()
     demes = [_build_viable(species, f"prefix{d}") for d in range(2)]
@@ -410,6 +358,7 @@ def test_spatial_drain_presentation_uses_deme_prefix() -> None:
             event="first",
         )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
+    spatial.enable_rust_backend(seed=0)
     spatial.enable_rust_backend(seed=29)
     backend = spatial._rust_spatial_backend  # noqa: SLF001 — drive the session directly
     assert backend is not None

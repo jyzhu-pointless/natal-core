@@ -499,18 +499,12 @@ class TestModifierRegression:
             .presets(nt.Wolbachia(name="wMel", viability_scaling=1.0))
             .build()
         )
-        from natal.backends.reference.simulation.age_structured import (
-            compute_offspring_probability_tensor,
-        )
+        from natal.frontend.data._engine import recompute_offspring_tensor
 
         cfg = pop.config
-        n_gtypes = cfg.zygotes_to_gametes_map.shape[2]
-        recomputed = compute_offspring_probability_tensor(
-            meiosis_f=cfg.zygotes_to_gametes_map[0],
-            meiosis_m=cfg.zygotes_to_gametes_map[1],
-            haplo_to_genotype_map=cfg.gametes_to_zygotes_map,
-            n_ztypes=cfg.n_ztypes,
-            n_gtypes=n_gtypes,
+        recomputed = recompute_offspring_tensor(
+            cfg.zygotes_to_gametes_map,
+            cfg.gametes_to_zygotes_map,
         )
         np.testing.assert_allclose(cfg.offspring_tensor, recomputed, atol=1e-10)
 

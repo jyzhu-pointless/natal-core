@@ -250,29 +250,6 @@ class TestStateAndBookkeeping:
             pop.restore_checkpoint(1)
 
 
-class TestReferencePathUnchanged:
-    """Without a Rust session the reference restore keeps its old shape."""
-
-    def test_reference_restore_rolls_counts_and_tick_only(self) -> None:
-        """Backend-less restore: counts/tick restored, ecology untouched.
-
-        This pins today's reference-path semantics (S6 deletes the
-        reference engine); the R3 full rollback is the Rust-backed path.
-        """
-        pop = _build_discrete("R3Reference")
-        pop.run(2, record_every=1)
-        pop.disable_rust_backend()
-        pop.update().competition(carrying_capacity=4321.0)
-        tick1_counts = pop.history.individual_count[1].copy()
-
-        pop.restore_checkpoint(1)
-
-        np.testing.assert_array_equal(pop.state.individual_count, tick1_counts)
-        assert pop.tick == 1
-        # Reference path keeps the later K — the documented S6-closing gap.
-        assert pop.params.carrying_capacity == 4321.0
-
-
 # ── Adversarial strengthening pass (S2 batch 22b) ──────────────────────
 #
 # Every class below attacks one seam of the record-aligned checkpoint
@@ -736,11 +713,12 @@ class TestWrightFisherPath:
             .build()
         )
         # WF mode is a post-build structural switch: swap the draft flag
-        # and rebuild the session so the Rust backend runs the fused tick.
+        # and rebuild the session (same-seed re-enable) so the engine runs
+        # the fused tick.
         object.__setattr__(
             pop, "_config", pop.config._replace(extreme_speed_mode=1)
         )
-        pop.refresh_rust_backend()
+        pop.enable_rust_backend(seed=0)
 
         pop.run(3, record_every=1)
         assert pop.history.ticks == (0, 1, 2, 3)
@@ -770,7 +748,7 @@ class TestWrightFisherPath:
         object.__setattr__(
             control, "_config", control.config._replace(extreme_speed_mode=1)
         )
-        control.refresh_rust_backend()
+        control.enable_rust_backend(seed=0)
         control.run(3, record_every=1)
 
         assert pop.tick == control.tick == 3

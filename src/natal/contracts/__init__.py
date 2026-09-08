@@ -1,13 +1,11 @@
-"""Boundary-layer contracts between the frontend and execution backends.
+"""Boundary-layer contracts between the frontend and the engine.
 
 This package defines the data contracts (``Blueprint``, ``Params``,
-``SimState``, and — from slice ④ — the ``Program`` bytecode container),
-the materialization bridge from the build-time draft, the backend
-capability table and selector, and the cross-backend conformance
-suite.
+``SimState``, and — from slice ④ — the ``Program`` bytecode container)
+and the materialization bridge from the build-time draft.
 
-The frontend produces these objects; every backend (reference / rust)
-consumes them.  Neither side may reach into the other's internals.
+The frontend produces these objects; the native Rust engine consumes
+them.  Neither side may reach into the other's internals.
 
 Contract discipline:
     - The frozen/mutable split is absolute: ``Blueprint`` holds only
