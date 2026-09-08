@@ -455,13 +455,19 @@ pop.reset()
 # 检查终止状态——容器自身没有 is_finished，逐 deme 检查
 any(d.is_finished for d in pop.demes)
 
-# 手动终止单个 deme（立即触发其 finish 事件并锁定）
-pop.deme(0).finish_simulation()
+# 结束共享运行，不推进时间
+pop.run(0, finish=True)
 ```
 
 容器没有 `is_finished` / `finish_simulation()`：任何 deme 终止后，`run()` /
 `run_tick()` 会抛出 `RuntimeError`；由 hook 触发停止时，容器会把所有 deme
 标记为 finished。
+
+受管理的 deme 句柄支持查询、参数更新以及限定到该 deme 的
+``trigger_event``。独立的 ``run``/``step``、``reset``、状态或配置导入、
+检查点恢复、记录、清空历史和 ``finish_simulation`` 均抛出 ``RuntimeError``。
+运行与历史控制必须由空间容器执行；初始状态使用构建器声明，运行中需要改变状态时，
+使用所选 deme 回调中的 ``TickContext.state``。
 
 ### 数据输出
 

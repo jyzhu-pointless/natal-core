@@ -54,6 +54,7 @@ from numpy.typing import NDArray
 
 import natal as nt
 from natal.backends.rust.rust_backend import rust_backend_available
+from natal.contracts.params import Params
 from natal.frontend.configurator import Configurator
 from natal.frontend.configurator._routes import (
     ROUTES,
@@ -85,6 +86,7 @@ class RecordingSession:
         self.applied: list[dict[str, float]] = []
         self.tensors: list[tuple[str, NDArray[np.float64]]] = []
         self.other_calls: list[str] = []
+        self.refreshed: list[tuple[list[str], Params]] = []
 
     def apply(self, writes: dict[str, float]) -> None:
         self.applied.append(dict(writes))
@@ -92,9 +94,8 @@ class RecordingSession:
     def tensor_write(self, field: str, values: NDArray[np.float64]) -> None:
         self.tensors.append((field, np.asarray(values, dtype=np.float64).copy()))
 
-    # Trapdoors: a well-behaved writer must never reach these.
-    def refresh_params(self, fields: object, source: object) -> None:
-        self.other_calls.append("refresh_params")
+    def refresh_params(self, fields: list[str], source: Params) -> None:
+        self.refreshed.append((list(fields), source))
 
     def rebuild(self) -> None:
         self.other_calls.append("rebuild")
@@ -243,6 +244,7 @@ class TestMethodLevelAtomicity:
             writer.apply({"carrying_capacity": 555.0, "sex_ratio": 7.0})
         assert session.applied == []
         assert session.tensors == []
+        assert session.refreshed == []
 
     def test_mixed_kind_batch_rejected_zero_writes(self):
         # The illegal entry is a geno_tensor shape mismatch inside a batch
@@ -341,7 +343,7 @@ class TestSensitiveDrivenSync:
         session = RecordingSession()
         writer = CoreConfigWriter(_age_draft(), session)
         writer.apply({"external_expected_eggs": 123.0})
-        assert session.applied == [{"external_expected_eggs": 123.0}]
+        assert session.applied[0] == {"external_expected_eggs": 123.0}
         writer.apply({"external_expected_eggs": None})
         # The cleared declaration materializes as the -1.0 sentinel.
         assert session.applied[-1] == {"external_expected_eggs": -1.0}
@@ -352,13 +354,15 @@ class TestSensitiveDrivenSync:
         writer = CoreConfigWriter(_age_draft(), session)
         declared = np.array([[10.0, 5.0, 1.0], [10.0, 5.0, 1.0]])
         writer.apply({"equilibrium_distribution": declared})
-        assert len(session.tensors) == 1
-        field, values = session.tensors[0]
-        assert field == "equilibrium_distribution"
-        np.testing.assert_array_equal(values, declared.ravel())
+        assert len(session.refreshed) == 1
+        fields, params = session.refreshed[0]
+        assert fields == ["equilibrium_distribution"]
+        np.testing.assert_array_equal(params.equilibrium_distribution, declared)
         writer.apply({"equilibrium_distribution": None})
-        # The session keeps its own sentinel: no empty tensor is pushed.
-        assert len(session.tensors) == 1
+        # Clearing is an explicit native commit of the derive-mode sentinel.
+        assert len(session.refreshed) == 2
+        assert session.refreshed[-1][0] == ["equilibrium_distribution"]
+        assert session.refreshed[-1][1].equilibrium_distribution.size == 0
         assert writer.draft.equilibrium_individual_distribution is None
 
 
@@ -1028,10 +1032,10 @@ class TestHookConfigWriterDirect:
         backend = pop._rust_lifecycle_backend  # noqa: SLF001
         writer = HookConfigWriter(backend)
         assert getattr(writer, "draft", None) is None
-        k0 = float(pop.config.carrying_capacity)
+        old_snapshot = pop.config
         writer.apply({"carrying_capacity": 300.0})
-        # The draft is untouched: the hook path bypasses the config layer.
-        assert float(pop.config.carrying_capacity) == k0
+        assert float(pop.config.carrying_capacity) == 300.0
+        assert float(old_snapshot.carrying_capacity) == 500.0
         # No rebuild is scheduled: direct session writes are values only.
         assert pop._rust_needs_rebuild is False
 

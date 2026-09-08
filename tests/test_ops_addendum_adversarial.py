@@ -59,7 +59,9 @@ from natal.frontend.hooks.types import (  # noqa: E402
     CompiledHookPlan,
     HookOp,
 )
-from natal.frontend.population.age_structured import AgeStructuredPopulation  # noqa: E402
+from natal.frontend.population.age_structured import (  # noqa: E402
+    AgeStructuredPopulation,  # noqa: E402
+)
 from natal.frontend.spatial.population import SpatialPopulation  # noqa: E402
 
 try:
@@ -660,7 +662,7 @@ def test_set_param_priority_chain_across_descriptors_sees_earlier_write() -> Non
     multiplier sees 999 and produces 499.5; with the multiplier first the
     constant simply overwrites.  This pins cross-descriptor chaining (the
     eco scratch stays live across descriptors of one event) and the
-    committed-row order.
+    final event commit. Intermediate scratch writes are coalesced in the log.
     """
     species = _fresh_species()
     pop = _build_age_structured(species, "prioconstfirst")
@@ -675,8 +677,7 @@ def test_set_param_priority_chain_across_descriptors_sees_earlier_write() -> Non
     )
     pop.trigger_event("early")
     assert pop.params_log == (
-        (0, "carrying_capacity", 800.0, 999.0),
-        (0, "carrying_capacity", 999.0, 999.0 * 0.5),
+        (0, "carrying_capacity", 800.0, 999.0 * 0.5),
     )
     assert pop.params.carrying_capacity == 999.0 * 0.5
 
@@ -693,8 +694,7 @@ def test_set_param_priority_chain_across_descriptors_sees_earlier_write() -> Non
     )
     pop.trigger_event("early")
     assert pop.params_log == (
-        (0, "carrying_capacity", 800.0, 800.0 * 0.5),
-        (0, "carrying_capacity", 800.0 * 0.5, 999.0),
+        (0, "carrying_capacity", 800.0, 999.0),
     )
     assert pop.params.carrying_capacity == 999.0
 
@@ -740,12 +740,14 @@ def _overwrite_adult_rows(
     row carries the same known value (and, optionally, zero the A|a
     destination column).
     """
-    ind = pop._state.individual_count  # pyright: ignore[reportPrivateUsage]  # setup write: public state is a snapshot since R5
+    state = pop.state
+    ind = state.individual_count
     ind[:, :, 0] = 0.0
     ind[0, 1:, 0] = female_aa
     ind[1, 1:, 0] = male_aa
     if zero_female_aax:
         ind[:, :, 1] = 0.0
+    pop.import_state(state)
 
 
 def test_convert_nontrivial_three_bucket_matrix_deterministic_exact() -> None:
@@ -837,7 +839,6 @@ def test_convert_stochastic_bucket_means_within_3sigma_and_exact_conservation() 
         dst_female_sum += float(ind[0, 0, 1])
         dst_male_sum += float(ind[1, 0, 1])
 
-    n_virgins = n_female - sum(buckets)
     for mz, n_base in enumerate(buckets):
         mean = dst_bucket_sums[mz] / n_trials
         sigma3 = 3.0 * math.sqrt(n_base * p * (1.0 - p) / n_trials)
@@ -886,7 +887,7 @@ def test_convert_three_way_split_chain_exact() -> None:
     )
     for age in range(1, 3):
         assert ind[0, age, 0] == f_after2
-        assert ind[0, age, 1] == float(10.0) + moved1
+        assert ind[0, age, 1] == 10.0 + moved1
         assert ind[0, age, 2] == moved2
         for mz, bucket in enumerate(buckets):
             # Destination buckets accumulate the raw moved amounts
@@ -900,7 +901,7 @@ def test_convert_three_way_split_chain_exact() -> None:
     m2 = (20.0 - m1) * 0.5
     for age in range(1, 3):
         assert ind[1, age, 0] == 20.0 - m1 - m2
-        assert ind[1, age, 1] == float(5.0) + m1
+        assert ind[1, age, 1] == 5.0 + m1
         assert ind[1, age, 2] == m2
     # Grand total conserved: 2 adult rows.
     total = ind.sum() + sperm.sum()
@@ -1076,7 +1077,7 @@ def test_start1_every2_when_schedule_persists_across_run_calls() -> None:
         event="early",
         name="addparity_program",
     )
-    pop.enable_rust_backend(seed=11)
+    pop._initialize_session(seed=11)
     session = pop._rust_lifecycle_backend._session  # noqa: SLF001 — bridge
 
     k_manual = 800.0
@@ -1174,7 +1175,7 @@ def test_spatial_set_param_selector_writes_only_selected_deme_columns() -> None:
 
     demes = [build_deme(f"addsp_d{d}") for d in range(3)]
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
     spatial.register_hooks(
         [Op.set_param("carrying_capacity", 321.0, every=1)],
         event="early",
@@ -1204,7 +1205,7 @@ def test_spatial_convert_applies_per_deme_independently() -> None:
 
     demes = [build_deme(f"addconv_d{d}") for d in range(3)]
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
     spatial.register_hooks(
         [Op.convert("A|A", "A|a", probability=0.25)], event="early"
     )
@@ -1429,7 +1430,7 @@ class TestHb2RustRunChannelMerge:
             )
             .build()
         )
-        pop.enable_rust_backend(seed=0)
+        pop._initialize_session(seed=0)
         with pytest.raises((ValueError, RuntimeError), match="carrying_capacity"):
             pop.run(2, record_every=0)
 
@@ -1440,7 +1441,6 @@ class TestHb3ValueExpressionTypeError:
     @pytest.mark.parametrize("bad", [True, False, None])
     def test_bool_and_none_values_raise_type_error(self, bad: object) -> None:
         """The bad-kind value surfaces as TypeError at compile (build) time."""
-        import natal as nt
 
         sp = _hb_species("hb3_sp")
         with pytest.raises(TypeError, match="string expression or a number"):
@@ -1448,7 +1448,6 @@ class TestHb3ValueExpressionTypeError:
 
     def test_illegal_character_raises_value_error(self) -> None:
         """An illegal character in the expression is a value error."""
-        import natal as nt
 
         sp = _hb_species("hb3_sp2")
         with pytest.raises(ValueError):

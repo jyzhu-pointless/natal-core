@@ -177,27 +177,55 @@ pop.import_state(state_flat)
 
 ### 7.1 随机流（RNG）与 bit-reproducible 承诺范围
 
-- 每个种群的随机流由 `setup(stochastic=True, seed=...)` 派生；引擎会话内
-  使用 `SessionRng`（构建时 `enable_rust_backend(seed=...)`、`reseed(seed)` 重置）。
-- 空间模型中 deme `d` 使用 `seed ^ d` 派生独立流，因此同一基种子下
-  各 deme 互不影响、确定性一致。
-- Hook 内的随机流 `pop.rng` 由 `槽位 ^ (tick*1_000_003) ^ ((deme_id+7)*6_559) ^
-  ((hook_index+1)*31)` 派生，每次调用独立。
+- `build()` 自动创建 Rust 会话。会话持有 `SessionRng`，多次 `run()` 持续推进同一随机流；
+  不需要选择或手动启用后端。
+- 空间模型中 deme `d` 从会话的基础种子按 `seed ^ d` 派生随机流；该 deme 的
+  生命周期阶段与迁移共用这条流。
+- Python Hook 内的 `ctx.rng` 是当前事件的受控 Rust 采样器。重复访问返回同一个采样器，
+  连续取样会推进随机流。回调返回后采样器失效；恢复检查点会恢复当时记录的 RNG 状态。
 - **承诺范围**：同一输入（构建参数 + seed + hook 组合）下，确定性
   （`stochastic=False`）轨迹逐位可复现；随机轨迹在固定 seed 下跨进程可复现。
   不承诺跨版本位级稳定（未来算法修复可能改变数值）。
 
-### 7.2 检查点（checkpoint）
+### 7.2 检查点与历史查询
 
-`snapshot_checkpoint()`（引擎会话层）捕获**内存检查点**，内容为
-`(tick, 状态数组, RNG words, 生态列)`——即 state + 随机状态 + 生态参数，
-**遗传节（genetics tables）不参与回滚**。`restore_checkpoint(tick)`（种群层）
-从原始历史恢复：
+Rust 会话拥有历史数值、检查点和参数日志。`mode="raw"` 的每个保留记录都包含对应的完整检查点：个体与精子状态、tick、执行阶段与状态、RNG、生态参数（含迁移和 custom）及日志位置。遗传表不参与回滚。`mode="observation"` 只保留投影值，不隐藏完整原始历史，也不支持恢复。
 
-- 恢复后 tick 与状态一致（`state.n_tick` 同步），历史清空；
-- 引擎会话通过 `restore_from_checkpoint(tick)` 就地回滚会话拥有的状态、RNG 与生态，并返回恢复后的生态参数（population 层将其同时写回草稿）；
-- 参数快照 `params_log` 是 hook 内参数修改的审计轨迹，与检查点独立
-  （检查点不包含 params_log；如需审计历史请另行保存）。
+`pop.restore_checkpoint(tick)` 只接受仍保留的精确 tick；未记录或已淘汰的 tick 会在修改状态前报错。恢复保留该 tick 及以前的历史，并按检查点中的位置截断未来参数日志，包括同一 tick 上后来发生的更新。普通稳定边界恢复为 `Ready`；手动记录的停止或失败边界保留对应执行状态。
+
+`record_snapshot()` 可在两次运行之间记录当前边界，包括已停止的种群；重复记录同一 tick 会报错。`pop.history.boundary_metadata` 返回不可变的 `(tick, phase_cursor, status)` 元组序列。阶段游标标识生命周期中的位置，例如 `0` 是正常 tick 边界，`2` 是 early 阶段。结合 status 区分完整边界和中途停止。
+
+`pop.params_log_details` 返回 `(tick, event, deme, parameter, old, new)` 元组序列；普通种群的 deme 为 `0`，空间种群可从对应 deme 的查询接口读取日志。值保留布尔、整数、浮点或数组类型，新增与删除分别用 `None` 表示旧值与新值。查询中的数组是独立副本。`params_log` 保留原有四列标量投影，不包含数组和新增／删除记录；需要完整审计时使用 `params_log_details`。已取得的查询结果不会被后续更新或恢复改写。
+
+`max_rows` 同时限制保留的记录与检查点；无 Python 回调的批量运行在 Rust 内逐步记录并淘汰。`clear_history()` 清除记录和对应检查点，保留当前状态、RNG、参数和参数日志。
+
+下面的完整示例演示有界历史及日志回滚：
+
+```python
+import natal as nt
+
+species = nt.Species.from_dict(
+    "HistoryExample", {"Chr1": {"L1": ["W"]}}, gamete_labels=["default"]
+)
+pop = (
+    nt.DiscreteGenerationPopulation.setup(species=species, stochastic=False)
+    .initial_state(individual_count={"female": {"W|W": 10}, "male": {"W|W": 10}})
+    .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+    .reproduction(eggs_per_female=2.0, sex_ratio=0.5)
+    .competition(carrying_capacity=1000.0, low_density_growth_rate=2.0)
+    .record_history(mode="raw", max_rows=3)
+    .build()
+)
+pop.run(3, record_every=1)
+assert pop.history.ticks == (1, 2, 3)
+pop.update().competition(carrying_capacity=500.0)
+assert pop.params_log_details[-1][3:] == ("carrying_capacity", 1000.0, 500.0)
+pop.restore_checkpoint(1)
+assert pop.params.carrying_capacity == 1000.0
+assert pop.history.ticks == (1,)
+assert pop.params_log_details == ()
+assert pop.history.boundary_metadata == ((1, 0, "Ready"),)
+```
 
 ## 8. Hook 如何嵌入执行链路
 

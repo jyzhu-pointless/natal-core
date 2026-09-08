@@ -22,8 +22,8 @@ unified migration (runtime rate column x frozen folded CSR)
 
 - **Engine session**: the container's tick driver calls
   per-deme lifecycle inside the one session-owned spatial kernel; deme `d`
-  derives its random stream from `seed ^ d` (see
-  `enable_rust_backend(seed=...)`), and the migration stage runs inside the
+  derives its random stream from `seed ^ d`. `build()` creates the Rust
+  session automatically, and the migration stage runs inside the
   same session on the same per-deme streams.
 
 ## Migration Data Plane (slice-5)

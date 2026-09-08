@@ -131,7 +131,7 @@ species = nt.Species.from_dict("TestSpecies", {
 })
 
 pop = (nt.AgeStructuredPopulation.setup(species, name="DriveTest", stochastic=False)
-       .age_structure(n_ages=5)
+       .age_structure(n_ages=5, new_adult_age=2)
        .initial_state({"female": {"WT|WT": [0, 0, 100, 0, 0]}})
        .presets(drive)
        .build())

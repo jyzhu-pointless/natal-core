@@ -49,7 +49,7 @@ def _build_window_population(name: str, seed: int) -> nt.DiscreteGenerationPopul
         .reproduction(eggs_per_female=10.0, sex_ratio=0.5)
         .competition(carrying_capacity=1e12, low_density_growth_rate=2.0)
         .build()
-    ).enable_rust_backend(seed=seed)
+    )._initialize_session(seed=seed)
 
 
 @pytest.mark.parametrize("seed", [0, 7])

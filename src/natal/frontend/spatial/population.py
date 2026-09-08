@@ -184,9 +184,9 @@ class DemeSlice:
       clones the draft arrays, so divergence at one deme never leaks into
       the demes that previously shared its tables.
 
-    Runtime config surgery through ``update()`` chains is gone on purpose:
-    the first-class runtime write path is the params surface (inside hooks
-    the ``TickContext`` lends the same writable surface).
+    ``params`` and ``update()`` commit through the owning spatial session.
+    Lifecycle, state import, and history controls belong to the container;
+    a managed deme cannot start, restore, reset, or finish a separate run.
     """
 
     def __init__(self, pop: SpatialPopulation, index: int) -> None:
@@ -250,12 +250,18 @@ class DemeSlice:
         Returns:
             The deme attribute value.
         """
-        # Only reached when normal lookup failed; _pop is set first in
-        # __init__, so this guard only fires for broken partial states.
-        deme = object.__getattribute__(self, "_pop")._demes[  # pyright: ignore[reportPrivateUsage]  # delegated read channel
-            object.__getattribute__(self, "_index")
-        ]
-        return getattr(deme, name)
+        population = object.__getattribute__(self, "_pop")
+        population._ensure_rust_states_fresh()
+        deme = population._demes[object.__getattribute__(self, "_index")]
+        value = getattr(deme, name)
+        if callable(value):
+            # A user may retain a bound export/count method across a run.
+            # Refresh when it is called, not only when the method is fetched.
+            def delegated(*args: Any, **kwargs: Any) -> Any:  # Any: preserve the dynamically delegated population method signature
+                population._ensure_rust_states_fresh()
+                return value(*args, **kwargs)
+            return delegated
+        return value
 
     @property
     def config(self) -> ModelDraft:
@@ -270,7 +276,8 @@ class DemeSlice:
         authoritative stacked state; reading refreshes the per-deme caches
         from one session snapshot, then returns an independent copy so a
         retained reference cannot mutate the real run state.  State
-        modifications go through ``import_state``.
+        modifications belong to initial-state declarations or a callback's
+        ``TickContext.state`` transaction.
         """
         pop = self._pop
         pop._ensure_rust_states_fresh()  # pyright: ignore[reportPrivateUsage]  # container lazy refresh
@@ -285,27 +292,6 @@ class DemeSlice:
             if getattr(state, name, None) is not None
         }
         return state._replace(**replacements)
-
-    def import_state(self, state: object) -> None:
-        """Import a state into this deme and push it into the live session.
-
-        Args:
-            state: The state payload accepted by the underlying deme —
-                ``{"n_tick", "individual_count"}`` for discrete demes and
-                ``{"n_tick", "individual_count", "sperm_storage"}`` for
-                age-structured demes (the sperm plane is required there,
-                matching the raw import payload).
-
-        Note:
-            Recording an already-recorded tick after a mid-timeline import
-            trips the history boundary guard; imports belong before the
-            next record boundary or on unrecorded runs.
-        """
-        pop = self._pop
-        deme = pop._demes[self._index]  # pyright: ignore[reportPrivateUsage]  # slot access implies a constructed deme
-        assert deme is not None
-        deme.import_state(state)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # duck-typed per-model method
-        pop._push_deme_state_to_session(self._index)  # pyright: ignore[reportPrivateUsage]  # session push
 
     # -- stage-3 write path --------------------------------------------------
 
@@ -421,40 +407,6 @@ def _minimal_contract(
     return blueprint, params
 
 
-# Contract ecology field names carried as (n_demes, ...) columns.
-def _eco_field_values(
-    draft: ModelDraft,
-) -> dict[str, float | int | bool | bytes | None]:
-    """Snapshot the draft's runtime ecology fields by contract name.
-
-    Used to detect whether a Python hook wrote params through its
-    TickContext: comparing the snapshot before and after the fire yields
-    exactly the fields the PYTHON hook changed, so the container never
-    pushes stale values over a same-tick declarative set_param commit.
-
-    Args:
-        draft: A deme's live ``ModelDraft``.
-
-    Returns:
-        A mapping of contract ecology field name to current value
-        (vectors as bytes so the mapping stays hashable/comparable).
-    """
-    import numpy as np
-
-    values: dict[str, float | int | bool | bytes | None] = {}
-    for draft_field, contract_name in _ECO_DRAFT_TO_COLUMN:
-        raw = getattr(draft, draft_field)
-        if isinstance(raw, np.generic):
-            values[contract_name] = raw.item()
-        elif isinstance(raw, np.ndarray):
-            values[contract_name] = np.ascontiguousarray(
-                raw, dtype=np.float64
-            ).tobytes()
-        else:
-            values[contract_name] = raw
-    return values
-
-
 # Draft field -> contract column name for the runtime ecology fields a
 # Python hook may write through its TickContext (migration_rate has its
 # own dedicated channel and is excluded).
@@ -552,7 +504,12 @@ class SpatialParamsView:
         """
         columns = self._pop._ecology_columns  # pyright: ignore[reportPrivateUsage]  # column read channel
         if name in columns:
-            arr = columns[name]
+            backend = getattr(self._pop, "_rust_spatial_backend", None)
+            if backend is not None:
+                values = np.asarray(backend.ecology_columns_snapshot()[name], dtype=np.float64)
+                arr = values if name == "equilibrium_distribution" else values.reshape(columns[name].shape)
+            else:
+                arr = columns[name].copy()
             readonly = arr.view()
             readonly.flags.writeable = False
             return readonly
@@ -681,6 +638,8 @@ class SpatialPopulation:
             one source deme (derived from the CSR).
         tick (int): Current shared simulation tick across all demes.
     """
+
+    _tick: int
 
     @classmethod
     def builder(
@@ -1024,11 +983,15 @@ class SpatialPopulation:
             raise TypeError("deme[0] does not implement export_config()")
         return cast(ModelDraft, export_fn())
 
-    def _export_deme_drafts(self) -> list[ModelDraft]:
+    def _export_deme_drafts(self, *, compact: bool = False) -> list[ModelDraft]:
         """Export every deme's draft, in deme order.
 
         Used by the Rust backend wiring: the columnized ecology and the
         genetics variant bank are gathered from the per-deme drafts.
+
+        Args:
+            compact: Share identical detached arrays only within this returned
+                list, for read-only native handoffs. Public snapshots are unchanged.
 
         Returns:
             One ``ModelDraft`` per deme.
@@ -1037,11 +1000,23 @@ class SpatialPopulation:
             TypeError: If any deme does not implement ``export_config``.
         """
         drafts: list[ModelDraft] = []
+        shared_arrays: dict[tuple[str, tuple[int, ...], bytes], NDArray[np.generic]] = {}
         for idx, deme in enumerate(self._demes):
             export_fn = getattr(deme, "export_config", None)
             if not callable(export_fn):
                 raise TypeError(f"deme[{idx}] does not implement export_config()")
-            drafts.append(cast(ModelDraft, export_fn()))
+            draft = cast(ModelDraft, export_fn())
+            if compact:
+                # Compact as snapshots arrive, before retaining D copies of
+                # identical genetics merely to deduplicate the variant bank.
+                replacements: dict[str, object] = {}
+                for name, value in zip(draft._fields, draft, strict=True):
+                    if isinstance(value, np.ndarray):
+                        array = np.asarray(value)
+                        key = (array.dtype.str, array.shape, array.tobytes())
+                        replacements[name] = shared_arrays.setdefault(key, array)
+                draft = draft._replace(**replacements)
+            drafts.append(draft)
         return drafts
 
     def _initialize_default_output_policy(self) -> None:
@@ -1208,11 +1183,12 @@ class SpatialPopulation:
         try:
             from natal.backends.rust.rust_backend import ecology_columns_from_drafts
 
+            drafts = self._export_deme_drafts(compact=True)
             columns.update(
                 {
                     name: np.asarray(column_values, dtype=np.float64)
                     for name, column_values in ecology_columns_from_drafts(
-                        self._export_deme_drafts()
+                        drafts
                     ).items()
                 }
             )
@@ -1223,7 +1199,7 @@ class SpatialPopulation:
                 column = columns.get(name)
                 if column is None or column.ndim != 1:
                     continue
-                first = getattr(self._demes[0].config, draft_field, None)
+                first = getattr(drafts[0], draft_field, None)
                 if first is None or np.asarray(first).ndim == 0:
                     continue
                 per_deme = np.asarray(first).shape
@@ -1481,13 +1457,24 @@ class SpatialPopulation:
 
         from natal.frontend.output.observation import ObservationResult
 
-        ind_all, _ = self._stack_deme_state_arrays()
-        values = self.observation.apply(ind_all)
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is None:
+            self._initialize_session()
+            backend = self._rust_spatial_backend
+        observation = self.observation
+        layout = self.history.schema.population
+        mask = observation.build_mask(layout.n_sexes, layout.n_ages, layout.n_ztypes)
+        selected = list(observation.deme_indices or ())
+        tick, values = backend.observe_current(mask, selected, observation.collapse_age, observation.deme_mode == "aggregate")
+        shape = (observation.n_groups,)
+        if observation.deme_mode == "preserve":
+            shape += (len(selected),)
+        shape += (layout.n_sexes,)
+        if not observation.collapse_age:
+            shape += (layout.n_ages,)
         return ObservationResult(
-            tick=self._tick,
-            _values=values,
-            axes=self.observation.axes,
-            _labels=MappingProxyType({"group": self.observation.labels}),
+            tick=tick, _values=values.reshape(shape), axes=observation.axes,
+            _labels=MappingProxyType({"group": observation.labels}),
         )
 
     def clear_history(self) -> None:
@@ -1570,52 +1557,16 @@ class SpatialPopulation:
                 tick, or an automatic boundary is stale or has a different
                 payload.
         """
-        ind_all, sperm_all = self._stack_deme_state_arrays()
         backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is None:
+            self._initialize_session()
+            backend = self._rust_spatial_backend
         history_obj = self.history
-        # Record-aligned boundaries are restorable: capture the full
-        # runtime checkpoint (state + RNG + ecology) next to the history
-        # row (plan S4 CheckpointStore).  Capture ONLY when this call will
-        # actually store a new row — a run-start boundary re-record
-        # (allow_existing on an already-recorded tick) must NOT push a
-        # second checkpoint carrying whatever ecology changed since.
-        will_store = self._tick not in history_obj.ticks
-        capture = (
-            backend is not None and history_obj.schema.mode == "raw" and will_store
-        )
         if history_obj.schema.mode == "observation":
-            values = self.observation.apply(ind_all)
-            flat = np.empty(history_obj.schema.row_size, dtype=np.float64)
-            flat[0] = float(self._tick)
-            flat[1:] = values.ravel()
-        else:
-            sperm_size = (
-                sperm_all.size if history_obj.schema.population.has_sperm_storage else 0
-            )
-            flat = np.empty(1 + ind_all.size + sperm_size, dtype=np.float64)
-            flat[0] = float(self._tick)
-            flat[1 : 1 + ind_all.size] = ind_all.ravel()
-            if sperm_size:
-                flat[1 + ind_all.size :] = sperm_all.ravel()
-        from natal.frontend.output.history import HistoryBatch
-
-        batch = HistoryBatch(schema=history_obj.schema, rows=flat[np.newaxis, :])
-        if allow_existing:
-            history_obj._append_continuation(  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
-                batch
-            )
-        else:
-            if self._tick in history_obj.ticks:
-                raise ValueError(f"History already contains tick {self._tick}.")
-            history_obj._append(batch)  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
-        if capture and backend is not None:
-            # Stored AFTER the row is committed: a rejected snapshot must
-            # not leave a checkpoint behind.
-            backend.capture_checkpoint()
-        # Evicted history rows take their checkpoints with them (plan S4
-        # bounded-memory contract).
-        if backend is not None and history_obj.ticks:
-            backend.retain_checkpoints_from(int(history_obj.ticks[0]))
+            history_obj._configure_observation(self.observation)  # pyright: ignore[reportPrivateUsage]  # container binds recording selector
+        backend.bind_history(history_obj._store, [deme._params_log for deme in self._demes])  # pyright: ignore[reportPrivateUsage]  # share native ownership
+        history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+        backend.record_history(allow_existing)
 
     def record_snapshot(self) -> None:
         """Record the current stable state across all demes into history.
@@ -1635,29 +1586,17 @@ class SpatialPopulation:
         self._record_snapshot(allow_existing=False)
 
     def restore_checkpoint(self, tick: int) -> None:
-        """Restore the spatial population to a recorded boundary.
+        """Restore one exact retained raw checkpoint, including execution status.
 
-        With the Rust backend live this is a FULL restore (plan S4
-        CheckpointStore): counts, sperm, every per-deme RNG stream, and the
-        ecology columns return to the checkpoint, so `restore -> run`
-        replays the original trajectory.  Without it the legacy history-row
-        path restores counts only (stochastic trajectories are not
-        reproducible without the RNG state).
-
-        Demes return to the runnable state and all records after *tick*
-        are removed.
-
-        With the Rust backend, restoring to a tick whose own checkpoint was
-        evicted or never captured restores the newest checkpoint at or
-        before it; without any covering checkpoint the legacy history-row
-        path applies (counts only).
+        State, RNG, ecology, phase, and logs return to the recorded boundary.
+        Future records are removed. A missing native checkpoint is rejected;
+        a counts-only payload cannot restore a reproducible execution state.
 
         Args:
-            tick: Tick to restore (the newest restorable boundary at or
-                before it is used).
+            tick: Exact retained tick to restore.
 
         Raises:
-            ValueError: If mode is not ``"raw"`` or tick is not found.
+            ValueError: If raw history or the complete native checkpoint is absent.
         """
         history_obj = getattr(self, "_history_obj", None)
         if history_obj is None or history_obj.is_empty:
@@ -1672,7 +1611,7 @@ class SpatialPopulation:
         if backend is not None and self._restore_from_rust_checkpoint(backend, tick):
             history_obj.truncate(retain_until_tick=tick)
             return
-        self._restore_from_history_rows(history_obj, tick)
+        raise ValueError(f"No complete native checkpoint exists at tick {tick}.")
 
     def _restore_from_rust_checkpoint(
         self, backend: RustHeterogeneousSpatialLifecycleBackend, tick: int
@@ -1705,6 +1644,9 @@ class SpatialPopulation:
                 continue  # not a materialized container column
             target = np.asarray(local)
             flat = np.asarray(column, dtype=np.float64)
+            if name == "equilibrium_distribution":
+                self._ecology_columns[name] = flat.copy()
+                continue
             if target.size != flat.size:
                 raise ValueError(
                     f"checkpoint rollback: ecology column {name!r} size "
@@ -1726,7 +1668,9 @@ class SpatialPopulation:
         n_demes = len(self._demes)
         for deme_id, deme in enumerate(self._demes):
             self._rollback_deme_draft(deme, columns, deme_id, restored_tick)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
-            deme._finished = False  # type: ignore[attr-defined]  # restore revives the runnable state
+            status, _ = backend.execution_state()
+            deme._finished = status == "Stopped"  # pyright: ignore[reportPrivateUsage]  # restore exact lifecycle marker
+            deme._failed = status == "Failed"  # pyright: ignore[reportPrivateUsage]  # partial snapshots retain failure metadata
         # The session state was rewound: refresh the deme caches from it.
         self._rust_states_dirty = True
         self._ensure_rust_states_fresh()
@@ -1770,48 +1714,7 @@ class SpatialPopulation:
             else:
                 new_draft = new_draft._replace(**{field: value})
         deme.set_config(new_draft)
-        deme.tick = int(tick)
-
-    def _restore_from_history_rows(self, history_obj: History, tick: int) -> None:
-        """Legacy counts-only restore from the raw history rows."""
-        restored_tick, ic, ss = history_obj.restore_state(tick)
-        # A spatial raw history always restores a
-        # (n_demes, n_sexes, n_ages, n_ztypes) 4-D block
-        # (History.restore_state derives the shape from the spatial
-        # schema), so a plain 3-D payload can never reach this container.
-        if ic.ndim == 4:
-            for di in range(min(ic.shape[0], len(self._demes))):
-                deme = self._demes[di]
-                deme._live_state().individual_count[:] = ic[di]  # pyright: ignore[reportPrivateUsage]  # live write-back
-                if ss is not None:
-                    sp = getattr(deme._live_state(), "sperm_storage", None)  # pyright: ignore[reportPrivateUsage]  # live write-back
-                    if sp is not None:
-                        sp[:] = ss[di] if ss.ndim == 4 else ss
-                deme._state = deme._live_state()._replace(n_tick=restored_tick)  # pyright: ignore[reportPrivateUsage]  # type: ignore[attr-defined]  # checkpoint must synchronize the immutable state tick
-                deme._tick = restored_tick  # type: ignore[attr-defined]  # private attr on base population
-        self._tick = restored_tick
-        # The session owns the run state: a restore that stops at the deme
-        # caches would be silently overwritten by the next tick.
-        backend = getattr(self, "_rust_spatial_backend", None)
-        if backend is not None and ic.ndim == 4:
-            sperm_all = (
-                np.zeros(
-                    (
-                        len(self._demes),
-                        int(self._blueprint.n_ages),
-                        int(self._blueprint.n_ztypes),
-                        int(self._blueprint.n_ztypes),
-                    ),
-                    dtype=np.float64,
-                )
-                if ss is None
-                else np.asarray(ss, dtype=np.float64)
-            )
-            backend.set_state(
-                np.asarray(ic, dtype=np.float64), sperm_all, int(restored_tick)
-            )
-            self._rust_states_dirty = False
-        history_obj.truncate(retain_until_tick=tick)
+        deme._tick = int(tick)  # pyright: ignore[reportPrivateUsage]  # container restores the shared clock
 
     @property
     def hooks(self) -> CompiledEventHooks:
@@ -2365,24 +2268,30 @@ class SpatialPopulation:
         return int(sum(deme.get_male_count() for deme in self._demes))
 
     def reset(self) -> None:
-        """Reset all demes and synchronize the container tick.
-
-        This resets each underlying deme using its own reset logic and then
-        updates the spatial container tick to match the demes.
-        """
-        for deme in self._demes:
-            deme.reset()
-        self._tick = int(self._demes[0].tick)
-        # Push the reset (blueprint-initial) state into the live session so
-        # the next tick continues from the reset, not the session's past.
-        # Reset also restores the initial random source (plan 9): the
-        # per-deme streams rebuild from the enable-time base seed.
+        """Reset the owning spatial session to initial state and random streams."""
         backend = getattr(self, "_rust_spatial_backend", None)
-        if backend is not None:
+        if backend is None:
+            for deme in self._demes:
+                deme.reset()
+            self._tick = int(self._demes[0].tick)
+        else:
+            initial = [deme._initial_population_snapshot for deme in self._demes]  # pyright: ignore[reportPrivateUsage]  # immutable initial declarations belong to the container
+            ind_all = np.stack([snapshot[0] for snapshot in initial])
+            _, _, n_ages, n_ztypes = ind_all.shape
+            sperm_all = np.stack([
+                snapshot[1] if snapshot[1] is not None else np.zeros((n_ages, n_ztypes, n_ztypes))
+                for snapshot in initial
+            ])
+            backend.set_state(ind_all, sperm_all, 0)
             backend.reseed(int(self._rust_spatial_seed or 0))
-            ind_all, sperm_all = self._stack_deme_state_arrays()
-            backend.set_state(ind_all, sperm_all, int(self._tick))
-            self._rust_states_dirty = False
+            backend.clear_checkpoints()
+            self._tick = 0
+            self._rust_states_dirty = True
+            for deme in self._demes:
+                deme._tick = 0  # pyright: ignore[reportPrivateUsage]  # metadata follows the shared native clock
+                deme._finished = False  # pyright: ignore[reportPrivateUsage]
+                deme._failed = False  # pyright: ignore[reportPrivateUsage]
+        self._failed = False
         history_obj = getattr(self, "_history_obj", None)
         if history_obj is not None:
             history_obj.clear()
@@ -2483,22 +2392,12 @@ class SpatialPopulation:
         for deme in self._demes:
             s = getattr(deme.state, "sperm_storage", None)
             if s is None:
-                # Create a dummy array if storage is missing
-                cfg = getattr(deme, "config", None)
-                if (
-                    cfg is not None
-                    and hasattr(cfg, "n_ages")
-                    and hasattr(cfg, "n_ztypes")
-                ):
-                    s = np.zeros(
-                        (cfg.n_ages, cfg.n_ztypes, cfg.n_ztypes), dtype=np.float64
-                    )
-                else:
-                    # Conservative fallback derived from state tensor shape.
-                    ind_shape = deme.state.individual_count.shape
-                    s = np.zeros(
-                        (ind_shape[1], ind_shape[2], ind_shape[2]), dtype=np.float64
-                    )
+                # The stacked state already carries the exact active layout;
+                # querying a full native config would copy unrelated tensors.
+                s = np.zeros(
+                    (ind_all.shape[2], ind_all.shape[3], ind_all.shape[3]),
+                    dtype=np.float64,
+                )
             sperm_list.append(s)
 
         sperm_all = np.stack(sperm_list, axis=0)
@@ -2529,7 +2428,7 @@ class SpatialPopulation:
 
             # Replace immutable state tuple and keep mirror tick fields aligned.
             deme._state = deme._live_state()._replace(**new_fields)  # type: ignore[attr-defined]  # duck-typed deme doubles carry the same container shape
-            deme.tick = int(tick)
+            deme._tick = int(tick)  # pyright: ignore[reportPrivateUsage]  # owning container publishes snapshot metadata
         self._tick = int(tick)
 
     def _shared_config(self) -> ConfigObject:
@@ -2726,7 +2625,7 @@ class SpatialPopulation:
             deme._finished = True  # type: ignore[attr-defined]
             deme.trigger_event("finish", deme_id=deme._deme_id)  # pyright: ignore[reportPrivateUsage]  # SpatialPopulation owns its demes; finish hooks must observe the firing deme's own index.
 
-    def enable_rust_backend(self, seed: int = 0) -> SpatialPopulation:
+    def _initialize_session(self, seed: int = 0) -> SpatialPopulation:
         """Enable the Rust spatial backend for subsequent runs.
 
         Both age-structured and discrete-generation spatial populations are
@@ -2764,12 +2663,16 @@ class SpatialPopulation:
         # variants, and identical genetics never clone ecology.  Both
         # models share this session (plan S3: one Program, per-deme RNG
         # banks, no per-config-bank execution sessions).
-        deme_drafts = self._export_deme_drafts()
+        deme_drafts = self._export_deme_drafts(compact=True)
         columns = ecology_columns_from_drafts(deme_drafts)
         columns["migration_rate"] = np.asarray(
             self._params.migration_rate, dtype=np.float64
         ).ravel()
         tensor_bank, deme_variant_ids = genetics_variant_bank(deme_drafts)
+        custom_slots = [draft.custom for draft in deme_drafts]
+        # Columns and the variant bank own their buffers. Release the full
+        # per-deme snapshots before allocating the stacked handoff state.
+        del deme_drafts
         compiled_hooks = self._collect_compact_spatial_hooks()
         hook_program = self._build_hook_program(compiled_hooks)
         # One-time build handoff: the session owns the stacked state and
@@ -2788,6 +2691,15 @@ class SpatialPopulation:
             hook_program=hook_program,
             seed=seed,
         )
+        from natal.backends.rust.rust_backend import RustDemeParameters
+
+        for index, deme in enumerate(self._demes):
+            channel = RustDemeParameters(self._rust_spatial_backend, index, self._invalidate_rust_states, self._prepare_explicit_event)
+            channel.set_custom_slots(custom_slots[index])
+            deme._runtime_state_reader = self._ensure_rust_states_fresh  # pyright: ignore[reportPrivateUsage]  # retained deme objects share the owning session's lazy read boundary
+            deme._runtime_config_reader = channel.config_snapshot  # pyright: ignore[reportPrivateUsage]  # owning container binds the native read projection
+            deme._runtime_parameter_writer = channel  # pyright: ignore[reportPrivateUsage]  # owning container binds the native write channel
+            deme._rust_lifecycle_backend = None  # pyright: ignore[reportPrivateUsage]  # ownership was transferred; no second standalone session may remain
         self._rust_spatial_seed = seed
         self._rust_states_dirty = False
         self._rust_needs_rebuild = False
@@ -2804,13 +2716,10 @@ class SpatialPopulation:
     ) -> None:
         """Bridge the demes' Python callbacks into the spatial session.
 
-        One aggregated adapter per in-tick event routes each Rust fire to
-        the owning deme's runner (stable deme identity), and after each
-        fire the changed draft fields are recorded; :meth:`_run_rust_spatial_tick`
-        pulls them into the session columns once the tick — and with it the
-        session borrow — has returned.  A hook's ``ctx.update`` therefore
-        lands for the NEXT tick: the same deferred-write semantics the
-        plain Rust backend has.
+        Each callback has a separate transaction and a stable deme identity.
+        Its parameter, state, and random draws commit together before the
+        next callback or lifecycle stage. State arrays are requested only
+        when the callback accesses state or metrics.
 
         Args:
             backend: The freshly constructed spatial backend.
@@ -2818,191 +2727,68 @@ class SpatialPopulation:
         # Fresh per-deme runners: cloned demes share the template's cached
         # runner (bound to deme 0), so a cached runner would route every
         # fire's ctx.update to the wrong draft.
+        from natal.frontend.hooks._transaction import EventTransaction
         from natal.frontend.hooks.tick_context import HookRunner
-        from natal.frontend.hooks.types import EVENT_EARLY, EVENT_FIRST, EVENT_LATE
+        from natal.frontend.hooks.types import (
+            EVENT_EARLY,
+            EVENT_FINISH,
+            EVENT_FIRST,
+            EVENT_LATE,
+        )
 
         runners = [HookRunner(deme) for deme in self._demes]
-        self._spatial_hook_sync_fields: dict[int, set[str]] = {}
-        bridges: list[list[Callable[..., int] | None]] = []
+        bridges: list[list[Callable[..., int]]] = []
+        for event_id in (EVENT_FIRST, EVENT_EARLY, EVENT_LATE, EVENT_FINISH):
+            per_deme = [runner.rust_callbacks(event_id) for runner in runners]
+            event_bridges: list[Callable[..., int]] = []
+            for index in range(max((len(entries) for entries in per_deme), default=0)):
+                selected = [entries[index] if index < len(entries) else None for entries in per_deme]
 
-        for event_id in (EVENT_FIRST, EVENT_EARLY, EVENT_LATE):
-            per_deme = [runner.rust_callback(event_id) for runner in runners]
-            if not any(per_deme):
-                # Rust fires every registered adapter for every deme; an
-                # all-None event contributes an empty list so the engine
-                # skips the GIL boundary for it entirely.
-                bridges.append([])
-                continue
-            demes = self._demes
+                def bridge(
+                    ind: NDArray[np.float64] | None,
+                    sperm: NDArray[np.float64] | None,
+                    tick: int,
+                    deme_id: int,
+                    transaction: EventTransaction,
+                    callbacks: list[Callable[..., int] | None] = selected,
+                ) -> int:
+                    """Dispatch one callback transaction to its stable deme owner."""
+                    callback = callbacks[int(deme_id)]
+                    return int(callback(ind, sperm, tick, deme_id, transaction)) if callback is not None else 0
 
-            def bridge(
-                ind: NDArray[np.float64],
-                sperm: NDArray[np.float64],
-                tick: int,
-                deme_id: int,
-                _cbs: list[Callable[..., int] | None] = per_deme,
-                _demes: list[BasePopulation[Any]] = demes,
-            ) -> int:
-                deme_id = int(deme_id)
-                deme = _demes[deme_id]
-                before = _eco_field_values(deme.config)  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed deme draft read channel
-                callback = _cbs[deme_id]
-                result = 0
-                if callback is not None:
-                    result = int(  # pyright: ignore[reportAny]  # duck-typed callback ABI
-                        callback(ind, sperm, tick, deme_id)
-                    )
-                # A hook may have written params through its TickContext;
-                # the changed fields land in the deme draft and are pulled
-                # into the session columns after the tick returns.  Only
-                # fields the PYTHON hook actually changed are synced — a
-                # blind pull would clobber same-tick declarative set_param
-                # commits with the stale pre-tick draft.
-                after = _eco_field_values(deme.config)
-                changed = {
-                    name for name, value in after.items() if before.get(name) != value
-                }
-                if changed:
-                    # Homogeneous clones share one config object, and vector
-                    # writes mutate that object in place: by the time a
-                    # sibling clone fires, its signature already matches the
-                    # post-write draft.  Queue every deme sharing this
-                    # config so each session column is refreshed.
-                    sharers = [
-                        other_id
-                        for other_id, other in enumerate(_demes)
-                        if other.config is deme.config
-                    ]
-                    for shared_id in sharers or (deme_id,):
-                        queued = self._spatial_hook_sync_fields.setdefault(
-                            shared_id, set()
-                        )
-                        queued.update(changed)
-                return result
-
-            bridges.append([bridge])
-
-        if any(bridges):
-            # One registration for all events: set_python_callbacks
-            # replaces the whole per-event vector.
-            backend.set_python_callbacks(  # pyright: ignore[reportAttributeAccessIssue]
-                *cast("list[list[Callable[..., int]]]", bridges)
-            )
-
-    def _absorb_rust_spatial_journal(self, backend: object) -> None:
-        """Split a drained spatial journal into per-deme plain-name rows.
-
-        The heterogeneous backend drains rows as
-        ``(tick, "deme{i}:{name}", old, new)`` (a params_log row has no
-        deme dimension).  Every deme population then absorbs its own
-        plain-name rows — the same ``params_log`` content and draft
-        visibility the Python per-deme dispatch path produces.
-        """
-        drain = getattr(backend, "drain_eco_journal", None)
-        if drain is None:
-            return
-        per_deme: dict[int, list[tuple[int, str, float, float]]] = {}
-        for tick, route, old, new in drain():
-            deme_part, _, name = route.partition(":")
-            deme = int(deme_part[len("deme") :])
-            per_deme.setdefault(deme, []).append((tick, name, old, new))
-            # Mirror the write into the authoritative container columns so
-            # the params surface (pop.params) stays identical.
-            column = self._ecology_columns.get(name)
-            if column is not None:
-                arr = np.asarray(column)
-                if arr.ndim == 1 and arr.size > deme:
-                    arr[deme] = float(new)
-        for deme, rows in per_deme.items():
-            absorb = getattr(self._demes[deme], "_absorb_rust_eco_journal", None)
-            if absorb is not None:
-                absorb(rows)
-
-    def _run_rust_spatial_tick(self) -> bool:
-        """Run one spatial tick through the session-owned Rust kernel.
-
-        The session owns the stacked state and per-deme RNG streams, so
-        the tick carries control parameters only: lifecycle first, then
-        migration on the same per-deme streams, both inside Rust.  The
-        per-deme caches refresh eagerly at the tick boundary from one
-        bulk session snapshot, so every cache-backed reader observes the
-        tick's result.
-
-        Returns:
-            ``True`` when a hook stopped the tick (state keeps the
-            modifications up to that boundary and the tick freezes),
-            ``False`` when the tick completed.
-        """
-        backend = getattr(self, "_rust_spatial_backend", None)
-        if backend is None:
-            # Directly constructed containers (no configurator ``build()``)
-            # lazily create their session at the first tick boundary; the
-            # session stacks the demes' current state as its own.
-            self.enable_rust_backend(
-                seed=int(getattr(self, "_rust_spatial_seed", None) or 0)
-            )
-        self._rebuild_stale_spatial_session()
-        backend = self._rust_spatial_backend
-        assert backend is not None  # enable either returns or raises
-        previous_tick = int(self._tick)
-        next_tick = int(backend.run_tick())
-        # Deferred-write sync (plan 7.2): a Python hook that wrote params
-        # through its TickContext lands the values in the deme draft; pull
-        # the runtime ecology into the session columns now that the tick —
-        # and with it the session borrow — has returned, so the NEXT tick
-        # starts from them.
-        sync_fields: dict[int, set[str]] = getattr(
-            self, "_spatial_hook_sync_fields", {}
-        )
-        if sync_fields:
-            from natal.contracts.materialize import materialize
-
-            for deme_id, fields in sync_fields.items():
-                backend.refresh_deme_ecology(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # session backend surface
-                    deme_id,
-                    sorted(fields),
-                    materialize(self._demes[deme_id].config).params,  # pyright: ignore[reportAny, reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]  # duck-typed deme draft read channel
-                )
-            self._spatial_hook_sync_fields = {}
-        # Merge the session's per-deme set_param writes (prefixed rows
-        # split back into each deme's plain-name log rows and draft).
-        self._absorb_rust_spatial_journal(backend)
-        was_stopped = next_tick == previous_tick
-        # Refresh the per-deme caches at the tick boundary (one bulk
-        # snapshot): every cache-backed reader — counts, aggregates, allele
-        # frequencies, export_state, deme delegation — must observe the
-        # tick's result without each reader knowing about the session.
-        self._rust_states_dirty = True
-        self._ensure_rust_states_fresh()
-        if was_stopped:
-            # A stop froze the tick above (run_tick returns it unchanged);
-            # the boundary state is kept, not rolled back (plan 7.4).
-            self._tick = previous_tick
-            for deme in self._demes:
-                deme.tick = previous_tick
-        return was_stopped
+                bridge.__natal_transaction__ = True  # pyright: ignore[reportFunctionMemberAccess]  # native event transaction ABI
+                event_bridges.append(bridge)
+            bridges.append(event_bridges)
+        backend.set_python_callbacks(*bridges)  # pyright: ignore[reportAttributeAccessIssue]  # native spatial session callback surface
 
     def _rebuild_stale_spatial_session(self) -> None:
-        """Rebuild the session when hook structure changed after enable.
-
-        Mirrors the panmictic ``_rust_needs_rebuild`` semantics (plan S2):
-        hook registration is session structure, so the next run starts from
-        a session whose HookProgram and Python-callback bridges include the
-        change.  The rebuild uses the enable-time base seed — the documented
-        refresh reseeding semantics.
-
-        Raises:
-            RuntimeError: If the Rust extension is unavailable.
-        """
-        container_stale = bool(getattr(self, "_rust_needs_rebuild", False))
-        deme_stale = any(
+        """Install changed programs without replacing native state or RNG streams."""
+        dirty = bool(getattr(self, "_rust_needs_rebuild", False)) or any(
             getattr(deme, "_rust_needs_rebuild", False) for deme in self._demes
         )
-        if not container_stale and not deme_stale:
+        if not dirty:
             return
-        self._ensure_rust_states_fresh()
-        seed = int(getattr(self, "_rust_spatial_seed", None) or 0)
-        self.enable_rust_backend(seed=seed)
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is None:
+            self._initialize_session(seed=int(self._rust_spatial_seed or 0))
+            return
+        compiled = self._collect_compact_spatial_hooks()
+        backend.configure_program(self._build_hook_program(compiled))
+        self._register_spatial_rust_callbacks(backend)
+        self._rust_needs_rebuild = False
+        for deme in self._demes:
+            deme._rust_needs_rebuild = False  # pyright: ignore[reportPrivateUsage]  # owning container installs the shared program
+
+    def _prepare_explicit_event(self) -> None:
+        """Bind native event audit ownership even before the first run or snapshot."""
+        self._rebuild_stale_spatial_session()
+        backend = self._rust_spatial_backend
+        assert backend is not None
+        backend.bind_history(self.history._store, [deme._params_log for deme in self._demes])  # pyright: ignore[reportPrivateUsage]  # explicit events use the same native stores as run.
+
+    def _invalidate_rust_states(self) -> None:
+        """Invalidate every deme snapshot after a native explicit event."""
+        self._rust_states_dirty = True
 
     def _ensure_rust_states_fresh(self) -> None:
         """Refresh the per-deme state caches from the session snapshot.
@@ -3025,36 +2811,8 @@ class SpatialPopulation:
         sperm_all = np.asarray(sperm_flat, dtype=np.float64).reshape(
             n_demes, n_ages, n_ztypes, n_ztypes
         )
+        self._rust_states_dirty = False
         self._apply_stacked_state(ind_all, sperm_all, int(tick))
-        self._rust_states_dirty = False
-
-    def _push_deme_state_to_session(self, deme_id: int) -> None:
-        """Push one deme's freshly imported state into the live session.
-
-        Per-deme ``import_state`` bypasses the session, so without this
-        push the next tick would silently overwrite the import.
-
-        Args:
-            deme_id: Deme whose state changed outside the engine.
-        """
-        backend = getattr(self, "_rust_spatial_backend", None)
-        if backend is None:
-            return
-        deme = self._demes[deme_id]
-        state = deme._live_state()  # pyright: ignore[reportPrivateUsage]
-        sperm = getattr(state, "sperm_storage", None)
-        n_ages = int(self._blueprint.n_ages)
-        n_ztypes = int(self._blueprint.n_ztypes)
-        if sperm is None:
-            sperm = np.zeros((n_ages, n_ztypes, n_ztypes), dtype=np.float64)
-        backend.set_deme_state(
-            deme_id,
-            np.asarray(state.individual_count, dtype=np.float64),
-            np.asarray(sperm, dtype=np.float64),
-            int(deme.tick),
-        )
-        self._tick = int(deme.tick)
-        self._rust_states_dirty = False
 
     def _run_rust_spatial_steps(
         self,
@@ -3065,16 +2823,22 @@ class SpatialPopulation:
         """Run multiple spatial ticks through the Rust backend with recording."""
         if clear_history_on_start:
             self.clear_history()
-        was_stopped = False
-        if record_every > 0 and (self._tick % record_every == 0):
-            self._record_snapshot(allow_existing=True)
-        for _ in range(n_steps):
-            if self._run_rust_spatial_tick():
-                was_stopped = True
-                break
-            if record_every > 0 and (self._tick % record_every == 0):
-                self._record_snapshot(allow_existing=True)
-        return was_stopped
+        if getattr(self, "_rust_spatial_backend", None) is None:
+            self._initialize_session(seed=int(getattr(self, "_rust_spatial_seed", None) or 0))
+        self._rebuild_stale_spatial_session()
+        backend = self._rust_spatial_backend
+        assert backend is not None
+        history = self.history
+        if history.schema.mode == "observation":
+            history._configure_observation(self.observation)  # pyright: ignore[reportPrivateUsage]  # configure native recording once per run
+        backend.bind_history(history._store, [deme._params_log for deme in self._demes])  # pyright: ignore[reportPrivateUsage]  # share native history and log ownership
+        history._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+        tick, stopped = backend.run_steps(n_steps, record_every)
+        self._tick = tick
+        for deme in self._demes:
+            deme._tick = tick  # pyright: ignore[reportPrivateUsage]  # metadata only; arrays remain native
+        self._rust_states_dirty = True
+        return stopped
 
     def run_tick(self) -> SpatialPopulation:
         """Run one spatial tick through the session-owned Rust kernel.
@@ -3088,13 +2852,7 @@ class SpatialPopulation:
                 ``SpatialConfigurator.build()`` or lazily at the first
                 tick).
         """
-        self._ensure_demes_runnable(context="run spatial tick")
-        self._assert_consistent_migration_flags()
-
-        was_stopped = self._run_rust_spatial_tick()
-        if was_stopped:
-            self._mark_all_demes_stopped()
-        return self
+        return self.run(1, record_every=0)
 
     def run(
         self,
@@ -3124,6 +2882,10 @@ class SpatialPopulation:
                 ``SpatialConfigurator.build()`` or lazily at the first
                 tick).
         """
+        if getattr(self, "_running", False):
+            raise RuntimeError("Nested run is forbidden")
+        if getattr(self, "_failed", False):
+            raise RuntimeError("Population has failed; restore or reset before run")
         if n_steps < 0:
             raise ValueError("n_steps must be >= 0")
 
@@ -3143,9 +2905,14 @@ class SpatialPopulation:
             if bool(was_stopped):
                 self._mark_all_demes_stopped()
             elif finish:
-                for deme in self._demes:
-                    deme.finish_simulation()
+                assert self._rust_spatial_backend is not None
+                self._rust_spatial_backend.stop()
+                self._mark_all_demes_stopped()
 
             return self
+        except BaseException:
+            self._failed = True
+            self._rust_states_dirty = True
+            raise
         finally:
             self._running = False

@@ -34,6 +34,10 @@ class OutputMixin(ModifierPresetMixin):
     # Declared here for pyright visibility — host BasePopulation subclass
     # provides these at runtime.  Any is required because pyright does not
     # allow mixin attribute declarations to shadow base-class @property.
+    _initialize_session: Any  # host-specific native session factory
+    _rust_lifecycle_backend: Any  # age/discrete native adapters share this recording protocol
+    _params_log: Any  # native parameter timeline supplied by the host population
+    _failed: bool  # failure marker owned by the host lifecycle
     _finished: bool  # type: ignore[assignment]  # host provides at runtime
     _state: Any  # type: ignore[assignment]  # host BasePopulation supplies the generic state
     _live_state: Any  # type: ignore[assignment]  # host live container accessor (snapshot twin)
@@ -47,6 +51,14 @@ class OutputMixin(ModifierPresetMixin):
     max_history: int  # type: ignore[assignment]  # host provides at runtime
     name: str  # type: ignore[assignment]  # host provides at runtime
     species: Any  # type: ignore[assignment]  # host provides at runtime
+
+    def _require_standalone_owner(self, operation: str) -> None:
+        """Reject independent lifecycle control after transfer to a spatial owner."""
+        if getattr(self, "_runtime_parameter_writer", None) is not None:
+            raise RuntimeError(
+                f"A managed deme cannot {operation} independently; "
+                "use the owning SpatialPopulation for lifecycle and history control."
+            )
 
     # ── Abstract query methods (from base.py:944-957) ──────────────
 
@@ -85,35 +97,22 @@ class OutputMixin(ModifierPresetMixin):
         history_obj = self._history_obj
         if history_obj is None:
             raise RuntimeError("History is not initialized for this population.")
-        tick = int(self._tick)
         if self._state is None:
             raise RuntimeError("Population state is not initialized.")
-        state = self._live_state()  # lazily pulls the session snapshot under Rust
-        if history_obj.schema.mode == "observation":
-            observation = self._observation
-            if observation is None:
-                raise RuntimeError("Observation is not initialized for this population.")
-            values = observation.apply(state.individual_count)
-            row = np.empty(history_obj.schema.row_size, dtype=np.float64)
-            row[0] = float(tick)
-            row[1:] = values.ravel()
-        else:
-            row = state.flatten_all()
-        from natal.frontend.output.history import HistoryBatch
-
-        batch = HistoryBatch(schema=history_obj.schema, rows=row[np.newaxis, :])
-        if allow_existing:
-            history_obj._append_continuation(  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
-                batch
-            )
-        else:
-            if tick in history_obj.ticks:
-                raise ValueError(f"History already contains tick {tick}.")
-            history_obj._append(batch)  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
-        # Evicted history rows take their checkpoints with them (plan S4).
+        if history_obj.schema.mode == "observation" and self._observation is None:
+            raise RuntimeError("Observation is not initialized for this population.")
         backend = getattr(self, "_rust_lifecycle_backend", None)
-        if backend is not None and history_obj.ticks:
-            backend.retain_checkpoints_from(int(history_obj.ticks[0]))
+        if backend is None:
+            # Directly constructed populations initialize the same native
+            # owner lazily; recording never creates a second state store.
+            self._initialize_session()
+            backend = self._rust_lifecycle_backend
+        observation = self._observation
+        if history_obj.schema.mode == "observation" and observation is not None:
+            history_obj._configure_observation(observation)  # pyright: ignore[reportPrivateUsage]  # Population binds its recording selector
+        backend.bind_history(history_obj._store, self._params_log)  # pyright: ignore[reportPrivateUsage]  # share native ownership
+        history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+        backend.record_history(allow_existing)
 
     def clear_history(self) -> None:
         """Remove all rows while preserving the frozen History schema.
@@ -121,6 +120,7 @@ class OutputMixin(ModifierPresetMixin):
         Session-side record checkpoints are dropped with the rows so a
         later ``restore_checkpoint`` cannot resurrect cleared ticks.
         """
+        self._require_standalone_owner("clear_history")
         if self._history_obj is not None:
             self._history_obj.clear()
         backend = getattr(self, "_rust_lifecycle_backend", None)
@@ -137,6 +137,7 @@ class OutputMixin(ModifierPresetMixin):
             RuntimeError: If the population is currently running.
             ValueError: If the current tick is already recorded.
         """
+        self._require_standalone_owner("record_snapshot")
         if getattr(self, "_running", False):
             raise RuntimeError(
                 "Cannot record snapshot while the population is running."
@@ -146,15 +147,13 @@ class OutputMixin(ModifierPresetMixin):
     def restore_checkpoint(self, tick: int) -> None:
         """Restore the population to its recorded state at *tick*.
 
-        Only valid for raw-mode history.  On the Rust backend the session
+        Only valid for raw-mode history. The Rust session
         rolls back its record-aligned checkpoint in full — counts, sperm
         storage, the ecology parameters (so a post-record parameter change
         like ``update().competition(...)`` is undone), and the RNG stream
         (a restore continues the exact stream rather than reseeding).
-        Without a live Rust session (reference path) only counts, sperm
-        storage, and the tick are restored from the Python history.
-
-        All records after *tick* are removed.
+        The recorded execution status and phase are restored as well.
+        Future history and parameter logs are truncated to the checkpoint.
 
         Args:
             tick: Exact tick to restore.
@@ -162,6 +161,7 @@ class OutputMixin(ModifierPresetMixin):
         Raises:
             ValueError: If mode is not ``"raw"`` or tick is not found.
         """
+        self._require_standalone_owner("restore_checkpoint")
         history_obj = getattr(self, "_history_obj", None)
         if history_obj is None or history_obj.is_empty:
             raise ValueError("No history available for checkpoint restore.")
@@ -184,6 +184,9 @@ class OutputMixin(ModifierPresetMixin):
             self._mark_state_cache_stale()
             backend.truncate_checkpoints(tick)
             history_obj.truncate(retain_until_tick=tick)
+            status, _ = backend.execution_state()
+            self._finished = status == "Stopped"
+            self._failed = status == "Failed"
             return
         restored_tick, ic, ss = history_obj.restore_state(tick)
         state = self._state
@@ -303,6 +306,7 @@ class OutputMixin(ModifierPresetMixin):
             ...         pop.finish_simulation()
             >>> pop.update().hooks(check_extinction, event='late')
         """
+        self._require_standalone_owner("finish_simulation")
         if self._finished:
             raise RuntimeError(
                 f"Population '{self.name}' has already finished."

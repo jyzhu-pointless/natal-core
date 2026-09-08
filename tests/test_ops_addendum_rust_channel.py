@@ -113,7 +113,7 @@ def _build_spatial(
             event=event,
         )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
     return spatial, demes
 
 
@@ -201,7 +201,7 @@ def test_spatial_heterogeneous_columns_split_across_demes() -> None:
             event="early",
         )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
 
     for tick in range(2):
         spatial.run(1, record_every=0)
@@ -236,8 +236,8 @@ def test_rust_spatial_session_applies_event_writes_raw_rows() -> None:
             event="first",
         )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
-    spatial.enable_rust_backend(seed=5)
+    spatial._initialize_session(seed=0)
+    spatial._initialize_session(seed=5)
 
     backend = spatial._rust_spatial_backend  # noqa: SLF001 — test drives the backend directly
     assert backend is not None
@@ -283,7 +283,7 @@ def test_rust_run_merges_journal_into_draft_and_params_log() -> None:
     pop_rs.register_hooks(
         [Op.set_param("carrying_capacity", "K * 0.9", every=1)], event="early"
     )
-    pop_rs.enable_rust_backend(seed=11)
+    pop_rs._initialize_session(seed=11)
     pop_rs.run(3, record_every=0)
 
     expected_rows: List[Tuple[int, str, float, float]] = []
@@ -308,7 +308,7 @@ def test_rust_run_inf_expression_raises_value_error_with_param_name() -> None:
     species = _fresh_species()
     pop = _build_viable(species, "infrun")
     pop.register_hooks([Op.set_param("carrying_capacity", "K / 0")], event="early")
-    pop.enable_rust_backend(seed=13)
+    pop._initialize_session(seed=13)
     with pytest.raises(ValueError, match="carrying_capacity") as excinfo:
         pop.run(3, record_every=0)
     message = str(excinfo.value)
@@ -329,7 +329,7 @@ def test_rust_discrete_run_merges_journal_into_draft_and_params_log() -> None:
         [Op.set_param("eggs_per_female", "eggs_per_female * 0.5", every=1)],
         event="early",
     )
-    pop_rs.enable_rust_backend(seed=19)
+    pop_rs._initialize_session(seed=19)
     pop_rs.run(3, record_every=0)
 
     expected_rows = [
@@ -358,8 +358,8 @@ def test_spatial_drain_presentation_uses_deme_prefix() -> None:
             event="first",
         )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
-    spatial.enable_rust_backend(seed=29)
+    spatial._initialize_session(seed=0)
+    spatial._initialize_session(seed=29)
     backend = spatial._rust_spatial_backend  # noqa: SLF001 — drive the session directly
     assert backend is not None
     backend.run_tick()

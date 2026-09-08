@@ -8,7 +8,7 @@ values, and compressing drafts.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Callable, List, Optional, cast
+from typing import Any, Callable, List, Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -627,7 +627,7 @@ def build_custom_slots(
       (``np.bool_`` → ``bool``, ``np.integer`` → ``int``, ``np.floating``
       → ``float``).
     - Native ``bool`` / ``int`` / ``float`` pass through unchanged.
-    - 3-D ``np.ndarray`` → fresh float64 C-contiguous copy (the draft
+    - ``np.ndarray`` of any rank → fresh float64 C-contiguous copy (the draft
       owns its arrays; callers never share storage with user input).
 
     Args:
@@ -642,12 +642,6 @@ def build_custom_slots(
     slots: dict[str, bool | int | float | NDArray[np.float64]] = {}
     for name, val in specs.items():
         if isinstance(val, np.ndarray):
-            array_val = cast(np.ndarray[Any, np.dtype[Any]], val)
-            if len(array_val.shape) != 3:
-                raise TypeError(
-                    f"custom field '{name}' is a {len(array_val.shape)}-D ndarray. "
-                    f"Only 3-D (sex, age, genotype) arrays are supported."
-                )
             slots[str(name)] = np.array(val, dtype=np.float64, order="C")
         elif isinstance(val, np.generic):
             # NumPy scalar → native Python value via .item() (np.bool_ →
@@ -662,7 +656,7 @@ def build_custom_slots(
             raise TypeError(
                 f"custom field '{name}' has unsupported type {type(val).__name__!r}. "
                 f"Supported types: bool, int, float (including NumPy scalars), "
-                f"or 3-D np.ndarray."
+                f"or np.ndarray."
             )
     return slots
 

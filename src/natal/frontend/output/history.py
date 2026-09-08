@@ -1,13 +1,8 @@
-"""Self-describing history storage with immutable schema.
+"""Read-only numerical queries over native history with an immutable schema.
 
-Each Population owns exactly one :class:`History` instance whose
-:class:`HistorySchema` is fixed at construction time.  Engine wrappers
-produce numerical :class:`HistoryBatch` rows that are validated and
-stored by the History layer.
-
-The history stores *flat* float64 rows internally for engine
-compatibility while exposing typed array properties (``individual_count``,
-``sperm_storage``, ``values``) that are recomputed lazily and cached.
+Rust sessions append and evict rows in HistoryStore. Python retains labels
+and dimensions and exports independent arrays for individual counts, sperm
+storage, and observations. HistoryBatch remains a validated import boundary.
 """
 
 from __future__ import annotations
@@ -17,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     Iterator,
     List,
@@ -28,6 +24,8 @@ from typing import (
 
 import numpy as np
 from numpy.typing import NDArray
+
+from natal._engine_rs import HistoryStore
 
 if TYPE_CHECKING:
     from natal.frontend.output.observation import Observation
@@ -277,7 +275,7 @@ class History:
 
     Attributes:
         schema: The immutable :class:`HistorySchema`.
-        max_rows: Soft capacity or ``None`` for unlimited.
+        max_rows: Native FIFO capacity or ``None`` for unlimited.
     """
 
     def __init__(
@@ -298,14 +296,62 @@ class History:
         if max_rows is not None and max_rows < 1:
             raise ValueError(f"max_rows must be >= 1 or None, got {max_rows}")
         self._schema = schema
-        self.max_rows: Optional[int] = max_rows
-        self._rows: List[NDArray[np.float64]] = []
-        self._seen_ticks: set[int] = set()
-        # cached views — invalidated on any mutation
-        self._cache_individual_count: Optional[NDArray[np.float64]] = None
-        self._cache_sperm_storage: Optional[NDArray[np.float64]] = None
-        self._cache_values: Optional[NDArray[np.float64]] = None
-        self._cache_ticks: Optional[Tuple[int, ...]] = None
+        pop = schema.population
+        self._checkpoint_pruner: Callable[[int], None] | None = None
+        self._store = HistoryStore(
+            schema.row_size,
+            (pop.n_demes, pop.n_sexes, pop.n_ages, pop.n_ztypes),
+            schema.mode == "raw", max_rows,
+        )
+
+    @property
+    def boundary_metadata(self) -> Tuple[Tuple[int, int, str], ...]:
+        """Return tick, phase cursor, and lifecycle status for each row.
+
+        Normal complete boundaries have phase zero and status Ready. A manual
+        snapshot after a mid-tick stop preserves its partial phase and status.
+
+        Returns:
+            An immutable tuple of the retained record boundaries.
+        """
+        return tuple(self._store.boundaries())
+
+    def _bind_checkpoint_pruner(self, prune: Callable[[int], None]) -> None:
+        """Pair capacity changes with immediate native checkpoint deallocation."""
+        self._checkpoint_pruner = prune
+
+    @property
+    def max_rows(self) -> Optional[int]:
+        """Native FIFO capacity; None means unlimited retention."""
+        return self._store.max_rows
+
+    @max_rows.setter
+    def max_rows(self, value: Optional[int]) -> None:
+        """Update the native retention limit."""
+        self._store.max_rows = value
+        ticks = self.ticks
+        if ticks and self._checkpoint_pruner is not None:
+            self._checkpoint_pruner(ticks[0])
+
+    @property
+    def _rows(self) -> List[NDArray[np.float64]]:
+        """Materialize an export snapshot; never store runtime data here."""
+        return list(self._store.query())
+
+    def _configure_observation(self, observation: Observation) -> None:
+        """Install a compiled selector in native storage.
+
+        Args:
+            observation: Canonical rule matching the history layout.
+        """
+        pop = self._schema.population
+        mask = observation.build_mask(pop.n_sexes, pop.n_ages, pop.n_ztypes)
+        selected = observation.deme_indices
+        self._store.configure_observation(
+            np.ascontiguousarray(mask, dtype=np.float64).ravel(),
+            list(selected) if selected is not None else [0],
+            observation.collapse_age, observation.deme_mode == "aggregate",
+        )
 
     # ── Properties ────────────────────────────────────────────────────────
 
@@ -316,22 +362,18 @@ class History:
 
     @property
     def n_records(self) -> int:
-        """Number of stored history rows."""
-        return len(self._rows)
+        """Number of records retained by the native store."""
+        return len(self._store)
 
     @property
     def is_empty(self) -> bool:
-        """Whether the history has no rows."""
-        return len(self._rows) == 0
+        """Whether native history contains no rows."""
+        return len(self._store) == 0
 
     @property
     def ticks(self) -> Tuple[int, ...]:
-        """Sorted tuple of all recorded ticks."""
-        if self._cache_ticks is not None:
-            return self._cache_ticks
-        ticks = tuple(sorted(int(r[0]) for r in self._rows))
-        self._cache_ticks = ticks
-        return ticks
+        """Return retained tick metadata without copying numerical rows."""
+        return tuple(self._store.ticks())
 
     @property
     def axes(self) -> Tuple[str, ...]:
@@ -357,253 +399,118 @@ class History:
 
     @property
     def individual_count(self) -> NDArray[np.float64]:
-        """Return the raw individual-count tensor for every recorded tick.
-
-        The shape is ``(record, sex, age, ztype)`` for non-spatial
-        populations and ``(record, deme, sex, age, ztype)`` for spatial
-        populations, including spatial populations with one deme. The
-        returned cached view is read-only. Only valid when
-        ``schema.mode == "raw"``.
+        """Return an independent read-only raw count tensor.
 
         Raises:
-            ValueError: If the schema mode is not ``"raw"``.
+            ValueError: If the history contains observation values.
         """
         if self._schema.mode != "raw":
             raise ValueError("individual_count is only available in raw mode")
-        if self._cache_individual_count is not None:
-            result = self._cache_individual_count.copy()
-            result.flags.writeable = False
-            return result
         pop = self._schema.population
-        is_spatial = self._schema.spatial_layout is not None
-        n_records = len(self._rows)
-        record_shape = (
-            (n_records, pop.n_demes, pop.n_sexes, pop.n_ages, pop.n_ztypes)
-            if is_spatial
-            else (n_records, pop.n_sexes, pop.n_ages, pop.n_ztypes)
-        )
-        arr = np.zeros(record_shape, dtype=np.float64)
-        ind_size = pop.n_sexes * pop.n_ages * pop.n_ztypes
-        for ri, row in enumerate(self._rows):
-            total_ind_size = ind_size * pop.n_demes
-            target_shape = (
-                (pop.n_demes, pop.n_sexes, pop.n_ages, pop.n_ztypes)
-                if is_spatial
-                else (pop.n_sexes, pop.n_ages, pop.n_ztypes)
-            )
-            arr[ri] = row[1 : 1 + total_ind_size].reshape(target_shape)
-        arr.flags.writeable = False
-        self._cache_individual_count = arr
-        result = arr.copy()
+        size = pop.n_demes * pop.n_sexes * pop.n_ages * pop.n_ztypes
+        shape = (len(self),)
+        if self._schema.spatial_layout is not None:
+            shape += (pop.n_demes,)
+        shape += (pop.n_sexes, pop.n_ages, pop.n_ztypes)
+        result = self._store.query(1, 1 + size).reshape(shape)
         result.flags.writeable = False
         return result
 
     @property
     def sperm_storage(self) -> Optional[NDArray[np.float64]]:
-        """Return the raw sperm-storage tensor for every recorded tick.
-
-        The shape is ``(record, age, female_ztype, male_ztype)`` for
-        non-spatial populations and
-        ``(record, deme, age, female_ztype, male_ztype)`` for spatial
-        populations, including spatial populations with one deme. Returns
-        ``None`` for discrete-generation populations. Only valid when
-        ``schema.mode == "raw"``.
+        """Return an independent read-only sperm tensor when recorded.
 
         Raises:
-            ValueError: If the schema mode is not ``"raw"``.
+            ValueError: If the history contains observation values.
         """
         if self._schema.mode != "raw":
             raise ValueError("sperm_storage is only available in raw mode")
-        if not self._schema.population.has_sperm_storage:
-            return None
-        if self._cache_sperm_storage is not None:
-            result = self._cache_sperm_storage.copy()
-            result.flags.writeable = False
-            return result
         pop = self._schema.population
-        is_spatial = self._schema.spatial_layout is not None
-        n_ztypes = pop.n_ztypes
-        n_records = len(self._rows)
-        record_shape = (
-            (n_records, pop.n_demes, pop.n_ages, n_ztypes, n_ztypes)
-            if is_spatial
-            else (n_records, pop.n_ages, n_ztypes, n_ztypes)
-        )
-        arr = np.zeros(record_shape, dtype=np.float64)
-        ind_size = pop.n_sexes * pop.n_ages * pop.n_ztypes
-        sperm_size = pop.n_ages * n_ztypes * n_ztypes
-        for ri, row in enumerate(self._rows):
-            ind_end = 1 + ind_size * pop.n_demes
-            sperm_end = ind_end + sperm_size * pop.n_demes
-            target_shape = (
-                (pop.n_demes, pop.n_ages, n_ztypes, n_ztypes)
-                if is_spatial
-                else (pop.n_ages, n_ztypes, n_ztypes)
-            )
-            arr[ri] = row[ind_end:sperm_end].reshape(target_shape)
-        arr.flags.writeable = False
-        self._cache_sperm_storage = arr
-        result = arr.copy()
+        if not pop.has_sperm_storage:
+            return None
+        start = 1 + pop.n_demes * pop.n_sexes * pop.n_ages * pop.n_ztypes
+        shape = (len(self),)
+        if self._schema.spatial_layout is not None:
+            shape += (pop.n_demes,)
+        shape += (pop.n_ages, pop.n_ztypes, pop.n_ztypes)
+        result = self._store.query(start).reshape(shape)
         result.flags.writeable = False
         return result
 
     @property
     def values(self) -> NDArray[np.float64]:
-        """Return observation-mode values for every recorded tick.
-
-        With age preserved, non-spatial and aggregate spatial observations
-        have shape ``(record, group, sex, age)``; preserve-mode spatial
-        observations have shape ``(record, group, deme, sex, age)``. A
-        preserve-mode spatial History keeps the deme axis even when it has
-        length one. With ``collapse_age=True``, the shapes become
-        ``(record, group, sex)`` and ``(record, group, deme, sex)``
-        respectively. Only valid when ``schema.mode == "observation"``.
+        """Return independent read-only observation values from native storage.
 
         Raises:
-            ValueError: If the schema mode is not ``"observation"``.
+            ValueError: If raw counts were recorded instead.
         """
         if self._schema.mode != "observation":
             raise ValueError("values is only available in observation mode")
-        if self._cache_values is not None:
-            result = self._cache_values.copy()
-            result.flags.writeable = False
-            return result
         pop = self._schema.population
-        obs_meta = self._schema.observation
-        assert obs_meta is not None
-        n_records = len(self._rows)
-        n_groups = obs_meta.n_groups
-        n_sexes = pop.n_sexes
-        axis_shape: tuple[int, ...] = (n_groups,)
-        if obs_meta.deme_indices is not None and obs_meta.deme_mode == "preserve":
-            axis_shape += (len(obs_meta.deme_indices),)
-        axis_shape += (n_sexes,)
-        if not obs_meta.collapse_age:
-            axis_shape += (pop.n_ages,)
-        arr = np.zeros((n_records, *axis_shape), dtype=np.float64)
-        for ri, row in enumerate(self._rows):
-            arr[ri] = row[1:].reshape(axis_shape)
-        arr.flags.writeable = False
-        self._cache_values = arr
-        result = arr.copy()
+        observation = self._schema.observation
+        assert observation is not None
+        shape = (len(self), observation.n_groups)
+        if observation.deme_indices is not None and observation.deme_mode == "preserve":
+            shape += (len(observation.deme_indices),)
+        shape += (pop.n_sexes,)
+        if not observation.collapse_age:
+            shape += (pop.n_ages,)
+        result = self._store.query(1).reshape(shape)
         result.flags.writeable = False
         return result
 
     # ── Mutations ─────────────────────────────────────────────────────────
 
     def __len__(self) -> int:
-        """Return the number of stored records."""
-        return len(self._rows)
+        """Return the number of retained native rows."""
+        return len(self._store)
 
     def __iter__(self) -> Iterator[Tuple[int, NDArray[np.float64]]]:  # explicit Iterator for typed iteration
         """Iterate over defensive copies paired with their ticks."""
         return iter(self._to_list())
 
-    def _invalidate_cache(self) -> None:
-        """Discard all array and tick views derived from stored rows."""
-        self._cache_individual_count = None
-        self._cache_sperm_storage = None
-        self._cache_values = None
-        self._cache_ticks = None
 
-    def _evict_if_needed(self) -> None:
-        """Evict oldest rows until the configured capacity is satisfied."""
-        if self.max_rows is None:
-            return
-        while len(self._rows) > self.max_rows:
-            evicted = self._rows.pop(0)
-            self._seen_ticks.discard(int(evicted[0]))
-            self._invalidate_cache()
 
     def _append(self, batch: HistoryBatch) -> None:
-        """Append rows from a validated batch.
+        """Validate and import a batch into the native ring atomically.
 
         Args:
-            batch: Batch of rows; schema must match.
+            batch: Numerical rows with the same frozen schema.
 
         Raises:
-            ValueError: If schemas mismatch, ticks repeat, or ticks are not
-                strictly increasing after the current tail.
+            ValueError: If schemas or row ordering do not agree.
         """
         if batch.schema != self._schema:
             raise ValueError("Batch schema does not match History schema")
-        if batch.rows.shape[0] == 0:
-            return
-        ticks = tuple(int(tick) for tick in batch.rows[:, 0])
-        if any(current <= previous for previous, current in zip(ticks, ticks[1:])):
-            raise ValueError("History batch ticks must be strictly increasing and unique")
-        if any(tick in self._seen_ticks for tick in ticks):
-            raise ValueError("History batch contains a tick that is already recorded")
-        if self._rows and ticks[0] <= int(self._rows[-1][0]):
-            raise ValueError("History ticks must be appended in strictly increasing order")
-        for ri, tick in enumerate(ticks):
-            row = batch.rows[ri, :].copy()
-            self._seen_ticks.add(tick)
-            self._rows.append(row)
-        self._invalidate_cache()
-        self._evict_if_needed()
+        self._store.append(batch.rows, False)
 
     def _append_continuation(self, batch: HistoryBatch) -> None:
-        """Append an engine batch with one validated boundary overlap.
-
-        A continued engine run repeats its starting boundary as the first
-        batch row. That row may be omitted only when both its tick and payload
-        exactly equal the current History tail.
+        """Import a batch allowing one identical overlapping boundary.
 
         Args:
-            batch: Engine-produced rows using this History schema.
+            batch: Numerical rows with the same frozen schema.
 
         Raises:
-            ValueError: If schemas mismatch, the batch is stale, or an
-                overlapping boundary has different state data.
+            ValueError: If schemas, ordering, or the overlap disagree.
         """
         if batch.schema != self._schema:
             raise ValueError("Batch schema does not match History schema")
-        rows = batch.rows
-        if rows.shape[0] == 0:
-            return
-        if self._rows:
-            last_row = self._rows[-1]
-            last_tick = int(last_row[0])
-            first_tick = int(rows[0, 0])
-            if first_tick < last_tick:
-                raise ValueError(
-                    "Kernel History starts before the latest recorded tick"
-                )
-            if first_tick == last_tick:
-                if not np.array_equal(rows[0], last_row):
-                    raise ValueError(
-                        "Kernel History boundary payload does not match the "
-                        "latest recorded state"
-                    )
-                rows = rows[1:, :]
-        if rows.shape[0] > 0:
-            self._append(HistoryBatch(schema=self._schema, rows=rows))
+        self._store.append(batch.rows, True)
 
     def clear(self) -> None:
-        """Remove all stored rows while preserving the schema."""
-        self._rows.clear()
-        self._seen_ticks.clear()
-        self._invalidate_cache()
+        """Clear the native history without changing the current state."""
+        self._store.clear()
 
     def truncate(self, *, retain_until_tick: int) -> None:
-        """Remove all rows with tick > *retain_until_tick*.
+        """Remove future native rows.
 
         Args:
-            retain_until_tick: Inclusive upper bound — rows with tick
-                greater than this value are removed.
+            retain_until_tick: Inclusive latest retained tick.
 
         Raises:
-            ValueError: If no record exists at or below the target tick.
+            ValueError: If no retained row precedes this boundary.
         """
-        new_rows = [r for r in self._rows if int(r[0]) <= retain_until_tick]
-        if not new_rows:
-            raise ValueError(
-                f"No records with tick <= {retain_until_tick} exist."
-            )
-        self._rows = new_rows
-        self._seen_ticks = {int(r[0]) for r in self._rows}
-        self._invalidate_cache()
+        self._store.truncate(retain_until_tick)
 
     def restore_state(
         self, tick: int
@@ -634,7 +541,7 @@ class History:
             else (pop.n_sexes, pop.n_ages, pop.n_ztypes)
         )
 
-        for row in self._rows:
+        for row in (self._store.row(tick),):
             if int(row[0]) == tick:
                 ic = row[1 : 1 + ind_size].reshape(ind_shape).copy()
                 ss: Optional[NDArray[np.float64]] = None
@@ -726,15 +633,8 @@ class History:
         )
         obs_history = History(obs_schema)
 
-        counts = self.individual_count
-        for record_index, row in enumerate(self._rows):
-            tick = row[0]
-            record_counts = counts[record_index]
-            observed = observation.apply(record_counts)
-            flat = np.empty(obs_row_size, dtype=np.float64)
-            flat[0] = tick
-            flat[1:] = observed.ravel()
-            obs_history._rows.append(flat)
+        obs_history._configure_observation(observation)
+        self._store.observe(obs_history._store)
 
         return obs_history
 
@@ -745,9 +645,7 @@ class History:
             2-D float64 array ``(n_records, row_size)``.
             Returns ``(0, row_size)`` when empty.
         """
-        if len(self._rows) == 0:
-            return np.zeros((0, self._schema.row_size), dtype=np.float64)
-        return np.array(self._rows, dtype=np.float64)
+        return self._store.query()
 
     def _to_list(self) -> List[Tuple[int, NDArray[np.float64]]]:
         """Return history rows as ``(tick, flat_row)`` pairs.

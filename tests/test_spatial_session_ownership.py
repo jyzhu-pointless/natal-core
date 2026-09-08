@@ -86,7 +86,7 @@ def _build(
     if late_ops:
         builder = builder.hooks(*late_ops)
     population = builder.build()
-    population.enable_rust_backend(seed=seed)
+    population._initialize_session(seed=seed)
     return population
 
 
@@ -112,8 +112,12 @@ def test_persistent_deme_streams_advance_across_ticks() -> None:
     final_a = _stacked(a)
 
     b = _build("own_r1b", seed=42)
-    for deme, state in zip(b.demes, imported):
-        deme.import_state(state)
+    def restore_counts(ctx: nt.TickContext) -> int:
+        state = imported[ctx.deme_id]
+        ctx.state.individual_count[:] = state["individual_count"]
+        ctx.state.sperm_storage[:] = state["sperm_storage"]
+        return 0
+    b.register_hooks(restore_counts, event="first")
     b.run(1)
     final_b = _stacked(b)
 
@@ -146,23 +150,20 @@ def test_same_seed_reproduces_the_trajectory() -> None:
     np.testing.assert_array_equal(_stacked(first), _stacked(second))
 
 
-def test_import_state_continues_from_imported_counts() -> None:
-    """A per-deme import reaches the session: the next tick computes from
-    the imported counts instead of overwriting them.
+def test_scoped_state_transaction_continues_from_committed_counts() -> None:
+    """A scoped state transaction reaches the only native owner.
 
-    Importing an extinguished deme must keep that deme extinct through
-    later ticks — the pre-S3 behavior recomputed ticks from the stale
-    pre-import cache, resurrecting the deme.
+    With zero migration and no surviving individuals or stored sperm,
+    subsequent reproduction cannot resurrect the extinguished deme.
     """
     target = _build("own_imp_target", seed=45, stochastic=False, n_demes=3, rate=0.0)
     target.run(1, record_every=0)
-    target.demes[1].import_state(
-        {
-            "n_tick": 1,
-            "individual_count": np.zeros((2, 3, 3), dtype=np.float64),
-            "sperm_storage": np.zeros((3, 3, 3), dtype=np.float64),
-        }
-    )
+    def extinguish(ctx: nt.TickContext) -> int:
+        ctx.state.individual_count[:] = 0
+        ctx.state.sperm_storage[:] = 0
+        return 0
+    target.register_hooks(extinguish, event="first", deme=1)
+    target.trigger_event("first", deme_id=1)
     target.run(2, record_every=0)
     np.testing.assert_array_equal(
         target.demes[1].state.individual_count,
@@ -194,7 +195,7 @@ def test_stop_keeps_boundary_state_and_freezes_the_tick() -> None:
 
 
 def test_retained_snapshot_cannot_mutate_the_run() -> None:
-    """A deme.state snapshot is independent; imports are the write channel."""
+    """A deme.state snapshot is independent; callback transactions own writes."""
     population = _build("own_snap", seed=47)
     retained = population.demes[0].state.individual_count
     before = retained.copy()
@@ -354,7 +355,7 @@ def test_discrete_spatial_rust_tick_keeps_the_migration_tail() -> None:
             .build()
         )
         if enable_rust:
-            pop.enable_rust_backend(seed=seed)
+            pop._initialize_session(seed=seed)
         return pop
 
     reference = build("own_d mig_ref".replace(" ", ""), 61, enable_rust=False)
@@ -397,7 +398,7 @@ def test_declarative_hooks_run_on_discrete_spatial_rust() -> None:
         .hooks(halve_k)
         .build()
     )
-    spatial.enable_rust_backend(seed=7)
+    spatial._initialize_session(seed=7)
     spatial.run(2, record_every=0)
     ks = [deme.params.carrying_capacity for deme in spatial.demes]
     assert ks == [2500.0, 2500.0, 2500.0, 2500.0]
@@ -444,7 +445,7 @@ def test_discrete_spatial_stochastic_migration_matches_python_dispatch() -> None
             .build()
         )
         if enable:
-            pop.enable_rust_backend(seed=seed)
+            pop._initialize_session(seed=seed)
         return pop
 
     population = build("own_dmig", 62, enable=True)
@@ -506,7 +507,7 @@ def _build_callback_population(
     if hooks:
         builder = builder.hooks(*hooks)
     population = builder.build()
-    population.enable_rust_backend(seed=seed)
+    population._initialize_session(seed=seed)
     return population
 
 
@@ -577,7 +578,7 @@ def test_python_hook_stop_on_discrete_spatial_freezes_the_tick() -> None:
         .hooks(stopper)
         .build()
     )
-    population.enable_rust_backend(seed=75)
+    population._initialize_session(seed=75)
     population.run(3, record_every=0)
     assert population._tick == 0  # noqa: SLF001 — stop froze the tick
     with pytest.raises(RuntimeError, match="finished"):
@@ -613,7 +614,7 @@ def test_mixed_declarative_and_python_hooks_share_one_program() -> None:
         .hooks(halve_k, observer)
         .build()
     )
-    population.enable_rust_backend(seed=76)
+    population._initialize_session(seed=76)
     population.run(2, record_every=0)
     assert [deme.params.carrying_capacity for deme in population.demes] == [
         2500.0,
@@ -708,7 +709,7 @@ def test_declarative_and_python_same_tick_writes_compose() -> None:
         .hooks(bump_eggs, write_k)
         .build()
     )
-    population.enable_rust_backend(seed=79)
+    population._initialize_session(seed=79)
     population.run(3, record_every=0)
     eggs_log = [
         row for row in population.demes[0].params_log
@@ -784,7 +785,7 @@ def _build_stochastic_spatial(name: str, seed: int) -> SpatialPopulation:
         .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
         .migration(adjacency=_ring_adjacency(4), migration_rate=0.25)
         .build()
-    ).enable_rust_backend(seed=seed)
+    )._initialize_session(seed=seed)
 
 
 def test_spatial_stochastic_restore_replays_bitwise() -> None:
@@ -841,7 +842,7 @@ def test_spatial_restore_rolls_back_ecology_and_revives() -> None:
         .migration(adjacency=_ring_adjacency(2), migration_rate=0.0)
         .hooks(halve_k)
         .build()
-    ).enable_rust_backend(seed=91)
+    )._initialize_session(seed=91)
     population.run(2, record_every=1)
     assert population.demes[0].params.carrying_capacity == 20000.0
 
@@ -957,7 +958,7 @@ def test_plain_record_snapshot_pairs_checkpoint_eviction() -> None:
         .record_history(mode="raw", max_rows=2)
         .build()
     )
-    population.enable_rust_backend(seed=96)
+    population._initialize_session(seed=96)
     population.run(3, record_every=2)
     assert population.history.ticks == (0, 2)
     population.record_snapshot()
@@ -999,7 +1000,7 @@ def test_spatial_program_rebases_set_param_literals() -> None:
         .hooks(double_eggs, halve_k)
         .build()
     )
-    population.enable_rust_backend(seed=99)
+    population._initialize_session(seed=99)
     population.run(1, record_every=0)
     assert population.demes[0].params.eggs_per_female == 8.0
     assert population.demes[0].params.carrying_capacity == 5e11

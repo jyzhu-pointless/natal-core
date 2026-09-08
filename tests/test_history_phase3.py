@@ -351,7 +351,7 @@ class TestReadOnlyCachedArrays:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history._rows.append(row)
+        history._append(HistoryBatch(schema=history.schema, rows=row[np.newaxis, :]))
 
         vals = history.values
         # Invariant: shape = (1, 2, 2, 2)
@@ -377,7 +377,7 @@ class TestReadOnlyCachedArrays:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history._rows.append(row)
+        history._append(HistoryBatch(schema=history.schema, rows=row[np.newaxis, :]))
 
         vals = history.values
         assert not vals.flags.writeable
@@ -400,7 +400,7 @@ class TestReadOnlyCachedArrays:
         history = History(obs_schema)
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history._rows.append(row)
+        history._append(HistoryBatch(schema=history.schema, rows=row[np.newaxis, :]))
 
         v1 = history.values
         v2 = history.values
@@ -572,8 +572,8 @@ class TestTicksProperty:
         assert history.ticks == (0, 1, 2, 3, 4)
         assert isinstance(history.ticks, tuple)
 
-    def test_ticks_cached(self) -> None:
-        """ticks returns same tuple object on second access (caching)."""
+    def test_ticks_metadata_remains_stable(self) -> None:
+        """Exported tick metadata remains unchanged as native storage grows."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(3, 5, start_tick=0)
@@ -581,8 +581,11 @@ class TestTicksProperty:
 
         t1 = history.ticks
         t2 = history.ticks
-        # Invariant: same object returned (cached)
-        assert t1 is t2
+        # Independent reads describe the same exact stored coordinates.
+        assert t1 == t2 == (0, 1, 2)
+        history._append(HistoryBatch(schema=schema, rows=_make_rows(1, 5, start_tick=3)))
+        assert t1 == (0, 1, 2)
+        assert history.ticks == (0, 1, 2, 3)
 
     def test_ticks_cache_invalidated_after_append(self) -> None:
         """ticks cache invalidated after appending new rows."""
@@ -821,8 +824,7 @@ class TestRestoreState:
         # Add a row so it's not empty
         row = np.zeros(5, dtype=np.float64)
         row[0] = 0.0
-        history._rows.append(row)
-        history._seen_ticks.add(0)
+        history._append(HistoryBatch(schema=history.schema, rows=row[np.newaxis, :]))
 
         with pytest.raises(ValueError, match="Cannot restore state from observation-mode"):
             history.restore_state(0)
@@ -1260,7 +1262,7 @@ class TestCacheInvalidationAfterClear:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history._rows.append(row)
+        history._append(HistoryBatch(schema=history.schema, rows=row[np.newaxis, :]))
 
         v1 = history.values
         assert v1.shape[0] == 1

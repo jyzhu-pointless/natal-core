@@ -7,8 +7,9 @@ to native Python values and 3-D arrays become owned float64 copies.
 """
 
 import numpy as np
-import natal as nt
 import pytest
+
+import natal as nt
 
 sp = nt.Species.from_dict(name="__custom_test__", structure={"auto": {"A": ["WT", "Var"]}})
 
@@ -51,10 +52,13 @@ class TestBuilderCustomFields:
         assert pop.config.custom["rainfall"] == 0.8
         assert pop.config.custom["terrain"].shape == (2, 2, 2)
 
-    def test_custom_mutable(self):
-        """Custom slots are mutable in-place."""
+    def test_custom_snapshot_isolated_and_runtime_update_commits(self):
+        """Custom query edits stay local; explicit updates reach the session."""
         pop = _build({"temperature": 25.0})
-        pop.config.custom["temperature"] = 30.0
+        snapshot = pop.config
+        snapshot.custom["temperature"] = 30.0
+        assert pop.config.custom["temperature"] == 25.0
+        pop.update().custom(temperature=30.0)
         assert pop.config.custom["temperature"] == 30.0
 
     def test_bool_custom(self):
@@ -93,13 +97,16 @@ class TestBuilderCustomFields:
         with pytest.raises(TypeError):
             _build({"label": "hot"})
 
-    def test_non_3d_array_raises(self):
-        """Arrays with dimensionality other than 3 raise TypeError."""
-        with pytest.raises(TypeError, match="Only 3-D"):
-            _build({"flat": np.zeros(4, dtype=np.float64)})
+    @pytest.mark.parametrize("shape", [(), (4,), (2, 3), (1, 2, 3, 4)])
+    def test_custom_array_rank_is_preserved(self, shape):
+        """Custom arrays keep their declared rank in isolated native storage."""
+        values = np.zeros(shape, dtype=np.float64)
+        pop = _build({"payload": values})
+        assert pop.config.custom["payload"].shape == shape
+        assert not np.shares_memory(pop.config.custom["payload"], values)
 
-    def test_custom_accessible_from_reference(self):
-        """Custom slots are readable and writable from the reference runtime."""
+    def test_custom_snapshot_edits_do_not_change_runtime_values(self):
+        """A helper may edit its owned snapshot without changing the session."""
         pop = _build({"temperature": 25.0, "threshold": 100.0})
 
         def read_custom(config):
@@ -110,7 +117,11 @@ class TestBuilderCustomFields:
             return 0
 
         assert read_custom(pop.config) == 125.0
-        write_custom(pop.config)
+        snapshot = pop.config
+        write_custom(snapshot)
+        assert snapshot.custom["temperature"] == 99.0
+        assert pop.config.custom["temperature"] == 25.0
+        pop.update().custom(temperature=99.0)
         assert pop.config.custom["temperature"] == 99.0
 
 
@@ -122,9 +133,13 @@ class TestBuildCustomArrayRemoved:
         from natal.frontend import data
 
         with pytest.raises(ImportError):
-            from natal.frontend.data import build_custom_array  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            from natal.frontend.data import (
+                build_custom_array,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            )
         with pytest.raises(ImportError):
-            from natal.frontend.data._engine import build_custom_array  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            from natal.frontend.data._engine import (
+                build_custom_array,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            )
         assert not hasattr(nt, "build_custom_array")
         assert not hasattr(data, "build_custom_array")
 

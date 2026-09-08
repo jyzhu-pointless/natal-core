@@ -3,6 +3,8 @@
 import numpy as np
 import pytest
 
+from tests._config_assertions import assert_config_equal
+
 import natal as nt
 from natal.frontend.configurator import Configurator, set_param
 from natal.frontend.data import build_custom_slots, build_population_config
@@ -606,6 +608,7 @@ class TestFitnessFormats:
         arr = cfg._config.sexual_selection_fitness
         original = arr[0, 1].copy()
         cfg.fitness(sexual_selection={"WT|WT": {"WT|Var": 2.0}}, mode="multiply")
+        arr = cfg._config.sexual_selection_fitness  # Read the successfully committed candidate.
         assert arr[0, 1] == original * 2.0
 
     def test_sexual_selection_nested_mixed_raises(self, fitness_species):
@@ -624,6 +627,7 @@ class TestFitnessFormats:
         cfg = _make_cfg(fitness_species)
         arr = cfg._config.sexual_selection_fitness
         cfg.fitness(sexual_selection={"WT|Var": 0.3})
+        arr = cfg._config.sexual_selection_fitness  # Read the successfully committed candidate.
         # Column for WT|Var (m_idx=1): all females get 0.3
         assert arr[0, 1] == 0.3
         assert arr[1, 1] == 0.3
@@ -638,6 +642,7 @@ class TestFitnessFormats:
         cfg.fitness(sexual_selection={
             "female": {"WT|WT": 0.7},
         })
+        arr = cfg._config.sexual_selection_fitness  # Read the successfully committed candidate.
         # Row for WT|WT (f_idx=0) → all males = 0.7
         assert arr[0, 0] == 0.7
         assert arr[0, 2] == 0.7
@@ -656,6 +661,7 @@ class TestFitnessFormats:
         cfg = _make_cfg(fitness_species)
         arr = cfg._config.viability_fitness  # (2, n_ages, 3)
         cfg.fitness(viability={"WT|Var": {"female": 0.2}})
+        arr = cfg._config.viability_fitness  # Read the successfully committed candidate.
         assert arr[0, 0, 1] == 0.2  # female, age0 (default juvenile age), WT|Var
         assert arr[0, 1, 1] == 1.0  # female, age1 — not written (age1 is adult)
         assert arr[1, 0, 1] == 1.0  # male unchanged
@@ -667,6 +673,7 @@ class TestFitnessFormats:
         cfg = _make_cfg(fitness_species)
         arr = cfg._config.fecundity_fitness  # (2, 3)
         cfg.fitness(fecundity={"Var|Var": {"female": 0.0, "male": 0.8}})
+        arr = cfg._config.fecundity_fitness  # Read the successfully committed candidate.
         assert arr[0, 2] == 0.0  # female Var|Var (idx=2)
         assert arr[1, 2] == 0.8  # male Var|Var
 
@@ -678,6 +685,7 @@ class TestFitnessFormats:
             "WT|WT": 2.0,                  # scalar → both sexes
             "Var|Var": {"female": 0.0},    # female only
         })
+        arr = cfg._config.fecundity_fitness  # Read the successfully committed candidate.
         assert arr[0, 0] == 2.0  # female WT|WT
         assert arr[1, 0] == 2.0  # male WT|WT
         assert arr[0, 2] == 0.0  # female Var|Var
@@ -690,6 +698,7 @@ class TestFitnessFormats:
         cfg = _make_cfg(fitness_species)
         arr = cfg._config.zygote_viability_fitness  # (2, 4)
         cfg.fitness(zygote_viability={"WT|Var": {"male": 0.5}})
+        arr = cfg._config.zygote_viability_fitness  # Read the successfully committed candidate.
         assert arr[1, 1] == 0.5   # male WT|Var (idx=1)
         assert arr[0, 1] == 1.0   # female WT|Var unchanged
 
@@ -703,6 +712,7 @@ class TestFitnessFormats:
             "female": {"WT|WT": 0.5},
             "male": {"WT|Var": 0.3},
         })
+        arr = cfg._config.fecundity_fitness  # Read the successfully committed candidate.
         assert arr[0, 0] == 0.5  # female WT|WT
         assert arr[1, 1] == 0.3  # male WT|Var
 
@@ -714,6 +724,7 @@ class TestFitnessFormats:
             "female": {"Var|Var": 0.1},
             "male": {"Var|Var": 0.9},
         })
+        arr = cfg._config.viability_fitness  # Read the successfully committed candidate.
         assert arr[0, 0, 2] == 0.1  # female age0 Var|Var (idx=2)
         assert arr[1, 0, 2] == 0.9  # male age0 Var|Var
 
@@ -725,6 +736,7 @@ class TestFitnessFormats:
             "female": {"WT|Var": 0.2},
             "male": {"WT|Var": 0.8},
         })
+        arr = cfg._config.zygote_viability_fitness  # Read the successfully committed candidate.
         assert arr[0, 1] == 0.2  # female WT|Var (idx=1)
         assert arr[1, 1] == 0.8  # male WT|Var
 
@@ -761,6 +773,7 @@ class TestFitnessAdvanced:
         cfg = _make_cfg(fitness_species).age_structure(n_ages=3, new_adult_age=2)
         arr = cfg._config.viability_fitness
         cfg.fitness(viability={"WT|WT": {0: 0.5, 1: 0.8}})
+        arr = cfg._config.viability_fitness  # Read the successfully committed candidate.
         # age 0 → 0.5, age 1 → 0.8, age 2 unchanged
         assert arr[0, 0, 0] == 0.5
         assert arr[0, 1, 0] == 0.8
@@ -771,9 +784,11 @@ class TestFitnessAdvanced:
         arr = cfg._config.fecundity_fitness
         # set baseline
         cfg.fitness(fecundity={"WT|WT": 0.5})
+        arr = cfg._config.fecundity_fitness  # Read the successfully committed candidate.
         assert arr[0, 0] == 0.5
         # multiply scales the existing value
         cfg.fitness(fecundity={"WT|WT": 0.6}, mode="multiply")
+        arr = cfg._config.fecundity_fitness  # Read the successfully committed candidate.
         assert arr[0, 0] == pytest.approx(0.3)  # 0.5 * 0.6
 
     def test_fitness_multiply_on_default(self, fitness_species):
@@ -781,6 +796,7 @@ class TestFitnessAdvanced:
         arr = cfg._config.viability_fitness
         # default is all 1.0
         cfg.fitness(viability={"WT|Var": 0.3}, mode="multiply")
+        arr = cfg._config.viability_fitness  # Read the successfully committed candidate.
         assert arr[0, 0, 1] == pytest.approx(0.3)  # 1.0 * 0.3
 
 
@@ -906,6 +922,7 @@ class TestReconfigurePreset:
 
         # Reconfigure with different viability scaling
         pop.update().reconfigure_preset(drive, viability_scaling=0.1)
+        arr = pop.config.viability_fitness  # Read the successfully committed candidate.
         new_val = arr[0, 0, 1]
         assert new_val != orig_val
         assert 0.0 < new_val < orig_val, f"reconfigure should lower viability, got {new_val}"
@@ -1117,8 +1134,8 @@ class TestReconfigurePreset:
         monkeypatch.undo()
 
         assert drive.drive_conversion_rate == (0.9, 0.9)  # attribute never landed
-        assert pop.config is config_before  # identity, not merely value
-        assert pop.config.zygotes_to_gametes_map is z2g_before
+        assert_config_equal(pop.config, config_before)
+        np.testing.assert_array_equal(pop.config.zygotes_to_gametes_map, z2g_before)
         np.testing.assert_array_equal(pop.config.fecundity_fitness, fitness_before)
         assert list(pop.gamete_modifiers) == gamete_mods_before
         assert list(pop.zygote_modifiers) == zygote_mods_before
@@ -1172,14 +1189,14 @@ class TestReconfigurePreset:
                 target_allele="WT",
                 drive_conversion_rate=0.9,
             )
-        ).enable_rust_backend(seed=99)
+        )._initialize_session(seed=99)
         drive_t = nt.HomingDrive(
             name="__stream_treat__",
             drive_allele="Dr",
             target_allele="WT",
             drive_conversion_rate=0.9,
         )
-        treat = build_viable_stochastic("treat", drive_t).enable_rust_backend(seed=99)
+        treat = build_viable_stochastic("treat", drive_t)._initialize_session(seed=99)
         control.run(6, record_every=1)
 
         treat.run(3, record_every=1)
@@ -1214,7 +1231,7 @@ class TestReconfigurePreset:
                 target_allele="WT",
                 drive_conversion_rate=0.9,
             )
-        ).enable_rust_backend(seed=98)
+        )._initialize_session(seed=98)
         other.run(6, record_every=1)
         assert control.history.individual_count[-1].sum() > 0  # population alive
         assert not np.array_equal(
@@ -1508,6 +1525,7 @@ class TestFitnessEdgeCases:
         cfg = _make_cfg(fitness_species).age_structure(n_ages=3, new_adult_age=2)
         arr = cfg._config.viability_fitness
         cfg.fitness(viability={"WT|WT": {"female": {0: 0.2, 1: 0.5}}})
+        arr = cfg._config.viability_fitness  # Read the successfully committed candidate.
         assert arr[0, 0, 0] == 0.2   # female age0 WT|WT
         assert arr[0, 1, 0] == 0.5   # female age1 WT|WT
         assert arr[0, 2, 0] == 1.0   # female age2 unchanged
@@ -1518,6 +1536,7 @@ class TestFitnessEdgeCases:
         cfg = _make_cfg(fitness_species).age_structure(n_ages=3, new_adult_age=2)
         arr = cfg._config.viability_fitness
         cfg.fitness(viability={"WT|Var": {"male": {1: 0.3}}})
+        arr = cfg._config.viability_fitness  # Read the successfully committed candidate.
         assert arr[1, 1, 1] == 0.3   # male age1 WT|Var
 
     def test_age_keyed_with_none_skip(self, fitness_species):
@@ -1526,6 +1545,7 @@ class TestFitnessEdgeCases:
         arr = cfg._config.viability_fitness
         # Set viability for ages 0=0.5, 1=None(skip), 2=0.1
         cfg.fitness(viability={"Var|Var": {0: 0.5, 1: None, 2: 0.1}})
+        arr = cfg._config.viability_fitness  # Read the successfully committed candidate.
         assert arr[0, 0, 2] == 0.5   # age0 — written
         assert arr[0, 1, 2] == 1.0   # age1 — skipped (None)
         assert arr[0, 2, 2] == 0.1   # age2 — written
@@ -1537,6 +1557,7 @@ class TestFitnessEdgeCases:
         cfg.fitness(sexual_selection={
             "male": {"WT|WT": 0.3},
         })
+        arr = cfg._config.sexual_selection_fitness  # Read the successfully committed candidate.
         # Column for WT|WT (m_idx=0) → all females × this male = 0.3
         assert arr[0, 0] == 0.3
         assert arr[1, 0] == 0.3
@@ -1547,9 +1568,11 @@ class TestFitnessEdgeCases:
         arr = cfg._config.sexual_selection_fitness
         # Set baseline
         cfg.fitness(sexual_selection={"female": {"WT|WT": 0.5}})
+        arr = cfg._config.sexual_selection_fitness  # Read the successfully committed candidate.
         assert arr[0, 0] == 0.5
         # Multiply
         cfg.fitness(sexual_selection={"female": {"WT|WT": 0.5}}, mode="multiply")
+        arr = cfg._config.sexual_selection_fitness  # Read the successfully committed candidate.
         assert arr[0, 0] == pytest.approx(0.25)
 
     def test_sexual_selection_flat_multiply(self, fitness_species):
@@ -1558,6 +1581,7 @@ class TestFitnessEdgeCases:
         arr = cfg._config.sexual_selection_fitness
         original_col = arr[:, 1].copy()
         cfg.fitness(sexual_selection={"WT|Var": 0.5}, mode="multiply")
+        arr = cfg._config.sexual_selection_fitness  # Read the successfully committed candidate.
         # Column for WT|Var (idx=1) should be scaled
         assert arr[0, 1] == pytest.approx(original_col[0] * 0.5)
 

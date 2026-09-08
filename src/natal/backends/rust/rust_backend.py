@@ -10,11 +10,12 @@ falling back to another execution path.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, NoReturn, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, NoReturn, Protocol, TypeAlias, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
 
+from natal._engine_rs import HistoryStore, ParameterLog
 from natal.contracts.materialize import Materialized, materialize
 from natal.frontend.data import (
     DiscretePopulationState,
@@ -26,6 +27,53 @@ from natal.frontend.hooks.types import ECO_PARAM_NAMES
 if TYPE_CHECKING:
     from natal.contracts.params import Params
     from natal.frontend.hooks.types import HookProgram
+
+class _ConfigReadSession(Protocol):
+    """Read channels needed to project one session's configuration."""
+
+    def get_scalar(self, name: str) -> float: ...
+    def get_tensor(self, name: str) -> NDArray[np.float64]: ...
+    def get_custom_slots(self) -> dict[str, bool | int | float | NDArray[np.float64]]: ...
+
+
+def config_snapshot_from_session(session: _ConfigReadSession, draft: ModelDraft) -> ModelDraft:
+    """Project current native parameters onto detached declaration metadata."""
+    from copy import deepcopy
+    from dataclasses import fields as dataclass_fields
+
+    from natal.contracts.params import Params
+    from natal.frontend.configurator._writers import contract_to_draft_field
+
+    fields: dict[str, object] = {"custom": session.get_custom_slots()}
+    for field in dataclass_fields(Params):
+        name = field.name
+        target = contract_to_draft_field(name)
+        if name == "custom_slots" or not hasattr(draft, target):
+            continue
+        current: object = getattr(draft, target)
+        if name == "equilibrium_distribution":
+            values = session.get_tensor(name)
+            fields[target] = values.reshape(2, int(draft.n_ages)) if values.size else None
+        elif isinstance(current, np.ndarray):
+            values = session.get_tensor(name)
+            if values.size == current.size:
+                fields[target] = values.reshape(np.asarray(current, dtype=np.float64).shape)
+        else:
+            value = session.get_scalar(name)
+            fields[target] = None if name == "external_expected_eggs" and value < 0 else value
+    # Native reads already return detached buffers. Only declaration metadata
+    # not replaced above still needs copying; copying the whole draft first
+    # duplicates large genetics tensors that would immediately be discarded.
+    for name, value in zip(draft._fields, draft, strict=True):
+        if name not in fields:
+            # ModelDraft's tuple fields are immutable catalogs of string names.
+            fields[name] = (
+                value
+                if value is None or isinstance(value, (bool, int, float, str, tuple))
+                else deepcopy(value)
+            )
+    return draft._replace(**fields)
+
 
 # Memory checkpoint tuples returned by the session-level snapshot API.
 # (tick, ind_flat, sperm_flat, rng_words, ecology)
@@ -200,7 +248,7 @@ class RustLifecycleBackend:
 
     Single-parameter Python callbacks are supported through the session's
     ``python_callbacks`` channel; the population bridges them at
-    ``enable_rust_backend`` time.
+    ``_initialize_session`` time.
     """
 
     def __init__(
@@ -234,6 +282,34 @@ class RustLifecycleBackend:
         if hook_program is not None:
             self._session.set_hook_program(hook_program)
 
+    def trigger_event(self, event: int, deme_id: int = 0) -> int:
+        """Execute a manual event against the authoritative native session."""
+        return self._session.trigger_event(event, deme_id)
+
+    def config_snapshot(self, draft: ModelDraft) -> ModelDraft:
+        """Return isolated configuration values from the authoritative session.
+
+        Args:
+            draft: Symbolic metadata and shapes from the model declaration.
+
+        Returns:
+            A detached configuration containing current native values.
+        """
+        return config_snapshot_from_session(self._session, draft)
+
+    def configure_program(self, program: HookProgram, config: ModelDraft) -> None:
+        """Install a compiled program and execution switches without replacing state.
+
+        Args:
+            program: Validated declarative hook program.
+            config: Candidate execution configuration.
+        """
+        self._session.set_hook_program(program)
+        self._session.set_execution_flags(
+            bool(config.stochastic), bool(config.continuous_sampling),
+            bool(config.fixed_egg_count), int(config.extreme_speed_mode),
+        )
+
     def refresh_params(self, fields: list[str], params_obj: Params) -> None:
         """Pull exactly *fields* from the contract params into the session.
 
@@ -246,6 +322,10 @@ class RustLifecycleBackend:
                 values for those fields.
         """
         self._session.refresh_params(fields, params_obj)
+
+    def get_scalar(self, name: str) -> float:
+        """Read one scalar directly from the authoritative session."""
+        return float(self._session.get_scalar(name))
 
     def apply(self, writes: dict[str, float]) -> None:
         """Batch scalar write straight into the session-owned params.
@@ -269,6 +349,7 @@ class RustLifecycleBackend:
         first: list[Callable[..., int]],
         early: list[Callable[..., int]],
         late: list[Callable[..., int]],
+        finish: list[Callable[..., int]] | None = None,
     ) -> None:
         """Register Python callables fired at Rust event boundaries.
 
@@ -277,7 +358,7 @@ class RustLifecycleBackend:
             early: Callables invoked after the ``early`` CSR event.
             late: Callables invoked after the ``late`` CSR event.
         """
-        self._session.set_python_callbacks(first, early, late)
+        self._session.set_python_callbacks(first, early, late, finish)
 
     def clear_python_callbacks(self) -> None:
         """Clear all registered Python callbacks."""
@@ -446,6 +527,45 @@ class RustLifecycleBackend:
             result,
         )
 
+    def observe_current(
+        self, mask: NDArray[np.float64], selected: list[int], collapse_age: bool, aggregate: bool,
+    ) -> tuple[int, NDArray[np.float64]]:
+        """Project native state and return only requested observation values.
+
+        Args:
+            mask: Compiled group/sex/age/ztype selection weights.
+            selected: Ordered native deme indices.
+            collapse_age: Whether to sum over age.
+            aggregate: Whether to sum over selected demes.
+
+        Returns:
+            Current tick and independently owned flattened observations.
+        """
+        return self._session.observe_current(np.ascontiguousarray(mask).ravel(), selected, collapse_age, aggregate)
+
+    def execution_state(self) -> tuple[str, int]:
+        """Return native lifecycle status and the within-tick phase cursor."""
+        return self._session.execution_state()
+
+    def bind_history(self, store: HistoryStore, log: ParameterLog) -> None:
+        """Attach native history and its parameter timeline to this session.
+
+        Args:
+            store: Numerical history shared with the query adapter.
+            log: The population's native parameter log.
+        """
+        store.bind_log(log)
+        self._session.bind_history(store)
+        self.history_bound = True
+
+    def record_history(self, continuation: bool = False) -> None:
+        """Record the current session state and its complete checkpoint.
+
+        Args:
+            continuation: Allow an identical already-recorded run boundary.
+        """
+        self._session.record_history(continuation)
+
     def run(
         self,
         n_steps: int,
@@ -559,6 +679,34 @@ class RustDiscreteLifecycleBackend:
         if hook_program is not None:
             self._session.set_hook_program(hook_program)
 
+    def trigger_event(self, event: int, deme_id: int = 0) -> int:
+        """Execute a manual event against the authoritative native session."""
+        return self._session.trigger_event(event, deme_id)
+
+    def config_snapshot(self, draft: ModelDraft) -> ModelDraft:
+        """Return isolated configuration values from the authoritative session.
+
+        Args:
+            draft: Symbolic metadata and shapes from the model declaration.
+
+        Returns:
+            A detached configuration containing current native values.
+        """
+        return config_snapshot_from_session(self._session, draft)
+
+    def configure_program(self, program: HookProgram, config: ModelDraft) -> None:
+        """Install a compiled program and execution switches without replacing state.
+
+        Args:
+            program: Validated declarative hook program.
+            config: Candidate execution configuration.
+        """
+        self._session.set_hook_program(program)
+        self._session.set_execution_flags(
+            bool(config.stochastic), bool(config.continuous_sampling),
+            bool(config.fixed_egg_count), int(config.extreme_speed_mode),
+        )
+
     def refresh_params(self, fields: list[str], params_obj: Params) -> None:
         """Pull exactly *fields* from the contract params into the session.
 
@@ -570,6 +718,10 @@ class RustDiscreteLifecycleBackend:
                 values for those fields.
         """
         self._session.refresh_params(fields, params_obj)
+
+    def get_scalar(self, name: str) -> float:
+        """Read one scalar directly from the authoritative session."""
+        return float(self._session.get_scalar(name))
 
     def apply(self, writes: dict[str, float]) -> None:
         """Batch scalar write straight into the session-owned params."""
@@ -584,9 +736,10 @@ class RustDiscreteLifecycleBackend:
         first: list[Callable[..., int]],
         early: list[Callable[..., int]],
         late: list[Callable[..., int]],
+        finish: list[Callable[..., int]] | None = None,
     ) -> None:
         """Register Python callables fired at Rust event boundaries."""
-        self._session.set_python_callbacks(first, early, late)
+        self._session.set_python_callbacks(first, early, late, finish)
 
     def clear_python_callbacks(self) -> None:
         """Clear all registered Python callbacks."""
@@ -742,6 +895,45 @@ class RustDiscreteLifecycleBackend:
             result,
         )
 
+    def observe_current(
+        self, mask: NDArray[np.float64], selected: list[int], collapse_age: bool, aggregate: bool,
+    ) -> tuple[int, NDArray[np.float64]]:
+        """Project native state and return only requested observation values.
+
+        Args:
+            mask: Compiled group/sex/age/ztype selection weights.
+            selected: Ordered native deme indices.
+            collapse_age: Whether to sum over age.
+            aggregate: Whether to sum over selected demes.
+
+        Returns:
+            Current tick and independently owned flattened observations.
+        """
+        return self._session.observe_current(np.ascontiguousarray(mask).ravel(), selected, collapse_age, aggregate)
+
+    def execution_state(self) -> tuple[str, int]:
+        """Return native lifecycle status and the within-tick phase cursor."""
+        return self._session.execution_state()
+
+    def bind_history(self, store: HistoryStore, log: ParameterLog) -> None:
+        """Attach native history and its parameter timeline to this session.
+
+        Args:
+            store: Numerical history shared with the query adapter.
+            log: The population's native parameter log.
+        """
+        store.bind_log(log)
+        self._session.bind_history(store)
+        self.history_bound = True
+
+    def record_history(self, continuation: bool = False) -> None:
+        """Record the current session state and its complete checkpoint.
+
+        Args:
+            continuation: Allow an identical already-recorded run boundary.
+        """
+        self._session.record_history(continuation)
+
     def run(
         self,
         n_steps: int,
@@ -868,11 +1060,11 @@ class RustHeterogeneousSpatialLifecycleBackend:
                 "and re-run."
             ) from err
         # PyO3 #[new]: the class constructor *is* from_parts(...).
-        # growth_mode travels as int64; every other column is float64.
+        # Discrete modes and declaration presence travel as integer columns.
         boundary_columns: dict[str, NDArray[np.float64] | NDArray[np.int64]] = {
             name: (
                 np.ascontiguousarray(column, dtype=np.int64)
-                if name == "growth_mode"
+                if name in {"growth_mode", "equilibrium_declared"}
                 else np.ascontiguousarray(column, dtype=np.float64)
             )
             for name, column in ecology_columns.items()
@@ -941,6 +1133,10 @@ class RustHeterogeneousSpatialLifecycleBackend:
         """
         self._session.refresh_variant_tensors(variant_id, fields, params_obj)
 
+    def configure_program(self, program: HookProgram) -> None:
+        """Install a spatial program without replacing states, checkpoints or RNG."""
+        self._session.set_hook_program(program)
+
     def run_tick(self) -> int:
         """Run one complete spatial tick inside Rust (control only).
 
@@ -971,6 +1167,10 @@ class RustHeterogeneousSpatialLifecycleBackend:
         tick, ind, sperm = self._session.state_snapshot()
         return int(tick), ind, sperm
 
+    def stop(self) -> None:
+        """Stop the shared spatial lifecycle while preserving its current phase."""
+        self._session.stop()
+
     def set_state(
         self,
         individual_count_all: NDArray[np.float64],
@@ -992,29 +1192,57 @@ class RustHeterogeneousSpatialLifecycleBackend:
             )
         )
 
-    def set_deme_state(
-        self,
-        deme: int,
-        individual_count: NDArray[np.float64],
-        sperm_storage: NDArray[np.float64],
-        tick: int,
-    ) -> None:
-        """Install one deme's state slice (per-deme import handoff).
+    def run_steps(self, n_steps: int, record_every: int) -> tuple[int, bool]:
+        """Advance and record a complete spatial batch inside Rust.
 
         Args:
-            deme: Deme index to overwrite.
-            individual_count: ``(2, n_ages, n_ztypes)`` counts.
-            sperm_storage: ``(n_ages, n_ztypes, n_ztypes)`` storage.
-            tick: The authoritative tick (all demes share the tick axis).
+            n_steps: Number of ticks to execute.
+            record_every: Recording interval, or zero to disable.
+
+        Returns:
+            Final tick and whether a hook stopped execution.
         """
-        _session_call(
-            lambda: self._session.set_deme_state(
-                int(deme),
-                np.ascontiguousarray(individual_count, dtype=np.float64),
-                np.ascontiguousarray(sperm_storage, dtype=np.float64),
-                int(tick),
-            )
-        )
+        tick, stopped = _session_call(lambda: self._session.run_steps(n_steps, record_every))
+        return int(tick), bool(stopped)
+
+    def observe_current(
+        self, mask: NDArray[np.float64], selected: list[int], collapse_age: bool, aggregate: bool,
+    ) -> tuple[int, NDArray[np.float64]]:
+        """Project native state and return only requested observation values.
+
+        Args:
+            mask: Compiled group/sex/age/ztype selection weights.
+            selected: Ordered native deme indices.
+            collapse_age: Whether to sum over age.
+            aggregate: Whether to sum over selected demes.
+
+        Returns:
+            Current tick and independently owned flattened observations.
+        """
+        return self._session.observe_current(np.ascontiguousarray(mask).ravel(), selected, collapse_age, aggregate)
+
+    def execution_state(self) -> tuple[str, int]:
+        """Return native lifecycle status and the within-tick phase cursor."""
+        return self._session.execution_state()
+
+    def bind_history(self, store: HistoryStore, logs: list[ParameterLog]) -> None:
+        """Bind native spatial history and the per-deme log timelines.
+
+        Args:
+            store: Native numerical history shared with the query adapter.
+            logs: Independent per-deme parameter logs.
+        """
+        store.bind_logs(logs)
+        self._session.bind_history(store)
+        self.history_bound = True
+
+    def record_history(self, continuation: bool = False) -> None:
+        """Record native stacked state and a complete checkpoint.
+
+        Args:
+            continuation: Allow the existing identical run boundary.
+        """
+        self._session.record_history(continuation)
 
     def capture_checkpoint(self) -> int:
         """Capture one restorable boundary from the owned runtime.
@@ -1068,8 +1296,8 @@ class RustHeterogeneousSpatialLifecycleBackend:
         """Export the current ecology columns for Python-side rollback.
 
         Returns:
-            A mapping of column name to a flat copy (``growth_mode``
-            int64, everything else float64, ``migration_rate`` included).
+            A mapping of column name to a flat copy (``growth_mode`` and
+            ``equilibrium_declared`` int64, all other columns float64).
         """
         columns: dict[str, NDArray[np.float64] | NDArray[np.int64]] = {}
         for name, values in self._session.ecology_columns_snapshot():
@@ -1098,6 +1326,7 @@ class RustHeterogeneousSpatialLifecycleBackend:
         first: list[Callable[..., int]],
         early: list[Callable[..., int]],
         late: list[Callable[..., int]],
+        finish: list[Callable[..., int]] | None = None,
     ) -> None:
         """Register Python callables fired at deme-tick event boundaries.
 
@@ -1109,7 +1338,7 @@ class RustHeterogeneousSpatialLifecycleBackend:
             early: Callables invoked after the ``early`` CSR event.
             late: Callables invoked after the ``late`` CSR event.
         """
-        self._session.set_python_callbacks(first, early, late)
+        self._session.set_python_callbacks(first, early, late, finish)
 
     def clear_python_callbacks(self) -> None:
         """Clear all registered Python callbacks."""
@@ -1196,7 +1425,8 @@ def ecology_columns_from_drafts(
 
     Returns:
         A mapping of contract field name to flat column arrays (float64,
-        int64 for ``growth_mode``).  ``migration_rate`` is *not* included;
+        int64 for ``growth_mode`` and ``equilibrium_declared``).
+        ``migration_rate`` is *not* included;
         callers append the spatial rate column themselves.
     """
     n_demes = len(drafts)
@@ -1225,15 +1455,14 @@ def ecology_columns_from_drafts(
         for index, draft in enumerate(drafts):
             stacked[index] = getattr(draft, draft_field)
         columns[contract_name] = stacked.reshape(n_demes, -1).ravel()
-    # Equilibrium declaration: keep the derive-mode sentinel empty unless
-    # at least one draft declares a distribution (heterogeneous declared
-    # and derived demes cannot share one column set).
-    declared = [
-        d
-        for d in drafts
-        if getattr(d, "equilibrium_individual_distribution", None) is not None
-        and np.asarray(d.equilibrium_individual_distribution).size
-    ]
+    # A zero distribution is a valid declaration, distinct from derive mode.
+    # Keep presence per deme when a mixed column needs padding for its shape.
+    columns["equilibrium_declared"] = np.array([
+        int(draft.equilibrium_individual_distribution is not None
+            and np.asarray(draft.equilibrium_individual_distribution).size > 0)
+        for draft in drafts
+    ], dtype=np.int64)
+    declared = [draft for draft, present in zip(drafts, columns["equilibrium_declared"]) if present]
     if declared:
         first = np.asarray(
             declared[0].equilibrium_individual_distribution, dtype=np.float64
@@ -1391,3 +1620,60 @@ def rust_migrate_csr_stochastic(
         seed,
         continuous_sampling,
     )
+
+
+class RustDemeParameters:
+    """Direct native parameter channel for one managed spatial deme."""
+
+    def __init__(
+        self,
+        backend: RustHeterogeneousSpatialLifecycleBackend,
+        deme: int,
+        invalidate_state: Callable[[], None],
+        refresh_program: Callable[[], None],
+    ) -> None:
+        """Bind a stable deme and its snapshot invalidation callback."""
+        self._session = backend._session  # pyright: ignore[reportPrivateUsage]  # same-module native adapter
+        self._deme = deme
+        self._invalidate_state = invalidate_state
+        self._refresh_program = refresh_program
+
+    def get_scalar(self, name: str) -> float:
+        """Read one scalar from the current native deme column."""
+        return self._session.get_deme_scalar(self._deme, name)
+
+    def get_tensor(self, name: str) -> NDArray[np.float64]:
+        """Read a detached native tensor for the selected deme."""
+        return self._session.get_deme_tensor(self._deme, name)
+
+    def get_custom_slots(self) -> dict[str, bool | int | float | NDArray[np.float64]]:
+        """Read isolated custom values from the native session."""
+        return self._session.get_deme_custom_slots(self._deme)
+
+    def trigger_event(self, event: int) -> int:
+        """Execute an explicit event on this deme's native state and RNG."""
+        self._refresh_program()
+        try:
+            return self._session.trigger_deme_event(self._deme, event)
+        finally:
+            self._invalidate_state()
+
+    def config_snapshot(self, draft: ModelDraft) -> ModelDraft:
+        """Project current native values onto detached model metadata."""
+        return config_snapshot_from_session(self, draft)
+
+    def refresh_params(self, fields: list[str], params_obj: Params) -> None:
+        """Atomically replace explicitly changed native fields for this deme."""
+        self._session.refresh_deme_parameters(self._deme, fields, params_obj)
+
+    def set_custom_slots(self, values: object) -> None:
+        """Validate heterogeneous custom values before native replacement."""
+        self._session.set_deme_custom_slots(self._deme, values)
+
+    def apply(self, writes: dict[str, float]) -> None:
+        """Apply one atomic scalar transaction to this deme only."""
+        self._session.apply_deme(self._deme, writes)
+
+    def tensor_write(self, field: str, values: NDArray[np.float64]) -> None:
+        """Apply one whole-tensor candidate to this deme only."""
+        self._session.tensor_write_deme(self._deme, field, np.asarray(values).ravel())

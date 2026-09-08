@@ -28,7 +28,7 @@ use crate::rng::{new_rng, SessionRng};
 /// new)`` — the per-deme wrapper around
 /// [`crate::hooks::EcoJournalRow`], because spatial EcoCtx instances are
 /// per-deme locals whose journals must carry the owning deme id.
-pub type SpatialEcoJournalRow = (usize, i64, usize, f64, f64);
+pub type SpatialEcoJournalRow = (usize, i64, usize, f64, f64, usize);
 
 /// Cut this deme's local ecology copy when the program writes params.
 ///
@@ -40,7 +40,13 @@ pub type SpatialEcoJournalRow = (usize, i64, usize, f64, f64);
 /// lifecycle has always had.  Programs without set_param get ``None``
 /// (zero overhead, identical numerics).
 fn local_params(hooks: &HookProgram, params: &Params, deme: usize) -> Option<Params> {
-    if hooks.has_set_param {
+    if hooks.n_hooks > 0
+        || hooks.has_set_param
+        || hooks
+            .python_callbacks
+            .iter()
+            .any(|callbacks| !callbacks.is_empty())
+    {
         Some(params.single_deme(deme))
     } else {
         None
@@ -170,6 +176,8 @@ fn tick_hetero_deme(
         bp,
         params: local_params,
         genetics,
+        updated_genetics: None,
+        phase: 0,
         // The local copy has exactly one column: writes target index 0.
         deme: 0,
         tick,
@@ -187,6 +195,27 @@ fn tick_hetero_deme(
         &mut ctx,
     );
     let rows = ctx.map(|ctx| {
+        if let Some(genetics) = ctx.updated_genetics.as_ref() {
+            let mut commits = hooks
+                .callback_commits
+                .lock()
+                .expect("callback queue poisoned");
+            let update = (deme_id, ctx.params.clone(), genetics.clone());
+            // Only a successful callback sets updated_genetics, and it enqueues
+            // the same deme atomically. Preserve later declarative ecology writes.
+            let previous = commits
+                .iter_mut()
+                .find(|entry| entry.0 == deme_id)
+                .expect("successful callback has a queued deme candidate");
+            *previous = update;
+        }
+        if !matches!(result, Ok(0)) {
+            hooks
+                .phase_marks
+                .lock()
+                .expect("phase queue poisoned")
+                .push(ctx.phase);
+        }
         // The local copy's final values are the deme's tick result:
         // reflect them into the eco scratch row the session reads
         // for its column write-back (multi-event writes included).
@@ -195,7 +224,7 @@ fn tick_hetero_deme(
         }
         ctx.journal
             .into_iter()
-            .map(|(t, id, old, new)| (deme_id, t, id, old, new))
+            .map(|(t, id, old, new, phase)| (deme_id, t, id, old, new, phase))
             .collect::<Vec<SpatialEcoJournalRow>>()
     });
     (result, rows.unwrap_or_default())
@@ -311,6 +340,8 @@ fn tick_discrete_deme(
         bp,
         params: local_params,
         genetics,
+        updated_genetics: None,
+        phase: 0,
         // The local copy has exactly one column: writes target index 0.
         deme: 0,
         tick,
@@ -318,12 +349,33 @@ fn tick_discrete_deme(
     });
     let result = discrete::run_tick(rng, cfg, hooks, ind, tick, deme_id as i64, eco, &mut ctx);
     let rows = ctx.map(|ctx| {
+        if let Some(genetics) = ctx.updated_genetics.as_ref() {
+            let mut commits = hooks
+                .callback_commits
+                .lock()
+                .expect("callback queue poisoned");
+            let update = (deme_id, ctx.params.clone(), genetics.clone());
+            // Only a successful callback sets updated_genetics, and it enqueues
+            // the same deme atomically. Preserve later declarative ecology writes.
+            let previous = commits
+                .iter_mut()
+                .find(|entry| entry.0 == deme_id)
+                .expect("successful callback has a queued deme candidate");
+            *previous = update;
+        }
+        if !matches!(result, Ok(0)) {
+            hooks
+                .phase_marks
+                .lock()
+                .expect("phase queue poisoned")
+                .push(ctx.phase);
+        }
         for id in 0..crate::hooks::N_ECO_PARAMS {
             eco[id] = ctx.params.eco_value(id, 0);
         }
         ctx.journal
             .into_iter()
-            .map(|(t, id, old, new)| (deme_id, t, id, old, new))
+            .map(|(t, id, old, new, phase)| (deme_id, t, id, old, new, phase))
             .collect::<Vec<SpatialEcoJournalRow>>()
     });
     (result, rows.unwrap_or_default())

@@ -1,8 +1,9 @@
 //! PyO3 session object owning the contract, RNG state, and the compiled CSR
 //! hook program.
 
+use crate::history::{HistoryStore, SharedHistory};
 use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray4};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
@@ -34,7 +35,7 @@ use crate::rng::{new_rng, SessionRng};
 /// ## Returns
 /// A ``PyRuntimeError`` for Python callers.
 fn map_lifecycle_error(err: String) -> PyErr {
-    PyRuntimeError::new_err(err)
+    crate::hook_transaction::map_error(err)
 }
 
 /// Ecology scalar field names carried by a memory checkpoint —
@@ -62,6 +63,10 @@ pub(crate) fn ecology_snapshot<'py>(
     for name in ECOLOGY_VECTORS {
         dict.set_item(name, params.get_tensor(py, name)?)?;
     }
+    dict.set_item(
+        "custom_slots",
+        crate::contract::custom_slots_to_python(py, &params.custom_slots[0])?,
+    )?;
     Ok(dict)
 }
 
@@ -76,9 +81,10 @@ pub(crate) fn restore_ecology(
     bp: &Blueprint,
     ecology: &Bound<'_, PyAny>,
 ) -> PyResult<()> {
+    let mut candidate = params.clone();
     for name in ECOLOGY_SCALARS {
         let value: f64 = ecology.get_item(name)?.extract()?;
-        params.apply(HashMap::from([(name.to_string(), value)]))?;
+        candidate.apply(HashMap::from([(name.to_string(), value)]))?;
     }
     for name in ECOLOGY_VECTORS {
         let values: Vec<f64> = ecology
@@ -86,8 +92,11 @@ pub(crate) fn restore_ecology(
             .extract::<numpy::PyReadonlyArray1<'_, f64>>()?
             .as_slice()?
             .to_vec();
-        params.tensor_write(bp, name, values)?;
+        candidate.tensor_write(bp, name, values)?;
     }
+    candidate.custom_slots[0] =
+        crate::contract::custom_slots_from_python(&ecology.get_item("custom_slots")?)?;
+    *params = candidate;
     Ok(())
 }
 
@@ -121,6 +130,8 @@ pub struct EngineSession {
     /// ecology, captured at every recorded tick of a raw-mode run.  The
     /// public ``restore_checkpoint`` restores from here.
     checkpoints: Vec<lifecycle::TickCheckpoint>,
+    /// Native history shared with the Python read-only adapter.
+    history_store: Option<SharedHistory>,
     /// Session-owned live state (plan S2): flattened individual counts,
     /// flattened sperm storage, and the authoritative tick.  ``run`` and
     /// the stage methods operate on these directly — Python passes control
@@ -128,10 +139,107 @@ pub struct EngineSession {
     state_ind: Vec<f64>,
     state_sperm: Vec<f64>,
     state_tick: i64,
+    execution: crate::execution::Execution,
+    phase: usize,
 }
 
 #[pymethods]
 impl EngineSession {
+    /// Execute an explicit event on the same native state and RNG stream.
+    #[pyo3(signature = (event, deme_id=0))]
+    fn trigger_event(&mut self, event: usize, deme_id: i64) -> PyResult<i32> {
+        if event >= 4 {
+            return Err(PyValueError::new_err("unknown hook event"));
+        }
+        let mut values = self.params.eco_values_row(0);
+        let mut ctx = Some(crate::lifecycle::EcoCtx {
+            bp: &self.blueprint,
+            params: &mut self.params,
+            genetics: &self.genetics,
+            updated_genetics: None,
+            phase: event * 2,
+            deme: 0,
+            tick: self.state_tick,
+            journal: Vec::new(),
+        });
+        let mut result = self.hooks.execute_event(
+            &mut self.rng,
+            event as i64,
+            &mut self.state_ind,
+            &mut self.state_sperm,
+            2,
+            self.blueprint.n_ages,
+            self.blueprint.n_ztypes,
+            self.state_tick,
+            self.blueprint.stochastic,
+            self.blueprint.continuous_sampling,
+            deme_id,
+            &mut values,
+        );
+        let operation = (|| -> Result<(), String> {
+            if result == 0 {
+                result = self.hooks.fire_python_callbacks(
+                    event,
+                    &mut self.state_ind,
+                    &mut self.state_sperm,
+                    self.state_tick,
+                    deme_id,
+                    &mut self.rng,
+                    &mut values,
+                    &mut ctx,
+                )?;
+            }
+            if let Some(context) = ctx.as_mut() {
+                context.commit(&values)?;
+            }
+            Ok(())
+        })();
+        if let Some(context) = ctx.as_mut() {
+            if let Some(shared) = &self.history_store {
+                let store = shared.lock().unwrap();
+                let mut log = store.log.lock().unwrap();
+                for (tick, id, old, new, phase) in context.journal.drain(..) {
+                    log.push(crate::history::LogEntry::from_phase(
+                        (
+                            tick,
+                            crate::contract::ECO_PARAM_COLUMNS[id].to_owned(),
+                            old,
+                            new,
+                        ),
+                        phase,
+                        0,
+                    ));
+                }
+            } else {
+                self.eco_journal.append(&mut context.journal);
+            }
+        }
+        let genetics = ctx
+            .as_mut()
+            .and_then(|context| context.updated_genetics.take());
+        drop(ctx);
+        if let Some(genetics) = genetics {
+            self.genetics = genetics;
+        }
+        if let Err(error) = operation {
+            self.execution = crate::execution::Execution::Failed;
+            return Err(map_lifecycle_error(error));
+        }
+        if result != 0 {
+            self.execution = crate::execution::Execution::Stopped;
+        }
+        Ok(result)
+    }
+
+    /// Read native execution state and its within-tick phase cursor.
+    fn execution_state(&self) -> (&str, usize) {
+        (self.execution.name(), self.phase)
+    }
+    /// Mark an explicit user finish without discarding state or history.
+    fn stop(&mut self) {
+        self.execution = crate::execution::Execution::Stopped;
+    }
+
     /// Create an age-structured session from the Python contract objects.
     ///
     /// ## Parameters
@@ -180,9 +288,12 @@ impl EngineSession {
             hooks: HookProgram::default(),
             eco_journal: Vec::new(),
             checkpoints: Vec::new(),
+            history_store: None,
             state_ind,
             state_sperm,
             state_tick: 0,
+            execution: crate::execution::Execution::Ready,
+            phase: 0,
         })
     }
 
@@ -210,6 +321,17 @@ impl EngineSession {
     /// Returns ``PyKeyError`` for unknown fields; atomic per call.
     fn apply(&mut self, writes: HashMap<String, f64>) -> PyResult<()> {
         self.params.apply(writes)
+    }
+
+    /// Replace the custom dictionary atomically, retaining every declared type.
+    fn set_custom_slots(&mut self, values: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.params.custom_slots[0] = crate::contract::custom_slots_from_python(values)?;
+        Ok(())
+    }
+
+    /// Return a detached custom dictionary.
+    fn get_custom_slots<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        crate::contract::custom_slots_to_python(py, &self.params.custom_slots[0])
     }
 
     /// Read a scalar param value from the owned params.
@@ -243,6 +365,26 @@ impl EngineSession {
         )
     }
 
+    /// Change execution switches while preserving the session's state and RNG.
+    fn set_execution_flags(
+        &mut self,
+        stochastic: bool,
+        continuous_sampling: bool,
+        fixed_egg_count: bool,
+        extreme_speed_mode: i64,
+    ) -> PyResult<()> {
+        if !(0..=3).contains(&extreme_speed_mode) {
+            return Err(PyValueError::new_err(
+                "extreme_speed_mode must be between 0 and 3",
+            ));
+        }
+        self.blueprint.stochastic = stochastic;
+        self.blueprint.continuous_sampling = continuous_sampling;
+        self.blueprint.fixed_egg_count = fixed_egg_count;
+        self.blueprint.extreme_speed_mode = extreme_speed_mode;
+        Ok(())
+    }
+
     /// Replace the declarative CSR hook program used by ``tick``.
     ///
     /// ## Parameters
@@ -269,13 +411,15 @@ impl EngineSession {
     /// Each callable receives ``(ind, sperm, tick, deme_id)`` where the two
     /// arrays are fresh copies of the current state; a nonzero return value
     /// stops the run.
+    #[pyo3(signature = (first, early, late, finish=None))]
     fn set_python_callbacks(
         &mut self,
         first: Vec<Py<PyAny>>,
         early: Vec<Py<PyAny>>,
         late: Vec<Py<PyAny>>,
+        finish: Option<Vec<Py<PyAny>>>,
     ) {
-        self.hooks.python_callbacks = vec![first, early, late];
+        self.hooks.python_callbacks = vec![first, early, late, finish.unwrap_or_default()];
     }
 
     /// Clear all Python callbacks.
@@ -300,8 +444,11 @@ impl EngineSession {
     ///
     /// ## Returns
     /// A list of ``(tick, param_id, old, new)`` tuples.
-    fn drain_eco_journal(&mut self) -> Vec<crate::hooks::EcoJournalRow> {
+    fn drain_eco_journal(&mut self) -> Vec<(i64, usize, f64, f64)> {
         std::mem::take(&mut self.eco_journal)
+            .into_iter()
+            .map(|(tick, id, old, new, _)| (tick, id, old, new))
+            .collect()
     }
 
     /// Run the reproduction stage in place on the session-owned state.
@@ -360,8 +507,17 @@ impl EngineSession {
     #[pyo3(signature = (deme_id))]
     fn tick(&mut self, deme_id: i64) -> PyResult<i32> {
         let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        self.execution.begin()?;
         let tick = self.state_tick;
         let result = self.run_with_eco(&cfg, tick, deme_id);
+        self.execution = match &result {
+            Ok(0) => {
+                self.phase = 0;
+                crate::execution::Execution::Ready
+            }
+            Ok(_) => crate::execution::Execution::Stopped,
+            Err(_) => crate::execution::Execution::Failed,
+        };
         if matches!(result, Ok(0)) {
             // Only a completed tick advances; a stop freezes the tick
             // exactly like the batch run() loop.
@@ -388,69 +544,37 @@ impl EngineSession {
         observation_mask: Option<PyReadonlyArray4<'py, f64>>,
         checkpoint_every: i64,
     ) -> PyResult<(i64, Bound<'py, PyArray2<f64>>, bool)> {
-        // Assemble the config from the owned contracts at the batch entry,
-        // copy the observation mask if present, run the Rust batch loop
-        // directly on the session-owned state, and copy the flattened
-        // history into a NumPy 2-D array.  Python passes control
-        // parameters only (plan S2: the session owns counts and tick).
-        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
-        let mask_vec = match observation_mask {
-            Some(mask) => Some(
-                mask.as_slice()
-                    .map_err(|err| PyValueError::new_err(err.to_string()))?
-                    .to_vec(),
-            ),
-            None => None,
-        };
-
-        let mut eco_values = self.eco_values(0);
-
-        // Borrowed EcoCtx: run_batch commits set_param writes at every event
-        // boundary; after the batch the journal is drained into the
-        // session-owned audit trail for the Python adapter.
-        let mut eco_ctx = Some(lifecycle::EcoCtx {
-            bp: &self.blueprint,
-            params: &mut self.params,
-            genetics: &self.genetics,
-            deme: 0,
-            tick: self.state_tick,
-            journal: Vec::new(),
-        });
-
-        let (final_tick, flat_history, n_rows, was_stopped) = lifecycle::run_batch(
-            &mut self.rng,
-            &cfg,
-            &self.hooks,
-            &mut self.state_ind,
-            &mut self.state_sperm,
-            self.state_tick,
+        self.execution.begin()?;
+        let outcome = self.run_inner(
+            py,
             n_ticks,
             record_interval,
-            mask_vec.as_deref(),
-            &mut eco_values,
-            &mut eco_ctx,
+            observation_mask,
             checkpoint_every,
-            &mut self.checkpoints,
-        )
-        .map_err(map_lifecycle_error)?;
-        self.state_tick = final_tick;
-
-        if let Some(ctx) = eco_ctx.as_mut() {
-            self.eco_journal.append(&mut ctx.journal);
+        );
+        // Earlier callbacks remain committed if a later callback fails.
+        // Ecology already committed through EcoCtx; genetic overrides must
+        // survive the context's unwinding before the wrapper marks Failed.
+        for (_, _, genetics) in self
+            .hooks
+            .callback_commits
+            .lock()
+            .expect("callback queue poisoned")
+            .drain(..)
+        {
+            if outcome.is_err() {
+                self.genetics = genetics;
+            }
         }
-
-        let n_cols = if n_rows == 0 {
-            0
-        } else {
-            flat_history.len() / n_rows
+        self.execution = match &outcome {
+            Ok(value) if value.2 => crate::execution::Execution::Stopped,
+            Ok(_) => {
+                self.phase = 0;
+                crate::execution::Execution::Ready
+            }
+            Err(_) => crate::execution::Execution::Failed,
         };
-        let history = PyArray2::<f64>::zeros(py, [n_rows, n_cols], false);
-        history
-            .readwrite()
-            .as_slice_mut()
-            .map_err(|err| PyValueError::new_err(err.to_string()))?
-            .copy_from_slice(&flat_history);
-        Ok((final_tick, history, was_stopped))
+        outcome
     }
 
     /// Install a full live state (plan S2 state ownership).
@@ -484,9 +608,12 @@ impl EngineSession {
                 sperm_flat.len()
             )));
         }
+        crate::contract::validate_state_values(&ind_flat, &sperm_flat, tick)?;
         self.state_ind = ind_flat;
         self.state_sperm = sperm_flat;
         self.state_tick = tick;
+        self.execution = crate::execution::Execution::Ready;
+        self.phase = 0;
         Ok(())
     }
 
@@ -576,13 +703,18 @@ impl EngineSession {
                 "checkpoint arrays do not match the live state size",
             ));
         }
+        crate::contract::validate_state_values(ind_src, sperm_src, tick)?;
+        let mut params = self.params.clone();
+        restore_ecology(&mut params, &self.blueprint, ecology)?;
         self.state_ind.copy_from_slice(ind_src);
         self.state_sperm.copy_from_slice(sperm_src);
         self.state_tick = tick;
+        self.execution = crate::execution::Execution::Ready;
+        self.phase = 0;
         let mut words = [0_u64; 4];
         words.copy_from_slice(&rng_words);
         self.rng = SessionRng::from_state_words(words);
-        restore_ecology(&mut self.params, &self.blueprint, ecology)?;
+        self.params = params;
         Ok(tick)
     }
 
@@ -629,13 +761,88 @@ impl EngineSession {
                 "checkpoint arrays do not match the live state size",
             ));
         }
+        if let Some(store) = &self.history_store {
+            store.lock().unwrap().restore_timeline(tick)?;
+        }
+        self.params.custom_slots[0] = cp.custom_slots.clone();
         self.state_ind.copy_from_slice(&cp.ind);
         self.state_sperm.copy_from_slice(&cp.sperm);
         self.state_tick = cp.tick;
+        self.execution = cp.execution;
+        self.phase = cp.phase;
         self.rng = SessionRng::from_state_words(cp.rng_words);
         self.params
             .ecology_restore_words(&self.blueprint, &cp.eco_scalars, &cp.eco_vectors)?;
         Ok(Some((cp.tick, ecology_snapshot(py, &self.params)?)))
+    }
+
+    /// Project the current engine-owned state without exporting raw arrays.
+    fn observe_current<'py>(
+        &self,
+        py: Python<'py>,
+        mask: numpy::PyReadonlyArray1<'py, f64>,
+        selected: Vec<usize>,
+        collapse_age: bool,
+        aggregate: bool,
+    ) -> PyResult<(i64, Bound<'py, PyArray1<f64>>)> {
+        let values = crate::history::project(
+            &self.state_ind,
+            mask.as_slice()?,
+            [
+                1,
+                self.blueprint.n_sexes,
+                self.blueprint.n_ages,
+                self.blueprint.n_ztypes,
+            ],
+            &selected,
+            collapse_age,
+            aggregate,
+        )?;
+        Ok((self.state_tick, PyArray1::from_vec(py, values)))
+    }
+
+    /// Attach the same native history object used by the public query adapter.
+    fn bind_history(&mut self, history: PyRef<'_, HistoryStore>) {
+        self.history_store = Some(std::sync::Arc::clone(&history.data));
+    }
+
+    /// Record a manual stable boundary and its complete native checkpoint.
+    fn record_history(&mut self, continuation: bool) -> PyResult<()> {
+        let shared = self
+            .history_store
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("History is not initialized"))?;
+        let mut history = shared.lock().unwrap();
+        let added = history.record(
+            self.state_tick,
+            &self.state_ind,
+            &self.state_sperm,
+            continuation,
+        )?;
+        if added {
+            if let Some(boundary) = history.boundaries.back_mut() {
+                boundary.1 = self.phase;
+                boundary.2 = self.execution.name().to_owned();
+            }
+        }
+        if added && history.raw {
+            let (eco_scalars, eco_vectors) = self.params.ecology_snapshot_words()?;
+            self.checkpoints.push(crate::lifecycle::TickCheckpoint {
+                execution: self.execution,
+                phase: self.phase,
+                tick: self.state_tick,
+                ind: self.state_ind.clone(),
+                sperm: self.state_sperm.to_vec(),
+                rng_words: self.rng.state_words(),
+                eco_scalars,
+                eco_vectors,
+                custom_slots: self.params.custom_slots[0].clone(),
+            });
+        }
+        if let Some(row) = history.rows.front() {
+            self.checkpoints.retain(|cp| cp.tick >= row[0] as i64);
+        }
+        Ok(())
     }
 
     /// Drop every stored checkpoint (paired with ``clear_history``).
@@ -699,12 +906,14 @@ impl EngineSession {
             eco_journal,
             ..
         } = self;
-        let deme = deme_id.max(0) as usize;
+        let deme = 0;
         let mut eco_values = params.eco_values_row(deme);
         let mut ctx = Some(lifecycle::EcoCtx {
             bp: blueprint,
             params,
             genetics,
+            updated_genetics: None,
+            phase: 0,
             deme,
             tick,
             journal: Vec::new(),
@@ -722,7 +931,18 @@ impl EngineSession {
         );
         if let Some(ctx) = ctx.as_mut() {
             eco_journal.append(&mut ctx.journal);
+            self.phase = ctx.phase;
         }
+        let updated = ctx.as_mut().and_then(|ctx| ctx.updated_genetics.take());
+        drop(ctx);
+        if let Some(updated) = updated {
+            self.genetics = updated;
+        }
+        self.hooks
+            .callback_commits
+            .lock()
+            .expect("callback queue poisoned")
+            .clear();
         result
     }
 }
@@ -858,5 +1078,172 @@ impl HookProgram {
             has_set_param,
             ..Default::default()
         })
+    }
+}
+
+impl EngineSession {
+    fn run_inner<'py>(
+        &mut self,
+        py: Python<'py>,
+        n_ticks: i64,
+        record_interval: i64,
+        observation_mask: Option<PyReadonlyArray4<'py, f64>>,
+        checkpoint_every: i64,
+    ) -> PyResult<(i64, Bound<'py, PyArray2<f64>>, bool)> {
+        // Assemble the config from the owned contracts at the batch entry,
+        // copy the observation mask if present, run the Rust batch loop
+        // directly on the session-owned state, and copy the flattened
+        // history into a NumPy 2-D array.  Python passes control
+        // parameters only (plan S2: the session owns counts and tick).
+        let cfg = SimConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        let mask_vec = match observation_mask {
+            Some(mask) => Some(
+                mask.as_slice()
+                    .map_err(|err| PyValueError::new_err(err.to_string()))?
+                    .to_vec(),
+            ),
+            None => None,
+        };
+
+        let mut eco_values = self.eco_values(0);
+
+        // Borrowed EcoCtx: run_batch commits set_param writes at every event
+        // boundary; after the batch the journal is drained into the
+        // session-owned audit trail for the Python adapter.
+        let mut eco_ctx = Some(lifecycle::EcoCtx {
+            bp: &self.blueprint,
+            params: &mut self.params,
+            genetics: &self.genetics,
+            updated_genetics: None,
+            phase: 0,
+            deme: 0,
+            tick: self.state_tick,
+            journal: Vec::new(),
+        });
+
+        if let Some(shared) = self.history_store.as_ref().map(std::sync::Arc::clone) {
+            let mut current_tick = self.state_tick;
+            let mut stopped = false;
+            // Native retention occurs at each boundary. No array proportional
+            // to the requested run duration is allocated or crosses into Python.
+            for step in 0..=n_ticks.max(0) {
+                {
+                    let mut store = shared.lock().unwrap();
+                    if let Some(ctx) = eco_ctx.as_mut() {
+                        let mut log = store.log.lock().unwrap();
+                        for &(tick, parameter, old, new, phase) in &ctx.journal {
+                            log.push(crate::history::LogEntry::from_phase(
+                                (
+                                    tick,
+                                    crate::contract::ECO_PARAM_COLUMNS[parameter].to_owned(),
+                                    old,
+                                    new,
+                                ),
+                                phase,
+                                0,
+                            ));
+                        }
+                        ctx.journal.clear();
+                    }
+                    if !stopped && record_interval > 0 && current_tick % record_interval == 0 {
+                        let added =
+                            store.record(current_tick, &self.state_ind, &self.state_sperm, true)?;
+                        if added && store.raw {
+                            crate::lifecycle::capture_checkpoint(
+                                &self.rng,
+                                &self.state_ind,
+                                &self.state_sperm,
+                                current_tick,
+                                &eco_ctx,
+                                &mut self.checkpoints,
+                            )
+                            .map_err(map_lifecycle_error)?;
+                        }
+                        if let Some(row) = store.rows.front() {
+                            self.checkpoints.retain(|cp| cp.tick >= row[0] as i64);
+                        }
+                    }
+                }
+                if step == n_ticks || stopped {
+                    break;
+                }
+                let (tick, _, _, was_stopped) = lifecycle::run_batch(
+                    &mut self.rng,
+                    &cfg,
+                    &self.hooks,
+                    &mut self.state_ind,
+                    &mut self.state_sperm,
+                    current_tick,
+                    1,
+                    0,
+                    None,
+                    &mut eco_values,
+                    &mut eco_ctx,
+                    0,
+                    &mut self.checkpoints,
+                )
+                .map_err(|err| {
+                    self.state_tick = current_tick;
+                    if let Some(ctx) = eco_ctx.as_ref() {
+                        self.phase = ctx.phase;
+                    }
+                    map_lifecycle_error(err)
+                })?;
+                if let Some(ctx) = eco_ctx.as_ref() {
+                    self.phase = ctx.phase;
+                }
+                current_tick = tick;
+                stopped = was_stopped;
+            }
+            self.state_tick = current_tick;
+            if let Some(ctx) = eco_ctx.as_mut() {
+                if let Some(genetics) = ctx.updated_genetics.take() {
+                    self.genetics = genetics;
+                }
+            }
+            return Ok((
+                current_tick,
+                PyArray2::<f64>::zeros(py, [0, 0], false),
+                stopped,
+            ));
+        }
+
+        let (final_tick, flat_history, n_rows, was_stopped) = lifecycle::run_batch(
+            &mut self.rng,
+            &cfg,
+            &self.hooks,
+            &mut self.state_ind,
+            &mut self.state_sperm,
+            self.state_tick,
+            n_ticks,
+            record_interval,
+            mask_vec.as_deref(),
+            &mut eco_values,
+            &mut eco_ctx,
+            checkpoint_every,
+            &mut self.checkpoints,
+        )
+        .map_err(map_lifecycle_error)?;
+        self.state_tick = final_tick;
+
+        if let Some(ctx) = eco_ctx.as_mut() {
+            self.eco_journal.append(&mut ctx.journal);
+            if let Some(genetics) = ctx.updated_genetics.take() {
+                self.genetics = genetics;
+            }
+        }
+
+        let n_cols = if n_rows == 0 {
+            0
+        } else {
+            flat_history.len() / n_rows
+        };
+        let history = PyArray2::<f64>::zeros(py, [n_rows, n_cols], false);
+        history
+            .readwrite()
+            .as_slice_mut()
+            .map_err(|err| PyValueError::new_err(err.to_string()))?
+            .copy_from_slice(&flat_history);
+        Ok((final_tick, history, was_stopped))
     }
 }

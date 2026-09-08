@@ -174,6 +174,7 @@ print(pop.history.values.shape)  # (record, group, sex)
 ### Spatial Example
 
 ```python
+import natal as nt
 from natal import SpatialPopulation, HexGrid
 import numpy as np
 
@@ -383,13 +384,15 @@ pop.run_tick()
 pop.record_snapshot()  # manually record after a single tick
 ```
 
-Call it at a stable boundary between `run()` calls. If the current tick is
-already recorded, it raises `ValueError`. It raises `RuntimeError` on a
-finished population.
+Call it between `run()` calls, including after an interrupted run. If the current tick is
+already recorded, it raises `ValueError`. `pop.history.boundary_metadata` retains
+the record's tick, phase cursor, and execution status.
 
 ### pop.restore_checkpoint(tick) — State Restoration
 
-Restore population state from a raw-mode history record at a specific tick.
+`pop.tick` is read-only and follows the owning simulation state. Direct assignment raises `RuntimeError` without changing the clock or state.
+
+Restore state, RNG, ecology parameters, execution phase and status from an exact retained raw-history tick, and truncate parameter logs at the checkpoint positions. An unrecorded or evicted tick raises an error without changing the population.
 All records after that tick are removed:
 
 ```python
@@ -598,11 +601,12 @@ species = nt.Species.from_dict(
 )
 
 pop = (
-    nt.DiscreteGenerationPopulation
+    nt.AgeStructuredPopulation
     .setup(species=species, name="age_demo", stochastic=False)
+    .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
-        "female": {"WT|WT": 500, "Dr|WT": 50},
-        "male": {"WT|WT": 500, "Dr|WT": 50},
+        "female": {"WT|WT": [0, 0, 500, 0, 0, 0, 0, 0], "Dr|WT": [0, 0, 50, 0, 0, 0, 0, 0]},
+        "male": {"WT|WT": [0, 0, 500, 0, 0, 0, 0, 0], "Dr|WT": [0, 0, 50, 0, 0, 0, 0, 0]},
     })
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=10000)
@@ -627,7 +631,8 @@ for i, tick in enumerate(observed.ticks):
     values = observed.values[i]  # (group, sex)
     total = float(values.sum())
     if total > 0:
-        group_labels = observed.labels["group"]
+        assert observed.schema.observation is not None
+        group_labels = observed.schema.observation.labels
         juv_idx = group_labels.index("juveniles")
         juvenile_ratio = values[juv_idx].sum() / total
         print(f"Tick {tick}: juvenile ratio = {juvenile_ratio:.3f}")
@@ -672,7 +677,7 @@ Both `pop.update().with_observation(...)` and
 `with_observation()` defines *which groups* to observe (the observation projection). `record_history()` sets *how to record* — raw full-state or compressed observation-mode. They are independent: you can have observation groups without compressed recording, or compressed recording without explicit groups (auto-identity).
 
 ### Can I restore my population to a previous state?
-Yes, if you recorded raw history (`mode="raw"`), use `pop.restore_checkpoint(tick)`. It restores individual counts (and sperm storage when applicable) to the exact state at that tick. Observation-mode history cannot be used for checkpoint restoration because it does not retain per-genotype data.
+Yes, if you recorded raw history (`mode="raw"`), use `pop.restore_checkpoint(tick)`. It restores individual and sperm state, RNG, ecology parameters, execution phase and status at that exact retained tick, then truncates future history and parameter logs. Observation-mode history cannot be used for checkpoint restoration because it does not retain per-genotype data.
 
 ---
 

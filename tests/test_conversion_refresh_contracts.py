@@ -11,10 +11,8 @@ from numpy.typing import NDArray
 
 import natal as nt
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
-
-
-
 from natal.frontend.population.base import BasePopulation
+from tests._config_assertions import assert_config_equal
 
 PopulationKind: TypeAlias = Literal["age", "discrete"]
 ConversionKind: TypeAlias = Literal["gamete", "zygote"]
@@ -961,7 +959,7 @@ def test_age_invalid_conversion_rate_is_atomic() -> None:
         pop.update().reconfigure_preset(drive, drive_conversion_rate="bad")
 
     assert drive.drive_conversion_rate == (0.8, 0.8)
-    assert pop.config is original_config
+    assert_config_equal(pop.config, original_config)
     assert pop._state is original_state  # pyright: ignore[reportPrivateUsage]
     np.testing.assert_array_equal(pop._state.individual_count, original_counts)  # pyright: ignore[reportPrivateUsage]
     np.testing.assert_array_equal(pop._state.sperm_storage, original_sperm)  # pyright: ignore[reportPrivateUsage]
@@ -997,7 +995,7 @@ def test_nonspatial_first_preset_registration_failure_is_atomic() -> None:
     with pytest.raises(ValueError, match="deferred modifier failure"):
         pop.update().presets(failing)
 
-    assert pop.config is original_config
+    assert_config_equal(pop.config, original_config)
     assert pop.presets == original_presets
     assert all(registered is not failing for registered in pop.presets)
     assert pop.gamete_modifiers == original_gamete
@@ -1054,7 +1052,7 @@ def test_nonspatial_first_registration_late_stage_failure_is_atomic(
     with pytest.raises(ValueError, match=expected_message):
         pop.update().presets(failing)
 
-    assert pop.config is original_config
+    assert_config_equal(pop.config, original_config)
     assert pop._state is original_state  # pyright: ignore[reportPrivateUsage]
     np.testing.assert_array_equal(pop._state.individual_count, original_counts)  # pyright: ignore[reportPrivateUsage]
     assert pop.presets == original_presets
@@ -1171,7 +1169,7 @@ def test_deferred_modifier_failure_is_atomic_nonspatial() -> None:
         pop.update().reconfigure_preset(preset, fail_during_rebuild=True)
 
     assert preset.fail_during_rebuild is False
-    assert pop.config is original_config
+    assert_config_equal(pop.config, original_config)
     assert pop._state is original_state  # pyright: ignore[reportPrivateUsage]
     np.testing.assert_array_equal(pop._state.individual_count, original_counts)  # pyright: ignore[reportPrivateUsage]
     np.testing.assert_array_equal(pop._state.sperm_storage, original_sperm)  # pyright: ignore[reportPrivateUsage]
@@ -1212,7 +1210,7 @@ def test_invalid_fitness_mode_is_atomic_nonspatial() -> None:
         pop.update().reconfigure_preset(drive, viability_mode="not-a-mode")
 
     assert drive.viability_mode == "multiplicative"
-    assert pop.config is original_config
+    assert_config_equal(pop.config, original_config)
     np.testing.assert_array_equal(pop.config.viability_fitness, original_fitness[0])
     np.testing.assert_array_equal(pop.config.fecundity_fitness, original_fitness[1])
     np.testing.assert_array_equal(

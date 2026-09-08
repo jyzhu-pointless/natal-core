@@ -674,7 +674,7 @@ def _execute_single_csr_hook(
                         elif op_type == _OP_SAMPLE:
                             target = min(current, max(0.0, param))
                         else:
-                            target = current
+                            raise ValueError("Unknown mutation opcode")
 
                         if sex_idx == 0 and sperm_storage is not None:
                             individual_count[sex_idx, age, zidx] = (

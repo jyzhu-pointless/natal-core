@@ -28,8 +28,56 @@
 use numpy::{PyArray1, PyReadonlyArrayDyn, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt};
 use std::collections::HashMap;
+
+/// Validate externally supplied state values before an owner commits a boundary.
+pub(crate) fn validate_state_values(ind: &[f64], sperm: &[f64], tick: i64) -> PyResult<()> {
+    if tick < 0 {
+        return Err(PyValueError::new_err("tick must be nonnegative"));
+    }
+    if ind
+        .iter()
+        .chain(sperm)
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(PyValueError::new_err(
+            "state counts must be finite and nonnegative",
+        ));
+    }
+    Ok(())
+}
+
+/// Check numerical domains before any native mutation.
+fn validate_scalar_value(name: &str, value: f64) -> PyResult<()> {
+    if let Some(id) = ECO_PARAM_COLUMNS.iter().position(|field| *field == name) {
+        return crate::hooks::validate_eco_param(id, value).map_err(PyValueError::new_err);
+    }
+    let valid = value.is_finite()
+        && match name {
+            "growth_mode" => value.fract() == 0.0 && (0.0..=4.0).contains(&value),
+            "external_expected_eggs" => value == -1.0 || value >= 0.0,
+            _ => true,
+        };
+    if !valid {
+        return Err(PyValueError::new_err(format!(
+            "Invalid value for {name}: {value}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_tensor_values(name: &str, values: &[f64]) -> PyResult<()> {
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(PyValueError::new_err(format!(
+            "{name} requires finite nonnegative values"
+        )));
+    }
+    Ok(())
+}
 
 /// The frozen model specification.
 #[derive(Clone)]
@@ -300,7 +348,7 @@ pub fn is_genetics_tensor(name: &str) -> bool {
 /// Demes with identical genetics share one ``TensorSet`` through the
 /// spatial session's variant bank, so heterogeneous models pay for the
 /// tables once per *genetics variant*, not once per deme.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct TensorSet {
     pub viability_fitness: Vec<f64>,          // (2, A, Z)
     pub fecundity_fitness: Vec<f64>,          // (2, Z)
@@ -482,6 +530,9 @@ impl TensorSet {
             }
             pending.push((field.clone(), extract_f64_vec(source, field)?));
         }
+        for (field, values) in &pending {
+            validate_tensor_values(field, values)?;
+        }
         for (field, values) in pending {
             *self.tensor_mut(&field)? = values;
         }
@@ -494,6 +545,7 @@ impl TensorSet {
     /// Returns ``PyKeyError`` for unknown names and ``PyValueError`` on
     /// size mismatch; the previous contents are preserved on failure.
     pub fn tensor_write(&mut self, bp: &Blueprint, name: &str, values: Vec<f64>) -> PyResult<()> {
+        validate_tensor_values(name, &values)?;
         let expected = Self::expected_len(bp, name)?;
         if values.len() != expected {
             return Err(PyValueError::new_err(format!(
@@ -628,21 +680,67 @@ fn is_ecology_tensor(name: &str) -> bool {
         | "migration_rate")
 }
 
-/// Extract scalar custom slots (bool/int/float) from the contract object.
-///
-/// Array-valued custom slots are deliberately skipped: no Rust kernel
-/// consumes them and the Python side keeps ownership of the arrays.
-fn extract_custom_slots(obj: &Bound<'_, PyAny>) -> PyResult<HashMap<String, f64>> {
-    let dict = obj.getattr("custom_slots")?;
+/// A session-owned custom value with its declared scalar or array type.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CustomSlot {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Array { shape: Vec<usize>, values: Vec<f64> },
+}
+
+/// Validate and copy every custom value before publishing the dictionary.
+pub(crate) fn custom_slots_from_python(
+    dict: &Bound<'_, PyAny>,
+) -> PyResult<HashMap<String, CustomSlot>> {
     let dict = dict.downcast::<PyDict>()?;
     let mut slots = HashMap::new();
     for (key, value) in dict.iter() {
         let key = key.extract::<String>()?;
-        if let Ok(number) = value.extract::<f64>() {
-            slots.insert(key, number);
-        }
+        let slot = if value.is_instance_of::<PyBool>() {
+            CustomSlot::Bool(value.extract()?)
+        } else if value.is_instance_of::<PyInt>() {
+            CustomSlot::Int(value.extract()?)
+        } else if value.is_instance_of::<PyFloat>() {
+            CustomSlot::Float(value.extract()?)
+        } else {
+            let array = value.extract::<PyReadonlyArrayDyn<'_, f64>>()?;
+            CustomSlot::Array {
+                shape: array.shape().to_vec(),
+                values: array.as_array().iter().copied().collect(),
+            }
+        };
+        slots.insert(key, slot);
     }
     Ok(slots)
+}
+
+/// Return isolated Python values, preserving custom scalar types and array shapes.
+pub(crate) fn custom_slots_to_python<'py>(
+    py: Python<'py>,
+    slots: &HashMap<String, CustomSlot>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    for (name, slot) in slots {
+        match slot {
+            CustomSlot::Bool(value) => dict.set_item(name, value)?,
+            CustomSlot::Int(value) => dict.set_item(name, value)?,
+            CustomSlot::Float(value) => dict.set_item(name, value)?,
+            CustomSlot::Array { shape, values } => {
+                let array = numpy::ndarray::ArrayD::from_shape_vec(
+                    numpy::ndarray::IxDyn(shape),
+                    values.clone(),
+                )
+                .map_err(|err| PyValueError::new_err(err.to_string()))?;
+                dict.set_item(name, numpy::PyArray::from_owned_array(py, array))?;
+            }
+        }
+    }
+    Ok(dict)
+}
+
+fn extract_custom_slots(obj: &Bound<'_, PyAny>) -> PyResult<HashMap<String, CustomSlot>> {
+    custom_slots_from_python(&obj.getattr("custom_slots")?)
 }
 
 /// Every runtime-mutable *ecology* value, stored as per-deme columns.
@@ -689,10 +787,12 @@ pub struct Params {
     pub reproduction_rates: Vec<f64>,       // (n_demes, A)
     pub fertility: Vec<f64>,                // (n_demes, A)
     pub competition_weights: Vec<f64>,      // (n_demes, A)
-    pub equilibrium_distribution: Vec<f64>, // (n_demes, 2, A) or empty (derive mode)
-    pub migration_rate: Vec<f64>,           // (n_demes, 2, A) or empty (not declared)
+    pub equilibrium_distribution: Vec<f64>, // (n_demes, 2, A) or empty
+    /// Per-deme declaration presence; a derived neighbor must not become zero.
+    pub equilibrium_declared: Vec<bool>,
+    pub migration_rate: Vec<f64>, // (n_demes, 2, A) or empty (not declared)
     // -- custom slots --
-    pub custom_slots: HashMap<String, f64>,
+    pub custom_slots: Vec<HashMap<String, CustomSlot>>,
 }
 
 /// Ecology scalar column names (f64 channels) — generated from the
@@ -772,6 +872,57 @@ impl Params {
     ///
     /// ## Panics
     /// Panics when *deme* is out of range for the scalar columns.
+    /// Merge a validated single-deme candidate without touching sibling columns.
+    pub fn replace_deme(&mut self, deme: usize, candidate: &Params) {
+        self.carrying_capacity[deme] = candidate.carrying_capacity[0];
+        self.eggs_per_female[deme] = candidate.eggs_per_female[0];
+        self.sex_ratio[deme] = candidate.sex_ratio[0];
+        self.sperm_displacement_rate[deme] = candidate.sperm_displacement_rate[0];
+        self.low_density_growth_rate[deme] = candidate.low_density_growth_rate[0];
+        self.growth_mode[deme] = candidate.growth_mode[0];
+        self.external_expected_eggs[deme] = candidate.external_expected_eggs[0];
+        // Required columns were shape-validated before this candidate commit.
+        let width = candidate.survival_rates.len();
+        self.survival_rates[deme * width..(deme + 1) * width]
+            .copy_from_slice(&candidate.survival_rates);
+        // Required columns were shape-validated before this candidate commit.
+        let width = candidate.mating_rates.len();
+        self.mating_rates[deme * width..(deme + 1) * width]
+            .copy_from_slice(&candidate.mating_rates);
+        // Required columns were shape-validated before this candidate commit.
+        let width = candidate.reproduction_rates.len();
+        self.reproduction_rates[deme * width..(deme + 1) * width]
+            .copy_from_slice(&candidate.reproduction_rates);
+        // Required columns were shape-validated before this candidate commit.
+        let width = candidate.fertility.len();
+        self.fertility[deme * width..(deme + 1) * width].copy_from_slice(&candidate.fertility);
+        // Required columns were shape-validated before this candidate commit.
+        let width = candidate.competition_weights.len();
+        self.competition_weights[deme * width..(deme + 1) * width]
+            .copy_from_slice(&candidate.competition_weights);
+        self.equilibrium_declared[deme] = candidate.equilibrium_declared[0];
+        if candidate.equilibrium_declared[0] {
+            let width = candidate.equilibrium_distribution.len();
+            if self.equilibrium_distribution.is_empty() {
+                self.equilibrium_distribution = vec![0.0; width * self.n_demes];
+            }
+            self.equilibrium_distribution[deme * width..(deme + 1) * width]
+                .copy_from_slice(&candidate.equilibrium_distribution);
+        }
+        if !self.equilibrium_declared.iter().any(|declared| *declared) {
+            self.equilibrium_distribution.clear();
+        }
+        if !candidate.migration_rate.is_empty() {
+            let width = candidate.migration_rate.len();
+            if self.migration_rate.is_empty() {
+                self.migration_rate = vec![0.0; width * self.n_demes];
+            }
+            self.migration_rate[deme * width..(deme + 1) * width]
+                .copy_from_slice(&candidate.migration_rate);
+        }
+        self.custom_slots[deme] = candidate.custom_slots[0].clone();
+    }
+
     pub fn single_deme(&self, deme: usize) -> Params {
         Params {
             n_demes: 1,
@@ -795,16 +946,17 @@ impl Params {
                 self.n_demes,
                 deme,
             ),
-            equilibrium_distribution: Self::cut_deme_segment(
-                &self.equilibrium_distribution,
-                self.n_demes,
-                deme,
-            ),
+            equilibrium_distribution: if self.equilibrium_declared[deme] {
+                Self::cut_deme_segment(&self.equilibrium_distribution, self.n_demes, deme)
+            } else {
+                Vec::new()
+            },
+            equilibrium_declared: vec![self.equilibrium_declared[deme]],
             // The migration-rate column is cut like every other vector
             // column: a deme's lifecycle consumes only its own (2, A) rate
             // segment; the empty sentinel stays empty.
             migration_rate: Self::cut_deme_segment(&self.migration_rate, self.n_demes, deme),
-            custom_slots: self.custom_slots.clone(),
+            custom_slots: vec![self.custom_slots[deme].clone()],
         }
     }
 
@@ -847,13 +999,14 @@ impl Params {
             reproduction_rates: Self::tile_vec(&reproduction, n_demes),
             fertility: Self::tile_vec(&fertility, n_demes),
             competition_weights: Self::tile_vec(&competition, n_demes),
+            equilibrium_declared: vec![!equilibrium.is_empty(); n_demes],
             equilibrium_distribution: if equilibrium.is_empty() {
                 Vec::new()
             } else {
                 Self::tile_vec(&equilibrium, n_demes)
             },
             migration_rate: extract_f64_vec(obj, "migration_rate")?,
-            custom_slots: extract_custom_slots(obj)?,
+            custom_slots: vec![extract_custom_slots(obj)?; n_demes],
         })
     }
 
@@ -885,10 +1038,12 @@ impl Params {
             fertility: Vec::new(),
             competition_weights: Vec::new(),
             equilibrium_distribution: Vec::new(),
+            equilibrium_declared: vec![false; n_demes],
             migration_rate: Vec::new(),
-            custom_slots: HashMap::new(),
+            custom_slots: vec![HashMap::new(); n_demes],
         };
         let dict = obj.downcast::<PyDict>()?;
+        let mut declared_override = None;
         let mut seen = std::collections::HashSet::new();
         for (key, value) in dict.iter() {
             let key = key.extract::<String>()?;
@@ -896,6 +1051,20 @@ impl Params {
                 return Err(PyValueError::new_err(format!(
                     "duplicate ecology column {key:?}"
                 )));
+            }
+            if key == "equilibrium_declared" {
+                let values = value
+                    .extract::<PyReadonlyArrayDyn<'_, i64>>()?
+                    .as_slice()?
+                    .to_vec();
+                Self::expect_column_len(&key, values.len(), n_demes)?;
+                if values.iter().any(|value| !matches!(value, 0 | 1)) {
+                    return Err(PyValueError::new_err(
+                        "equilibrium_declared must contain 0 or 1",
+                    ));
+                }
+                declared_override = Some(values.into_iter().map(|value| value == 1).collect());
+                continue;
             }
             if key == "growth_mode" {
                 let values = value
@@ -935,7 +1104,10 @@ impl Params {
                     "reproduction_rates" => params.reproduction_rates = values,
                     "fertility" => params.fertility = values,
                     "competition_weights" => params.competition_weights = values,
-                    "equilibrium_distribution" => params.equilibrium_distribution = values,
+                    "equilibrium_distribution" => {
+                        params.equilibrium_declared.fill(!values.is_empty());
+                        params.equilibrium_distribution = values;
+                    }
                     "migration_rate" => params.migration_rate = values,
                     _ => unreachable!("name matched the tensor column list"),
                 }
@@ -944,6 +1116,9 @@ impl Params {
                     "unknown ecology column {key:?}"
                 )));
             }
+        }
+        if let Some(declared) = declared_override {
+            params.equilibrium_declared = declared;
         }
         Ok(params)
     }
@@ -1126,6 +1301,9 @@ impl Params {
                 column.len()
             )));
         }
+        if name == "equilibrium_distribution" {
+            self.equilibrium_declared[deme] = true;
+        }
         Ok(())
     }
 
@@ -1212,6 +1390,17 @@ impl Params {
                 pending_scalars.push((field.clone(), extract_f64(source, field)?));
             }
         }
+        let pending_custom = if wants_custom_slots {
+            Some(extract_custom_slots(source)?)
+        } else {
+            None
+        };
+        for (name, value) in &pending_scalars {
+            validate_scalar_value(name, *value)?;
+        }
+        for (name, values) in pending_tensors.iter().chain(pending_genetics.iter()) {
+            validate_tensor_values(name, values)?;
+        }
         // Commit pass: scalars first, then tensors, then genetics.
         for (field, value) in &pending_scalars {
             match self.scalar_ref(field, deme)? {
@@ -1221,8 +1410,12 @@ impl Params {
         }
         for (field, values) in &pending_tensors {
             if values.is_empty() {
-                // Empty sentinel pull on a derive/not-declared column:
-                // nothing to copy into the deme segment.
+                if field == "equilibrium_distribution" {
+                    self.equilibrium_declared[deme] = false;
+                    if !self.equilibrium_declared.iter().any(|declared| *declared) {
+                        self.equilibrium_distribution.clear();
+                    }
+                }
                 continue;
             }
             self.write_deme_tensor(bp, field, deme, values)?;
@@ -1232,8 +1425,8 @@ impl Params {
                 sink.tensor_write(bp, field, values.clone())?;
             }
         }
-        if wants_custom_slots {
-            self.custom_slots = extract_custom_slots(source)?;
+        if let Some(slots) = pending_custom {
+            self.custom_slots[deme] = slots;
         }
         Ok(())
     }
@@ -1265,6 +1458,20 @@ impl Params {
     /// ## Errors
     /// Returns ``PyValueError`` on the first size mismatch.
     pub fn validate(&self, bp: &Blueprint) -> PyResult<()> {
+        if self.equilibrium_declared.len() != self.n_demes
+            || (self.equilibrium_distribution.is_empty()
+                && self.equilibrium_declared.iter().any(|value| *value))
+        {
+            return Err(PyValueError::new_err(
+                "equilibrium declaration presence does not match its columns",
+            ));
+        }
+        if self.custom_slots.len() != self.n_demes {
+            return Err(PyValueError::new_err(
+                "custom-slot column must have one entry per deme",
+            ));
+        }
+
         // Scalar columns carry exactly one entry per deme.
         let scalar_lens: [(&str, usize); 7] = [
             ("carrying_capacity", self.carrying_capacity.len()),
@@ -1316,8 +1523,9 @@ impl Params {
     pub fn apply(&mut self, writes: HashMap<String, f64>) -> PyResult<()> {
         // Validate names AND field categories first (method-level atomicity:
         // nothing is written when any entry fails).
-        for name in writes.keys() {
+        for (name, value) in &writes {
             self.scalar_ref(name, 0)?;
+            validate_scalar_value(name, *value)?;
         }
         for (name, value) in writes {
             match self.scalar_ref(&name, 0)? {
@@ -1338,6 +1546,7 @@ impl Params {
     /// ``PyValueError`` on size mismatch; the previous contents are
     /// preserved on failure.
     pub fn tensor_write(&mut self, bp: &Blueprint, name: &str, values: Vec<f64>) -> PyResult<()> {
+        validate_tensor_values(name, &values)?;
         if is_genetics_tensor(name) {
             return Err(PyKeyError::new_err(format!(
                 "{name:?} is a genetics tensor; route it to the session genetics bank"
@@ -1347,14 +1556,14 @@ impl Params {
         // The derive-mode sentinel for equilibrium_distribution (empty) is
         // legal content: writing full length widens it, writing empty keeps
         // it, and any other size is rejected.
-        let keeps_empty_sentinel = matches!(name, "equilibrium_distribution" | "migration_rate")
-            && {
+        let keeps_empty_sentinel = (name == "equilibrium_distribution" && values.is_empty())
+            || (name == "migration_rate" && {
                 let current_empty = match name {
                     "equilibrium_distribution" => self.equilibrium_distribution.is_empty(),
                     _ => self.migration_rate.is_empty(),
                 };
                 current_empty && values.is_empty()
-            };
+            });
         if values.len() != expected && !keeps_empty_sentinel {
             return Err(PyValueError::new_err(format!(
                 "Params.{name}: expected {expected} elements, got {}",
@@ -1367,7 +1576,10 @@ impl Params {
             "reproduction_rates" => self.reproduction_rates = values,
             "fertility" => self.fertility = values,
             "competition_weights" => self.competition_weights = values,
-            "equilibrium_distribution" => self.equilibrium_distribution = values,
+            "equilibrium_distribution" => {
+                self.equilibrium_declared.fill(!values.is_empty());
+                self.equilibrium_distribution = values;
+            }
             "migration_rate" => self.migration_rate = values,
             _ => {
                 // Scalar names never reach here: expected_len raises
@@ -1604,8 +1816,9 @@ mod tests {
             fertility: vec![0.0, 1.0],
             competition_weights: vec![1.0, 0.8],
             equilibrium_distribution: vec![],
+            equilibrium_declared: vec![false],
             migration_rate: vec![],
-            custom_slots: HashMap::new(),
+            custom_slots: vec![HashMap::new()],
         };
         let genetics = TensorSet {
             viability_fitness: vec![1.0; 8],
@@ -1618,6 +1831,49 @@ mod tests {
             male_ztype_compatibility: vec![0.5, 0.5],
         };
         (bp, params, genetics)
+    }
+
+    /// Invalid internal custom-column cardinality is rejected before assembly.
+    #[test]
+    fn malformed_custom_column_is_rejected() {
+        let (bp, mut params, _) = fixture();
+        params.custom_slots.clear();
+        assert!(params.validate(&bp).is_err());
+    }
+
+    /// An absent migration column means zero migration for untouched demes.
+    #[test]
+    fn adding_deme_migration_preserves_zero_migration_for_its_neighbor() {
+        let (_, source, _) = fixture();
+        let mut column = source.clone();
+        column.n_demes = 2;
+        column.equilibrium_declared = vec![false; 2];
+        for values in [
+            &mut column.carrying_capacity,
+            &mut column.eggs_per_female,
+            &mut column.sex_ratio,
+            &mut column.sperm_displacement_rate,
+            &mut column.low_density_growth_rate,
+            &mut column.external_expected_eggs,
+            &mut column.survival_rates,
+            &mut column.mating_rates,
+            &mut column.reproduction_rates,
+            &mut column.fertility,
+            &mut column.competition_weights,
+        ] {
+            values.extend_from_within(..);
+        }
+        column.growth_mode = vec![2, 2];
+        column.custom_slots = vec![HashMap::new(), HashMap::new()];
+        let mut candidate = source;
+        candidate.migration_rate = vec![0.25];
+        column.replace_deme(1, &candidate);
+        assert_eq!(column.migration_rate, vec![0.0, 0.25]);
+        assert_eq!(column.single_deme(0).carrying_capacity, vec![400.0]);
+        assert_eq!(
+            column.single_deme(0).survival_rates,
+            vec![0.9, 0.8, 0.85, 0.75]
+        );
     }
 
     /// An unknown field must fail in the validation pass: the legal entry in
@@ -1690,8 +1946,7 @@ mod tests {
 
     /// The derive-mode sentinel of ``equilibrium_distribution``: empty ->
     /// empty keeps deriving, empty -> full widens to declared contents, and
-    /// every other transition (wrong size, full -> empty) is rejected with
-    /// the previous contents preserved.
+    /// full -> empty explicitly resumes deriving. Other lengths fail atomically.
     #[test]
     fn tensor_write_equilibrium_empty_sentinel_semantics() {
         let (bp, mut params, _) = fixture();
@@ -1709,8 +1964,9 @@ mod tests {
         assert_eq!(params.equilibrium_distribution, vec![1.0, 2.0, 3.0, 4.0]);
         assert!(params
             .tensor_write(&bp, "equilibrium_distribution", vec![])
-            .is_err());
-        assert_eq!(params.equilibrium_distribution, vec![1.0, 2.0, 3.0, 4.0]);
+            .is_ok());
+        assert!(params.equilibrium_distribution.is_empty());
+        assert_eq!(params.equilibrium_declared, vec![false]);
     }
 
     /// ``validate`` checks every column against the blueprint-derived size
@@ -1741,6 +1997,8 @@ mod tests {
     fn deme_scoped_scalar_writes_are_independent() {
         let (_, mut params, _) = fixture();
         params.n_demes = 3;
+        params.equilibrium_declared = vec![false; 3];
+        params.custom_slots.resize(3, HashMap::new());
         params.carrying_capacity = vec![400.0, 400.0, 400.0];
         params.growth_mode = vec![2, 2, 2];
         let writes = HashMap::from([("carrying_capacity".to_string(), 50.0)]);
@@ -1759,6 +2017,8 @@ mod tests {
     fn deme_scoped_tensor_segments_are_isolated() {
         let (bp, mut params, _) = fixture();
         params.n_demes = 2;
+        params.equilibrium_declared = vec![false; 2];
+        params.custom_slots.resize(2, HashMap::new());
         params.survival_rates = vec![0.9, 0.8, 0.85, 0.75, 0.9, 0.8, 0.85, 0.75];
         // Simulate the per-deme pull channel at deme 1: expected segment is
         // 2 * a = 4 elements, committed at offset 4.
@@ -1785,6 +2045,8 @@ mod tests {
         // Tiling to 3 demes triples the vector; scalars repeat.
         let mut tiled = params.clone();
         tiled.n_demes = 3;
+        tiled.equilibrium_declared = vec![false; 3];
+        tiled.custom_slots.resize(3, HashMap::new());
         tiled.carrying_capacity = Params::tile(400.0, 3);
         tiled.survival_rates = Params::tile_vec(&params.survival_rates, 3);
         assert_eq!(tiled.carrying_capacity, vec![400.0, 400.0, 400.0]);
@@ -1821,6 +2083,8 @@ mod tests {
         let (bp, mut params, genetics) = fixture();
         // Widen to 3 demes; give every deme distinct ecology columns.
         params.n_demes = 3;
+        params.equilibrium_declared = vec![false; 3];
+        params.custom_slots.resize(3, HashMap::new());
         params.carrying_capacity = vec![400.0, 650.0, 310.0];
         params.eggs_per_female = vec![30.0, 22.5, 41.0];
         params.sex_ratio = vec![0.5, 0.6, 0.45];

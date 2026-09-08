@@ -174,21 +174,19 @@ class ParamsView:
     field names; attribute writes re-route through the writers with
     full validation.  Use :meth:`tensor_write` for genetics tensors.
 
-    Reads always come from the draft.  When a Rust ``run()`` evolves
-    ecology scalars through ``Op.set_param`` hooks, the evolving values
-    live inside the Rust session for the duration of the run; the run's
-    audited transitions are appended to ``params_log`` and the final
-    values are merged back into the draft when ``run()`` returns, so
-    attribute reads stay current at run boundaries.
+    Outside a callback, reads project the owning Rust session into isolated
+    values. Inside a callback, they use its event candidate; validated writes
+    commit with that candidate when the callback succeeds.
     """
 
-    def __init__(self, pop: BasePopulation[Any]) -> None:
+    def __init__(self, pop: BasePopulation[Any], validate: Callable[[], None] | None = None) -> None:
         """Bind the view to *pop*.
 
         Args:
             pop: The population whose parameters are exposed.
         """
         self._pop = pop
+        self._validate = validate
 
     # -- derived equilibrium metrics (read-only, always fresh) ----------------
 
@@ -221,6 +219,12 @@ class ParamsView:
     @property
     def _draft(self) -> ModelDraft:
         """The population's current draft."""
+        if self._validate is not None:
+            self._validate()
+        if self._validate is not None:
+            candidate = self._pop._config  # pyright: ignore[reportPrivateUsage]  # callback owns the temporary candidate
+            assert candidate is not None
+            return candidate
         return self._pop.config
 
     def _species(self) -> Species:
@@ -248,24 +252,22 @@ class ParamsView:
         def _publish(draft: ModelDraft) -> None:
             self._pop.set_config(draft)
 
-        # Session-direct writes are impossible while the Rust run holds the
-        # session borrow (PyO3 runtime borrow check).  During a run, writes
-        # land in the draft only; the run boundary flushes them into the
-        # session afterwards.
-        backend: object = None
-        if not getattr(self._pop, "_rust_run_active", False):
-            backend = getattr(self._pop, "_rust_lifecycle_backend", None)
+        if self._validate is not None:
+            self._validate()
+            backend: object = getattr(self._pop, "_event_transaction", None)
+        elif getattr(self._pop, "_running", False) or getattr(self._pop, "_rust_run_active", False):
+            raise RuntimeError("External parameter writes are forbidden during run")
         else:
-            # In-run write: the session holds its borrow, so the value
-            # lands in the draft and the run boundary flushes it.
-            object.__setattr__(self._pop, "_rust_deferred_writes", True)
+            backend = getattr(self._pop, "_runtime_parameter_writer", None)
+            if backend is None:
+                backend = getattr(self._pop, "_rust_lifecycle_backend", None)
         return CoreConfigWriter(
             self._draft,
             backend,
             on_replace=_publish,
             species=self._species(),
             registry=self._registry(),
-            param_log=self._pop.log_param_change,
+            param_value_log=self._pop.log_param_value,
         )
 
     # -- attribute surface -----------------------------------------------------
@@ -416,13 +418,12 @@ class ParamsView:
 
         Raises:
             ValueError: On a size mismatch (zero writes).
-            RuntimeError: If a genetics tensor is written on a deme of a
-                spatial population — its draft tables are shared between
-                demes, so the write would leak into every other deme.
-                Use the deme's ``write_genetics`` channel, which forks
-                the variant first.
+            RuntimeError: If shared genetics have no owning native write
+                channel. Native deme and hook transactions fork changed
+                variants and keep other demes isolated.
         """
-        if field in _GENETICS_TENSORS and getattr(
+        has_native_candidate = self._validate is not None or getattr(self._pop, "_runtime_parameter_writer", None) is not None
+        if not has_native_candidate and field in _GENETICS_TENSORS and getattr(
             self._pop, "_shares_genetics_draft", False
         ):
             raise RuntimeError(

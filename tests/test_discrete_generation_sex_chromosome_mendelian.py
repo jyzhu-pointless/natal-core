@@ -123,7 +123,7 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
             "male": {male_parent: parent_count},
         },
     )
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
 
     pop.run(1)
     state = pop.state.individual_count
@@ -291,7 +291,7 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
             "male": {male_parent: 1000.0},
         },
     )
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
 
     pop.run(1)
     state = pop.state.individual_count
@@ -388,7 +388,7 @@ def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:
             "male": {male_parent: 1000.0},
         },
     )
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
 
     pop.run(1)
     state = pop.state.individual_count

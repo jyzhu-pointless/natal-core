@@ -502,12 +502,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         Restores individual counts and sperm storage to original values.
         """
+        self._require_standalone_owner("reset")
         self._tick = 0
         if self._history_obj is not None:
             self._history_obj.clear()
         self._finished = False
+        self._failed = False
         if hasattr(self, "_initial_population_snapshot"):
             ind_copy, sperm_copy, _ = self._initial_population_snapshot
+            assert sperm_copy is not None
 
             self._state = PopulationState.create(
                 n_ztypes=self.config.n_ztypes,
@@ -520,8 +523,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         backend = self._rust_lifecycle_backend
         if backend is not None and self._state is not None:
             # The session owns the runtime state: the reset container
-            # becomes the new session state (RNG keeps its current stream).
+            # becomes the new session state, and RNG restarts from the
+            # most recently configured explicit seed.
             backend.set_state(self._state)
+            backend.reseed(int(self._rust_backend_seed or 0))
+            backend.clear_checkpoints()
             self._state_cache_stale = False
 
     @property
@@ -614,12 +620,14 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Args:
             config: Config jitclass instance.
         """
+        self._require_standalone_owner("import_config")
         # Configuration is usually read-only (used by run_tick),
         # kept here for completeness.
-        self._config = config
+        self._install_config(config)
 
     def clear_history(self) -> None:
         """Clear history rows and the paired session checkpoints."""
+        self._require_standalone_owner("clear_history")
         super().clear_history()
 
     def export_state(self) -> NDArray[np.float64]:
@@ -647,6 +655,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Args:
             state: Flattened array, PopulationState object, or data dictionary.
         """
+        self._require_standalone_owner("import_state")
         from natal.frontend.data import PopulationState, parse_flattened_state
 
         n_sexes, n_ages, n_ztypes = self._live_state().individual_count.shape
@@ -686,21 +695,20 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 f"{expected_sperm_shape}, got {state_obj.sperm_storage.shape}"
             )
 
-        # ── Phase 2: commit atomically ──
-        self._live_state().individual_count[:] = state_obj.individual_count
-        self._live_state().sperm_storage[:] = state_obj.sperm_storage
-        self._state = PopulationState(
-            n_tick=state_obj.n_tick,
-            individual_count=self._live_state().individual_count,
-            sperm_storage=self._live_state().sperm_storage,
+        self._validate_import_values(state_obj)
+        candidate = PopulationState(
+            n_tick=int(state_obj.n_tick),
+            individual_count=state_obj.individual_count.copy(),
+            sperm_storage=state_obj.sperm_storage.copy(),
         )
-        self._tick = int(state_obj.n_tick)
         backend = self._rust_lifecycle_backend
         if backend is not None:
-            # The session owns the runtime state (plan S2): the imported
-            # container becomes the new session state.
-            backend.set_state(self._state)
-            self._state_cache_stale = False
+            # Native validation and commit must succeed before changing even
+            # the Python cache, tick, or history associated with this owner.
+            backend.set_state(candidate)
+        self._state = candidate
+        self._tick = candidate.n_tick
+        self._state_cache_stale = False
         self.clear_history()
 
     # ========================================================================
@@ -716,6 +724,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Raises:
             ValueError: If no record is found for the specified tick.
         """
+        self._require_standalone_owner("restore_checkpoint")
         super().restore_checkpoint(tick)
 
     # ========================================================================
@@ -749,7 +758,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         return self.export_config()
 
-    def enable_rust_backend(self, seed: int = 0) -> AgeStructuredPopulation:
+    def _initialize_session(self, seed: int = 0) -> AgeStructuredPopulation:
         """Enable the Rust lifecycle backend for subsequent runs.
 
         CSR declarative hooks travel to Rust inside the ``HookProgram``;
@@ -773,6 +782,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Raises:
             RuntimeError: If the Rust extension is unavailable.
         """
+        self._require_standalone_owner("_initialize_session")
         from natal.backends.rust.rust_backend import (
             RustLifecycleBackend,
             rust_backend_available,
@@ -786,7 +796,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         hook_program = self._build_hook_program()
         self._run_program = self._run_program._replace(hooks=hook_program)
         backend = RustLifecycleBackend(
-            self.config,
+            # Materialization copies the first owned draft itself; only an
+            # existing session needs a current native parameter snapshot.
+            self._config if self._rust_lifecycle_backend is None and self._config is not None else self.config,
             hook_program,
             seed=seed,
         )
@@ -807,35 +819,18 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         return self
 
     def _run_startup_sync(self) -> None:
-        """Rebuild the session when structural changes requested it.
-
-        Hook registration, modifier-map rebuilds, and blueprint-flag writes
-        are session structure, not values: the live session must be
-        rebuilt before the next run (RNG reseeds to the original seed —
-        the documented rebuild semantics).
-        """
-        if self._rust_needs_rebuild:
-            self._rust_needs_rebuild = False
-            self.enable_rust_backend(seed=int(self._rust_backend_seed or 0))
-
-    def _flush_runtime_fields_after_run(self) -> None:
-        """Sync the draft's runtime fields (ecology AND genetics) back into the session after a run.
-
-        In-run writes (hook callbacks, deferred pushes) land in the draft
-        only while the session owns its borrow; this boundary flush
-        re-materializes the contract params once and pulls every runtime
-        field, so the next run starts from the user-visible draft values
-        (including values a hook wrote through ``ctx.update()``).
-        """
-        from natal.frontend.population.base import RUNTIME_FLUSH_FIELDS
-
+        """Install changed execution flags and hooks without replacing state or RNG."""
+        if not self._rust_needs_rebuild:
+            return
         backend = self._rust_lifecycle_backend
         if backend is None:
-            return
-        from natal.contracts.materialize import materialize
-
-        params = materialize(self.config).params
-        backend.refresh_params(list(RUNTIME_FLUSH_FIELDS), params)
+            raise RuntimeError("The population session has not been initialized.")
+        config = self.config
+        program = self._build_hook_program()
+        backend.configure_program(program, config)
+        self._register_rust_callbacks(backend)
+        self._run_program = self._run_program._replace(hooks=program)
+        self._rust_needs_rebuild = False
 
     def _run_rust_lifecycle(
         self,
@@ -850,13 +845,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         if backend is None:
             # Instances that skipped ``build()`` (clones, direct
             # construction) lazily create their engine session at the
-            # first run boundary; ``enable_rust_backend`` installs the
+            # first run boundary; ``_initialize_session`` installs the
             # current live state into the fresh session.
-            self.enable_rust_backend(seed=int(self._rust_backend_seed or 0))
+            self._initialize_session(seed=int(self._rust_backend_seed or 0))
             backend = self._rust_lifecycle_backend
             assert backend is not None  # enable either returns or raises
 
-        observation_mask = self._observation_mask
         # Raw-mode runs keep a full record-aligned checkpoint per recorded
         # tick inside the session (state + RNG + ecology), so the public
         # restore_checkpoint rolls back everything, not just counts.
@@ -869,24 +863,24 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             else 0
         )
 
-        # In-hook writes during the batch defer session pushes to the next run.
+        if history_obj is not None:
+            if clear_history_on_start:
+                self.clear_history()
+            if history_obj.schema.mode == "observation":
+                history_obj._configure_observation(self.observation)
+            backend.bind_history(history_obj._store, self._params_log)
+            history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+
         self._rust_run_active = True
-        self._rust_deferred_writes = False
         try:
             final_tick, history_new, was_stopped = backend.run(
                 n_steps=n_steps,
                 record_every=record_every,
-                observation_mask=observation_mask,
+                observation_mask=self._observation_mask,
                 checkpoint_every=checkpoint_every,
             )
-            if self._rust_deferred_writes:
-                # Run-boundary ecology flush: in-run writes landed in the
-                # draft; the next run starts from the user-visible values.
-                self._flush_runtime_fields_after_run()
         finally:
             self._rust_run_active = False
-            # A failed run wrote nothing to the session (validation is
-            # atomic): the deferral flag must not leak into the next run.
             self._rust_deferred_writes = False
 
         # Merge the session's set_param writes (params_log rows under their
@@ -933,6 +927,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 (the session is created by ``build()`` or lazily at the
                 first run).
         """
+        self._require_standalone_owner("run")
+        if getattr(self, "_running", False):
+            raise RuntimeError("Nested run is forbidden")
+        if getattr(self, "_failed", False):
+            raise RuntimeError("Population has failed; restore a checkpoint or reset before run")
         if self._finished:
             raise RuntimeError(
                 f"Population '{self.name}' has finished. "
@@ -950,6 +949,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 finish=finish,
                 clear_history_on_start=clear_history_on_start,
             )
+        except BaseException:
+            self._failed = True
+            self._mark_state_cache_stale()
+            raise
         finally:
             self._running = False
 

@@ -54,7 +54,7 @@ pub const OP_SET_PARAM_PUBLIC: i64 = 10;
 /// ``(tick, param_id, old, new)``, recorded only when the committed value
 /// actually changed.  Spatial sessions wrap rows with the deme id (see
 /// ``spatial::SpatialEcoJournalRow``).
-pub type EcoJournalRow = (i64, usize, f64, f64);
+pub type EcoJournalRow = (i64, usize, f64, f64, usize);
 
 // Validity bounds per ECO param id live in the generated
 // ``eco_param_wire`` module (re-exported above): the jsonc is the single
@@ -159,6 +159,11 @@ pub struct HookProgram {
     /// Each callback receives private copies of the arrays, and the copies
     /// are written back after the call so hook state mutations take effect.
     pub python_callbacks: Vec<Vec<Py<PyAny>>>,
+    /// Completed spatial callback candidates awaiting stable deme-order merge.
+    /// Stage cursors from demes stopped or failed during this tick.
+    pub phase_marks: std::sync::Mutex<Vec<usize>>,
+    pub callback_commits:
+        std::sync::Mutex<Vec<(usize, crate::contract::Params, crate::contract::TensorSet)>>,
 }
 
 impl HookProgram {
@@ -191,6 +196,9 @@ impl HookProgram {
         sperm: &mut [f64],
         tick: i64,
         deme_id: i64,
+        rng: &mut SessionRng,
+        eco_values: &mut [f64],
+        eco_ctx: &mut Option<crate::lifecycle::EcoCtx<'_>>,
     ) -> Result<i32, String> {
         let Some(callbacks) = self.python_callbacks.get(event) else {
             return Ok(0);
@@ -198,32 +206,119 @@ impl HookProgram {
         if callbacks.is_empty() {
             return Ok(0);
         }
-        Python::with_gil(|py| {
+        if let Some(ctx) = eco_ctx.as_mut() {
+            ctx.commit(eco_values)?;
+        }
+        Python::with_gil(|py| -> PyResult<i32> {
             for callback in callbacks {
-                // Copies: PyArray1::from_slice allocates a fresh buffer, so
-                // the callback can never alias the live kernel memory.
-                let ind_arr = PyArray1::from_slice(py, ind);
-                let sperm_arr = PyArray1::from_slice(py, sperm);
-                let result: i32 = callback
+                let transactional = callback
                     .bind(py)
-                    .call1((ind_arr.clone(), sperm_arr.clone(), tick, deme_id))
-                    .and_then(|value| value.extract())
-                    .map_err(|err| format!("python lifecycle callback failed: {err}"))?;
-                // Write back the (possibly mutated) copies so hook state
-                // writes take effect, matching the Python-backend semantics.
-                let ind_mutated: Vec<f64> = ind_arr
-                    .readonly()
-                    .as_slice()
-                    .map_err(|err| err.to_string())?
-                    .to_vec();
-                ind.copy_from_slice(&ind_mutated);
-                if !sperm.is_empty() {
-                    let sperm_mutated: Vec<f64> = sperm_arr
-                        .readonly()
-                        .as_slice()
-                        .map_err(|err| err.to_string())?
-                        .to_vec();
-                    sperm.copy_from_slice(&sperm_mutated);
+                    .getattr("__natal_transaction__")
+                    .and_then(|value| value.extract::<bool>())
+                    .unwrap_or(false);
+                let arrays = if transactional {
+                    None
+                } else {
+                    Some((
+                        PyArray1::from_slice(py, ind),
+                        PyArray1::from_slice(py, sperm),
+                    ))
+                };
+                let transaction = if transactional {
+                    let ctx = eco_ctx.as_ref().ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "callback requires a session transaction",
+                        )
+                    })?;
+                    Some(Py::new(
+                        py,
+                        crate::hook_transaction::HookTransaction {
+                            active: true,
+                            parameters_changed: false,
+                            blueprint: ctx.bp.clone(),
+                            params: ctx.params.clone(),
+                            genetics: ctx
+                                .updated_genetics
+                                .as_ref()
+                                .unwrap_or(ctx.genetics)
+                                .clone(),
+                            rng: rng.clone(),
+                            state_ind: ind.to_vec(),
+                            state_sperm: sperm.to_vec(),
+                            state_arrays: None,
+                        },
+                    )?)
+                } else {
+                    None
+                };
+                let outcome = if let Some(tx) = transaction.as_ref() {
+                    callback
+                        .bind(py)
+                        .call1((py.None(), py.None(), tick, deme_id, tx.clone_ref(py)))
+                } else {
+                    let (ind_arr, sperm_arr) = arrays.as_ref().expect("raw callback arrays exist");
+                    callback
+                        .bind(py)
+                        .call1((ind_arr.clone(), sperm_arr.clone(), tick, deme_id))
+                }
+                .and_then(|value| value.extract::<i32>());
+                // Invalidation happens even when Python raises. Retained samplers
+                // cannot advance either the candidate or the live stream later.
+                if let Some(tx) = transaction.as_ref() {
+                    tx.borrow_mut(py).active = false;
+                }
+                let result = outcome?;
+                let state_candidate = if let Some(tx) = transaction.as_ref() {
+                    tx.borrow(py).candidate_state(py)?
+                } else {
+                    let (ind_arr, sperm_arr) = arrays.as_ref().expect("raw callback arrays exist");
+                    let a = ind_arr.readonly().as_slice()?.to_vec();
+                    let b = sperm_arr.readonly().as_slice()?.to_vec();
+                    if a.len() != ind.len()
+                        || b.len() != sperm.len()
+                        || a.iter().chain(&b).any(|v| !v.is_finite() || *v < 0.0)
+                    {
+                        return Err(pyo3::exceptions::PyValueError::new_err(
+                            "Hook state must preserve shape and contain finite nonnegative counts",
+                        ));
+                    }
+                    Some((a, b))
+                };
+                if let Some(tx) = transaction.as_ref() {
+                    let candidate = tx.borrow(py);
+                    // Read-only and state-only callbacks have no parameter
+                    // products to validate, clone, or publish into the bank.
+                    if candidate.parameters_changed {
+                        candidate.params.validate(&candidate.blueprint)?;
+                        candidate.genetics.validate(&candidate.blueprint)?;
+                        let ctx = eco_ctx.as_mut().expect("transaction requires context");
+                        for (id, value) in eco_values.iter_mut().enumerate() {
+                            *value = candidate.params.eco_value(id, ctx.deme);
+                        }
+                        *ctx.params = candidate.params.clone();
+                        ctx.updated_genetics = Some(candidate.genetics.clone());
+                        let mut commits = self
+                            .callback_commits
+                            .lock()
+                            .expect("callback queue poisoned");
+                        let update = (
+                            deme_id as usize,
+                            candidate.params.clone(),
+                            candidate.genetics.clone(),
+                        );
+                        if let Some(previous) =
+                            commits.iter_mut().find(|entry| entry.0 == deme_id as usize)
+                        {
+                            *previous = update;
+                        } else {
+                            commits.push(update);
+                        }
+                    }
+                    *rng = candidate.rng.clone();
+                }
+                if let Some((ind_candidate, sperm_candidate)) = state_candidate {
+                    ind.copy_from_slice(&ind_candidate);
+                    sperm.copy_from_slice(&sperm_candidate);
                 }
                 if result != 0 {
                     return Ok(result);
@@ -231,6 +326,7 @@ impl HookProgram {
             }
             Ok(0)
         })
+        .map_err(crate::hook_transaction::preserve_error)
     }
 }
 

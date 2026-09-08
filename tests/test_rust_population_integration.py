@@ -57,7 +57,7 @@ def _build_population(species: Species, name: str, k: float = 80.0) -> AgeStruct
 
 def test_run_tick_routes_through_engine(species: Species) -> None:
     """The single-tick entry point routes through the engine session."""
-    pop = _build_population(species, "tick_pop").enable_rust_backend(seed=9)
+    pop = _build_population(species, "tick_pop")._initialize_session(seed=9)
     before = pop.state.individual_count.copy()
 
     pop.run_tick()
@@ -82,7 +82,7 @@ def test_declarative_hooks_registered_after_build_run_in_engine(
     baseline = _build_population(species, "hook_baseline")
     hooked = _build_population(species, "hooked")
     hooked.register_hooks(ops, event="early", name="early_control")
-    hooked.enable_rust_backend(seed=7)
+    hooked._initialize_session(seed=7)
 
     baseline.run(4, record_every=1)
     hooked.run(4, record_every=1)
@@ -116,7 +116,7 @@ def test_runtime_config_update_reaches_the_engine(species: Species) -> None:
     the language boundary instead of being swallowed by the draft.
     """
     baseline = _build_population(species, "runtime_base")
-    updated = _build_population(species, "runtime_updated").enable_rust_backend(
+    updated = _build_population(species, "runtime_updated")._initialize_session(
         seed=11
     )
     baseline.run(5, record_every=1, clear_history_on_start=True)
@@ -146,7 +146,7 @@ def test_custom_hooks_work_with_rust_backend(species: Species) -> None:
         .build()
     )
 
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
 
     pop.run(2)
     assert pop.tick == 2

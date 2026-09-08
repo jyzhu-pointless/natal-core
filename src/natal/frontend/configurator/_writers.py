@@ -30,6 +30,7 @@ own sentinel instead of receiving an empty tensor.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import TYPE_CHECKING, Mapping, Protocol, cast, runtime_checkable
 
 import numpy as np
@@ -55,6 +56,7 @@ from natal.frontend.data._engine import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from natal.contracts.params import Params
     from natal.frontend.genetics import Species
     from natal.frontend.registry.index import IndexRegistry
 
@@ -70,9 +72,19 @@ __all__ = [
 ]
 
 
+NATIVE_SCALAR_FIELDS = frozenset({
+    "carrying_capacity", "eggs_per_female", "sex_ratio", "sperm_displacement_rate",
+    "low_density_growth_rate", "growth_mode", "external_expected_eggs",
+})
+
+
 @runtime_checkable
 class SessionChannel(Protocol):
     """The slice-2 Rust write channel (backend adapters expose it)."""
+
+    def refresh_params(self, fields: list[str], params_obj: Params) -> None:
+        """Validate and commit all named fields as one native transaction."""
+        ...
 
     def apply(self, writes: dict[str, float]) -> None:
         """Batch scalar write into the session-owned params."""
@@ -116,9 +128,11 @@ class ConfigWriter(Protocol):
 
 def _session_of(session: object) -> SessionChannel | None:
     """Narrow an unknown backend reference to a :class:`SessionChannel`."""
-    if session is not None and isinstance(session, SessionChannel):
+    if session is None:
+        return None
+    if isinstance(session, SessionChannel):
         return session
-    return None
+    raise TypeError("Runtime parameter writers require an atomic session channel.")
 
 
 # Contract (Params) name -> ModelDraft field name; only renames listed.
@@ -166,28 +180,23 @@ def _committed_scalar(draft: ModelDraft, entry: RouteEntry) -> float | None:
     return None
 
 
-def _scalar_value(entry: RouteEntry, draft: ModelDraft) -> float | None:
-    """Read the committed scalar payload of *entry* for a session push.
+AuditValue = bool | int | float | NDArray[np.float64] | None
 
-    Args:
-        entry: A scalar-shaped route entry.
-        draft: The freshly committed draft.
 
-    Returns:
-        The scalar value, or ``None`` for the cleared
-        ``external_expected_eggs`` declaration.
-    """
+def _committed_value(draft: ModelDraft, entry: RouteEntry) -> AuditValue:
+    """Copy the actual routed value, preserving scalar types and tensor shape."""
     if entry.config_field is None:
         return None
-    field_obj: object = getattr(draft, entry.config_field)
-    if field_obj is None:
-        return None
-    if isinstance(field_obj, np.ndarray):
-        # cast: 0-d float64 element read; float() validates at runtime.
-        return float(cast("float", field_obj[()]))
-    if isinstance(field_obj, (int, float)):
-        return float(field_obj)
-    return None
+    value: object = getattr(draft, entry.config_field)
+    if isinstance(value, np.ndarray):
+        typed = np.asarray(value, dtype=np.float64)
+        selected = typed[entry.config_path] if entry.config_path else typed
+        if np.ndim(selected) > 0:
+            return np.array(selected, dtype=np.float64, copy=True)
+        return entry.dtype(selected)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    raise TypeError(f"Unsupported audit value for {entry.name!r}")
 
 
 class _DraftWriterBase:
@@ -202,6 +211,7 @@ class _DraftWriterBase:
         species: Species | None = None,
         registry: IndexRegistry | None = None,
         param_log: Callable[[str, float, float], None] | None = None,
+        param_value_log: Callable[[str, AuditValue, AuditValue], None] | None = None,
     ) -> None:
         """Bind the writer to a draft.
 
@@ -215,6 +225,8 @@ class _DraftWriterBase:
             param_log: Optional snapshot sink called as
                 ``param_log(name, old, new)`` for every committed routed
                 scalar change (the population's parameter log).
+            param_value_log: Complete typed audit sink, called only after
+                the native commit succeeds.
         """
         self._draft = draft
         self._on_replace = on_replace
@@ -222,6 +234,7 @@ class _DraftWriterBase:
         self._species = species
         self._registry = registry
         self._param_log = param_log
+        self._param_value_log = param_value_log
 
     @property
     def draft(self) -> ModelDraft:
@@ -231,6 +244,40 @@ class _DraftWriterBase:
     # -- ConfigWriter protocol ---------------------------------------------------
 
     def apply(self, writes: Mapping[str, object], *, mode: str = "replace") -> None:
+        """Compile a whole method into an isolated candidate before committing.
+
+        Args:
+            writes: Route names and scalar, vector, or pattern patch values.
+            mode: Fitness patch composition mode.
+        """
+        before = self._draft
+        # Routes only mutate their named destination; clone those arrays once
+        # so validation and pattern patches cannot affect the committed draft.
+        fields = {lookup(name).config_field for name in writes}
+        copies = {field: cast("NDArray[np.float64]", value).copy() for field in fields if field is not None and isinstance(value := getattr(before, field), np.ndarray)}
+        candidate = _DraftWriterBase(
+            before._replace(**copies), species=self._species, registry=self._registry,
+        )
+        touched = candidate._stage(writes, mode=mode)
+        candidate._session = self._session
+        candidate._finish(touched)
+        self._draft = candidate._draft
+        if self._on_replace is not None:
+            self._on_replace(self._draft)
+        if self._param_log is not None:
+            for entry in touched:
+                old = _committed_scalar(before, entry)
+                new = _committed_scalar(self._draft, entry)
+                if old is not None and new is not None:
+                    self._param_log(entry.name, old, new)
+        if self._param_value_log is not None:
+            for entry in touched:
+                self._param_value_log(
+                    entry.name, _committed_value(before, entry),
+                    _committed_value(self._draft, entry),
+                )
+
+    def _stage(self, writes: Mapping[str, object], *, mode: str = "replace") -> list[RouteEntry]:
         """Resolve every write, then commit atomically.
 
         Args:
@@ -273,15 +320,14 @@ class _DraftWriterBase:
         for entry, patch in patches:
             self._apply_fitness_patch(entry, patch, mode)
             touched.append(entry)
-        self._finish(touched)
+        return touched
 
     def tensor_write(self, field: str, values: NDArray[np.float64]) -> None:
         """Write whole-tensor contents by contract field name.
 
-        The draft always receives the contents; the live session (when
-        bound) is pushed too, unless *values* is empty — writing empty
-        contents is only meaningful for the equilibrium derive-mode
-        sentinel, which the session already holds.
+        The draft and live session receive the validated contents together.
+        Tensor sizes must match the declared shape; equilibrium presence
+        changes use the equilibrium route rather than this fixed-shape channel.
 
         Args:
             field: Contract field name.
@@ -291,22 +337,24 @@ class _DraftWriterBase:
             KeyError: If *field* is not a tensor contract field.
             ValueError: On a size mismatch (zero writes).
         """
-        self._write_contract_tensor(field, values)
-        if field == "meiosis_map":
-            # The derived offspring tensor changed with the meiosis
-            # write: push it inside the same transaction so the engine
-            # consumes the recomputed table.
-            if self._session is not None:
-                self._session.tensor_write(
-                    "offspring_tensor",
-                    np.ascontiguousarray(
-                        np.asarray(self._draft.offspring_tensor, dtype=np.float64)
-                    ).ravel(),
+        from natal.contracts.materialize import materialize
+
+        before = self._draft
+        candidate = _DraftWriterBase(deepcopy(before))
+        candidate._write_contract_tensor(field, values)
+        fields = [field, "offspring_tensor"] if field == "meiosis_map" else [field]
+        if self._session is not None:
+            self._session.refresh_params(fields, materialize(candidate.draft).params)
+        self._draft = candidate.draft
+        if self._on_replace is not None:
+            self._on_replace(self._draft)
+        if self._param_value_log is not None:
+            for changed in fields:
+                name = contract_to_draft_field(changed)
+                self._param_value_log(
+                    changed, np.array(getattr(before, name), dtype=np.float64, copy=True),
+                    np.array(getattr(self._draft, name), dtype=np.float64, copy=True),
                 )
-        if self._session is not None and np.asarray(values).size:
-            self._session.tensor_write(
-                field, np.ascontiguousarray(values, dtype=np.float64).ravel()
-            )
 
     # -- internals ---------------------------------------------------------------
 
@@ -322,35 +370,18 @@ class _DraftWriterBase:
             self._push_session(touched)
 
     def _push_session(self, touched: list[RouteEntry]) -> None:
-        """Mirror the committed writes into the live session.
+        """Submit all compiled products through the single native commit channel."""
+        from natal.contracts.materialize import materialize
 
-        Scalar-shaped entries go through ``session.apply``; vector and
-        tensor entries (including slot cells, whose contract field is
-        the whole unified vector) through ``session.tensor_write`` with
-        the full committed field contents.  Boolean rows never reach
-        the session as values — they only mark ``__blueprint__`` (a
-        rebuild), handled by the dirty bridge.
-        """
         session = self._session
         assert session is not None
-        scalars: dict[str, float] = {}
-        for entry in touched:
-            if entry.kind == "bool" or entry.config_field is None:
-                continue
-            contract = entry.contract_field
-            if entry.kind in ("scalar", "mode_enum"):
-                value = _scalar_value(entry, self._draft)
-                scalars[contract] = -1.0 if value is None else value
-                continue
-            field_obj: object = getattr(self._draft, entry.config_field)
-            if isinstance(field_obj, np.ndarray) and field_obj.size:
-                # cast: object narrowed to bare ndarray; dtype is float64 by
-                # draft construction.
-                typed_field = cast("NDArray[np.float64]", field_obj)
-                flat = np.ascontiguousarray(typed_field, dtype=np.float64).ravel()
-                session.tensor_write(contract, flat)
-        if scalars:
-            session.apply(scalars)
+        fields = sorted({entry.contract_field for entry in touched if entry.kind != "bool" and entry.config_field is not None})
+        if fields and set(fields) <= NATIVE_SCALAR_FIELDS:
+            # The native scalar batch already validates atomically. Building
+            # every genetics tensor for an ecological scalar edit is needless.
+            session.apply({name: -1.0 if (value := getattr(self._draft, contract_to_draft_field(name))) is None else float(value) for name in fields})
+        elif fields:
+            session.refresh_params(fields, materialize(self._draft).params)
 
     def _apply_fitness_patch(
         self,
@@ -446,6 +477,7 @@ class CoreConfigWriter(_DraftWriterBase):
         species: Species | None = None,
         registry: IndexRegistry | None = None,
         param_log: Callable[[str, float, float], None] | None = None,
+        param_value_log: Callable[[str, AuditValue, AuditValue], None] | None = None,
     ) -> None:
         """Bind the writer to a population's draft and live session.
 
@@ -460,6 +492,7 @@ class CoreConfigWriter(_DraftWriterBase):
             registry: Optional index registry for the same purpose.
             param_log: Optional snapshot sink called as
                 ``param_log(name, old, new)`` per committed scalar change.
+            param_value_log: Complete typed audit sink after a native commit.
         """
         super().__init__(
             draft,
@@ -467,6 +500,7 @@ class CoreConfigWriter(_DraftWriterBase):
             session=session,
             species=species, registry=registry,
             param_log=param_log,
+            param_value_log=param_value_log,
         )
 
 

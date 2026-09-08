@@ -186,6 +186,6 @@ def test_custom_hooks_work_with_discrete_rust(species: Species) -> None:
         .hooks(_discrete_custom_noop)
         .build()
     )
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
     pop.run(2)
     assert pop.tick == 2

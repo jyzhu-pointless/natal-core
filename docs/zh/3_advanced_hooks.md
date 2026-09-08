@@ -13,13 +13,15 @@
 |---|---|
 | `pop.tick` | 当前模拟 tick（只读）。 |
 | `pop.deme_id` | 本次调用的 deme 索引（panmictic 为 `0`，空间模型为实际 deme 下标，只读）。 |
-| `pop.state` | 可写状态视图（短期借用；写入立即生效）。 |
-| `pop.params` | 可写参数面（与 `pop.params` 相同的写入器栈；属性写入经边界校验，同时到达 draft、Rust 会话与参数快照日志）。 |
+| `pop.state` | 可写事务候选，首次访问 state 或 metrics 时物化，回调成功后提交。 |
+| `pop.params` | 可写参数面（与 `pop.params` 相同的写入器栈；属性写入在候选中经过校验，回调成功后进入 Rust 会话与审计日志）。 |
 | `pop.blueprint` | 只读维度、名称目录与引擎开关（`n_sexes`、`n_ages`、`n_ztypes`、`discrete`、`stochastic`、`continuous_sampling`、`extreme_speed_mode`、`ztype_names`、`gtype_names`）。 |
 | `pop.metrics` | 按需计算的指标视图（每次访问重新计算）。 |
-| `pop.rng` | 确定性随机流（由种群槽位、tick、deme、hook 索引派生；从不触碰全局 `numpy.random`）。 |
+| `pop.rng` | 该 deme 持久 Rust 随机流的受控采样器；从不触碰全局 `numpy.random`。 |
 | `pop.update()` | 返回绑定到所属种群的运行时 `Configurator`（与构建链同语法）。 |
 | `pop.stop()` / `pop.stop_requested` | 在事件边界请求/查询终止当前 run。 |
+
+只有回调访问参数或配置时，参数候选才会复制到 Python。仅统计调用次数、查看状态或抽取随机数的回调不会传输参数张量。经过校验的写入直接更新原生事务；回调抛出异常时，该回调的候选会被丢弃。
 
 ### 基本用法
 
@@ -141,7 +143,7 @@ def balance_population(pop: TickContext, drive: int, wt: int) -> int:
 
 ## Hook 内随机采样
 
-回调 Hook 内的随机性必须来自 `pop.rng`（`np.random.Generator`）。任何
+回调 Hook 内的随机性必须来自 `pop.rng`（受控 Rust 采样器）。任何
 `np.random` 全局状态都不会被触碰：
 
 ```python
@@ -152,8 +154,8 @@ from natal.frontend.hooks.tick_context import TickContext
 @hook(event="late", priority=10)
 def stochastic_culling_hook(pop: TickContext) -> int:
     if pop.tick > 50:
-        # pop.rng 是本次调用独立的确定性流：同一 (槽位, tick, deme, hook 索引)
-        # 给出确定的抽取序列
+        # 随机采样推进该 deme 的持久 Rust 流。
+        # 恢复检查点也会恢复随机流位置。
         survival_prob = 0.9
         n_current = pop.state.individual_count[:, :, 0]
         pop.state.individual_count[:, :, 0] = pop.rng.binomial(
@@ -162,10 +164,7 @@ def stochastic_culling_hook(pop: TickContext) -> int:
     return 0
 ```
 
-随机流由 `种群槽位 ^ (tick * 1_000_003) ^ ((deme_id + 7) * 6_559) ^ ((hook_index + 1) * 31)`
-派生。**可复现性承诺**：针对同一 `setup(stochastic=True, seed=...)`、同一 hook 组合，
-引擎产生的确定性轨迹以及种子驱动的随机抽样跨进程 bit 级可复现；
-任何自定义全局随机（`np.random.seed(...)` 这类）都不在承诺范围内。
+采样器支持 `random`、`uniform`、`normal`、`integers` 和 `binomial`；binomial 的计数和概率可以按数组广播。同一回调中重复访问使用同一随机流；失败回调的候选采样被丢弃。使用相同 hook 和参数恢复检查点，可重放之后的采样。回调结束后，保留的 RNG、参数和 update 句柄拒绝访问。
 
 ## 执行路径
 
@@ -244,31 +243,24 @@ def heatwave(pop: TickContext) -> int:
 语义（各入口统一）：
 
 - 写入经过 jsonc 边界校验，超出 `parameters.jsonc` 中声明的 `bounds` 抛 `ValueError`；
-- 同 tick 后续阶段立即生效（tick 内写落入会话生态列；带外 `trigger_event` 写直接落 draft）；
+- 同 tick 后续阶段立即生效（tick 内和显式 `trigger_event` 写入都通过所属 Rust 会话提交）；
 - 每条实际变化追加到 `pop.params_log`，格式 `(tick, name, old, new)`；
 - 向量/张量参数用 `pop.params.tensor_write(name, values)`。
 
-自定义字段通过 `pop.state` / `config.custom['name'][()]` 读写，构建时用
+自定义字段通过 `population.config.custom['name']` 读取，构建时用
 `.custom(temperature=25.0)` 初始化，运行时可用 `pop.update().custom(...)` 修改。
-自定义字段不在参数注册表中，`pop.params` 无法访问它们。
+自定义值保留 bool/int/float 类型以及任意维数数组的形状；空间模型按 deme 独立保存，并纳入检查点。自定义字段不在参数注册表中，`pop.params` 无法访问它们。
 
 Hook 内如需构建链式更新，可用 `pop.update()` 返回的 Configurator（与构建链同语法）。
 
-## 切片④ 一致性条款（slice ④ 语义决定）
+## 事件事务
 
-- **late 事件中的 `stop()`**：在事件边界立即停止，当前 tick 的其余阶段不再执行，
-  且 tick 不递增。
-- **`stop()` 之后**：继续 `run()` 前必须先 `reset()`；否则 `run()` 抛错。
-- **Hook 异常**：回调抛出的异常跨桥回到 Python 时包装为 `RuntimeError`，
-  消息中内嵌原始错误文本（普通模型桥保留原异常在 `__cause__`，空间桥仅在
-  消息中内嵌）；带外调用（`trigger_event`、finish 事件）原样上抛原始异常。
-- **空间 `ctx.update()` 下一 tick 生效**：空间 run 内 hook 的参数写先落入 deme
-  draft，并在该 tick 返回时拉入会话列，因此从**下一个 tick** 开始生效（与普通
-  模型 hook 的延迟写语义一致）。同一 tick 内声明式 `Op.set_param` 与 `ctx.update()`
-  写同一参数时，运行时按后写者为准（Python 回调在该事件的声明式钩子之后触发）。
-- **hook 内参数写与 `run()` 合流**（HB-2 修复后）：会话内写发生在会话
-  生态列中；`run()` 返回时审计日志按各自提交 tick 追加到 `params_log`，最终值
-  同步回 draft，无需脏桥回推。
+- 每个 Python 回调统一提交状态、生态、遗传参数、自定义值和 RNG 位置。非法状态或异常会丢弃该回调的候选；此前成功回调的提交保留。
+- 声明式操作按优先级执行，同一事件中后面的操作能看到前面的写入。最终参数变化按原生事件提交，同一参数多次写入合并为一条从初值到终值的审计记录。Python 回调在声明式事件之后逐个独立提交，分别记录日志。
+- 普通和空间模型中的成功参数更新，对同一 tick 的后续回调和阶段立即可见。Rust 保存当前值和参数日志，Python 配置读取返回隔离快照。空间 `ctx.params.tensor_write()` 和 deme 参数写入由原生会话为变化的遗传数据建立独立变体，不影响其他 deme。
+- 回调异常保留原始 Python 异常类型。失败会话必须 reset 或恢复检查点后才能再次运行。
+- `stop()` 在当前事件边界停止，保留该阶段的状态和位置，tick 不递增；继续运行需要 reset 或恢复一个 Ready 检查点。
+- 只有回调访问 state 或 metrics 时才生成 Python 状态数组。仅使用参数或 RNG 的回调不会创建 Python 状态数组。
 
 ## 相关章节
 

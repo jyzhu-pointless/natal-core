@@ -178,7 +178,9 @@ def _assert_materializations_equal(
 def test_deleted_contracts_names_are_inaccessible() -> None:
     # The ParamsBlock family must not be importable from natal.contracts.
     with pytest.raises(ImportError):
-        from natal.contracts import make_params_block  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        from natal.contracts import (
+            make_params_block,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        )
     with pytest.raises(ImportError):
         from natal.contracts import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
             build_params_dtype,
@@ -201,15 +203,25 @@ def test_deleted_data_names_are_inaccessible() -> None:
         )
     # natal.frontend.data (legacy shim): all five legacy config names are gone.
     with pytest.raises(ImportError):
-        from natal.frontend.data import DiscretePopulationConfig  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        from natal.frontend.data import (
+            DiscretePopulationConfig,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        )
     with pytest.raises(ImportError):
-        from natal.frontend.data import PlainPopulationConfig  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        from natal.frontend.data import (
+            PlainPopulationConfig,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        )
     with pytest.raises(ImportError):
-        from natal.frontend.data import PopulationConfig  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        from natal.frontend.data import (
+            PopulationConfig,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        )
     with pytest.raises(ImportError):
-        from natal.frontend.data import from_plain_population_config  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        from natal.frontend.data import (
+            from_plain_population_config,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        )
     with pytest.raises(ImportError):
-        from natal.frontend.data import to_plain_population_config  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        from natal.frontend.data import (
+            to_plain_population_config,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: name must not exist
+        )
 
 
 def test_model_draft_schema_has_no_legacy_fields() -> None:
@@ -481,7 +493,8 @@ def test_runtime_update_visible_to_later_materialization() -> None:
     assert float(p.survival_rates[:, 1].sum()) == 0.0
     assert p.eggs_per_female == pytest.approx(9.0)
     # The updated draft still satisfies the discrete invariants.
-    assert _require_discrete_config(pop.config) is pop.config
+    snapshot = pop.config
+    assert _require_discrete_config(snapshot) is snapshot
 
 
 # ── axis combinations ─────────────────────────────────────────────────────────

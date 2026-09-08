@@ -59,6 +59,7 @@ if TYPE_CHECKING:
             first: List[Callable[..., int]],
             early: List[Callable[..., int]],
             late: List[Callable[..., int]],
+            finish: List[Callable[..., int]] | None = None,
         ) -> None:
             """Register per-event callback lists."""
             ...
@@ -321,6 +322,26 @@ class HookManagerMixin:
             int: ``RESULT_CONTINUE`` (0) to continue, ``RESULT_STOP`` (1)
             to stop.
         """
+        native = getattr(self, "_runtime_parameter_writer", None)
+        if native is None:
+            native = getattr(self, "_rust_lifecycle_backend", None)
+        if native is not None and hasattr(native, "trigger_event"):
+            event_id = EVENT_ID_MAP.get(event_name)
+            if event_id is None:
+                return RESULT_CONTINUE
+            # Refresh changed hook programs without replacing session state/RNG.
+            if getattr(self, "_runtime_parameter_writer", None) is None:
+                pop = cast("_Population", self)
+                native.bind_history(pop.history._store, pop._params_log)  # pyright: ignore[reportPrivateUsage]  # manual events use the same native log as run checkpoints.
+                pop.history._bind_checkpoint_pruner(native.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+                native.configure_program(self._run_program.hooks, self.config)
+                self._register_rust_callbacks(native)
+            if getattr(self, "_runtime_parameter_writer", None) is None:
+                result = int(native.trigger_event(event_id, deme_id))
+            else:
+                result = int(native.trigger_event(event_id))
+            cast("_Population", self)._mark_state_cache_stale()  # pyright: ignore[reportPrivateUsage]  # host owns its snapshot cache
+            return result
         if self.hook_executor is None:
             self.ensure_hook_executor()
         executor = self.hook_executor
@@ -399,16 +420,19 @@ class HookManagerMixin:
         callbacks register an empty list so Rust kernels skip the GIL
         boundary entirely.
         """
-        from natal.frontend.hooks.types import EVENT_EARLY, EVENT_FIRST, EVENT_LATE
+        from natal.frontend.hooks.types import (
+            EVENT_EARLY,
+            EVENT_FINISH,
+            EVENT_FIRST,
+            EVENT_LATE,
+        )
 
         runner = self._ensure_hook_runner()
-        first_cb = runner.rust_callback(EVENT_FIRST)
-        early_cb = runner.rust_callback(EVENT_EARLY)
-        late_cb = runner.rust_callback(EVENT_LATE)
         backend.set_python_callbacks(
-            [first_cb] if first_cb is not None else [],
-            [early_cb] if early_cb is not None else [],
-            [late_cb] if late_cb is not None else [],
+            runner.rust_callbacks(EVENT_FIRST),
+            runner.rust_callbacks(EVENT_EARLY),
+            runner.rust_callbacks(EVENT_LATE),
+            runner.rust_callbacks(EVENT_FINISH),
         )
 
     def register_compiled_hook(self, desc: CompiledHookDescriptor) -> None:

@@ -58,6 +58,9 @@ from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import GridTopology
 
 if TYPE_CHECKING:
+    from natal.frontend.data.definition import ModelDefinition
+    from natal.frontend.genetics.compile import GameteList, ZygoteList
+    from natal.frontend.genetics.definition_compiler import CompiledModel
     from natal.frontend.presets import GeneticPreset
 
 __all__ = [
@@ -725,10 +728,13 @@ class SpatialConfigurator:
                     seeds.update(resolved_decl)
 
         # ── Step 5: Build combined modifier maps & BFS ─────────────────
-        combined_z2g, combined_g2z = self._build_combined_modifier_maps(
-            expanded,
-            full_config,
-        )
+        if not _genetics_batch_names(batch_param_names):
+            # Ecology variation cannot add genetic edges. The already compiled
+            # uncompressed template supplies the complete reachability graph.
+            combined_z2g = full_config.zygotes_to_gametes_map
+            combined_g2z = full_config.gametes_to_zygotes_map
+        else:
+            combined_z2g, combined_g2z = self._build_combined_modifier_maps(expanded, full_config)
         _, _, ztype_mask, _ = build_compression_mask(
             combined_z2g,
             combined_g2z,
@@ -1685,6 +1691,96 @@ class SpatialConfigurator:
         Returns:
             A ``SpatialPopulation`` with all demes initialized.
         """
+        definition = self._definition_for_compile()
+        return self._build_from_definition(definition, cached_template=self._template._compiled_model)  # pyright: ignore[reportPrivateUsage]  # avoid re-executing recipes already compiled by the chain.
+
+    def _definition_for_compile(self) -> ModelDefinition:
+        """Freeze concrete spatial controls before creating any execution session."""
+        from dataclasses import replace
+
+        from natal.frontend.data.definition import (
+            ModelDefinition,
+            SpatialInputs,
+            copy_declaration_value,
+        )
+
+        inputs = self._template._definition_for_compile().normalized  # pyright: ignore[reportPrivateUsage]  # shared template compiler input.
+        assert inputs is not None
+        expanded = {name: tuple(batch.expand(self._n_demes, self._topology)) for name, batch in self._batch_settings.items()}
+
+        def normalize(value: Any) -> Any:
+            # Any: group call values can include nested batches and opaque recipes.
+            if isinstance(value, BatchSetting):
+                first = cast("BatchSetting[Any]", value).first_value()
+                return copy_declaration_value(first)
+            if isinstance(value, dict):
+                return {key: normalize(item) for key, item in cast("dict[str, Any]", value).items()}
+            if isinstance(value, (tuple, list)):
+                return tuple(normalize(item) for item in cast("Sequence[Any]", value))
+            return copy_declaration_value(value)
+
+        kernel_bank, kernel_ids = self._resolve_migration_kernels()
+        controls = SpatialInputs(
+            self._n_demes, self._topology, self._pop_type, self._spatial_name,
+            tuple(expanded.items()),
+            tuple((name, normalize(kwargs)) for name, kwargs in self._declaration_log),
+            {
+                "adjacency": self._migration_adjacency, "kernel": self._migration_kernel,
+                "strategy": self._migration_strategy, "kernel_bank": kernel_bank,
+                "deme_kernel_ids": kernel_ids, "kernel_include_center": self._kernel_include_center,
+                "migration_rate": self._migration_rate, "adjust_migration_on_edge": self._adjust_migration_on_edge,
+            },
+            self._observation_groups, self._observation_collapse_age,
+            self._observation_demes, self._observation_deme_mode,
+            self._record_history_mode, self._record_history_max_rows, self._compress,
+            None if self._declared_zygote_types is None else cast("frozenset[str] | frozenset[int]", frozenset(self._declared_zygote_types)),
+        )
+        return ModelDefinition(self._species, self._pop_type == "discrete_generation", tuple(self._declaration_log), self._spatial_name, normalized=replace(inputs, spatial=controls))
+
+    @classmethod
+    def _build_from_definition(
+        cls, definition: ModelDefinition, *, cached_template: CompiledModel | None = None,
+    ) -> SpatialPopulation:
+        """Compile a detached normalized definition using the existing group compiler."""
+        inputs = definition.normalized
+        if inputs is None or inputs.spatial is None:
+            raise ValueError("Spatial compilation requires normalized spatial inputs")
+        controls = inputs.spatial
+        compiler = cls(definition.species, controls.n_demes, controls.topology, pop_type=controls.pop_type)
+        template = Configurator(inputs.settings, species=definition.species)
+        template._registry = inputs.registry  # pyright: ignore[reportPrivateUsage]  # initialize one isolated compiler candidate.
+        template._presets = list(inputs.presets)  # pyright: ignore[reportPrivateUsage]
+        template._manual_gamete = cast("GameteList", list(inputs.manual_gamete))  # pyright: ignore[reportPrivateUsage]
+        template._manual_zygote = cast("ZygoteList", list(inputs.manual_zygote))  # pyright: ignore[reportPrivateUsage]
+        template._fitness_base = inputs.fitness_base  # pyright: ignore[reportPrivateUsage]
+        template._fitness_steps = list(inputs.fitness_steps)  # pyright: ignore[reportPrivateUsage]
+        template._compilation_key = inputs.compilation_key  # pyright: ignore[reportPrivateUsage]
+        template._compiled_model = cached_template  # pyright: ignore[reportPrivateUsage]
+        template._hook_calls = list(inputs.hook_calls)  # pyright: ignore[reportPrivateUsage]
+        template._observation_groups = inputs.observation_groups  # pyright: ignore[reportPrivateUsage]
+        template._observation_collapse_age = inputs.observation_collapse_age  # pyright: ignore[reportPrivateUsage]
+        template._record_history_mode = inputs.history_mode  # pyright: ignore[reportPrivateUsage]
+        template._record_history_max_rows = inputs.history_max_rows  # pyright: ignore[reportPrivateUsage]
+        template._compress = inputs.compress  # pyright: ignore[reportPrivateUsage]
+        template._declared_zygote_types = None if inputs.declared_zygote_types is None else cast("set[str] | set[int]", set(inputs.declared_zygote_types))  # pyright: ignore[reportPrivateUsage]
+        compiler._template = template
+        compiler._batch_settings = {name: BatchSetting(values) for name, values in controls.batch_values}
+        compiler._declaration_log = list(controls.group_calls)
+        template._declaration_log = compiler._resolved_group_journal({})  # pyright: ignore[reportPrivateUsage]  # preserve provenance without replaying recipes.
+        compiler._spatial_name = controls.name
+        compiler._observation_groups = None if controls.observation_groups is None else dict(controls.observation_groups)
+        compiler._observation_collapse_age = controls.observation_collapse_age
+        compiler._observation_demes = controls.observation_demes
+        compiler._observation_deme_mode = controls.observation_deme_mode
+        compiler._record_history_mode = controls.history_mode
+        compiler._record_history_max_rows = controls.history_max_rows
+        compiler._compress = controls.compress
+        compiler._declared_zygote_types = None if controls.declared_zygote_types is None else cast("set[str] | set[int]", set(controls.declared_zygote_types))
+        compiler.migration(**controls.migration)  # pyright: ignore[reportArgumentType]  # validated normalized migration keyword schema.
+        return compiler._build_normalized(definition)
+
+    def _build_normalized(self, definition: ModelDefinition) -> SpatialPopulation:
+        """Execute group compilation and native construction from frozen inputs."""
         if not self._batch_settings:
             demes = self._build_homogeneous_demes()
         else:
@@ -1705,20 +1801,7 @@ class SpatialConfigurator:
             adjust_migration_on_edge=self._adjust_migration_on_edge,
             name=self._spatial_name,
         )
-        # Freeze the spatial declaration snapshot (plan 5.1 slice 3):
-        # the wrapper journal carries the raw BatchSetting declarations —
-        # the authoritative record for a spatial build (the per-deme
-        # snapshots hold the template's first-value chain instead).
-        from natal.frontend.data.definition import ModelDefinition
-
-        spatial._definition = ModelDefinition(  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]  # build() is the sanctioned attachment point
-            species=self._species,
-            discrete_generation=bool(self._pop_type == "discrete_generation"),
-            journal=tuple(
-                (name, dict(kwargs)) for name, kwargs in self._declaration_log
-            ),
-            build_name=self._spatial_name,
-        )
+        spatial._definition = definition  # pyright: ignore[reportPrivateUsage]  # attach the actual input consumed by this compilation.
         # The Rust engine is the ONLY execution backend (plan S6): the
         # spatial population builds its session here with the default seed
         # 0, and a missing extension is a hard error — no silent fallback
@@ -1731,7 +1814,7 @@ class SpatialConfigurator:
                 "only execution backend. Build it with `maturin develop` "
                 "before constructing populations."
             )
-        spatial.enable_rust_backend(seed=0)
+        spatial._initialize_session(seed=0)  # pyright: ignore[reportPrivateUsage]  # build owns session initialization.
         self._compile_recording_plan(spatial)
         return spatial
 
@@ -2076,6 +2159,18 @@ class SpatialConfigurator:
 
         return variant
 
+    def _resolved_group_journal(self, values: Mapping[str, object]) -> list[tuple[str, dict[str, Any]]]:
+        """Record concrete group inputs without executing their declarations again."""
+        # Any: journal arguments include opaque recipe objects and nested selectors.
+        result: list[tuple[str, dict[str, Any]]] = []
+        for method, kwargs in self._declaration_log:
+            resolved = {key: values.get(key, value) for key, value in kwargs.items()}
+            if method in ("presets", "hooks"):
+                source = "preset_list" if method == "presets" else "hook_items"
+                resolved["__args__"] = tuple(_object_sequence(resolved.pop(source, ()), name=source))
+            result.append((method, resolved))
+        return result
+
     def _build_template_for_group(
         self,
         sig_map: Dict[str, object],
@@ -2095,6 +2190,27 @@ class SpatialConfigurator:
             extra_declared: Additional ztype indices to protect from
                 compression pruning (union seeds across all demes).
         """
+        # Ecology-only variants reuse the template's compiled genetics,
+        # including the uncompressed pass used to collect global BFS seeds.
+        # Cloning the configurator preserves opaque recipe identities without
+        # repeating their effects; build snapshots every owned array itself.
+        if not _genetics_batch_names(list(sig_map)) and self._can_use_replace(sig_map, self._template.config):
+            from copy import copy
+
+            template_cfg = copy(self._template)
+            template_cfg._declaration_log = self._resolved_group_journal(sig_map)  # pyright: ignore[reportPrivateUsage]  # cached products still retain the concrete group declaration.
+            template_cfg._config = self._build_variant_config(  # pyright: ignore[reportPrivateUsage]  # isolated group candidate.
+                sig_map, self._template.config, species=self._species, pop_type=self._pop_type,
+            )
+            if compress is not None:
+                template_cfg._compress = compress  # pyright: ignore[reportPrivateUsage]
+            if extra_declared:
+                template_cfg._declared_zygote_types = set(extra_declared)  # pyright: ignore[reportPrivateUsage]
+            result = template_cfg.build(name=f"{self._spatial_name}_group")
+            # A cold compile creates products once; subsequent ecology groups
+            # and the post-BFS build can reuse them under the same input key.
+            self._template._compiled_model = template_cfg._compiled_model  # pyright: ignore[reportPrivateUsage]
+            return result
         if self._pop_type == "age_structured":
             template_cfg = Configurator.for_age_structured(self._species)
         else:
@@ -2143,7 +2259,7 @@ class SpatialConfigurator:
                         first = cast(BatchSetting[Any], item).first_value()
                         if first is not None:
                             expanded_presets.append(first)
-                    else:
+                    elif item is not None:
                         expanded_presets.append(item)
                 filtered = {k: v for k, v in resolved.items() if v is not None}
                 method(*expanded_presets, **filtered)
@@ -2219,10 +2335,8 @@ class SpatialConfigurator:
             population_fingerprint=plan.schema.population.fingerprint,
         )
         spatial._observation = observation  # type: ignore[reportPrivateUsage]  # bind canonical rule to the frozen PopulationLayout
-        # Spatial wrappers currently transport one regular raw batch to the
-        # container, which applies the frozen Observation before committing to
-        # History. This avoids the legacy ragged CompactMeta layout while still
-        # storing only the selected observation values.
+        # The native store compiles its selector from this frozen policy when
+        # bound; no per-tick raw batch is transported to the Python wrapper.
         spatial._observation_mask = None  # type: ignore[reportPrivateUsage]  # raw engine transport; container commits the configured History mode
         spatial._recording_plan = plan  # type: ignore[reportPrivateUsage]  # configurator sets private attr on spatial
         spatial._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]  # configurator sets private attr

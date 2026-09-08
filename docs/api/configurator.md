@@ -10,11 +10,10 @@ identically at build time and runtime.
 Key features:
 
 - **Fluent chain API** — `.competition(carrying_capacity=10000).reproduction(eggs_per_female=50).build()`
-- **Immediate writes** — every chain method writes to NumPy arrays in-place
+- **Validated writes** — build-time methods update the model definition; runtime methods submit validated updates to the Rust session
 - **Runtime modification** — `pop.update().competition(carrying_capacity=5000)` without rebuilding
-- **Model-specific subclasses** — `DiscreteConfigurator` / `AgeStructuredConfigurator`
-  with narrowed parameter signatures
-- **Preset/modifier/fitness** — applied directly to config arrays, no deferred execution
+- **One configurator** — the same `Configurator` dispatches parameters for discrete and age-structured models
+- **Preset/modifier/fitness** — declarations compile into genetic tables; runtime reconfiguration updates the existing session
 - **Equilibrium sync** — `carrying_capacity` / `eggs_per_female` / `sex_ratio` changes
   derive the equilibrium metrics on read
 
@@ -40,10 +39,10 @@ pop.update().competition(carrying_capacity=5000)
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 ```
 
-## DiscreteConfigurator
+## Discrete-Generation Configuration
 
-Configurator for `DiscreteGenerationPopulation`. Parameters are narrowed to the
-discrete-generation model.
+Use `Configurator.for_discrete(species)` or the population's `.setup(species)`
+entry point. The following fragment assumes `species` is already defined.
 
 ```python
 # Create
@@ -71,10 +70,11 @@ cfg.competition(
 )
 ```
 
-## AgeStructuredConfigurator
+## Age-Structured Configuration
 
-Configurator for `AgeStructuredPopulation`. Supports per-age array parameters
-and the Champer equilibrium model.
+Use `Configurator.for_age_structured(species)`. It supports per-age parameters
+and the Champer equilibrium model. The following fragment assumes `species`
+and the optional `custom_dist` equilibrium distribution are already defined.
 
 ```python
 cfg = nt.Configurator.for_age_structured(species)
@@ -107,7 +107,8 @@ cfg.competition(
 
 ## Shared Methods
 
-Both Configurator subclasses expose these methods:
+The unified Configurator exposes these methods. Fragments below assume a
+build-time `cfg` and any referenced presets or modifiers already exist.
 
 ### `setup(**flags)`
 ```python
@@ -129,8 +130,9 @@ format: `{sex: {genotype: age_data}}`.
 ```python
 cfg.custom(temperature=25.0, debug=True)
 ```
-Register named fields stored in `config.custom`. Hooks read/write via
-`config.custom['name'][()]`.
+Register typed named values. Read snapshots through `pop.config.custom`;
+write runtime values with `pop.update().custom(...)` or, inside a callback,
+`ctx.update().custom(...)`. Scalars are plain Python values, not 0-D arrays.
 
 ### `with_observation(groups, *, collapse_age=False)`
 ```python
@@ -186,11 +188,12 @@ fingerprint before applying the observation.
 ```python
 cfg.presets(homing_drive)
 ```
-Apply genetic presets immediately — writes directly to config arrays (not deferred).
+Register genetic presets in the model definition. Construction compiles their
+rules; runtime reconfiguration replaces validated tables without resetting the session.
 
 ### `reconfigure_preset(preset, **changes)`
 ```python
-cfg.reconfigure_preset(homing_drive, homing_rate=0.95)
+pop.update().reconfigure_preset(homing_drive, drive_conversion_rate=0.95)
 ```
 Modify a registered preset parameter and re-apply from baselines. Restores
 baseline fitness/gamete arrays, applies the updated preset parameters, and
@@ -201,7 +204,7 @@ syncs equilibrium. Requires that the preset was first registered via
 ```python
 cfg.modifiers(gamete_modifiers=[my_mod])
 ```
-Register gamete/zygote modifiers, immediately rebuilding genotype/gamete maps.
+Register gamete/zygote modifier rules for compilation into genotype/gamete maps.
 
 ### `fitness(viability=None, fecundity=None, sexual_selection=None, zygote_viability=None, mode="replace")`
 ```python
@@ -247,29 +250,42 @@ pop.update().reproduction(eggs_per_female=100).competition(carrying_capacity=100
 # Custom fields
 pop.update().custom(temperature=35.0)
 ```
-All changes write immediately to 0-d ndarrays — no `freeze()` or rebuild needed.
+Each runtime call validates and commits its own update. Separate chained calls
+are separate transactions; the existing Rust session and random stream continue.
 
 ### Inside Hooks
+
+This fragment continues the Quick Start population above. A Python callback
+receives one `TickContext`; its updates commit with the callback's candidate
+state when the callback completes successfully.
+
 ```python
-@nt.hook(event="early", custom=True)
-def my_hook(state, config, deme_id):
-    config.carrying_capacity[()] = 5000
-    config.custom['temperature'][()] = 40.0
+@nt.hook(event="early")
+def my_hook(ctx: nt.TickContext) -> int:
+    ctx.update().competition(carrying_capacity=5000)
+    ctx.update().custom(temperature=40.0)
+    return 0
+
+pop.update().hooks(my_hook)
+pop.run(1)
+assert pop.params.carrying_capacity == 5000
+assert pop.config.custom["temperature"] == 40.0
 ```
 
 ### Spatial Population
+
+This fragment assumes `spatial` is a built spatial population with four demes.
+Use the validated parameter surface to change runtime ecology:
+
 ```python
-# All demes
-pop.update().competition(carrying_capacity=5000)
+# All demes.
+spatial.params.tensor_write("carrying_capacity", 5000.0)
 
-# Single deme (clone-on-write)
-pop.update(deme=3).competition(carrying_capacity=8000)
+# One deme.
+spatial.deme(3).write_ecology("carrying_capacity", 8000.0)
 
-# Batch per-deme
-from natal.frontend.spatial import batch_setting
-pop.update().competition(
-    carrying_capacity=batch_setting([100, 200, 300, 400])
-)
+# A separate value for every deme.
+spatial.params.tensor_write("carrying_capacity", [100.0, 200.0, 300.0, 400.0])
 ```
 
 ## Low-Level API
@@ -284,31 +300,29 @@ The foundation of all higher-level APIs. Resolves parameter names through the
 `parameters.py` registry, locates the config field and index, and writes in-place.
 Equilibrium-sensitive parameters (K / eggs / sex_ratio) auto-trigger sync.
 
-### `hook_set_param(config, name, value)`
-```python
-from natal.frontend.configurator import hook_set_param
+### Declarative Parameter Updates
 
-@nt.hook(event="early", custom=True)
-def my_hook(state, config, deme_id):
-    hook_set_param(config, "carrying_capacity", 5000.0)
-    hook_set_param(config, "reproduction.eggs_per_female", 100.0)
-    return 0
+A parameter operation needs no Python callback. This fragment continues the
+Quick Start population and keeps the declarative `Op` format:
+
+```python
+pop.update().hooks(nt.Op.set_param("carrying_capacity", "K * 0.5", event="early"))
 ```
-Wraps `objmode` + `set_param` for callable-from-njit convenience. Use when
-you need string-name routing inside hooks. The fastest path remains direct
-`config.field[()] = v`.
+
+For Python callback logic, use `ctx.params` or `ctx.update()` as shown above.
+Direct mutation of a returned configuration snapshot does not update a session.
 
 ### `Configurator.for_config(config)`
 ```python
 cfg = nt.Configurator.for_config(pop.config)
 ```
-Returns `DiscreteConfigurator` or `AgeStructuredConfigurator` based on config type.
+Returns the unified `Configurator` for the supplied draft. A configuration
+snapshot obtained from `pop.config` is isolated; use `pop.update()` when the
+intention is to modify a running population.
 
-## Type Hierarchy
+## Configurator Ownership
 
-```
-Configurator                  # base: setup, build, apply, presets, fitness, hooks...
-├── DiscreteConfigurator      # + competition(discrete), reproduction(discrete), survival(discrete)
-└── AgeStructuredConfigurator # + competition(Champer), reproduction(per-age), survival(per-age)
-```
-
+`Configurator` is one implementation for both model kinds. Construction keeps
+model declarations; `pop.update()` binds it to runtime parameter updates.
+`pop.config` is a query snapshot, so mutation through that snapshot cannot
+replace the explicit runtime write path.

@@ -27,8 +27,9 @@ Population state
 | `output/observation.py` | 定义 `Observation`、`ObservationResult`、`ObservationFilter` 与恒等观测 |
 | `output/history.py` | 定义不可变 schema、类型化数组视图、raw History 的事后投影 |
 | `output/_recording.py` | 在构建阶段编译 `RecordingPlan`、行宽与空间布局 |
-| `engine/templates/spatial_lifecycle_*.tmpl.py` | 运行空间生命周期并传回规则化 raw batch |
-| `spatial/population.py` | 在空间容器边界应用 canonical Observation，再提交 History |
+| `rust/src/history.rs` | 拥有历史数值、投影实现、保留预算及参数日志 |
+| `rust/src/spatial_session.rs` | 批量运行空间生命周期，在 Rust 内记录边界 |
+| `spatial/population.py` | 传递运行控制与 selector，包装 Rust 观测查询结果 |
 
 ## 构建阶段的公开接口
 
@@ -159,22 +160,17 @@ Observation History 已经丢弃未记录的 ZType 与未选择的 deme 信息�
 
 ## 空间记录路径
 
-空间记录不在执行内核内执行 Observation。内核的职责是运行生命周期、迁移，并在稳定 tick 边界返回规则化 raw batch：
+空间会话在 Rust 内运行生命周期与迁移，在记录边界直接写入 Rust HistoryStore：raw 模式保存完整状态，observation 模式使用已编译的 selector 投影后仅保存观测值。
 
 ```text
-Spatial execution kernel
-  → [tick, all deme individual_count, all deme sperm_storage]
-  → SpatialPopulation._process_kernel_history(...)
-       ├─ raw History: 验证并提交完整 batch
-       └─ observation History:
-            reshape 为规则化空间 count
-            → canonical Observation.apply(...)
-            → 提交固定形状的投影行
+Rust spatial session
+  → lifecycle and migration
+  → raw state or native observation projection
+  → bounded HistoryStore and raw checkpoints
+  → Python query: independent result arrays
 ```
 
-带外记录在相同的稳定 tick 边界调用 `_record_snapshot()`。raw mode 提交完整空间状态；observation mode 调用同一个 `Observation.apply()`。因此引擎内批次与带外快照共享相同的 Observation 语义和 History schema，只是 raw batch 的产生位置不同。
-
-空间 wrapper 传 raw batch 的原因是保持 engine transport 规则且固定：生命周期内核不需要理解 group、deme selection 或 aggregate 规则。Observation 的所有语义集中在 canonical `Observation` 和空间容器边界，避免 engine 与事后投影各自实现一套规则。
+当前状态观测、raw 历史的事后投影与运行时观测记录共享同一套 Rust 数值实现。Python 编译 selector、维护标签并提供只读查询出口；无 Python 回调的批量运行不逐 tick 返回 Python，也不往返传输完整状态。手动快照同样直接从会话记录。`max_rows` 在逐条写入时淘汰旧记录及其检查点，避免先积累整个运行批次。
 
 ## 已删除的 compact 空间布局
 

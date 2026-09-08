@@ -70,22 +70,20 @@ class ModifierPresetMixin(HookManagerMixin):
         Called after structural changes to presets (addition, removal, or
         reconfiguration).  Only preset-derived fitness is restored — any
         fitness values set directly via ``pop.update().fitness()`` will be
-        overwritten, because there is currently no manual-fitness storage
-        analogous to ``_manual_gamete`` / ``_manual_zygote``.
+        overwritten. This explicit reset clears stored manual-fitness patches.
         """
-        from natal.frontend.fitness import apply_preset_fitness_patch
+        import numpy as np
+
+        from natal.frontend.configurator import Configurator
 
         if self._config is None:
             return
-        self._config.viability_fitness.fill(1.0)
-        self._config.fecundity_fitness.fill(1.0)
-        self._config.sexual_selection_fitness.fill(1.0)
-        self._config.zygote_viability_fitness.fill(1.0)
-        for preset in sorted(self._presets, key=lambda p: p.priority):
-            preset.bind_species(self._species)
-            patch = preset.fitness_patch()
-            if patch:
-                apply_preset_fitness_patch(self, patch)  # type: ignore[arg-type]
+        compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
+        candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # compile an isolated reset declaration.
+        candidate._fitness_base = tuple(np.ones_like(array) for array in candidate._fitness_base)  # pyright: ignore[reportPrivateUsage]
+        candidate._fitness_steps = []  # pyright: ignore[reportPrivateUsage]
+        candidate._compile_specification()  # pyright: ignore[reportPrivateUsage]
+        compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
 
     def refresh_modifiers(self, rebuild_maps: bool = True) -> None:
         """Rebuild derived modifier lists and maps from _presets + _manual_*.
@@ -101,24 +99,16 @@ class ModifierPresetMixin(HookManagerMixin):
                 caller plans to batch multiple modifier registrations and
                 will call :meth:`refresh_modifier_maps` once afterward.
         """
-        self._gamete_modifiers.clear()
-        self._zygote_modifiers.clear()
-        for preset in sorted(self._presets, key=lambda p: p.priority):
-            preset.bind_species(self._species)
-            if gm := preset.gamete_modifier(self):
-                self._gamete_modifiers.append((
-                    self._next_modifier_id(self._gamete_modifiers),
-                    f"{preset.name}/gamete", gm,
-                ))
-            if zm := preset.zygote_modifier(self):
-                self._zygote_modifiers.append((
-                    self._next_modifier_id(self._zygote_modifiers),
-                    f"{preset.name}/zygote", zm,
-                ))
-        self._gamete_modifiers.extend(self._manual_gamete)
-        self._zygote_modifiers.extend(self._manual_zygote)
+        from natal.frontend.configurator import Configurator
+
+        compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
+        candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # all runtime recipes use the isolated build compiler.
+        candidate._compile_specification(preserve_fitness=True)  # pyright: ignore[reportPrivateUsage]  # map-only updates preserve current native fitness.
         if rebuild_maps:
-            self.refresh_modifier_maps()
+            compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
+        else:
+            self._gamete_modifiers = list(candidate.gamete_modifiers)
+            self._zygote_modifiers = list(candidate.zygote_modifiers)
 
     def refresh_modifier_maps(self) -> None:
         """Rebuild the three modifier maps from current modifier lists.
@@ -137,88 +127,16 @@ class ModifierPresetMixin(HookManagerMixin):
             and by individual ``add_gamete_modifier`` /
             ``add_zygote_modifier`` when ``refresh=True``.
         """
-        from natal.frontend.data._engine import (
-            initialize_gamete_map,
-            initialize_zygote_map,
-        )
-        from natal.frontend.genetics.compile import compile_modifier_maps
-
         if self._config is None or self._registry is None:
             return
-
-        haploid_genotypes = self._registry.index_to_haplo
-        diploid_genotypes = self._registry.index_to_genotype
-        if not haploid_genotypes or not diploid_genotypes:
+        if not self._registry.index_to_haplo or not self._registry.index_to_genotype:
             return
+        from natal.frontend.configurator import Configurator
 
-        n_glabs = int(self._config.n_glabs)
-        n_slabs = int(self._config.n_slabs)
-
-        # Step 1: full Mendelian baselines, projected onto the registry's
-        # active flat axes.  Compression may retain arbitrary
-        # (genotype, slab) and (haplotype, glab) entries, so neither
-        # active axis is necessarily a Cartesian product.
-        full_z2g = initialize_gamete_map(
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
-            n_slabs=n_slabs,
-        )
-        full_g2z = initialize_zygote_map(
-            haploid_genotypes=haploid_genotypes,
-            diploid_genotypes=diploid_genotypes,
-            n_glabs=n_glabs,
-            n_slabs=n_slabs,
-            unordered=self._species.unordered,
-        )
-        full_ztype_index = {
-            (genotype, slab): genotype_idx * n_slabs + slab_idx
-            for genotype_idx, genotype in enumerate(diploid_genotypes)
-            for slab_idx, slab in enumerate(self._registry.slab_labels)
-        }
-        full_gtype_index = {
-            (haplotype, glab): haplotype_idx * n_glabs + glab_idx
-            for haplotype_idx, haplotype in enumerate(haploid_genotypes)
-            for glab_idx, glab in enumerate(self._registry.glab_labels)
-        }
-        active_ztypes = [
-            full_ztype_index[ztype] for ztype in self._registry.index_to_ztype
-        ]
-        active_gtypes = [
-            full_gtype_index[gtype] for gtype in self._registry.index_to_gtype
-        ]
-        projected_z2g = full_z2g[:, active_ztypes, :][:, :, active_gtypes]
-        projected_g2z = full_g2z[active_gtypes, :, :][:, active_gtypes, :][
-            :, :, active_ztypes
-        ]
-
-        # Step 2: the unified compiler applies the modifier recipes on
-        # the projected axes and derives the offspring tensor.
-        # The mixin always composes into a BasePopulation; the runtime
-        # refresh passes the live host so recipe factories can read it.
-        z2g, g2z, offspring_tensor = compile_modifier_maps(
-            projected_z2g,
-            projected_g2z,
-            gamete_modifiers=self._gamete_modifiers,
-            zygote_modifiers=self._zygote_modifiers,
-            registry=self._index_registry,
-            population=cast("BasePopulation[Any]", self),
-        )
-
-        # Step 3: Persist all three maps into the config via shallow copy.
-        n_g = int(z2g.shape[1])
-        n_hg = int(z2g.shape[2])
-        self._config = self._config._replace(
-            zygotes_to_gametes_map=z2g,
-            gametes_to_zygotes_map=g2z,
-            offspring_tensor=offspring_tensor,
-            n_ztypes=n_g,
-            n_gtypes=n_hg,
-            n_glabs=n_glabs,
-        )
-        # Modifier maps are session structure for the Rust bridge: the maps
-        # (and dimension counters) changed, so the session must be rebuilt.
-        self._rust_needs_rebuild = True
+        compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
+        candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # isolate all user modifier effects before publication.
+        candidate._compile_candidate_maps(self._gamete_modifiers, self._zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
+        compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
 
     def add_gamete_modifier(
         self,
@@ -238,13 +156,20 @@ class ModifierPresetMixin(HookManagerMixin):
                 call :meth:`refresh_modifiers` or
                 :meth:`refresh_modifier_maps` afterward to apply all at once.
         """
-        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_gamete)
-        self._manual_gamete.append((resolved_id, name, modifier))
-        self._manual_gamete.sort(key=lambda x: x[0])
-        self._gamete_modifiers.append((resolved_id, name, modifier))
-        self._gamete_modifiers.sort(key=lambda x: x[0])
+        from natal.frontend.configurator import Configurator
+
+        compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
+        candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # registration is published only after compilation succeeds.
+        declarations = candidate._manual_gamete  # pyright: ignore[reportPrivateUsage]
+        resolved_id = self._resolve_modifier_id(modifier_id, declarations)
+        declarations.append((resolved_id, name, modifier))
+        declarations.sort(key=lambda item: item[0])
         if refresh:
-            self.refresh_modifier_maps()
+            candidate._compile_specification(preserve_fitness=True)  # pyright: ignore[reportPrivateUsage]
+            compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
+        else:
+            self._manual_gamete = list(declarations)
+            self._gamete_modifiers = [*self._gamete_modifiers, (resolved_id, name, modifier)]
 
     def add_zygote_modifier(
         self,
@@ -264,13 +189,20 @@ class ModifierPresetMixin(HookManagerMixin):
                 call :meth:`refresh_modifiers` or
                 :meth:`refresh_modifier_maps` afterward to apply all at once.
         """
-        resolved_id = self._resolve_modifier_id(modifier_id, self._manual_zygote)
-        self._manual_zygote.append((resolved_id, name, modifier))
-        self._manual_zygote.sort(key=lambda x: x[0])
-        self._zygote_modifiers.append((resolved_id, name, modifier))
-        self._zygote_modifiers.sort(key=lambda x: x[0])
+        from natal.frontend.configurator import Configurator
+
+        compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
+        candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # registration is published only after compilation succeeds.
+        declarations = candidate._manual_zygote  # pyright: ignore[reportPrivateUsage]
+        resolved_id = self._resolve_modifier_id(modifier_id, declarations)
+        declarations.append((resolved_id, name, modifier))
+        declarations.sort(key=lambda item: item[0])
         if refresh:
-            self.refresh_modifier_maps()
+            candidate._compile_specification(preserve_fitness=True)  # pyright: ignore[reportPrivateUsage]
+            compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
+        else:
+            self._manual_zygote = list(declarations)
+            self._zygote_modifiers = [*self._zygote_modifiers, (resolved_id, name, modifier)]
 
     def add_preset(self, preset: GeneticPreset) -> None:
         """Add a preset to this population.
@@ -313,9 +245,9 @@ class ModifierPresetMixin(HookManagerMixin):
 :class:`natal.frontend.presets.GeneticPreset` - Base class for creating custom presets
 :class:`natal.frontend.presets.HomingDrive` - Built-in gene drive preset
         """
-        self.add_preset(preset)
-        self.refresh_modifiers()
-        self.reapply_preset_fitness()
+        from natal.frontend.configurator import Configurator
+
+        Configurator.for_population(cast("BasePopulation[Any]", self)).presets(preset)
 
     @classmethod
     def builder(cls, species: Species) -> Any:

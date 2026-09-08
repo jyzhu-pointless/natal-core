@@ -4,7 +4,7 @@ The module provides :class:`Observation` (frozen projection rule with
 baked mask), :class:`ObservationResult` (result of projecting current
 state), :class:`ObservationFilter` (compiler for group specs and
 :class:`IndividualSelector`-based groups), :func:`apply_rule`
-(standalone numpy projection), and :func:`build_identity_observation`
+(standalone projection through the shared Rust implementation), and :func:`build_identity_observation`
 (identity observation, one group per active ZType).
 """
 
@@ -189,120 +189,49 @@ class Observation:
         return axes
 
     def apply(self, individual_count: NDArray[np.float64]) -> NDArray[np.float64]:
-        """Project population counts using the baked-in mask.
+        """Project counts with the same native operation used by History.
 
         Args:
-            individual_count: Count array of shape
-                ``(n_sexes, n_ages, n_ztypes)``, ``(n_sexes, n_ztypes)``,
-                or spatial ``(n_demes, n_sexes, n_ages, n_ztypes)``.
+            individual_count: A sex/ztype, sex/age/ztype, or deme/sex/age/ztype tensor.
 
         Returns:
-            Group-first observed counts whose axes equal :attr:`axes`.
+            Independent group-first observed values.
 
         Raises:
-            ValueError: If dimensions are unsupported, the spatial deme
-                selection is empty, or an index is outside the input.
+            ValueError: If dimensions or deme selectors are invalid.
         """
-        if individual_count.ndim not in (2, 3, 4):
-            raise ValueError(
-                f"Unsupported individual_count ndim: {individual_count.ndim}"
-            )
+        from natal._engine_rs import project_observation
 
-        if individual_count.ndim == 4 and self.deme_indices is not None:
-            return self._apply_spatial(individual_count)
-        if individual_count.ndim == 4:
-            raise ValueError(
-                f"Unsupported individual_count ndim: {individual_count.ndim}"
-            )
-
-        if self._is_identity and self._identity_map is not None:
-            if individual_count.ndim == 3:
-                projected = np.moveaxis(
-                    individual_count[:, :, self._identity_map], -1, 0
-                ).copy()
-                if self.collapse_age:
-                    return projected.sum(axis=-1)
-                return projected
-            return np.moveaxis(individual_count[:, self._identity_map], -1, 0).copy()
-
-        mask = self.mask
-        if mask is None:
-            n_sexes = int(individual_count.shape[0])
-            n_ages = (
-                int(individual_count.shape[1])
-                if individual_count.ndim == 3
-                else 1
-            )
-            n_ztypes = int(individual_count.shape[-1])
-            collapse = self.collapse_age or individual_count.ndim == 2
-            mask = self._rebuild_mask_dim(
-                n_sexes, n_ages, n_ztypes, collapse_age=collapse
-            )
-
-        projected = apply_rule(individual_count, mask)
-        # A lazily rebuilt legacy mask can already remove age. Only fold an
-        # age axis that is still present in the numerical result.
-        if (
-            self.collapse_age
-            and individual_count.ndim == 3
-            and projected.ndim == 3
-        ):
-            return projected.sum(axis=-1)
-        return projected
-
-    def _apply_spatial(
-        self,
-        individual_count: NDArray[np.float64],
-    ) -> NDArray[np.float64]:
-        """Project a stacked spatial count tensor.
-
-        Args:
-            individual_count: Counts shaped
-                ``(deme, sex, age, ztype)``.
-
-        Returns:
-            Group-first values with deme preserved or aggregated according to
-            :attr:`deme_mode`.
-
-        Raises:
-            ValueError: If no demes are selected or an index is out of range.
-        """
-        selected_indices = self.deme_indices
-        assert selected_indices is not None
-        if not selected_indices:
-            raise ValueError("Observation selects no demes")
-        if any(
-            index < 0 or index >= individual_count.shape[0]
-            for index in selected_indices
-        ):
-            raise ValueError(
-                "Observation deme selection is outside the population layout"
-            )
-
-        selected = individual_count[np.asarray(selected_indices, dtype=np.intp)]
-        if self._is_identity and self._identity_map is not None:
-            projected = np.moveaxis(
-                selected[:, :, :, self._identity_map], -1, 0
-            )
+        arr = np.ascontiguousarray(individual_count, dtype=np.float64)
+        if arr.ndim == 2:
+            dimensions = (1, arr.shape[0], 1, arr.shape[1])
+        elif arr.ndim == 3:
+            dimensions = (1, *arr.shape)
+        elif arr.ndim == 4 and self.deme_indices is not None:
+            dimensions = tuple(arr.shape)
         else:
-            mask = self.mask
-            if mask is None:
-                mask = self._rebuild_mask_dim(
-                    int(selected.shape[1]),
-                    int(selected.shape[2]),
-                    int(selected.shape[3]),
-                    collapse_age=False,
-                )
-            projected = np.sum(
-                mask[:, None, :, :, :] * selected[None, :, :, :, :],
-                axis=-1,
-            )
+            raise ValueError(f"Unsupported individual_count ndim: {arr.ndim}")
+        d, sexes, ages, ztypes = dimensions
+        selected = list(self.deme_indices) if arr.ndim == 4 and self.deme_indices is not None else [0]
+        if not selected:
+            raise ValueError("Observation selects no demes")
+        if any(index < 0 or index >= d for index in selected):
+            raise ValueError("Observation deme selection is outside the population layout")
+        mask = self.build_mask(sexes, ages, ztypes)
+        collapse = self.collapse_age or arr.ndim == 2
+        aggregate = arr.ndim == 4 and self.deme_mode == "aggregate"
+        values = project_observation(
+            arr.ravel(), np.ascontiguousarray(mask).ravel(), dimensions,
+            selected, collapse, aggregate,
+        )
+        shape = (self.n_groups,)
+        if arr.ndim == 4 and not aggregate:
+            shape += (len(selected),)
+        shape += (sexes,)
+        if not collapse:
+            shape += (ages,)
+        return values.reshape(shape)
 
-        if self.collapse_age:
-            projected = projected.sum(axis=-1)
-        if self.deme_mode == "aggregate":
-            projected = projected.sum(axis=1)
-        return projected
 
     def build_mask(
         self,
@@ -320,6 +249,11 @@ class Observation:
         Returns:
             The binary mask.
         """
+        if self._is_identity and self._identity_map is not None:
+            mask = np.zeros((len(self._identity_map), n_sexes, n_ages, n_ztypes), dtype=np.float64)
+            for group, ztype in enumerate(self._identity_map):
+                mask[group, :, :, int(ztype)] = 1.0
+            return mask
         if self.mask is not None:
             return self.mask.copy()
         return self._rebuild_mask_dim(n_sexes, n_ages, n_ztypes, collapse_age=False)
@@ -1053,25 +987,31 @@ def apply_rule(
     Raises:
         ValueError: If array dimensions are incompatible.
     """
-    arr = individual_count
-    mask = rule
+    from natal._engine_rs import project_observation
+
+    arr = np.ascontiguousarray(individual_count, dtype=np.float64)
+    mask = np.asarray(rule, dtype=np.float64)
     if arr.ndim == 3:
-        if mask.ndim == 4:
-            prod = mask * arr[np.newaxis, ...]
-            return prod.sum(axis=-1)
+        sexes, ages, ztypes = arr.shape
+        collapse = mask.ndim == 3
         if mask.ndim == 3:
-            expanded = mask[:, :, None, :]
-            prod = expanded * arr[np.newaxis, ...]
-            return prod.sum(axis=-1).sum(axis=-1)
-        raise ValueError("Unsupported rule ndim for age-structured state")
-
-    if arr.ndim == 2:
-        if mask.ndim == 3:
-            prod = mask * arr[np.newaxis, ...]
-            return prod.sum(axis=-1)
+            mask = np.broadcast_to(mask[:, :, None, :], (mask.shape[0], sexes, ages, ztypes))
+        elif mask.ndim != 4:
+            raise ValueError("Unsupported rule ndim for age-structured state")
+    elif arr.ndim == 2:
+        sexes, ztypes = arr.shape
+        ages = 1
+        collapse = True
         if mask.ndim == 2:
-            prod = mask[:, None, :] * arr[None, ...]
-            return prod.sum(axis=-1)
-        raise ValueError("Unsupported rule ndim for non-age state")
-
-    raise ValueError("Unsupported individual_count ndim")
+            mask = np.broadcast_to(mask[:, None, None, :], (mask.shape[0], sexes, 1, ztypes))
+        elif mask.ndim == 3:
+            mask = mask[:, :, None, :]
+        else:
+            raise ValueError("Unsupported rule ndim for non-age state")
+    else:
+        raise ValueError("Unsupported individual_count ndim")
+    values = project_observation(
+        arr.ravel(), np.ascontiguousarray(mask).ravel(), (1, sexes, ages, ztypes), [0], collapse, False,
+    )
+    shape = (mask.shape[0], sexes) if collapse else (mask.shape[0], sexes, ages)
+    return values.reshape(shape)

@@ -132,7 +132,7 @@ def test_first_stop_prevents_downstream_events_and_tick() -> None:
         return 0
 
     pop = _build(
-        f"s4x_first_stop",
+        "s4x_first_stop",
         hooks=[stopper, early_marker, late_marker],
     )
     pop.run(n_steps=5)
@@ -171,7 +171,7 @@ def test_early_stop_skips_late_and_aging() -> None:
         return 0
 
     pop = _build(
-        f"s4x_early_stop",
+        "s4x_early_stop",
         hooks=[first_marker, early_stopper, late_marker],
     )
     pop.run(n_steps=3)  # must not resume after the stop
@@ -203,7 +203,7 @@ def test_late_stop_halts_at_event_boundary_before_aging() -> None:
         return 0
 
     pop = _build(
-        f"s4x_late_stop",
+        "s4x_late_stop",
         hooks=[late_stopper],
     )
     pop.run(n_steps=2)
@@ -348,6 +348,7 @@ def test_metrics_mixture_exact_frequencies() -> None:
 
     @nt.hook(event="first")
     def capture(pop: TickContext) -> int:
+        _ = pop.metrics  # Materialize a detached state during the active event.
         captured.append(pop)
         return 0
 
@@ -360,10 +361,12 @@ def test_metrics_mixture_exact_frequencies() -> None:
     ab = _ztype_index(_live_ctx(pop), "A|B")
     # Overwrite the quiescent start with the target mixture (age 0).
     # Setup writes reach the live container (pop.state is a snapshot since R5).
-    pop._state.individual_count[:] = 0.0  # pyright: ignore[reportPrivateUsage]
-    pop._state.individual_count[0, 0, aa] = 600.0  # female A|A
-    pop._state.individual_count[1, 0, ab] = 400.0  # male A|B
+    state = pop.state
+    state.individual_count[:] = 0.0  # pyright: ignore[reportPrivateUsage]
+    state.individual_count[0, 0, aa] = 600.0  # female A|A
+    state.individual_count[1, 0, ab] = 400.0  # male A|B
 
+    pop.import_state(state)
     pop.trigger_event("first")
     ctx = captured[0]
     catalog = ctx.blueprint.ztype_names
@@ -401,12 +404,15 @@ def test_metrics_zero_total_maps_frequencies_to_zero() -> None:
 
     @nt.hook(event="first")
     def capture(pop: TickContext) -> int:
+        _ = pop.metrics  # Materialize a detached state during the active event.
         captured.append(pop)
         return 0
 
     pop = _build("s4x_zero", hooks=[capture])
     # Setup write reaches the live container (pop.state is a snapshot since R5).
-    pop._state.individual_count[:] = 0.0  # pyright: ignore[reportPrivateUsage]
+    state = pop.state
+    state.individual_count[:] = 0.0  # pyright: ignore[reportPrivateUsage]
+    pop.import_state(state)
     pop.trigger_event("first")
 
     ctx = captured[0]
@@ -657,29 +663,34 @@ def test_rng_stream_reproducible_under_global_pollution() -> None:
 
     p3 = _build("s4x_rng_other", hooks=[make_sampler()])
     p3.run(n_steps=2)
-    assert list(draws) != d1  # different pop name → independent stream
+    assert list(draws) == d1  # names do not replace the session seed
 
 
-def test_rng_independent_per_hook_index_and_typed_generator() -> None:
-    """Two hooks at one event draw from independent typed streams."""
+def test_hook_samplers_share_an_advancing_controlled_stream() -> None:
+    """Callbacks consume successive draws and their contexts expire on return."""
     draws: dict[str, list[float]] = {}
-    rng_objects: list[np.random.Generator] = []
+    contexts: list[TickContext] = []
+    stable_identity: list[bool] = []
 
     def make(tag: str) -> Callable[[TickContext], int]:
+        """Create one callback with an independently observable draw group."""
         @nt.hook(event="first")
-        def sampler(pop: TickContext) -> int:
-            rng_objects.append(pop.rng)
-            draws[tag] = list(pop.rng.random(4))
+        def sampler(ctx: TickContext) -> int:
+            """Consume four values from the current Rust stream."""
+            stable_identity.append(ctx.rng is ctx.rng)
+            contexts.append(ctx)
+            draws[tag] = list(ctx.rng.random(4))
             return 0
-
         return sampler
 
     pop = _build("s4x_rng_idx", hooks=[make("a"), make("b")])
     pop.run(n_steps=1)
-
-    assert isinstance(rng_objects[0], np.random.Generator)
-    assert len(draws["a"]) == 4
-    assert draws["a"] != draws["b"]  # hook_index folds into the seed
+    assert all(stable_identity)
+    assert len(draws["a"]) == len(draws["b"]) == 4
+    assert draws["a"] != draws["b"]
+    for ctx in contexts:
+        with pytest.raises(RuntimeError, match="expired"):
+            ctx.rng.random()
 
 
 def test_hook_rng_does_not_touch_numpy_global_stream() -> None:
@@ -706,6 +717,7 @@ def test_hook_rng_does_not_touch_numpy_global_stream() -> None:
 
     assert len(draws[0]) == 16
     np.testing.assert_array_equal(observed_after_hook, observed_after_plain)
+    np.testing.assert_array_equal(observed_after_hook, expected_after)
 
 
 # ---------------------------------------------------------------------------
@@ -891,30 +903,28 @@ def test_runner_skips_non_tick_event_descriptors() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_hook_exception_propagates_and_session_survives() -> None:
-    """A raising hook surfaces as a Python exception; the pop stays usable.
-
-    The Rust bridge wraps the original error as ``RuntimeError`` with the
-    chained message; the Python orchestration re-raises it as-is.
-    """
+def test_hook_exception_requires_recovery_before_session_reuse() -> None:
+    """Original exceptions propagate; Failed sessions require restore or reset."""
     armed = {"live": True}
 
     @nt.hook(event="first")
-    def fragile(pop: TickContext) -> int:
+    def fragile(ctx: TickContext) -> int:
+        """Fail one callback, then remain disarmed after explicit recovery."""
         if armed["live"]:
             armed["live"] = False
             raise ValueError("hook boom")
         return 0
 
     pop = _build("s4x_boom", hooks=[fragile])
-    with pytest.raises(RuntimeError, match="python lifecycle callback failed"):
+    initial = pop.export_state().copy()
+    with pytest.raises(ValueError, match="hook boom"):
         pop.run(n_steps=2)
-
-    # The failure left a clean, restartable session: no dangling run flag,
-    # tick not advanced, not marked finished — and a disarmed run completes.
     assert not pop._running
-    assert pop.tick == 0
-    assert not pop._finished
+    np.testing.assert_array_equal(pop.export_state(), initial)
+    with pytest.raises(RuntimeError):
+        pop.run(n_steps=1)
+    pop.reset()
+    np.testing.assert_array_equal(pop.export_state(), initial)
     pop.run(n_steps=1)
     assert pop.tick == 1
 
@@ -950,7 +960,7 @@ class TestRustDiscreteFemaleOp:
             .hooks(op, event="early")
             .build()
         )
-        pop.enable_rust_backend(seed=0)
+        pop._initialize_session(seed=0)
         pop.run(3, record_every=0)
         total = float(pop.state.individual_count.sum())
         assert total > 0.0 and total == total  # finite and positive

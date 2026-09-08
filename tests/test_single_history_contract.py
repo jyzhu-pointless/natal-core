@@ -10,10 +10,11 @@ import pytest
 
 import natal as nt
 from natal.frontend.hooks import Op, hook
-
 from natal.frontend.output import History, HistorySchema, PopulationLayout
 from natal.frontend.output.history import HistoryBatch
 from natal.frontend.patterns import IndividualSelector
+from tests._config_assertions import assert_config_equal
+from tests.spatial_test_state import set_deme_state
 
 Model: TypeAlias = Literal["age", "discrete", "wright_fisher"]
 HistoryMode: TypeAlias = Literal["raw", "observation"]
@@ -292,8 +293,8 @@ def test_python_continuation_rejects_same_tick_changed_payload_atomically() -> N
     changed_state = current_count.copy()
     # deme.state hands out snapshots since plan S3, so the
     # boundary-guard probe reaches the run through the sanctioned
-    # per-deme import channel instead.
-    population.demes[0].import_state(
+    # per-deme callback transaction instead.
+    set_deme_state(population, 0,
         {"n_tick": population.tick, "individual_count": changed_state}
     )
 
@@ -767,7 +768,7 @@ def test_age_legacy_state_adapters_round_trip_typed_history() -> None:
     source.run(1, record_every=1)
     state_flat = source.export_state()
     history_rows = source.history._to_numpy()
-    assert source._get_kernel_config() is source.config  # type: ignore[reportPrivateUsage]  # simulator adapter must expose the active immutable config
+    assert_config_equal(source._get_kernel_config(), source.config)  # pyright: ignore[reportPrivateUsage]  # adapter returns the same values in an independent snapshot
     np.testing.assert_array_equal(state_flat, source.state.flatten_all())
     np.testing.assert_array_equal(history_rows, source.history._to_numpy())
 

@@ -432,7 +432,7 @@ def test_population_bridge_end_to_end(age_species: Species) -> None:
     backend object must survive the update (no session rebuild, no reseed).
     """
     reference = _build_population(age_species, "bridge_ref")
-    rust_pop = _build_population(age_species, "bridge_rust").enable_rust_backend(
+    rust_pop = _build_population(age_species, "bridge_rust")._initialize_session(
         seed=42
     )
     backend_before = rust_pop._rust_lifecycle_backend

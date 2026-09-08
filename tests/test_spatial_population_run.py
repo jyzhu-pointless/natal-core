@@ -101,8 +101,11 @@ class _RunDemePopulation:
     ) -> None:
         self._species = species
         self._name = name
-        self.tick = 0
+        self._tick = 0
         self._finished = False
+        from natal._engine_rs import ParameterLog
+
+        self._params_log = ParameterLog()
         self._config = config
         self.config = config
         self.finish_events = 0
@@ -115,6 +118,11 @@ class _RunDemePopulation:
                 (config.n_ages, config.n_ztypes, config.n_ztypes), dtype=np.float64
             ),
         )
+
+    @property
+    def tick(self) -> int:
+        """Read the native tick metadata mirrored by the spatial wrapper."""
+        return self._tick
 
     @property
     def species(self) -> Species:
@@ -147,7 +155,7 @@ class _RunDemePopulation:
 
     def run_tick(self) -> _RunDemePopulation:
         """Advance one fake tick."""
-        self.tick += 1
+        self._tick += 1
         return self
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
@@ -159,7 +167,7 @@ class _RunDemePopulation:
 
     def reset(self) -> None:
         """Return the fake deme to tick 0."""
-        self.tick = 0
+        self._tick = 0
 
     def get_total_count(self) -> int:
         """Return the summed individual count."""
@@ -180,8 +188,11 @@ class _RunDiscreteDemePopulation:
     def __init__(self, species: Species, name: str, config: object) -> None:
         self._species = species
         self._name = name
-        self.tick = 0
+        self._tick = 0
         self._finished = False
+        from natal._engine_rs import ParameterLog
+
+        self._params_log = ParameterLog()
         self._config = config
         self.config = config
         self.finish_events = 0
@@ -192,6 +203,11 @@ class _RunDiscreteDemePopulation:
                 dtype=np.float64,
             ),
         )
+
+    @property
+    def tick(self) -> int:
+        """Read the native tick metadata mirrored by the spatial wrapper."""
+        return self._tick
 
     @property
     def species(self) -> Species:
@@ -220,7 +236,7 @@ class _RunDiscreteDemePopulation:
 
     def run_tick(self) -> _RunDiscreteDemePopulation:
         """Advance one fake tick."""
-        self.tick += 1
+        self._tick += 1
         return self
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
@@ -232,7 +248,7 @@ class _RunDiscreteDemePopulation:
 
     def reset(self) -> None:
         """Return the fake deme to tick 0."""
-        self.tick = 0
+        self._tick = 0
 
     def get_total_count(self) -> int:
         """Return the summed individual count."""
@@ -264,14 +280,14 @@ def test_spatial_population_run_tick_updates_all_demes():
         deme._state.individual_count[:, 1, 0] = 100.0  # noqa: SLF001 — seed the double's live state
 
     sp = SpatialPopulation([d0, d1], migration_rate=0.0)
-    sp.enable_rust_backend(seed=0)
+    sp._initialize_session(seed=0)
 
     sp.run_tick()
 
     assert sp.tick == 1
     assert d0.tick == 1 and d1.tick == 1
     assert d0.tick == d1.tick == sp.tick
-    for deme in (d0, d1):
+    for deme in sp.demes:
         counts = deme.state.individual_count
         assert counts[:, 1, 0].sum() == 0.0, "age-1 cohort must vacate"
         assert counts[0, 2, 0] == 100.0, "female cohort ages 1 -> 2"
@@ -305,7 +321,7 @@ def test_spatial_population_run_stop_marks_finish():
     demes[0].register_hooks(stop_on_deme_zero)
 
     sp = SpatialPopulation(demes, migration_rate=0.0)
-    sp.enable_rust_backend(seed=0)
+    sp._initialize_session(seed=0)
 
     sp.run(n_steps=5, record_every=1)
 
@@ -343,7 +359,7 @@ def test_spatial_stop_path_finish_hooks_see_own_deme_ids() -> None:
     demes[1].register_hooks(stop_on_deme_one)
 
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
     spatial.run(n_steps=5)
 
     # The engine freezes the tick at the stop boundary; the container's
@@ -385,7 +401,7 @@ def test_spatial_population_stochastic_discrete_migration_preserves_integer_coun
         adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
         migration_rate=0.5,
     )
-    sp.enable_rust_backend(seed=0)
+    sp._initialize_session(seed=0)
     sp.run_tick()
 
     total_counts = [float(deme.state.individual_count.sum()) for deme in sp.demes]
@@ -427,7 +443,7 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
         adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
         migration_rate=0.5,
     )
-    sp.enable_rust_backend(seed=0)
+    sp._initialize_session(seed=0)
     sp.run_tick()
 
     total_females = sum(
@@ -494,7 +510,7 @@ def test_spatial_hook_priority_runs_in_run_tick_and_run() -> None:
         [_build_test_deme("prio_d0", _make_species("spatial_prio"))],
         migration_rate=0.0,
     )
-    sp.enable_rust_backend(seed=0)
+    sp._initialize_session(seed=0)
     sp.register_hooks(first_a)
     sp.register_hooks(first_b)
 
@@ -529,7 +545,7 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
     d1.register_hooks(d1_hook)
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
     spatial.run_tick()
 
     assert calls == ["d0", "d1"]
@@ -557,7 +573,7 @@ def test_spatial_reference_run_hooks_see_live_deme_ids() -> None:
     for deme in demes:
         deme.register_hooks(record_deme)
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
     spatial.run(n_steps=2)
 
     # Each of the 3 demes fires its first-event hook once per tick.
@@ -584,7 +600,7 @@ def test_spatial_reference_deme_selector_targets_one_deme() -> None:
     for deme in demes:
         deme.register_hooks(only_deme_one)
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
     spatial.run(n_steps=1)
 
     assert hits == [1]
@@ -603,7 +619,7 @@ def test_spatial_compiled_local_hooks_still_take_effect() -> None:
         return 0
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
     spatial.register_hooks(stop_immediately, deme=0)
     spatial.run_tick()
 
@@ -701,7 +717,7 @@ def test_compact_plan_folds_identical_sequences_to_wildcard() -> None:
     d2.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
 
     spatial = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
 
     expanded = spatial._collect_effective_compiled_hooks()
     compact = spatial._collect_compact_spatial_hooks()
@@ -730,7 +746,7 @@ def test_compact_plan_preserves_expanded_view() -> None:
     d1.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
 
     public = spatial.get_compiled_hooks()
     assert len(public) == 2
@@ -754,7 +770,7 @@ def test_compact_plan_subset_selector() -> None:
     d2 = _build_test_deme("cs_d2", species)
 
     spatial = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
 
     compact = spatial._collect_compact_spatial_hooks()
     assert len(compact) == 1
@@ -829,7 +845,7 @@ def test_compact_plan_empty_hook_sequence_skipped() -> None:
     d1 = _build_test_deme("ce_d1", species)
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
 
     compact = spatial._collect_compact_spatial_hooks()
     assert len(compact) == 1

@@ -17,8 +17,7 @@ from natal.frontend.spatial.configurator import (
     batch_setting,
 )
 from natal.frontend.ui.spatial_dashboard import SpatialDashboard
-
-
+from tests.spatial_test_state import set_deme_state
 
 
 def _species(name: str) -> nt.Species:
@@ -221,10 +220,10 @@ def test_spatial_observe_is_group_first_and_preserves_deme_coordinates() -> None
         observation_history=False,
     )
     counts = np.arange(1.0, 25.0).reshape(2, 2, 2, 3)
-    for deme_index, deme in enumerate(population.demes):
-        # State writes go through the explicit import entry (snapshot
+    for deme_index, _deme in enumerate(population.demes):
+        # State writes go through the scoped callback transaction (snapshot
         # discipline: a retained deme.state view cannot mutate the run).
-        deme.import_state({"n_tick": 0, "individual_count": counts[deme_index]})
+        set_deme_state(population, deme_index, {"n_tick": 0, "individual_count": counts[deme_index]})
 
     result = population.observe()
     expected = np.stack((counts[..., 0], counts[..., 2]), axis=0)

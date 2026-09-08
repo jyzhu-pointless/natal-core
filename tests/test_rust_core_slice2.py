@@ -6,7 +6,7 @@ Every assertion proves one numerical or identity invariant:
 1. Write channels (``EngineSession``): method-level atomicity of ``apply``
    (an unknown field must commit nothing), tensor-vs-scalar channel
    rejection, the ``equilibrium_distribution`` empty-sentinel semantics
-   (empty -> empty kept, empty -> full widened, every other size refused),
+   (empty restores derive mode; nonempty values require full width),
    and read-only isolated ``get_tensor`` copies.
 2. Runtime channels: every value write path must hand the live session the
    exact contract field it touches (direct push outside a run, boundary
@@ -330,7 +330,7 @@ def test_session_tensor_write_size_guard_preserves_contents(
 def test_session_tensor_write_equilibrium_empty_sentinel(
     age_species: Species,
 ) -> None:
-    """Empty <-> empty keeps derive mode; empty -> full widens; the rest is refused."""
+    """Clearing a declaration restores dynamically derived density regulation."""
     session, _ = _fresh_session(age_species)
     # The materialized contract starts in derive mode (empty sentinel).
     assert np.asarray(session.get_tensor("equilibrium_distribution")).size == 0
@@ -349,12 +349,23 @@ def test_session_tensor_write_equilibrium_empty_sentinel(
     assert np.array_equal(
         np.asarray(session.get_tensor("equilibrium_distribution")), declared
     )
-    # full -> empty is refused too: the sentinel only protects derive mode.
-    with pytest.raises(ValueError, match="expected 10 elements, got 0"):
-        session.tensor_write("equilibrium_distribution", np.array([], dtype=np.float64))
-    assert np.array_equal(
-        np.asarray(session.get_tensor("equilibrium_distribution")), declared
-    )
+    # Clearing an explicit declaration must recover the untouched derive trajectory.
+    session.tensor_write("equilibrium_distribution", np.array([], dtype=np.float64))
+    assert np.asarray(session.get_tensor("equilibrium_distribution")).size == 0
+    control, _ = _fresh_session(age_species)
+    # Use the public initial state container for the native flat ownership channel.
+    state = _age_state(_build_age_draft(age_species, "ClearedEquilibriumDraft", stochastic=False))
+    for target in (session, control):
+        target.set_state(state.individual_count.ravel(), state.sperm_storage.ravel(), 0)
+    for capacity in (400.0, 900.0):
+        for target in (session, control):
+            target.apply({"carrying_capacity": capacity})
+            assert target.tick(0) == 0
+        actual = session.state_snapshot()
+        expected = control.state_snapshot()
+        assert actual[0] == expected[0]
+        np.testing.assert_array_equal(actual[1], expected[1])
+        np.testing.assert_array_equal(actual[2], expected[2])
     # full -> full: rewriting a declared distribution at full width is legal.
     redeclared = np.arange(10, dtype=np.float64) * 2
     session.tensor_write("equilibrium_distribution", redeclared)
@@ -523,7 +534,7 @@ _AGE_WRITE_CASES: list[tuple[str, Callable[[Configurator], None], str, str]] = [
         "blueprint_flag",
         lambda cfg: cfg.setup(stochastic=True),
         "",  # no contract field: the write is session structure
-        "structure",  # execution flags force a rebuild
+        "structure",  # execution flags update the existing session
     ),
 ]
 
@@ -545,12 +556,12 @@ def test_age_write_reaches_session_per_write_path(
     Value writes push straight into the live session (scalars through the
     scalar channel, vectors and tensors through the tensor channel) and
     the following run() must keep exactly the pushed value.  Blueprint
-    flags are session structure: they schedule a rebuild that the next
-    run() consumes exactly once (backend identity changes, flag clears).
+    flags update the existing session before the next run, preserving its
+    state and stream while consuming the pending update flag.
     """
     _ = case_name
     pop = _build_age_population(age_species, f"slice2_dirty_{case_name}")
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
     backend = pop._rust_lifecycle_backend  # noqa: SLF001 — the session is the readback channel
     assert backend is not None
     action(pop.update())
@@ -558,7 +569,11 @@ def test_age_write_reaches_session_per_write_path(
         assert pop._rust_needs_rebuild is True
         pop.run(1, record_every=0)
         assert pop._rust_needs_rebuild is False
-        assert pop._rust_lifecycle_backend is not backend  # noqa: SLF001 — the rebuild swapped the session
+        assert pop._rust_lifecycle_backend is backend  # noqa: SLF001 — execution settings preserve the session
+        control = _build_age_population(age_species, "slice2_flag_control", stochastic=True)
+        control._initialize_session(seed=0)
+        control.run(1, record_every=0)
+        np.testing.assert_array_equal(pop.export_state(), control.export_state())
         return
     params = materialize(pop.config).params
     expected = getattr(params, contract_field)
@@ -578,14 +593,13 @@ def test_age_write_reaches_session_per_write_path(
         assert float(expected) == backend._session.get_scalar(contract_field)  # noqa: SLF001 — the session is the readback channel
 
 
-def test_preset_registration_marks_rebuild_set_and_rebuild_applies_fitness(
+def test_preset_registration_updates_existing_session_fitness(
     drive_species: Species,
 ) -> None:
-    """Runtime preset application marks maps + the hooks sentinel.
+    """A preset updates session tables in place and preserves ownership.
 
-    The sentinel routes the next run to a full backend rebuild, so the
-    preset's fitness patch must be visible in the rebuilt session's tensors
-    (bit-for-bit equal to a fresh materialization of the updated draft).
+    The post-preset tensors must match the independently materialized
+    configuration without replacing the running session.
     """
     from natal.frontend.presets import HomingDrive
 
@@ -603,7 +617,7 @@ def test_preset_registration_marks_rebuild_set_and_rebuild_applies_fitness(
         .reproduction(eggs_per_female=40, sex_ratio=0.5)
         .build()
     )
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
     backend_before = pop._rust_lifecycle_backend
     assert backend_before is not None
 
@@ -615,14 +629,13 @@ def test_preset_registration_marks_rebuild_set_and_rebuild_applies_fitness(
         viability_scaling=0.8,
     )
     pop.update().presets(drive)
-    # The runtime path rebuilds the modifier maps, which is session
-    # structure: the next run must rebuild the backend.
-    assert pop._rust_needs_rebuild is True
+    # Runtime compilation replaces tables without scheduling a rebuild.
+    assert pop._rust_needs_rebuild is False
 
     pop.run(1, record_every=0)
     assert pop._rust_needs_rebuild is False
-    assert pop._rust_lifecycle_backend is not backend_before
-    # End-to-end: the rebuilt session owns the post-preset tensor values.
+    assert pop._rust_lifecycle_backend is backend_before
+    # End-to-end: the original session owns the post-preset tensor values.
     expected = np.asarray(
         materialize(pop.config).params.viability_fitness, dtype=np.float64
     ).ravel()
@@ -632,19 +645,26 @@ def test_preset_registration_marks_rebuild_set_and_rebuild_applies_fitness(
     )
 
 
-def test_modifier_registration_marks_map_rebuild_set(age_species: Species) -> None:
-    """Modifier map rebuilds mark both maps plus the hooks sentinel."""
-    pop = _build_age_population(age_species, "slice2_modifier_dirty")
-    pop.enable_rust_backend(seed=0)
+def test_noop_modifier_registration_preserves_session_and_trajectory(age_species: Species) -> None:
+    """Registering an empty genetic rule cannot reset or alter the stream."""
+    pop = _build_age_population(age_species, "slice2_modifier_update", stochastic=True)
+    pop._initialize_session(seed=0)
+    control = _build_age_population(age_species, "slice2_modifier_control", stochastic=True)
+    control._initialize_session(seed=0)
+    pop.run(1)
+    control.run(1)
+    backend = pop._rust_lifecycle_backend
 
     def noop_modifier() -> dict[tuple[int, str], dict[str, float]]:
-        """A no-op bulk gamete modifier (empty frequency mapping)."""
+        """Return no changes to the gamete probability table."""
         return {}
 
     pop.add_gamete_modifier(noop_modifier, name="slice2_noop", refresh=True)
-    assert pop._rust_needs_rebuild is True
-    pop.run(1, record_every=0)
     assert pop._rust_needs_rebuild is False
+    pop.run(1)
+    control.run(1)
+    assert pop._rust_lifecycle_backend is backend
+    np.testing.assert_array_equal(pop.export_state(), control.export_state())
 
 
 def test_sexual_selection_fitness_reaches_session(age_species: Species) -> None:
@@ -655,7 +675,7 @@ def test_sexual_selection_fitness_reaches_session(age_species: Species) -> None:
     new channel must hand the patched tensor straight to the live session.
     """
     pop = _build_age_population(age_species, "slice2_ss_dirty")
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
     pop.update().fitness(sexual_selection={"A|A": {"A|B": 0.7}})
     backend = pop._rust_lifecycle_backend  # noqa: SLF001 — the session is the readback channel
     assert backend is not None
@@ -677,21 +697,21 @@ def test_custom_slot_write_commits_to_draft_and_survives_run(
     resolves ``custom_slots`` into the session on every run.
     """
     pop = _build_age_population(age_species, "slice2_custom_dirty")
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
     pop.update().custom(slice2_probe=1.5)
     assert dict(pop.config.custom) == {"slice2_probe": 1.5}
     pop.run(1, record_every=0)
     assert dict(pop.config.custom) == {"slice2_probe": 1.5}
 
 
-def test_hooks_sentinel_triggers_backend_rebuild(age_species: Species) -> None:
-    """Hook registration must rebuild the backend, not refresh it.
+def test_hook_program_replacement_preserves_backend(age_species: Species) -> None:
+    """A hook program is installed into the existing session.
 
-    Hook programs are session structure: the run must swap the backend
-    object (identity assertion) and consume the rebuild flag.
+    The numeric result must match registering the same operation before
+    session initialization, not merely clear a pending update flag.
     """
     pop = _build_age_population(age_species, "slice2_hooks_rebuild")
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
     backend_before = pop._rust_lifecycle_backend
     assert backend_before is not None
 
@@ -701,7 +721,12 @@ def test_hooks_sentinel_triggers_backend_rebuild(age_species: Species) -> None:
 
     pop.run(1, record_every=0)
     assert pop._rust_needs_rebuild is False
-    assert pop._rust_lifecycle_backend is not backend_before
+    assert pop._rust_lifecycle_backend is backend_before
+    control = _build_age_population(age_species, "slice2_hooks_control")
+    control.register_hooks([Op.scale(genotypes="*", ages="*", sex="both", factor=0.9)], event="early")
+    control._initialize_session(seed=0)
+    control.run(1, record_every=0)
+    np.testing.assert_array_equal(pop.export_state(), control.export_state())
 
 
 # ── 3. refresh semantics: directed refresh == full rebuild ──────────────────
@@ -751,7 +776,7 @@ def test_bare_draft_write_stays_outside_the_declared_face(age_species: Species) 
     (the backend identity survives).
     """
     pop = _build_age_population(age_species, "slice2_bare_write")
-    pop.enable_rust_backend(seed=0)
+    pop._initialize_session(seed=0)
     backend = pop._rust_lifecycle_backend
     assert backend is not None
 
@@ -779,7 +804,7 @@ def test_discrete_dirty_paths_and_refresh_equivalence(
     a population built from scratch with the updated values.
     """
     pop = _build_disc_population(discrete_species, "slice2_disc_upd", stochastic=True)
-    pop.enable_rust_backend(seed=31)
+    pop._initialize_session(seed=31)
     backend_before = pop._rust_lifecycle_backend
 
     pop.update().survival(female_age0_survival=0.55)
@@ -813,7 +838,7 @@ def test_discrete_dirty_paths_and_refresh_equivalence(
         eggs=50.0,
         female_mating=0.8,
     )
-    reference.enable_rust_backend(seed=31)
+    reference._initialize_session(seed=31)
     reference.run(6, record_every=0)
 
     assert np.array_equal(pop.state.individual_count, reference.state.individual_count)

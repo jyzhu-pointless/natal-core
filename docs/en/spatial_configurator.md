@@ -5,21 +5,28 @@
 ## Quick Start
 
 ```python
+import numpy as np
 from natal import Species, HexGrid, SpatialPopulation
-from natal.frontend.spatial import batch_setting
 
-species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
+species = Species.from_dict(name="spatial_configurator_demo", structure={"chr1": {"loc": ["A", "B"]}})
 
-# Homogeneous: all demes have identical parameters
-pop = SpatialPopulation.setup(species, n_demes=100, topology=HexGrid(10, 10)) \
-    .setup(name="homo_demo", stochastic=False) \
-    .initial_state(individual_count={"female": {"A|A": 5000}, "male": {"A|A": 5000}}) \
-    .reproduction(eggs_per_female=50) \
-    .competition(carrying_capacity=10000) \
-    .migration(migration_rate=0.1) \
+# All demes use the same discrete-generation model.
+pop = (
+    SpatialPopulation.builder(
+        species, n_demes=100, topology=HexGrid(10, 10),
+        pop_type="discrete_generation",
+    )
+    .setup(name="homo_demo", stochastic=False)
+    .initial_state(individual_count={"female": {"A|A": 5000}, "male": {"A|A": 5000}})
+    .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+    .reproduction(eggs_per_female=2, sex_ratio=0.5)
+    .competition(carrying_capacity=10000)
+    .migration(kernel=np.ones((3, 3)), migration_rate=0.1)
     .build()
+)
 
 pop.run(10)
+assert pop.tick == 10
 ```
 
 ## Core Design
@@ -27,7 +34,7 @@ pop.run(10)
 ### Two-Layer Structure
 
 ```
-SpatialPopulation.setup(...)
+SpatialPopulation.builder(...)
     │
     └─► SpatialConfigurator         ← User-facing chained API
            │
@@ -44,6 +51,12 @@ SpatialPopulation.setup(...)
 1. **Delegates to `_template`** — the template builder always receives scalar values, maintaining correct internal state
 2. **Detects `BatchSetting`** — intercepts and stores them in `_batch_settings`; template only sees `first_value()`
 3. **Records in `_declaration_log`** — preserves original arguments (including BatchSetting objects) for heterogeneous scenario replay
+
+### Normalized Compilation Inputs
+
+`build()` first freezes declarations into `ModelDefinition.normalized`. Template inputs hold the single-deme settings, genetic rules, and hooks; `.spatial` stores the deme count, topology, expanded per-deme batch values, migration, spatial observation, history capacity, and compression declarations. The actual build creates an isolated compiler from these inputs and groups demes by genetic differences.
+
+Batch functions expand once when inputs are frozen, and finalization reuses cached template genetics. Cold compilation consumes frozen concrete values without reevaluating batch functions. Definition queries copy NATAL arrays and containers, so modifying a query result cannot affect a later build. User presets, hooks, and their external resources preserve their identity and do not need to support deep copying.
 
 ### Delegation Mechanism
 

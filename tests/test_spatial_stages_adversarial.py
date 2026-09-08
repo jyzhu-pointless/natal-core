@@ -143,7 +143,7 @@ def _backend(
     pop: nt.SpatialPopulation, *, seed: int
 ) -> RustHeterogeneousSpatialLifecycleBackend:
     """Enable the Rust backend and return the owning heterogeneous session."""
-    pop.enable_rust_backend(seed=seed)
+    pop._initialize_session(seed=seed)
     backend = pop._rust_spatial_backend  # pyright: ignore[reportPrivateUsage]  # test reaches the owning session
     assert isinstance(backend, RustHeterogeneousSpatialLifecycleBackend)
     return backend
@@ -325,7 +325,7 @@ class TestColumnizedRefreshChannels:
         ref = _build_pop(
             species, k_values=[10.0, 500.0, 9000.0],
             name="__adv_from_columns_ref__")
-        ref.enable_rust_backend(seed=6)
+        ref._initialize_session(seed=6)
 
         drafts = [ref.deme(i).export_config() for i in range(ref.n_demes)]
         columns = ecology_columns_from_drafts(drafts)
@@ -506,7 +506,7 @@ class TestColumnizedRefreshChannels:
         species = _species("__adv_columns_guard__")
         pop = _build_pop(
             species, k_values=[500.0] * 3, name="__adv_columns_guard_pop__")
-        pop.enable_rust_backend(seed=1)
+        pop._initialize_session(seed=1)
         drafts = [pop.deme(i).export_config() for i in range(3)]
         columns = ecology_columns_from_drafts(drafts)
         columns["migration_rate"] = np.asarray(
@@ -638,10 +638,10 @@ class TestSingleDemeFlatteningInvariant:
                 .build()
             )
 
-        panmictic = _panmictic().enable_rust_backend(seed=9)
+        panmictic = _panmictic()._initialize_session(seed=9)
         spatial = _build_pop(
             species, k_values=[500.0], n_demes=1,
-            name="__adv_flat_parity_sp__").enable_rust_backend(seed=9)
+            name="__adv_flat_parity_sp__")._initialize_session(seed=9)
 
         panmictic.run(5)
         spatial.run(5, record_every=0)
@@ -711,7 +711,7 @@ class TestDemeSliceWriteChannels:
         assert backend.n_variants == 1
 
         shared = pop.deme(0).config.viability_fitness
-        assert pop.deme(1).config.viability_fitness is shared
+        np.testing.assert_array_equal(pop.deme(1).config.viability_fitness, shared)
         shared_copy = shared.copy()
 
         pop.deme(0).write_genetics(
@@ -724,7 +724,7 @@ class TestDemeSliceWriteChannels:
         assert pop.deme(0).config.viability_fitness is not shared
         assert float(pop.deme(0).config.viability_fitness[0, 0, 0]) == 0.5
         for i in (1, 2):
-            assert pop.deme(i).config.viability_fitness is shared
+            np.testing.assert_array_equal(pop.deme(i).config.viability_fitness, shared)
         assert backend.n_variants == 2
 
     def test_write_genetics_swaps_session_variant_used_by_run(self) -> None:

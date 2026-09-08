@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import (
     TYPE_CHECKING,
     Generic,
@@ -84,6 +84,7 @@ T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationStat
 
 if TYPE_CHECKING:
     from natal.frontend.configurator import Configurator
+    from natal.frontend.configurator._writers import SessionChannel
     from natal.frontend.hooks import (
         CompiledHookDescriptor,
         HookExecutor,
@@ -153,6 +154,12 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     # object: reconfigure_preset's **changes values are heterogeneous
     # user input (floats, dicts, ...), mirrored verbatim per entry.
     _reconfiguration_log: list[tuple[int, str, dict[str, object]]]
+
+    _initial_population_snapshot: tuple[NDArray[np.float64], NDArray[np.float64] | None, None]
+    _runtime_config_reader: Callable[[ModelDraft], ModelDraft] | None = None
+    _runtime_state_reader: Callable[[], None] | None = None
+    _current_definition: ModelDefinition | None = None
+    _runtime_parameter_writer: SessionChannel | None = None
 
     def __init__(
         self,
@@ -237,7 +244,9 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
         # Parameter snapshot log (tick, name, old, new) appended by the
         # runtime writers on every committed scalar change.
-        self._params_log: List[ParamChange] = []
+        from natal._engine_rs import ParameterLog
+
+        self._params_log = ParameterLog()
 
         # Hooks queued for deferred registration after subclass
         # initialization (declarative ops need the IndexRegistry).
@@ -323,7 +332,9 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
         # --- per-clone bookkeeping (deferred hooks already finalized) ---
         clone._pending_hook_items = []
-        clone._params_log = []
+        from natal._engine_rs import ParameterLog
+
+        clone._params_log = ParameterLog()
 
         # --- shared identity ---
         clone._species = self._species
@@ -534,13 +545,17 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
     @property
     def tick(self) -> int:  # type: ignore[reportIncompatibleVariableOverride]  # property override from mixin
-        """The current simulation tick or generation index."""
+        """The current simulation tick or generation index (read-only)."""
         return self._tick
 
     @tick.setter
     def tick(self, value: int) -> None:  # type: ignore[reportIncompatibleVariableOverride]  # property override from mixin
-        """Set the current simulation tick."""
-        self._tick = value
+        """Reject clock changes outside an owning lifecycle operation."""
+        self._require_standalone_owner("set tick")
+        raise RuntimeError(
+            "tick is read-only; use run(), reset(), or restore_checkpoint() "
+            "to change the simulation clock."
+        )
 
     @property
     def registry(self) -> IndexRegistry:
@@ -561,7 +576,40 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         """Public accessor for compiled population configuration."""
         if self._config is None:
             raise AttributeError("Population config has not been initialized.")
-        return self._config
+        from copy import deepcopy
+
+        prepare = getattr(self, "_event_prepare_config", None)
+        if prepare is not None:
+            prepare()
+        reader = getattr(self, "_runtime_config_reader", None)
+        if reader is not None and not getattr(self, "_rust_run_active", False):
+            return reader(self._config)
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None and not getattr(self, "_rust_run_active", False):
+            return backend.config_snapshot(self._config)
+        return deepcopy(self._config)
+
+    def _install_config(self, config: object) -> None:
+        """Validate and commit an explicit configuration import to the live session."""
+        from copy import deepcopy
+
+        from natal.contracts.materialize import materialize
+
+        old = self._config
+        if old is None:
+            raise RuntimeError("The model has not been initialized.")
+        if not isinstance(config, ModelDraft):
+            raise TypeError("config must be a ModelDraft")
+        layout = ("n_sexes", "n_ages", "n_ztypes", "n_gtypes", "n_glabs", "n_slabs", "new_adult_age", "adult_ages", "ztype_names", "gtype_names")
+        if any(not np.array_equal(getattr(old, field), getattr(config, field)) for field in layout):
+            raise ValueError("Configuration import cannot change the model's active layout.")
+        candidate = deepcopy(config)
+        contracts = materialize(candidate)
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None:
+            backend.refresh_params(list(contracts.params.__dataclass_fields__), contracts.params)
+        self._config = candidate
+        self._mark_rust_dirty()
 
     def set_config(self, config: ModelDraft) -> None:
         """Replace this population's configuration."""
@@ -612,7 +660,34 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         Returns:
             A tuple snapshot of the logged rows.
         """
-        return tuple(self._params_log)
+        return tuple(self._params_log.snapshot())
+
+    @property
+    def params_log_details(self) -> Tuple[Tuple[int, str, int, str, bool | int | float | NDArray[np.float64] | None, bool | int | float | NDArray[np.float64] | None], ...]:
+        """Return native commits as tick, event, deme, name, old, and new.
+
+        The legacy params_log property remains a four-column projection;
+        this query retains complete event and deme provenance and typed
+        old/new values. None marks additions or deletions; arrays are copies.
+
+        Returns:
+            An immutable tuple of the current valid audit entries.
+        """
+        return tuple(self._params_log.details())
+
+    def log_param_value(
+        self, name: str, old: bool | int | float | NDArray[np.float64] | None,
+        new: bool | int | float | NDArray[np.float64] | None, event: str = "update",
+    ) -> None:
+        """Record one successful typed parameter commit in native storage.
+
+        Args:
+            name: Parameter route or custom field name.
+            old: Value before the commit, or None for a newly created field.
+            new: Value after the commit, or None for a removed field.
+            event: Responsible update operation or lifecycle event.
+        """
+        self._params_log.append_value(int(self._tick), name, old, new, event, self._deme_id)
 
     def log_param_change(self, name: str, old: float, new: float) -> None:
         """Append one parameter snapshot row at the current tick.
@@ -626,44 +701,29 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
             new: Committed value after the write.
         """
         if old != new:
-            self._params_log.append((int(self._tick), name, float(old), float(new)))
+            self._params_log.append_detail((int(self._tick), name, float(old), float(new)), "update", self._deme_id)
 
     def _absorb_rust_eco_journal(
         self, rows: Sequence[Tuple[int, str, float, float]]
     ) -> None:
-        """Merge a drained Rust-session journal into the log and the draft.
+        """Transfer a legacy session journal into the native parameter log.
 
-        On the Rust run path, ``Op.set_param`` writes evolve inside the
-        session-owned ecology columns; when ``run()`` returns, this merge
-        makes those writes visible on the population side.  Each row is
-        appended to ``params_log`` under its own commit tick (not the
-        current tick, so multi-tick batches keep their per-tick audit), and
-        each parameter's final value is written into the draft 0-d array.
-        No dirty-bridge marking happens: the session already holds the same
-        value and the values were bounds-validated on the Rust side, so
-        re-pushing them would be a redundant round trip.
+        Bound production sessions commit directly to the shared native log.
+        This adapter handles unbound low-level callers without mutating draft
+        parameters or changing the authoritative native ecology.
 
         Args:
             rows: ``(tick, name, old, new)`` rows from a Rust backend's
                 ``drain_eco_journal`` (change-only, commit order).
         """
-        if not rows:
+        # Sessions with a bound history append directly before capturing each
+        # checkpoint cursor. Unbound low-level/spatial adapters still transfer
+        # their commit journal here, into native log storage rather than a draft.
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None and getattr(backend, "history_bound", False):
             return
-        final_values: dict[str, float] = {}
         for tick, name, old, new in rows:
             self._params_log.append((int(tick), name, float(old), float(new)))
-            final_values[name] = float(new)
-        draft = self.config
-        for name, value in final_values.items():
-            slot: object = getattr(draft, name)
-            # The journal only ever names the five runtime-mutable ecology
-            # scalars; they are immutable NamedTuple slots now, so the
-            # merge rebuilds the draft once.
-            if isinstance(slot, np.ndarray):
-                slot[()] = value
-            else:
-                draft = draft._replace(**{name: value})
-        self.set_config(draft)
 
     @property
     def presets(self) -> List[GeneticPreset]:
@@ -792,7 +852,10 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         Raises:
             RuntimeError: If the state has not been initialized.
         """
-        if (
+        reader = self._runtime_state_reader
+        if reader is not None:
+            reader()
+        elif (
             getattr(self, "_rust_lifecycle_backend", None) is not None
             and getattr(self, "_state_cache_stale", False)
         ):
@@ -800,6 +863,17 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         if self._state is None:
             raise RuntimeError("Population state has not been initialized.")
         return self._state
+
+    @staticmethod
+    def _validate_import_values(state: T_State) -> None:
+        """Validate state values even before a lazily initialized native owner exists."""
+        if state.n_tick < 0:
+            raise ValueError("tick must be nonnegative")
+        arrays = [state.individual_count]
+        if isinstance(state, PopulationState):
+            arrays.append(state.sperm_storage)
+        if any(not np.isfinite(values).all() or np.any(values < 0) for values in arrays):
+            raise ValueError("state counts must be finite and nonnegative")
 
     def _refresh_state_cache_from_session(self) -> None:
         """Pull the session-owned state into the local cache (subclass hook).
@@ -811,13 +885,10 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         return
 
     def _mark_rust_dirty(self) -> None:
-        """Flag a structural change so the next run rebuilds the session.
+        """Schedule program and execution-flag configuration at the run boundary.
 
-        Blueprint-flag writes (setup) and similar structural edits cannot
-        be value-refreshed; the run head rebuilds the session (RNG
-        reseeds to the original seed — the documented refresh semantics).
-        setattr keeps the attribute unclaimed on this base class: the
-        model subclasses own its declaration.
+        The owning session, current state, checkpoints, and RNG survive this
+        update. Model subclasses own the pending-program marker.
         """
         self._rust_needs_rebuild = True
 
@@ -848,11 +919,9 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     def _restore_ecology_to_draft(self, ecology: Mapping[str, object]) -> None:
         """Write a restored checkpoint's ecology into the draft.
 
-        The Rust session already restored its own columns; this mirrors
-        the same values into the Python draft so ``pop.params`` reads the
-        checkpointed ecology.  No dirty-bridge marking happens — the
-        session already holds identical values (the same shape as
-        ``_absorb_rust_eco_journal``).
+        The Rust session has already restored its authoritative columns.
+        Keep the declaration metadata's tensor shapes and optional presence
+        consistent with that boundary for subsequent queries and writers.
 
         Args:
             ecology: Contract-name → value mapping from
@@ -865,6 +934,11 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         # vectors become float64 ndarrays, and the eggs sentinel becomes
         # None (the Optional declaration).
         overrides: dict[str, float | NDArray[np.float64] | None] = {}
+        custom = ecology.get("custom_slots")
+        if isinstance(custom, dict) and self._config is not None:
+            from natal.frontend.data import build_custom_slots
+
+            self._config = self._config._replace(custom=build_custom_slots(cast("Mapping[str, object]", custom)))
         for name, value in ecology.items():
             draft_field = contract_to_draft_field(str(name))
             if not hasattr(self._config, draft_field):
@@ -875,27 +949,21 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
             )
             if isinstance(value, np.ndarray):
                 restored = np.array(value, dtype=np.float64)
-                if isinstance(current, np.ndarray):
+                if name == "equilibrium_distribution":
+                    assert self._config is not None
+                    overrides[draft_field] = restored.reshape(2, int(self._config.n_ages)) if restored.size else None
+                elif isinstance(current, np.ndarray):
                     # The wire carries deme-flattened vectors; the draft
                     # stores the structured shape (e.g. survival as
                     # (2, n_ages)).  Restore the declared shape so routed
                     # reads and update() writes keep working.
                     overrides[draft_field] = restored.reshape(current.shape)
-                elif restored.size == 0:
-                    # Undeclared on the draft (derive-mode sentinel): an
-                    # empty wire vector must not flip the None declaration
-                    # into a zero-length array.
-                    continue
-                else:
-                    overrides[draft_field] = restored
             elif isinstance(value, float):
                 if draft_field == "external_expected_eggs" and value < 0.0:
                     # Wire sentinel ↔ draft Optional translation.
                     overrides[draft_field] = None
                 else:
                     overrides[draft_field] = value
-            elif isinstance(value, int):
-                overrides[draft_field] = float(value)
         draft = self._config
         if overrides and draft is not None:
             self._config = draft._replace(**overrides)
@@ -1031,6 +1099,22 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
             RuntimeError: When state is not available yet.
         """
         obs = self.observation
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None:
+            from types import MappingProxyType
+
+            from natal.frontend.output.observation import ObservationResult
+
+            layout = self.history.schema.population
+            mask = obs.build_mask(layout.n_sexes, layout.n_ages, layout.n_ztypes)
+            tick, values = backend.observe_current(mask, [0], obs.collapse_age, False)
+            shape = (obs.n_groups, layout.n_sexes)
+            if not obs.collapse_age:
+                shape += (layout.n_ages,)
+            return ObservationResult(
+                tick=tick, _values=values.reshape(shape), axes=obs.axes,
+                _labels=MappingProxyType({"group": obs.labels}),
+            )
         state = getattr(self, "state", None)
         if state is None:
             raise RuntimeError("Population has no state to observe.")

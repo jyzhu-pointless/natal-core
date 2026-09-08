@@ -180,36 +180,60 @@ Typical scenarios:
 
 ### 7.1 Random Streams (RNG) and the Bit-Reproducible Promise
 
-- Each population's random stream derives from `setup(stochastic=True, seed=...)`;
-  engine sessions use a `SessionRng` (`enable_rust_backend(seed=...)` at
-  construction, `reseed(seed)` resets it).
-- In spatial models deme `d` derives its stream from `seed ^ d`, so demes do
-  not interfere with each other under the same base seed.
-- Inside hooks `pop.rng` derives from
-  `slot ^ (tick*1_000_003) ^ ((deme_id+7)*6_559) ^ ((hook_index+1)*31)`,
-  independent per invocation.
+- `build()` creates the Rust session automatically. The session owns its
+  `SessionRng` and continues the stream across `run()` calls; no backend
+  selection or enable step is required.
+- In spatial models, deme `d` derives its stream from the session's base seed
+  using `seed ^ d`. Lifecycle stages and migration consume that deme's stream.
+- Inside Python hooks, `ctx.rng` is the event's controlled Rust sampler.
+  Repeated access returns the same sampler and advances the stream. The
+  sampler expires when the callback returns; restoring a checkpoint restores
+  the recorded RNG state.
 - **Promise scope**: with identical inputs (build parameters + seed + hook
   combination), deterministic (`stochastic=False`) trajectories are bitwise
   reproducible, and stochastic trajectories reproduce across processes under
   a fixed seed. Version-to-version bit-level stability is *not* promised
   (future algorithm fixes may change numerics).
 
-### 7.2 Checkpoints
+### 7.2 Checkpoints and History Queries
 
-`snapshot_checkpoint()` (backend session layer) captures an **in-memory
-checkpoint** of `(tick, state arrays, RNG words, ecology columns)` -- that is,
-state + random state + ecology parameters; the **genetics tables are not part
-of the rollback**. `restore_checkpoint(tick)` (population layer) restores from
-raw history:
+Rust sessions own history values, checkpoints, and parameter logs. Every retained `mode="raw"` record has a complete checkpoint: individual and sperm state, tick, execution phase and status, RNG, ecology parameters (including migration and custom values), and log positions. Genetics tables are not rolled back. `mode="observation"` keeps only projected values, without hidden full raw history, and cannot restore checkpoints.
 
-- After restoration the tick and state are consistent (`state.n_tick` synced)
-  and the history is cleared;
-- Rust sessions restore via `restore_from_checkpoint(tick)`, which rolls
-  the session-owned state, RNG, and ecology back in place and returns the
-  restored ecology (the population layer also writes it back into the draft);
-- The `params_log` parameter snapshot is the audit trail of hook-side parameter
-  writes and is independent of checkpoints (checkpoints do not carry
-  `params_log`; save it separately if you need the audit).
+`pop.restore_checkpoint(tick)` accepts only an exact retained tick; an unrecorded or evicted tick fails before changing state. Restoration keeps history through that tick and truncates future parameter logs at the recorded positions, including updates made later at the same tick. Ordinary stable boundaries restore to `Ready`; manually recorded stopped or failed boundaries retain their execution status.
+
+`record_snapshot()` records the current boundary between runs, including a stopped population; recording the same tick twice raises an error. `pop.history.boundary_metadata` returns an immutable sequence of `(tick, phase_cursor, status)` tuples. The phase cursor identifies a lifecycle position, such as `0` for a normal tick boundary and `2` for the early phase. Use it together with status to distinguish complete boundaries from interrupted execution.
+
+`pop.params_log_details` returns `(tick, event, deme, parameter, old, new)` tuples. The deme is `0` for a non-spatial population; spatial populations expose logs through the corresponding deme's query interface. Values retain their Boolean, integer, floating-point, or array types; `None` represents the old value for additions and the new value for deletions. Arrays in query results are independent copies. `params_log` keeps the original four-column scalar projection, excluding arrays and additions/deletions; use `params_log_details` for the complete audit. Later updates or restores do not alter previously retrieved results.
+
+`max_rows` bounds both retained records and checkpoints. Batch runs without Python callbacks record and evict within Rust. `clear_history()` clears records and their checkpoints while preserving current state, RNG, parameters, and parameter logs.
+
+This complete example demonstrates bounded history and log rollback:
+
+```python
+import natal as nt
+
+species = nt.Species.from_dict(
+    "HistoryExample", {"Chr1": {"L1": ["W"]}}, gamete_labels=["default"]
+)
+pop = (
+    nt.DiscreteGenerationPopulation.setup(species=species, stochastic=False)
+    .initial_state(individual_count={"female": {"W|W": 10}, "male": {"W|W": 10}})
+    .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+    .reproduction(eggs_per_female=2.0, sex_ratio=0.5)
+    .competition(carrying_capacity=1000.0, low_density_growth_rate=2.0)
+    .record_history(mode="raw", max_rows=3)
+    .build()
+)
+pop.run(3, record_every=1)
+assert pop.history.ticks == (1, 2, 3)
+pop.update().competition(carrying_capacity=500.0)
+assert pop.params_log_details[-1][3:] == ("carrying_capacity", 1000.0, 500.0)
+pop.restore_checkpoint(1)
+assert pop.params.carrying_capacity == 1000.0
+assert pop.history.ticks == (1,)
+assert pop.params_log_details == ()
+assert pop.history.boundary_metadata == ((1, 0, "Ready"),)
+```
 
 ## 8. How Hooks Integrate into the Execution Pipeline
 

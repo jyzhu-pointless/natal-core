@@ -27,8 +27,9 @@ Core modules and responsibilities:
 | `output/observation.py` | Defines `Observation`, `ObservationResult`, `ObservationFilter`, and identity observations |
 | `output/history.py` | Defines immutable schemas, typed array views, and post-hoc projection of raw History |
 | `output/_recording.py` | Compiles the `RecordingPlan`, row width, and spatial layout at build time |
-| `engine/templates/spatial_lifecycle_*.tmpl.py` | Runs the spatial lifecycle and returns regular raw batches |
-| `spatial/population.py` | Applies the canonical Observation at the spatial container boundary, then commits History |
+| `rust/src/history.rs` | Owns history values, projection, retention budgets, and parameter logs |
+| `rust/src/spatial_session.rs` | Runs spatial lifecycle batches and records boundaries inside Rust |
+| `spatial/population.py` | Passes run controls and selectors and wraps Rust observation query results |
 
 ## Build-Time Public Interface
 
@@ -159,22 +160,17 @@ Observation History has discarded unrecorded ZTypes and unselected demes, so it 
 
 ## Spatial Recording Path
 
-Spatial recording does not execute the Observation inside the execution kernel. The kernel runs lifecycle steps and migration, then returns a regular raw batch at stable tick boundaries:
+Spatial sessions run lifecycle stages and migration in Rust and write directly to the Rust HistoryStore at recording boundaries. Raw mode keeps complete state; observation mode projects through the compiled selector and stores only observed values.
 
 ```text
-Spatial execution kernel
-  → [tick, all deme individual_count, all deme sperm_storage]
-  → SpatialPopulation._process_kernel_history(...)
-       ├─ raw History: validate and commit the complete batch
-       └─ observation History:
-            reshape into regular spatial count
-            → canonical Observation.apply(...)
-            → commit the fixed-shape projected row
+Rust spatial session
+  → lifecycle and migration
+  → raw state or native observation projection
+  → bounded HistoryStore and raw checkpoints
+  → Python query: independent result arrays
 ```
 
-Out-of-band recording calls `_record_snapshot()` at the same stable tick boundaries. Raw mode commits complete spatial state, while observation mode calls the same `Observation.apply()`. In-engine batches and out-of-band snapshots therefore share the same Observation semantics and History schema; only the place where the raw batch is produced differs.
-
-The spatial wrapper transports raw batches to keep engine transport regular and fixed. The lifecycle kernel does not need to understand groups, deme selection, or aggregate rules. All Observation semantics remain concentrated in the canonical `Observation` and the spatial container boundary, rather than being reimplemented by the engine or the post-hoc projection path.
+Current-state observation, post-hoc projection of raw history, and observation recording share one Rust numerical implementation. Python compiles selectors, maintains labels, and exposes read-only queries. Batch runs without Python callbacks do not return to Python each tick or transport complete state back and forth. Manual snapshots also record directly from the session. `max_rows` evicts old records and their checkpoints as each row is written, avoiding accumulation of an entire run batch.
 
 ## Removed Compact Spatial Layout
 

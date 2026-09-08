@@ -959,7 +959,7 @@ def _probe_population(
     if rate3d is not None:
         pop.params.tensor_write("migration_rate", rate3d)
     if rust:
-        pop.enable_rust_backend(seed=5)
+        pop._initialize_session(seed=5)
     return pop
 
 

@@ -17,12 +17,8 @@ Rust 原生扩展是唯一的执行引擎，所有路径共享同一套 hook 计
 统一迁移（runtime 迁移率列 × 冻结的 CSR 折叠）
 ```
 
-- **参考（Python）后端**：`_python_dispatch_tick_inner()` 逐 deme 调用
-  `run_structured_tick` / `run_discrete_tick`（每个 deme 是独立的
-  `BasePopulation` 实例，hook 计划在其自身生命周期内执行），然后将所有 deme
-  状态堆叠为 `(n_demes, ...)` 数组，调用 `run_spatial_migration` 统一迁移。
-- **Rust 后端**：per-deme 生命周期与迁移核都在会话内执行；deme `d` 的随机流
-  以 `seed ^ d` 派生（见 `enable_rust_backend(seed=...)`）。
+- **引擎会话**：`build()` 自动创建 Rust 会话；per-deme 生命周期与迁移核都在会话内
+  执行。deme `d` 的随机流以 `seed ^ d` 派生，生命周期与迁移持续使用同一条流。
 
 ## 迁移数据面（slice-5）
 

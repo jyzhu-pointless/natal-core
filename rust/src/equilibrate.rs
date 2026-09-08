@@ -52,7 +52,7 @@ pub fn equilibrium_metrics(bp: &Blueprint, params: &Params, deme: usize) -> (f64
     let fertility: &[f64] = &params.fertility[deme_idx * a..(deme_idx + 1) * a];
     let competition_weights: &[f64] = &params.competition_weights[deme_idx * a..(deme_idx + 1) * a];
     let survival_rates: &[f64] = &params.survival_rates[deme_idx * 2 * a..(deme_idx + 1) * 2 * a];
-    let declared: &[f64] = if params.equilibrium_distribution.is_empty() {
+    let declared: &[f64] = if !params.equilibrium_declared[deme_idx] {
         &[]
     } else {
         &params.equilibrium_distribution[deme_idx * 2 * a..(deme_idx + 1) * 2 * a]
@@ -230,8 +230,9 @@ mod tests {
             fertility: vec![0.0, 1.0, 0.9, 0.8],
             competition_weights: vec![1.0, 0.8, 0.7, 0.6],
             equilibrium_distribution: vec![],
+            equilibrium_declared: vec![false],
             migration_rate: vec![],
-            custom_slots: HashMap::new(),
+            custom_slots: vec![HashMap::new()],
         };
         let genetics = crate::contract::TensorSet {
             viability_fitness: vec![1.0; 2 * n_ages * z],
@@ -267,6 +268,7 @@ mod tests {
     fn declared_distribution_and_external_eggs_match_python_reference() {
         let (bp, mut params, _) = fixture();
         params.equilibrium_distribution = vec![0.0, 200.0, 150.0, 100.0, 0.0, 200.0, 150.0, 100.0];
+        params.equilibrium_declared = vec![true];
         params.external_expected_eggs = vec![5000.0];
         let (comp, surv) = equilibrium_metrics(&bp, &params, 0);
         assert_eq!(comp, 9075.0);
@@ -292,6 +294,7 @@ mod tests {
     fn competition_strength_sums_juvenile_mass() {
         let (bp, mut params, _) = fixture();
         params.equilibrium_distribution = vec![0.0, 200.0, 150.0, 100.0, 0.0, 200.0, 150.0, 100.0];
+        params.equilibrium_declared = vec![true];
         // produced_age_0 = 200*0.8*1.0*30 + 150*0.7*0.9*30 + 100*0.6*0.8*30.
         let produced = 200.0_f64 * 0.8 * 1.0 * 30.0
             + 150.0_f64 * 0.7 * 0.9 * 30.0
@@ -308,6 +311,7 @@ mod tests {
     fn deme_columns_feed_per_deme_metrics() {
         let (bp, mut params, _) = fixture();
         params.n_demes = 2;
+        params.equilibrium_declared = vec![false; 2];
         // Tile every column to two demes (identical demes first).
         params.carrying_capacity = vec![400.0, 400.0];
         params.eggs_per_female = vec![30.0, 30.0];

@@ -43,8 +43,8 @@ pop = (
         "male":   {"WT|WT": [0, 0, 100, 100, 80, 60, 40, 20]},
     })
     .survival(
-        female=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
-        male=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0],
+        female_age_based_survival=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
+        male_age_based_survival=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0],
     )
     .reproduction(
         eggs_per_female=100,

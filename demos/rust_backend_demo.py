@@ -66,7 +66,7 @@ pop.register_hooks(control_ops, event="early", name="demo_control")
 # 3. 启用引擎会话并运行
 # ═══════════════════════════════════════════════════════════════════════════════
 
-pop.enable_rust_backend(seed=2026)
+pop._initialize_session(seed=2026)
 
 n_steps = 10
 pop.run(n_steps, record_every=1, clear_history_on_start=True)

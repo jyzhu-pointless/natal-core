@@ -30,6 +30,7 @@ from natal.frontend.spatial.migration import MigrationCSR
 from natal.frontend.spatial.population import (
     _minimal_contract,  # pyright: ignore[reportPrivateUsage]  # frozen-discipline target under test
 )
+from tests.spatial_test_state import set_deme_state
 
 _BLUEPRINT_ARRAY_FIELDS = (
     "adult_ages",
@@ -161,7 +162,7 @@ class TestBlueprintFrozenArrays:
     def test_frozen_blueprint_still_feeds_the_rust_session(self) -> None:
         """A frozen blueprint crosses the PyO3 boundary and runs a tick."""
         pop = _build_discrete("R4RustFeed")
-        pop.enable_rust_backend(seed=7)
+        pop._initialize_session(seed=7)
         pop.run(1)
         # Deterministic model: 10 females x 2 eggs x 0.5 sex ratio -> 10
         # juveniles of each sex replacing the adults; adults all survive.
@@ -604,19 +605,19 @@ class TestDirectedRefreshUnderFrozenBlueprint:
         """The Rust value channel refreshes through materialize safely.
 
         Same twin design, but the writer pushes the new K straight into
-        the live session (``enable_rust_backend`` before the update) and
+        the live session (``_initialize_session`` before the update) and
         the run consumes it in place.
         """
         refreshed = _build_beverton("R4RefreshDirect", 100000.0)
-        refreshed.enable_rust_backend(seed=3)
+        refreshed._initialize_session(seed=3)
         refreshed.update().competition(carrying_capacity=8.0)
         refreshed.run(4)
 
         twin = _build_beverton("R4RefreshDirectTwin", 8.0)
-        twin.enable_rust_backend(seed=3)
+        twin._initialize_session(seed=3)
         twin.run(4)
         unrefreshed = _build_beverton("R4RefreshDirectOld", 100000.0)
-        unrefreshed.enable_rust_backend(seed=3)
+        unrefreshed._initialize_session(seed=3)
         unrefreshed.run(4)
 
         np.testing.assert_array_equal(
@@ -627,52 +628,36 @@ class TestDirectedRefreshUnderFrozenBlueprint:
             unrefreshed.state.individual_count,
         )
 
-    def test_in_hook_update_deferred_through_boundary_flush_matches_direct_push(
-        self,
-    ) -> None:
-        """A mid-run capacity retune reaches the session at the run boundary.
+    def test_first_hook_update_matches_pre_run_update(self) -> None:
+        """A first-event capacity change applies before that tick's lifecycle.
 
-        Attack vector: while a Rust run is active the direct-push channel
-        is closed (PyO3 borrow), so an in-hook ``update()`` lands in the
-        draft only — the run-boundary flush must pull it through
-        ``materialize`` + ``refresh_params``.  Dropping that flush leaves
-        the session running with the stale capacity.
-
-        Twin invariant: (run 1 under K=1e5 with a retuning hook, run 3
-        more) must bitwise equal (run 1 under K=1e5, update outside the
-        run, run 3 more) — deferred and immediate channels converge.
+        The event transaction commits before subsequent stages. Therefore a
+        first-hook update must match setting the same K immediately before
+        the first run, including the same seeded random stream.
         """
         @nt.hook(event="first")
         def retune(ctx: nt.TickContext) -> int:
+            """Change the candidate ecology before reproduction starts."""
             ctx.update().competition(carrying_capacity=8.0)
             return 0
 
-        deferred = _build_beverton("R4RefreshDefer", 100000.0)
-        deferred.enable_rust_backend(seed=5)
-        deferred.register_hooks(retune, event="first")
-        deferred.run(1)
-        # The mid-run write deferred: the value is in the draft but the
-        # session only adopts it once the run boundary flushes.
-        assert float(deferred.config.carrying_capacity) == 8.0
-        deferred.run(3)
+        in_hook = _build_beverton("R4RefreshEvent", 100000.0)
+        in_hook._initialize_session(seed=5)
+        in_hook.register_hooks(retune, event="first")
+        in_hook.run(1)
+        assert float(in_hook.config.carrying_capacity) == 8.0
+        in_hook.run(3)
 
         immediate = _build_beverton("R4RefreshDirect", 100000.0)
-        immediate.enable_rust_backend(seed=5)
-        immediate.run(1)
+        immediate._initialize_session(seed=5)
         immediate.update().competition(carrying_capacity=8.0)
-        immediate.run(3)
+        immediate.run(4)
+        np.testing.assert_array_equal(in_hook.export_state(), immediate.export_state())
 
         never_retuned = _build_beverton("R4RefreshNever", 100000.0)
-        never_retuned.enable_rust_backend(seed=5)
+        never_retuned._initialize_session(seed=5)
         never_retuned.run(4)
-
-        np.testing.assert_array_equal(
-            deferred.state.individual_count, immediate.state.individual_count
-        )
-        assert not np.array_equal(
-            deferred.state.individual_count,
-            never_retuned.state.individual_count,
-        )
+        assert not np.array_equal(in_hook.state.individual_count, never_retuned.state.individual_count)
 
 
 class TestR5SnapshotChannelAttacks:
@@ -780,13 +765,13 @@ class TestR5SnapshotChannelAttacks:
             pop.state.sperm_storage, twin.state.sperm_storage
         )
 
-    def test_spatial_slice_state_is_snapshot_and_import_state_writes(self) -> None:
-        """DemeSlice.state is a snapshot; import_state is the write channel.
+    def test_spatial_slice_state_is_snapshot_and_transaction_writes(self) -> None:
+        """DemeSlice.state is a snapshot; a scoped callback transaction writes state.
 
         Plan S3 contract inversion: a retained ``deme.state`` container is
         an independent point-in-time copy, so mutating it must never move
         the real run (the old live write-through is retired).  The
-        sanctioned write channel is ``deme.import_state``, whose payload
+        sanctioned write channel is ``TickContext.state``, whose payload
         reaches the deme's live state, every subsequent read, and the next
         tick.
         """
@@ -796,7 +781,7 @@ class TestR5SnapshotChannelAttacks:
         spatial = nt.SpatialPopulation(
             [d0, d1], migration_rate=0.0, name="R5SpatialLive"
         )
-        spatial.enable_rust_backend(seed=0)
+        spatial._initialize_session(seed=0)
         counts_before = spatial.demes[0].state.individual_count.copy()
         total_before = spatial.get_total_count()
         assert total_before == 80
@@ -822,13 +807,13 @@ class TestR5SnapshotChannelAttacks:
         # and is visible in subsequent reads and ticks.
         fresh = spatial.demes[0].state  # compose the payload from a read
         zeroed = np.zeros_like(fresh.individual_count)
-        spatial.demes[0].import_state({
+        set_deme_state(spatial, 0, {
             "n_tick": int(fresh.n_tick),
             "individual_count": zeroed,
             "sperm_storage": fresh.sperm_storage,
         })
 
-        assert float(d0._state.individual_count.sum()) == 0.0  # pyright: ignore[reportPrivateUsage]  # the import landed
+        assert float(d0.state.individual_count.sum()) == 0.0  # pyright: ignore[reportPrivateUsage]  # the import landed
         assert float(spatial.demes[0].state.individual_count.sum()) == 0.0  # reads see it
         np.testing.assert_array_equal(
             spatial.aggregate_individual_count(),
@@ -847,7 +832,7 @@ class TestR5SnapshotChannelAttacks:
             migration_rate=0.0,
             name="R5SpatialTwin",
         )
-        twin.enable_rust_backend(seed=0)
+        twin._initialize_session(seed=0)
         spatial.run(1)
         twin.run(1)
         assert float(spatial.demes[0].state.individual_count.sum()) == 0.0

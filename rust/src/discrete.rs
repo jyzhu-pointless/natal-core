@@ -635,6 +635,7 @@ pub fn run_tick(
     // loops journal under the correct tick value.
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.tick = tick;
+        ctx.phase = 0;
     }
     let mut rebuilt: Option<DiscreteConfig> = None;
 
@@ -653,11 +654,25 @@ pub fn run_tick(
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(0, ind, &mut [], tick, deme_id)?;
+        result = hooks.fire_python_callbacks(
+            0,
+            ind,
+            &mut [],
+            tick,
+            deme_id,
+            rng,
+            eco_values,
+            eco_ctx,
+        )?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
-        if hooks.has_set_param {
+        if hooks.has_set_param
+            || hooks
+                .python_callbacks
+                .iter()
+                .any(|callbacks| !callbacks.is_empty())
+        {
             rebuilt = Some(ctx.assemble_discrete()?);
         }
     }
@@ -665,7 +680,13 @@ pub fn run_tick(
         return Ok(result);
     }
     let cfg_after_first = rebuilt.as_ref().unwrap_or(cfg);
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.phase = 1;
+    }
     reproduction(rng, cfg_after_first, ind);
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.phase = 2;
+    }
     result = hooks.execute_event(
         rng,
         1,
@@ -681,11 +702,25 @@ pub fn run_tick(
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(1, ind, &mut [], tick, deme_id)?;
+        result = hooks.fire_python_callbacks(
+            1,
+            ind,
+            &mut [],
+            tick,
+            deme_id,
+            rng,
+            eco_values,
+            eco_ctx,
+        )?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
-        if hooks.has_set_param {
+        if hooks.has_set_param
+            || hooks
+                .python_callbacks
+                .iter()
+                .any(|callbacks| !callbacks.is_empty())
+        {
             rebuilt = Some(ctx.assemble_discrete()?);
         }
     }
@@ -693,7 +728,13 @@ pub fn run_tick(
         return Ok(result);
     }
     let cfg_after_early = rebuilt.as_ref().unwrap_or(cfg);
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.phase = 3;
+    }
     survival(rng, cfg_after_early, ind);
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.phase = 4;
+    }
     result = hooks.execute_event(
         rng,
         2,
@@ -709,11 +750,25 @@ pub fn run_tick(
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(2, ind, &mut [], tick, deme_id)?;
+        result = hooks.fire_python_callbacks(
+            2,
+            ind,
+            &mut [],
+            tick,
+            deme_id,
+            rng,
+            eco_values,
+            eco_ctx,
+        )?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
-        if hooks.has_set_param {
+        if hooks.has_set_param
+            || hooks
+                .python_callbacks
+                .iter()
+                .any(|callbacks| !callbacks.is_empty())
+        {
             rebuilt = Some(ctx.assemble_discrete()?);
         }
     }
@@ -721,6 +776,9 @@ pub fn run_tick(
         return Ok(result);
     }
     let cfg_after_late = rebuilt.as_ref().unwrap_or(cfg);
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.phase = 5;
+    }
     aging(cfg_after_late, ind);
     Ok(0)
 }
@@ -970,7 +1028,16 @@ pub fn run_batch(
                 eco_values,
             );
             if result == 0 {
-                result = hooks.fire_python_callbacks(0, ind, &mut [], current_tick, 0)?;
+                result = hooks.fire_python_callbacks(
+                    0,
+                    ind,
+                    &mut [],
+                    current_tick,
+                    0,
+                    rng,
+                    eco_values,
+                    eco_ctx,
+                )?;
             }
             if let Some(ctx) = eco_ctx.as_mut() {
                 ctx.tick = current_tick;
@@ -979,7 +1046,11 @@ pub fn run_batch(
             if result != 0 {
                 return Ok((current_tick, history, n_rows, true));
             }
-            run_wf_tick(rng, cfg, ind)?;
+            let rebuilt = eco_ctx
+                .as_ref()
+                .map(|ctx| ctx.assemble_discrete())
+                .transpose()?;
+            run_wf_tick(rng, rebuilt.as_ref().unwrap_or(cfg), ind)?;
             0
         } else {
             run_tick(rng, cfg, hooks, ind, current_tick, 0, eco_values, eco_ctx)?

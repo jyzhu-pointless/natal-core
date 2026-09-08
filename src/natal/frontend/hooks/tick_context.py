@@ -1,38 +1,29 @@
-"""``TickContext`` — the single-parameter Python hook's population view.
+"""Event-scoped Python hook views backed by an owned Rust transaction.
 
-The 26-decision hook contract: a custom hook is
-``def hook(pop: TickContext) -> int`` where *pop* is the live population
-the engine lends to the hook for one event.  Nine members:
-
-- ``tick`` / ``deme_id``: read-only event coordinates.
-- ``blueprint``: read-only dimensions / name catalogs / switches.
-- ``params``: writable parameter surface (the same writer stack as
-  ``pop.params`` — writes are first-class and visible to the engine).
-- ``update()``: configurator access with the same syntax as the build chain.
-- ``stop()``: request termination of the current run.
-- ``rng``: per-hook numpy Generator derived from (population, tick, deme,
-  hook index) — the only sanctioned randomness source inside a hook.
-- ``state``: writable ndarray view (short-term loan; writes are effective).
-- ``metrics``: on-demand population metrics, never cached.
-
-Two discipline layers live side by side: the context lends the *live*
-state arrays for the duration of one callback (short-term loan), while the
-population object itself keeps its snapshot discipline (long-term
-immutability contract for callers outside hooks).
+State and parameter edits become visible together when the callback succeeds.
+An exception discards the candidate, including random draws. The controlled RNG
+uses the owning Rust stream, and retained parameter, update, and RNG handles
+reject access after the callback returns. Public population snapshots remain
+isolated from the writable callback candidate.
 """
 
 from __future__ import annotations
 
+import copy
 import re
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.frontend.hooks._transaction import (
+    EventTransaction,
+    GuardedConfigurator,
+    HookRng,
+)
 from natal.frontend.hooks.types import RESULT_STOP
 
 if TYPE_CHECKING:
-    from natal.frontend.configurator import Configurator
     from natal.frontend.data import ModelDraft
     from natal.frontend.genetics import Species
     from natal.frontend.population._params_view import ParamsView
@@ -128,7 +119,7 @@ class TickMetrics:
         blueprint: BlueprintView,
         species: Species,
         registry: IndexRegistry,
-        config: Any,
+        config: Callable[[], ModelDraft],
     ) -> None:
         """Bind the metrics view to one state snapshot and blueprint."""
         self._state = state
@@ -253,7 +244,7 @@ class TickMetrics:
         """Compute the (C*, s*) pair from the current sex-age totals."""
         from natal.frontend.data._engine import equilibrium_metrics_dispatch
 
-        config = self._config
+        config = self._config()
         ic = self._state.individual_count
         sex_age = np.sum(ic, axis=2)  # (n_sexes, n_ages)
         n_ages = int(config.n_ages)
@@ -295,6 +286,7 @@ class TickContext:
         deme_id: int,
         state: Any,
         hook_index: int = 0,
+        transaction: EventTransaction | None = None,
     ) -> None:
         """Bind the context to one event invocation.
 
@@ -307,6 +299,9 @@ class TickContext:
             hook_index: Position of this hook within its event; folds into
                 the RNG stream so same-tick hooks get independent draws.
         """
+        self._active = True
+        self._transaction = transaction
+        self._rng: HookRng | None = None
         self._pop = pop
         self._tick = tick
         self._deme_id = deme_id
@@ -346,38 +341,46 @@ class TickContext:
         """
         from natal.frontend.population._params_view import ParamsView
 
-        return ParamsView(self._pop)
+        self.ensure_active()
+        return ParamsView(self._pop, self._prepare_parameters)
 
     @property
     def state(self) -> Any:
         """Writable state view (short-term loan; writes are effective)."""
+        if callable(self._state):
+            self._state = self._state()
         return self._state
 
     @property
     def metrics(self) -> TickMetrics:
         """On-demand metrics, recomputed on every property access."""
         if self._metrics is None:
+            pop = self._pop
             self._metrics = TickMetrics(
-                self._state,
+                self.state,
                 self.blueprint,
-                self._pop.species,
-                self._pop.index_registry,
-                self._pop.config,
+                pop.species,
+                pop.index_registry,
+                lambda: pop.config,
             )
         return self._metrics
 
     # -- actions ----------------------------------------------------------------
 
-    def update(self) -> Configurator:
+    def update(self) -> GuardedConfigurator:
         """Return a runtime ``Configurator`` (same syntax as the build chain).
 
         Returns:
             A configurator bound to the owning population.
         """
-        return self._pop.update()
+        self._prepare_parameters()
+        cfg = self._pop.update()
+        cfg._hook_context = self  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # event-bound configurator marker
+        return GuardedConfigurator(cfg, self.ensure_active)
 
     def stop(self) -> None:
         """Request termination of the current run at the event boundary."""
+        self.ensure_active()
         self._stop_requested = True
 
     @property
@@ -385,26 +388,42 @@ class TickContext:
         """Whether :meth:`stop` was called on this context."""
         return self._stop_requested
 
-    @property
-    def rng(self) -> np.random.Generator:
-        """Deterministic per-invocation random stream.
+    def ensure_active(self) -> None:
+        """Reject every retained writer or sampler after callback completion."""
+        if not self._active:
+            raise RuntimeError("Hook context has expired")
 
-        Derived from (population slot, tick, deme, hook index); the only
-        sanctioned randomness source inside a hook — the global
-        ``numpy.random`` state is never touched.
-        """
-        seed = (
-            int(self._pop.hook_slot)
-            ^ (self._tick * 1_000_003)
-            ^ ((self._deme_id + 7) * 6_559)
-            ^ ((self._hook_index + 1) * 31)
-        )
-        return np.random.default_rng(seed % (2**63))
+    def _prepare_parameters(self) -> None:
+        """Materialize the isolated parameter candidate only when requested."""
+        self.ensure_active()
+        prepare = getattr(self._pop, "_event_prepare_config", None)
+        if prepare is not None:
+            prepare()
+
+    def invalidate(self) -> None:
+        """Detach every writer and sampler when this callback ends."""
+        self._active = False
+        # The sampler's lifetime guard is a bound method. Break the cycle
+        # without disabling guards on samplers explicitly retained by users.
+        self._rng = None
+
+    @property
+    def rng(self) -> HookRng:
+        """Return the same controlled Rust sampler throughout this callback."""
+        self.ensure_active()
+        if self._rng is None:
+            if self._transaction is None:
+                raise RuntimeError("This event has no native RNG transaction")
+            self._rng = HookRng(self._transaction, self.ensure_active)
+        return self._rng
 
 
 def _build_blueprint(pop: BasePopulation[Any]) -> BlueprintView:
     """Project a population onto the read-only blueprint view."""
-    config = pop.config
+    # These dimensions and execution flags are fixed during a callback;
+    # querying them must not materialize unrelated native parameter tensors.
+    config = pop._config  # pyright: ignore[reportPrivateUsage]
+    assert config is not None
     ic = pop._state.individual_count  # pyright: ignore[reportPrivateUsage, reportOptionalMemberAccess]  # shape probe only: shape is invariant and probing must never trigger the session pull (callbacks run inside the session borrow)
     discrete = bool(getattr(config, "discrete_generation", False))
     return BlueprintView(
@@ -468,7 +487,6 @@ def state_view_for(
         PopulationState,
     )
 
-    config = pop.config
     live = pop._state.individual_count  # pyright: ignore[reportPrivateUsage, reportOptionalMemberAccess]  # shape probe only: same invariance argument as _build_blueprint
     n_sexes = int(live.shape[0])
     n_ages = int(live.shape[1])
@@ -477,7 +495,6 @@ def state_view_for(
     if sperm_flat is None or sperm_flat.size == 0:
         return DiscretePopulationState(n_tick=tick, individual_count=ind)
     sperm = sperm_flat.reshape(n_ages, n_ztypes, n_ztypes)
-    _ = config
     return PopulationState(n_tick=tick, individual_count=ind, sperm_storage=sperm)
 
 
@@ -543,6 +560,8 @@ class HookRunner:
         tick: int,
         deme_id: int,
         state: Any,
+        transaction: EventTransaction | None = None,
+        only_index: int | None = None,
     ) -> int:
         """Run one event's callbacks in priority order.
 
@@ -559,7 +578,7 @@ class HookRunner:
         for hook_index, (_priority, callback, selector) in enumerate(
             self._callbacks.get(event_id, [])
         ):
-            if not self._matches(selector, deme_id):
+            if (only_index is not None and hook_index != only_index) or not self._matches(selector, deme_id):
                 continue
             context = TickContext(
                 self._pop,
@@ -567,43 +586,117 @@ class HookRunner:
                 deme_id=deme_id,
                 state=state,
                 hook_index=hook_index,
+                transaction=transaction,
             )
-            result = callback(context)
+            try:
+                result = callback(context)
+            finally:
+                context.invalidate()
             if result is not None and int(result) != 0:
                 return RESULT_STOP
             if context.stop_requested:
                 return RESULT_STOP
         return 0
 
-    def rust_callback(self, event_id: int) -> Optional[Callable[..., int]]:
+    def rust_callbacks(self, event_id: int) -> list[Callable[..., int]]:
+        """Give each Python callback its own native atomic commit boundary."""
+        callbacks: list[Callable[..., int]] = []
+        for index in range(len(self._callbacks.get(event_id, []))):
+            callback = self.rust_callback(event_id, only_index=index)
+            if callback is not None:
+                callbacks.append(callback)
+        return callbacks
+
+    def rust_callback(self, event_id: int, only_index: int | None = None) -> Optional[Callable[..., int]]:
         """Build the Rust-bridge callback for one event, or ``None``.
 
-        The returned callable has the slice-2 Rust signature
-        ``(ind, sperm, tick, deme_id) -> int``; the flat arrays it receives
-        are per-callback copies that Rust writes back after the call.
+        The native ABI passes two empty state placeholders, event coordinates,
+        and an owned transaction. State arrays materialize only when requested
+        through the context; they commit together with other candidates.
         """
         entries = self._callbacks.get(event_id, [])
         if not entries:
             return None
 
         def bridge(
-            ind: NDArray[np.float64],
-            sperm: NDArray[np.float64],
+            ind: NDArray[np.float64] | None,
+            sperm: NDArray[np.float64] | None,
             tick: int,
             deme_id: int,
+            transaction: EventTransaction,
         ) -> int:
             """Adapt the Rust callback ABI to :meth:`run_event`."""
-            state = state_view_for(
-                self._pop,
-                tick=int(tick),
-                ind_flat=ind,
-                sperm_flat=sperm if sperm.size else None,
+            pop = self._pop
+            original = pop._config  # pyright: ignore[reportPrivateUsage]  # candidate scope owns this temporary binding
+            metadata_names = (
+                "_current_definition", "_presets", "_manual_gamete", "_manual_zygote",
+                "_gamete_modifiers", "_zygote_modifiers", "_reconfiguration_log",
             )
-            return self.run_event(
-                event_id,
-                tick=int(tick),
-                deme_id=int(deme_id),
-                state=state,
-            )
+            original_metadata: dict[str, object] = {}
+            original_log = pop._params_log  # pyright: ignore[reportPrivateUsage]  # failed event logs are rolled back
+            original_active = getattr(pop, "_rust_run_active", False)
+            pop._rust_run_active = True  # pyright: ignore[reportAttributeAccessIssue]  # native callback holds the session borrow
+            original_tick = pop._tick  # pyright: ignore[reportPrivateUsage]
+            pop._tick = tick  # pyright: ignore[reportPrivateUsage]  # event logs use the actual native tick
+            pop._event_transaction = transaction  # pyright: ignore[reportAttributeAccessIssue]  # event-local native candidate
+            prepared = False
+            rollback_actions: list[Callable[[], None]] | None = None
+
+            def prepare_config() -> None:
+                """Defer Python configuration ownership until a callback needs it."""
+                nonlocal prepared, rollback_actions
+                if prepared:
+                    return
+                from natal.backends.rust.rust_backend import (
+                    config_snapshot_from_session,
+                )
+
+                assert original is not None
+                candidate = config_snapshot_from_session(transaction, original)
+                for name in metadata_names:
+                    if hasattr(pop, name):
+                        original_metadata[name] = getattr(pop, name)
+                        setattr(pop, name, copy.copy(original_metadata[name]) if name != "_current_definition" else original_metadata[name])
+                pop._params_log = type(original_log)()  # pyright: ignore[reportPrivateUsage]  # allocate a log only for accessed parameter candidates
+                pop._config = candidate  # pyright: ignore[reportPrivateUsage]
+                rollback_actions = []
+                pop._event_rollback_actions = rollback_actions  # pyright: ignore[reportAttributeAccessIssue]  # NATAL-managed recipe updates join this event's rollback.
+                prepared = True
+
+            pop._event_prepare_config = prepare_config  # pyright: ignore[reportAttributeAccessIssue]  # callback-local lazy projection used by public config reads
+            try:
+                def state_factory() -> Any:
+                    # Any: the two model-specific state NamedTuples share this lazy boundary.
+                    ind_values, sperm_values = transaction.state_arrays()
+                    return state_view_for(pop, tick=int(tick), ind_flat=ind_values, sperm_flat=sperm_values if sperm_values.size else None)
+
+                result = self.run_event(event_id, tick=int(tick), deme_id=int(deme_id), state=state_factory, transaction=transaction, only_index=only_index)
+                transaction.validate_state()
+                # Every validated writer has already submitted its changed fields
+                # to the native candidate. Read-only callbacks need no return trip.
+                if prepared:
+                    from natal.frontend.hooks.types import EVENT_NAMES
+                    for change_tick, _event, _deme, name, old, new in pop._params_log.details():  # pyright: ignore[reportPrivateUsage]
+                        original_log.append_value(change_tick, name, old, new, EVENT_NAMES[event_id], int(deme_id))
+                return result
+            except BaseException:
+                for rollback in reversed(rollback_actions or ()):
+                    rollback()
+                pop._config = original  # pyright: ignore[reportPrivateUsage]
+                for name in metadata_names if prepared else ():
+                    if name in original_metadata:
+                        setattr(pop, name, original_metadata[name])
+                    elif hasattr(pop, name):
+                        delattr(pop, name)
+                raise
+            finally:
+                pop._params_log = original_log  # pyright: ignore[reportPrivateUsage]
+                pop._rust_run_active = original_active  # pyright: ignore[reportAttributeAccessIssue]
+                pop._tick = original_tick  # pyright: ignore[reportPrivateUsage]
+                pop._event_rollback_actions = None  # pyright: ignore[reportAttributeAccessIssue]
+                pop._event_transaction = None  # pyright: ignore[reportAttributeAccessIssue]
+                pop._event_prepare_config = None  # pyright: ignore[reportAttributeAccessIssue]
+
+        bridge.__natal_transaction__ = True  # pyright: ignore[reportFunctionMemberAccess]  # native bridge ABI discriminator
 
         return bridge

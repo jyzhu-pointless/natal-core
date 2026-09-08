@@ -16,6 +16,7 @@ import pytest
 import natal as nt
 from natal.frontend.configurator import Configurator
 from natal.frontend.data import ModelDefinition
+from natal.frontend.genetics.compile import RecipeHost
 
 
 def _species() -> nt.Species:
@@ -298,3 +299,53 @@ class TestReconfigurationProvenance:
         snapshot[0][2]["drive_conversion_rate"] = 999.0  # type: ignore[index]  # ownership attack on the returned entry
 
         assert pop.reconfiguration_log[0][2]["drive_conversion_rate"] == 0.3
+
+
+def test_inline_build_hooks_are_normalized_with_dispatch_defaults() -> None:
+    """Inline hooks execute and remain part of the frozen declaration."""
+    calls: list[int] = []
+
+    def callback(ctx: nt.TickContext) -> int:
+        calls.append(ctx.tick)
+        return 0
+
+    descriptor = nt.hook(event="early")(callback)
+    pop = Configurator.for_discrete(_species()).build(hook_items=[descriptor])
+    inputs = pop.definition.normalized
+    assert inputs is not None
+    assert inputs.hook_calls[0][0] == (descriptor,)
+    pop.run(2)
+    assert len(calls) == 2
+    inputs.hook_calls[0][1]["priority"] = 999
+    assert pop.definition.normalized.hook_calls[0][1]["priority"] == 0
+
+
+def test_failed_modifier_registration_leaves_declarations_and_products_unchanged() -> None:
+    """A user recipe failure cannot leave a latent modifier for the next refresh."""
+    pop = Configurator.for_discrete(_species()).build()
+    before = pop.config.offspring_tensor
+
+    def invalid_modifier() -> dict[str, float]:
+        raise ValueError("invalid user modifier")
+
+    with pytest.raises(ValueError, match="invalid user modifier"):
+        pop.add_gamete_modifier(invalid_modifier)
+    assert pop.gamete_modifiers == []
+    pop.refresh_modifiers()
+    np.testing.assert_array_equal(pop.config.offspring_tensor, before)
+
+
+def test_modifier_receives_isolated_host_on_build_and_refresh() -> None:
+    """Host-aware manual recipes see configuration instead of None or a live pop."""
+    hosts: list[object] = []
+
+    def modifier(host: RecipeHost) -> dict[str, float]:
+        hosts.append(host)
+        assert host.species is _species()
+        assert host.config.n_ztypes == 3
+        return {}
+
+    pop = Configurator.for_discrete(_species()).modifiers(gamete_modifiers=[modifier]).build()
+    pop.refresh_modifiers()
+    assert len(hosts) == 2
+    assert all(host is not pop for host in hosts)

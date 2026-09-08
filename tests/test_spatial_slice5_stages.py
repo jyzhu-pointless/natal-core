@@ -212,7 +212,7 @@ class TestMergedBuildEntry:
 
 
 def _enabled_backend(pop) -> RustHeterogeneousSpatialLifecycleBackend:
-    pop.enable_rust_backend(seed=3)
+    pop._initialize_session(seed=3)
     backend = pop._rust_spatial_backend  # pyright: ignore[reportPrivateUsage]  # test reaches the owning session
     assert isinstance(backend, RustHeterogeneousSpatialLifecycleBackend)
     return backend

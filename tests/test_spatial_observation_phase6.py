@@ -10,10 +10,8 @@ import numpy as np
 import pytest
 
 import natal as nt
-
-
-
 from natal.frontend.patterns import IndividualSelector
+from tests.spatial_test_state import set_deme_state
 
 DemeMode: TypeAlias = Literal["preserve", "aggregate"]
 
@@ -176,9 +174,8 @@ def _install_coordinate_counts(population: nt.SpatialPopulation) -> np.ndarray:
         shape = deme.state.individual_count.shape
         coordinates = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
         counts = coordinates + 1.0 + 1000.0 * deme_index
-        # import_state replaces the whole payload; the age-structured
-        # dict import requires sperm_storage, so the current values
-        # travel along whenever the model carries them.
+        # The transaction updates counts while preserving the current
+        # sperm plane whenever the model carries one.
         payload: dict[str, object] = {
             "n_tick": int(deme.state.n_tick),
             "individual_count": counts,
@@ -186,7 +183,7 @@ def _install_coordinate_counts(population: nt.SpatialPopulation) -> np.ndarray:
         sperm = getattr(deme.state, "sperm_storage", None)
         if sperm is not None:
             payload["sperm_storage"] = sperm
-        deme.import_state(payload)
+        set_deme_state(population, deme_index, payload)
         installed.append(counts)
     return np.stack(installed)
 
@@ -210,9 +207,8 @@ def _install_valid_coordinate_sperm(
         female_counts = counts[deme_index, 0]
         sperm[:, :, 0] = female_counts / 4.0
         sperm[:, :, 1] = female_counts / 8.0
-        # Age-structured import replaces the whole payload, so the counts
-        # installed by _install_coordinate_counts travel with the sperm.
-        deme.import_state({
+        # Commit the installed counts and the new sperm plane together.
+        set_deme_state(population, deme_index, {
             "n_tick": int(deme.state.n_tick),
             "individual_count": counts[deme_index],
             "sperm_storage": sperm,
@@ -627,9 +623,8 @@ def test_raw_history_ignores_observation_demes_and_preserves_sperm() -> None:
             + 1.0
             + 10000.0 * deme_index
         )
-        # import_state replaces the whole payload, so the counts travel
-        # with the sperm (the age-structured dict import requires both).
-        deme.import_state({
+        # Commit the installed counts and the new sperm plane together.
+        set_deme_state(population, deme_index, {
             "n_tick": int(deme.state.n_tick),
             "individual_count": counts[deme_index],
             "sperm_storage": sperm,

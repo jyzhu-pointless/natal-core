@@ -15,10 +15,15 @@ mod discrete_session;
 /// scripts/generate_param_tables.py — do not hand-edit).
 mod eco_param_wire;
 mod equilibrate;
+mod execution;
+mod history;
+mod hook_transaction;
 mod hooks;
 mod lifecycle;
 mod offspring;
 mod rng;
+#[cfg(test)]
+mod runtime_boundary_tests;
 mod session;
 mod spatial;
 mod spatial_session;
@@ -463,6 +468,9 @@ fn _engine_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
     module.add_function(wrap_pyfunction!(age_structured_aging, module)?)?;
     module.add_function(wrap_pyfunction!(discrete_aging, module)?)?;
+    module.add_class::<history::HistoryStore>()?;
+    module.add_class::<history::ParameterLog>()?;
+    module.add_function(wrap_pyfunction!(history::project_observation, module)?)?;
     module.add_class::<EngineSession>()?;
     module.add_class::<DiscreteEngineSession>()?;
     module.add_class::<HeterogeneousSpatialEngineSession>()?;

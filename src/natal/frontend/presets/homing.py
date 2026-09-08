@@ -201,13 +201,6 @@ class HomingDrive(GeneticPreset):
 
         return patch
 
-    def _instantiate_allele(self, allele_name: str, host: "RecipeHost") -> Gene:
-        """Helper to get Gene object for an allele name from the host species."""
-        gene = host.species.gene_index.get(allele_name)
-        if gene is None:
-            raise ValueError(f"Allele '{allele_name}' not found in species '{host.species.name}'.")
-        return gene
-
     @property
     def drive_allele(self) -> Gene:
         """Gene: The drive allele (e.g. the Cas9/gRNA construct)."""

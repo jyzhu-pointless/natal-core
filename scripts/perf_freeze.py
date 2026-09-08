@@ -160,7 +160,7 @@ def _scenario_many_homogeneous_demes() -> Callable[[], None]:
 
 def _scenario_large_space_few_variants() -> Callable[[], None]:
     sp = _spatial("PerfLargeSpace", _species("PerfSpecies3"), n_demes=16).build()
-    sp.enable_rust_backend(seed=11)
+    sp._initialize_session(seed=11)
     sp.run(30)
 
     def guard() -> None:

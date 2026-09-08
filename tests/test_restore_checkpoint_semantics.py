@@ -94,7 +94,7 @@ def _build_age(
         .build()
     )
     if seed is not None:
-        pop.enable_rust_backend(seed=seed)
+        pop._initialize_session(seed=seed)
     return pop
 
 
@@ -545,9 +545,9 @@ class TestSetParamAuditPrecedence:
 
         pop.restore_checkpoint(0)
         assert pop.params.carrying_capacity == 100000.0
-        # The audit log is append-only provenance; only the value face
-        # rolls back.
-        assert pop.params_log == ((1, "carrying_capacity", 100000.0, 111.0),)
+        # Restoring a checkpoint replaces the effective timeline, including
+        # commits after its exact log cursor (plan section 9).
+        assert pop.params_log == ()
 
         # The rerun replays the control exactly: the same hook re-fires
         # from the restored stream, so journal absorption left no residue.
@@ -572,9 +572,11 @@ class TestSetParamAuditPrecedence:
         pop.run(3, record_every=1)
         assert pop.params.eggs_per_female == 9.0
 
+        old_log = pop.params_log
         pop.restore_checkpoint(1)
         assert pop.params.eggs_per_female == 2.0
-        assert pop.params_log == ((1, "eggs_per_female", 2.0, 9.0),)
+        assert pop.params_log == ()
+        assert old_log == ((1, "eggs_per_female", 2.0, 9.0),)
 
 
 class TestCheckpointIsolation:
@@ -718,7 +720,7 @@ class TestWrightFisherPath:
         object.__setattr__(
             pop, "_config", pop.config._replace(extreme_speed_mode=1)
         )
-        pop.enable_rust_backend(seed=0)
+        pop._initialize_session(seed=0)
 
         pop.run(3, record_every=1)
         assert pop.history.ticks == (0, 1, 2, 3)
@@ -748,7 +750,7 @@ class TestWrightFisherPath:
         object.__setattr__(
             control, "_config", control.config._replace(extreme_speed_mode=1)
         )
-        control.enable_rust_backend(seed=0)
+        control._initialize_session(seed=0)
         control.run(3, record_every=1)
 
         assert pop.tick == control.tick == 3
@@ -775,29 +777,22 @@ class TestCaptureNegativeContracts:
         with pytest.raises(ValueError, match="No history available"):
             pop.restore_checkpoint(0)
 
-    def test_manual_record_snapshot_has_no_session_checkpoint(self) -> None:
-        """A hand-recorded row cannot be restored (no RNG/ecology save).
-
-        The frozen wording stays "not found in history" because the
-        checkpoint store is record-aligned with engine-recorded rows.
-        """
-        pop = _build_discrete("R3NegB")
+    def test_manual_record_snapshot_restores_ecology_and_rng(self) -> None:
+        """Manual snapshots are complete checkpoints, not just count rows."""
+        pop = _build_discrete("R3ManualComplete", stochastic=True)
         pop.run(2, record_every=0)
-        # Session-owned state (plan S2): after a Rust run the Python-side
-        # state container is a lazily refreshed cache.  The public ``state``
-        # read is the sync point, so record_snapshot stamps the session
-        # tick and rows.
-        _ = pop.state
         pop.record_snapshot()
-        assert pop.history.ticks == (2,)
-
-        with pytest.raises(ValueError, match="Tick 2 not found in history"):
-            pop.restore_checkpoint(2)
-
-        # Error path leaves state untouched.
+        boundary = pop.export_state().copy()
+        pop.run(2, record_every=0)
+        expected = pop.export_state().copy()
+        pop.update().competition(carrying_capacity=23.0)
+        pop.restore_checkpoint(2)
         assert pop.tick == 2
         assert pop.history.ticks == (2,)
         assert pop.params.carrying_capacity == 100000.0
+        np.testing.assert_array_equal(pop.export_state(), boundary)
+        pop.run(2, record_every=0)
+        np.testing.assert_array_equal(pop.export_state(), expected)
 
 
 class TestRestoredSnapshotOwnership:

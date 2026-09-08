@@ -458,13 +458,20 @@ pop.reset()
 # is_finished of its own (DemeSlice delegates to the underlying deme)
 any(d.is_finished for d in pop.demes)
 
-# Manually terminate one deme (fires its finish event and locks it)
-pop.deme(0).finish_simulation()
+# Finish the shared run without advancing its clock
+pop.run(0, finish=True)
 ```
 
 The container has no `is_finished` / `finish_simulation()` of its own:
 once any deme has finished, `run()` / `run_tick()` raise `RuntimeError`;
 when a hook requests a stop, the container marks every deme finished.
+
+Managed deme handles support queries, parameter updates, and scoped
+``trigger_event`` calls. They reject independent ``run``/``step``, ``reset``,
+state/config import, checkpoint restore, recording, history clearing, and
+``finish_simulation`` with ``RuntimeError``. These operations must use the
+spatial container; initial states belong to builder declarations, and a
+mid-run state change uses the selected deme's ``TickContext.state``.
 
 ### Data Output
 

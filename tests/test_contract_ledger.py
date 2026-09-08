@@ -342,7 +342,7 @@ def _removed_probe_backend_selector() -> None:
     The three ``setup()`` signatures carry no ``backend`` kwarg, the
     ``disable_rust_backend`` / ``refresh_rust_backend`` facades and the
     ``using_rust_backend`` property are absent from every population class,
-    and ``enable_rust_backend`` remains as the engine initialization entry.
+    and ``_initialize_session`` remains as the engine initialization entry.
     """
     from natal.frontend.configurator._base import Configurator
     from natal.frontend.population.age_structured import AgeStructuredPopulation
@@ -368,8 +368,8 @@ def _removed_probe_backend_selector() -> None:
                 f"{cls.__name__}.{attr} is reachable again — backend "
                 "selection returned"
             )
-        assert hasattr(cls, "enable_rust_backend"), (
-            f"{cls.__name__}.enable_rust_backend must remain as the engine "
+        assert hasattr(cls, "_initialize_session"), (
+            f"{cls.__name__}._initialize_session must remain as the engine "
             "initialization entry"
         )
 

@@ -1,10 +1,10 @@
-"""Recording plan and row encoder infrastructure.
+"""Compile immutable recording schemas and native observation masks.
 
 :class:`RecordingPlan` is an internal object created at build time that
 bundles the :class:`HistorySchema` with the engine-facing observation
 mask. The plan is frozen when the Population is built and never changes
-afterwards. Spatial engines transport regular raw batches; the container
-applies the canonical Observation before committing typed History rows.
+afterwards. Rust sessions use the schema and mask to store raw state or
+projected observation rows without per-tick Python state transport.
 """
 
 from __future__ import annotations

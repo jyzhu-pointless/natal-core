@@ -55,6 +55,31 @@ class RecipeHost(Protocol):
     def index_registry(self) -> IndexRegistry: ...
 
 
+def project_mendelian_maps(
+    species: Species, registry: IndexRegistry,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Project Mendelian tables onto the candidate's exact active axes.
+
+    Args:
+        species: Registered genetic structure providing the full baseline.
+        registry: Ordered active zygote and gamete types, possibly sparse.
+
+    Returns:
+        Isolated meiosis and fertilization arrays aligned to the registry.
+    """
+    from natal.frontend.configurator._registry_builder import build_registry
+
+    full = build_registry(species)
+    zindices = {key: index for index, key in enumerate(full.index_to_ztype)}
+    gindices = {key: index for index, key in enumerate(full.index_to_gtype)}
+    zactive = [zindices[key] for key in registry.index_to_ztype]
+    gactive = [gindices[key] for key in registry.index_to_gtype]
+    baseline = species.get_config_blueprint()
+    meiosis = baseline["zygotes_to_gametes_map"][:, zactive, :][:, :, gactive]
+    fertilization = baseline["gametes_to_zygotes_map"][gactive, :, :][:, gactive, :][:, :, zactive]
+    return meiosis, fertilization
+
+
 def next_modifier_id(
     modifiers: GameteList | ZygoteList,
 ) -> int:

@@ -70,6 +70,7 @@ from natal.frontend.configurator._routes import (
     lookup_or_none,
 )
 from natal.frontend.configurator._writers import (
+    NATIVE_SCALAR_FIELDS,
     ConfigWriter,
     CoreConfigWriter,
     DraftWriter,
@@ -79,10 +80,12 @@ from natal.frontend.data import (
 )
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.types import DemeSelector
-from natal.frontend.presets import CytoplasmicPreset
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
+    from natal.frontend.data.definition import ModelDefinition
+    from natal.frontend.genetics.definition_compiler import CompiledModel
+    from natal.frontend.hooks.tick_context import TickContext
     from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
     from natal.frontend.patterns import IndividualSelector
     from natal.frontend.population.age_structured import AgeStructuredPopulation
@@ -322,6 +325,8 @@ def _declared(
     """
     from inspect import signature
 
+    sig = signature(method)
+
     @wraps(method)
     def wrapper(
         self: Configurator, *args: _P.args, **kwargs: _P.kwargs
@@ -331,21 +336,27 @@ def _declared(
         # the rest.  Variadic parameters are normalized so the journal
         # stays a flat kwargs dict: *args lands under the reserved
         # "__args__" key, **kwargs are expanded back into their keys.
-        from inspect import Parameter
+        declared: dict[str, object]
+        if not args:
+            # Fluent calls normally use keywords, which already have the
+            # journal's flat shape. Python validates them when method is called
+            # below, before its body runs; no second signature binding is needed.
+            declared = dict(kwargs)
+        else:
+            from inspect import Parameter
 
-        sig = signature(method)
-        bound = sig.bind(self, *args, **kwargs)
-        declared: dict[str, object] = {}
-        for name, value in bound.arguments.items():
-            if name == "self":
-                continue
-            kind = sig.parameters[name].kind
-            if kind == Parameter.VAR_KEYWORD:
-                declared.update(value)
-            elif kind == Parameter.VAR_POSITIONAL:
-                declared["__args__"] = value
-            else:
-                declared[name] = value
+            bound = sig.bind(self, *args, **kwargs)
+            declared = {}
+            for name, value in bound.arguments.items():
+                if name == "self":
+                    continue
+                kind = sig.parameters[name].kind
+                if kind == Parameter.VAR_KEYWORD:
+                    declared.update(value)
+                elif kind == Parameter.VAR_POSITIONAL:
+                    declared["__args__"] = value
+                else:
+                    declared[name] = value
         # Record only AFTER the method body succeeded: a failed call must
         # leave neither state nor journal entries behind (plan 5.1 step 5
         # — failure does not pollute committed declarations).  The method's
@@ -419,6 +430,8 @@ class Configurator:
         Configurator(pop.config).competition(carrying_capacity=5000)
     """
 
+    _hook_context: TickContext | None = None
+
     def __init__(
         self,
         config: ModelDraft,
@@ -447,7 +460,15 @@ class Configurator:
         self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
         # Preset identity must survive build() so runtime refresh and
         # reconfiguration can reconstruct modifiers from the original recipes.
+        from natal.frontend.genetics.definition_compiler import FITNESS_FIELDS
+
+        self._fitness_base = tuple(getattr(config, field).copy() for field in FITNESS_FIELDS)
+        self._fitness_steps: list[tuple[int, dict[str, object]]] = []
+        self._compilation_key = object()
+        self._compiled_model: CompiledModel | None = None
         self._presets: list[GeneticPreset] = []
+        self._manual_gamete: list[tuple[int, str | None, GameteModifier]] = []
+        self._manual_zygote: list[tuple[int, str | None, ZygoteModifier]] = []
 
         # Accumulated kwargs for user custom slots.  Each .custom() call
         # adds to this dict; build_custom_slots() normalizes it whenever
@@ -491,8 +512,8 @@ class Configurator:
 
     @property
     def config(self) -> ModelDraft:
-        """The wrapped ModelDraft (read-only accessor)."""
-        return self._config
+        """Read the current runtime snapshot, or the owned build draft."""
+        return self._pop_ref.config if self._pop_ref is not None else self._config
 
     # -- recipe-host surface (build-side candidate compile) ------------------
     # These three read-only properties complete the RecipeHost protocol
@@ -551,57 +572,8 @@ class Configurator:
             gamete_modifiers=gamete_modifiers,
             zygote_modifiers=zygote_modifiers,
             compress=False,
+            host=self,
         )
-
-    def _apply_preset_to_candidate(
-        self,
-        preset: GeneticPreset,
-        gamete_modifiers: list[tuple[int, str | None, GameteModifier]],
-        zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]],
-    ) -> None:
-        """Run one preset's recipes against this candidate and rebuild.
-
-        Mirrors the historical per-preset application order exactly:
-        species binding, recipe factories, registration (ids assigned
-        from the *current* candidate lists, then sorted), an immediate
-        map rebuild when the preset contributed any modifier, and the
-        declarative fitness patch composed onto the current tensors.
-        """
-        from natal.frontend.fitness._patch import apply_preset_fitness_patch
-        from natal.frontend.genetics.compile import next_modifier_id
-
-        preset.bind_species(self.species)
-
-        gamete_mod = preset.gamete_modifier(self)
-        zygote_mod = preset.zygote_modifier(self)
-
-        if gamete_mod is not None:
-            gamete_modifiers.append(
-                (
-                    next_modifier_id(gamete_modifiers),
-                    f"{preset.name}/gamete",
-                    gamete_mod,
-                )
-            )
-            gamete_modifiers.sort(key=lambda x: x[0])
-
-        if zygote_mod is not None:
-            zygote_modifiers.append(
-                (
-                    next_modifier_id(zygote_modifiers),
-                    f"{preset.name}/zygote",
-                    zygote_mod,
-                )
-            )
-            zygote_modifiers.sort(key=lambda x: x[0])
-
-        if gamete_mod is not None or zygote_mod is not None:
-            self._compile_candidate_maps(gamete_modifiers, zygote_modifiers)
-
-        # Preferred path: declarative fitness patch
-        patch = preset.fitness_patch()
-        if patch:
-            apply_preset_fitness_patch(self, patch)
 
     # -- factory ---------------------------------------------------------------
 
@@ -731,33 +703,51 @@ class Configurator:
         Returns:
             A ``Configurator`` ready for further chaining.
         """
-        cfg = Configurator.for_config(pop.config)
+        # A runtime updater is a handle. Its actual write and query paths read
+        # the session when used, including when the caller retains this handle.
+        draft = pop._config  # pyright: ignore[reportPrivateUsage]  # immutable declaration metadata only; never an authoritative parameter read.
+        if draft is None:
+            raise RuntimeError("Population configuration is not initialized.")
+        cfg = Configurator.for_config(draft)
 
         # Record the Population reference for write-back
         cfg._pop_ref = pop
 
         # Runtime custom() calls accumulate with the build-time slots:
         # seed the accumulator from the population's current custom dict.
-        cfg._custom_kwargs = (
-            dict(pop.config.custom) if hasattr(pop.config, "custom") else {}
-        )
+        cfg._custom_kwargs = dict(draft.custom)
         # Bind species and registry from the Population so recipe
         # factories and fitness() work against the live objects.
         cfg._species = pop.species
         cfg._registry = pop.index_registry
 
+        cfg._presets = list(pop.presets)
+        cfg._manual_gamete = list(pop._manual_gamete)  # pyright: ignore[reportPrivateUsage]  # runtime declaration source.
+        cfg._manual_zygote = list(pop._manual_zygote)  # pyright: ignore[reportPrivateUsage]
+        definition = getattr(pop, "_current_definition", None)
+        # Read only recipe metadata here; copying the normalized ecology and
+        # initial state would duplicate the fresh native draft already obtained.
+        inputs = None if definition is None else definition._normalized  # pyright: ignore[reportPrivateUsage]  # NATAL-owned immutable declaration; mutable fields copied below.
+        if inputs is not None:
+            cfg._fitness_base = tuple(array.copy() for array in inputs.fitness_base)
+            cfg._fitness_steps = deepcopy(list(inputs.fitness_steps))
+            cfg._compilation_key = inputs.compilation_key
         return cfg
 
     # -- batch writer ----------------------------------------------------------
 
-    def _make_writer(self) -> ConfigWriter:
+    def _make_writer(self, writes: Mapping[str, object] | None = None) -> ConfigWriter:
         """Create a batch writer bound to the current draft state.
 
         Build path (no live population): a :class:`DraftWriter` writing
         the draft through the route table.  Runtime path: a
         :class:`CoreConfigWriter` which also pushes the committed
         values straight into the live Rust session when one exists,
-        while still marking the dirty bridge exactly as before.
+        with method-level validation and atomic native publication.
+
+        Args:
+            writes: Known method writes; scalar batches query only their
+                current native fields before staging an atomic candidate.
 
         Returns:
             A fresh :class:`ConfigWriter` bound to this instance.
@@ -771,25 +761,45 @@ class Configurator:
                 self._pop_ref.set_config(draft)
 
         if self._pop_ref is not None:
-            # getattr guard: the backend only exists on Rust-enabled
-            # populations; reference-path populations pass None.  During an
-            # active Rust run the session cannot be written (PyO3 borrow);
-            # writes land in the draft only and the run boundary flushes
-            # them into the session afterwards.
             backend: object = None
-            if not getattr(self._pop_ref, "_rust_run_active", False):
-                backend = getattr(self._pop_ref, "_rust_lifecycle_backend", None)
+            if self._hook_context is not None:
+                self._hook_context.ensure_active()
+                backend = getattr(self._pop_ref, "_event_transaction", None)
+            elif getattr(self._pop_ref, "_running", False) or getattr(self._pop_ref, "_rust_run_active", False):
+                raise RuntimeError("External parameter writes are forbidden during run")
             else:
-                # In-run write: the session holds its borrow, so the value
-                # lands in the draft and the run boundary flushes it.
-                object.__setattr__(self._pop_ref, "_rust_deferred_writes", True)
+                backend = getattr(self._pop_ref, "_runtime_parameter_writer", None)
+                if backend is None:
+                    backend = getattr(self._pop_ref, "_rust_lifecycle_backend", None)
+            entries = [lookup_or_none(name) for name in writes] if writes else []
+            read_scalar = getattr(backend, "get_scalar", None)
+            if entries and read_scalar is not None and all(
+                entry is not None and entry.contract_field in NATIVE_SCALAR_FIELDS
+                for entry in entries
+            ):
+                # Unchanged fields are declaration metadata, never runtime input.
+                # Read touched old values from Rust for validation and exact logs,
+                # including updates through a previously retained Configurator.
+                draft = self._pop_ref._config  # pyright: ignore[reportPrivateUsage]
+                assert draft is not None
+                current: dict[str, object] = {}
+                for entry in entries:
+                    assert entry is not None and entry.config_field is not None
+                    value = float(read_scalar(entry.contract_field))
+                    current[entry.config_field] = (
+                        None if entry.contract_field == "external_expected_eggs" and value < 0
+                        else int(value) if entry.contract_field == "growth_mode" else value
+                    )
+                self._config = draft._replace(**current)
+            else:
+                self._config = self._pop_ref.config
             return CoreConfigWriter(
                 self._config,
                 backend,
                 on_replace=_publish,
                 species=self._species,
                 registry=self._registry,
-                param_log=self._pop_ref.log_param_change,
+                param_value_log=self._pop_ref.log_param_value,
             )
         return DraftWriter(
             self._config,
@@ -1046,7 +1056,7 @@ class Configurator:
         if equilibrium_distribution is not None:
             writes["equilibrium_distribution"] = equilibrium_distribution
         if writes:
-            writer = self._make_writer()
+            writer = self._make_writer(writes)
             writer.apply(writes)
             self._config = writer.draft
         if expected_num_new_adult_females is not None:
@@ -1063,7 +1073,7 @@ class Configurator:
                 ``external_expected_eggs`` route (a sensitive write, so
                 the equilibrium caches refresh).
         """
-        cfg = self._config
+        cfg = self.config
         eggs = compute_expected_eggs_from_females(
             expected_num_new_adult_females=target_females,
             eggs_per_female=float(cfg.eggs_per_female),
@@ -1074,7 +1084,7 @@ class Configurator:
             new_adult_age=int(cfg.new_adult_age),
             n_ages=int(cfg.n_ages),
         )
-        writer = self._make_writer()
+        writer = self._make_writer({"external_expected_eggs": eggs})
         writer.apply({"external_expected_eggs": eggs})
         self._config = writer.draft
 
@@ -1177,7 +1187,7 @@ class Configurator:
         if fixed_egg_count is not None:
             writes["fixed_egg_count"] = fixed_egg_count
         if writes:
-            writer = self._make_writer()
+            writer = self._make_writer(writes)
             writer.apply(writes)
             self._config = writer.draft
         return self
@@ -1227,7 +1237,7 @@ class Configurator:
         if male_age0_survival is not None:
             writes["male_age0_survival"] = male_age0_survival
         if writes:
-            writer = self._make_writer()
+            writer = self._make_writer(writes)
             writer.apply(writes)
             self._config = writer.draft
         return self
@@ -1330,12 +1340,9 @@ class Configurator:
 
         Multiple calls accumulate — ``.custom(a=1).custom(b=2)`` stores both.
 
-        ``config.custom`` is a plain ``{name: value}`` dict shared between
-        the Configurator and the Population's draft, so values are written
-        in place and are immediately visible on both sides — no
-        ``_replace`` or write-back round-trip is needed.  When called via
-        ``pop.update().custom(...)``, the value lands in the shared draft and
-        the run boundary refreshes ``custom_slots`` in the session.
+        Runtime updates validate the complete candidate and commit native
+        custom slots before publishing snapshots and typed audit entries.
+        A failed update leaves both state and audit history unchanged.
 
         Args:
             **kwargs: Name-value pairs for custom slots.  Values must be
@@ -1346,16 +1353,30 @@ class Configurator:
         """
         from natal.frontend.data import build_custom_slots
 
-        self._custom_kwargs.update(kwargs)
-        normalized = build_custom_slots(self._custom_kwargs)
-        # Keep the same dict object (shared with the population's draft):
-        # clear + update in place instead of rebinding the slot.
-        self._config.custom.clear()
-        self._config.custom.update(normalized)
-        if getattr(self._pop_ref, "_rust_run_active", False):
-            # In-run custom write: the session holds its borrow, so the
-            # value lands in the draft and the run boundary flushes it.
-            object.__setattr__(self._pop_ref, "_rust_deferred_writes", True)
+        if self._hook_context is not None:
+            self._hook_context.ensure_active()  # pyright: ignore[reportPrivateUsage]  # callback lifetime guards every mutation entry.
+        pop = self._pop_ref
+        if pop is not None and self._hook_context is None and getattr(pop, "_rust_run_active", False):
+            raise RuntimeError("External parameter writes are forbidden during run")
+        current = pop.config if pop is not None else self._config
+        merged = dict(current.custom)
+        merged.update(kwargs)
+        normalized = build_custom_slots(merged)
+        if pop is not None:
+            backend = getattr(pop, "_event_transaction", None) if self._hook_context is not None else getattr(pop, "_runtime_parameter_writer", None)
+            if backend is None:
+                backend = getattr(pop, "_rust_lifecycle_backend", None)
+            if backend is not None:
+                from natal.contracts.materialize import materialize
+
+                candidate = current._replace(custom=normalized)
+                backend.refresh_params(["custom_slots"], materialize(candidate).params)
+        self._custom_kwargs = dict(normalized)
+        self._config = current._replace(custom=normalized)
+        if pop is not None:
+            pop.set_config(self._config)
+            for name in sorted(set(current.custom) | set(normalized)):
+                pop.log_param_value(f"custom.{name}", current.custom.get(name), normalized.get(name))
         return self
 
     # -- presets / modifiers / fitness (immediate — applied directly to config) --
@@ -1383,108 +1404,21 @@ class Configurator:
             Self for chaining.
         """
         if self._pop_ref is not None:
-            # Runtime transaction (plan 5.1): the recipes execute exactly
-            # once against the live population — no clone-to-validate and
-            # no isolated-deepcopy replay.  A failure rolls back from
-            # snapshots (the same transaction shape reconfigure_preset
-            # uses): registration lists, config identity, derived modifier
-            # lists, the dirty bridge, and the in-place fitness arrays.
-            pop = self._pop_ref
-            original_config = pop.config
-            original_presets = pop.presets
-            original_needs_rebuild = pop._rust_needs_rebuild  # pyright: ignore[reportPrivateUsage]  # a failed transaction must not force a rebuild (RNG reset) on the next run
-            original_gamete = pop.gamete_modifiers
-            original_zygote = pop.zygote_modifiers
-            original_fitness = tuple(
-                tensor.copy()
-                for tensor in (
-                    original_config.viability_fitness,
-                    original_config.fecundity_fitness,
-                    original_config.sexual_selection_fitness,
-                    original_config.zygote_viability_fitness,
-                )
-            )
-            preset_bindings: list[tuple[GeneticPreset, Species | None]] = [
-                (preset, preset._bound_species)  # pyright: ignore[reportPrivateUsage]  # rollback must preserve binding after a failed first registration.
-                for preset in presets
-            ]
-            try:
-                for preset in presets:
-                    pop.add_preset(preset)
-                pop.refresh_modifiers()
-                pop.reapply_preset_fitness()
-            except Exception:
-                pop._presets = original_presets  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores internal registration metadata.
-                pop._gamete_modifiers = original_gamete  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived modifier metadata.
-                pop._zygote_modifiers = original_zygote  # pyright: ignore[reportPrivateUsage]  # transactional rollback restores derived modifier metadata.
-                pop.set_config(original_config)
-                pop._rust_needs_rebuild = original_needs_rebuild  # pyright: ignore[reportPrivateUsage]  # a failed transaction must not force a rebuild (RNG reset) on the next run
-                for tensor, saved in zip(
-                    (
-                        original_config.viability_fitness,
-                        original_config.fecundity_fitness,
-                        original_config.sexual_selection_fitness,
-                        original_config.zygote_viability_fitness,
-                    ),
-                    original_fitness,
-                ):
-                    tensor[...] = saved
-                for preset, bound_species in preset_bindings:
-                    preset._bound_species = bound_species  # pyright: ignore[reportPrivateUsage]  # restore the caller-owned preset exactly.
-                self._config = original_config
-                raise
-            self._config = pop.config
+            candidate = self._genetic_candidate()
+            candidate.presets(*presets)
+            self._commit_genetic_candidate(candidate)
             return self
 
-        new_presets: list[GeneticPreset] = []
-        for preset in presets:
-            if any(registered is preset for registered in self._presets) or any(
-                registered is preset for registered in new_presets
-            ):
-                continue
-            new_presets.append(preset)
+        new_presets = [preset for preset in presets if not any(item is preset for item in self._presets)]
         if not new_presets:
             return self
-
-        original_config = self._config
-        original_registry = self._registry
-        original_gamete = list(self.gamete_modifiers)
-        original_zygote = list(self.zygote_modifiers)
-        original_presets = list(self._presets)
-        original_compression_applied = self._compression_applied
-        preset_bindings: list[tuple[GeneticPreset, Species | None]] = [
-            (preset, preset._bound_species)  # pyright: ignore[reportPrivateUsage]  # rollback must preserve binding after a failed build-time registration.
-            for preset in new_presets
-        ]
-        # Preset fitness and modifier rebuilding may mutate arrays in place.
-        # Work against an isolated config and publish it only after every new
-        # preset has completed successfully.
-        isolated_config: ModelDraft = deepcopy(original_config)
-        self._config = isolated_config
-        self._presets.extend(new_presets)
-        # Candidate lists: shallow copies so a failed compile never leaves
-        # half-registered modifiers on the Configurator.
-        gamete_list = list(self.gamete_modifiers)
-        zygote_list = list(self.zygote_modifiers)
-        try:
-            for preset in new_presets:
-                self._apply_preset_to_candidate(preset, gamete_list, zygote_list)
-            # Cytoplasmic presets have no gamete/zygote modifier that would
-            # otherwise trigger a map rebuild.
-            if any(isinstance(p, CytoplasmicPreset) for p in new_presets):
-                self._compile_candidate_maps(gamete_list, zygote_list)
-        except Exception:
-            self._config = original_config
-            self._registry = original_registry
-            self.gamete_modifiers = original_gamete
-            self.zygote_modifiers = original_zygote
-            self._presets = original_presets
-            self._compression_applied = original_compression_applied
-            for preset, bound_species in preset_bindings:
-                preset._bound_species = bound_species  # pyright: ignore[reportPrivateUsage]  # restore the caller-owned preset exactly.
-            raise
-        self.gamete_modifiers = gamete_list
-        self.zygote_modifiers = zygote_list
+        candidate = copy(self)
+        candidate._presets = list(self._presets)
+        for preset in new_presets:
+            if not any(item is preset for item in candidate._presets):
+                candidate._presets.append(preset)
+        candidate._compile_specification()
+        self._adopt_compilation(candidate)
         return self
 
     @_declared
@@ -1505,40 +1439,23 @@ class Configurator:
             Self for chaining.
         """
         if self._pop_ref is not None:
-            if gamete_modifiers:
-                for mod in gamete_modifiers:
-                    self._pop_ref.add_gamete_modifier(mod)
-            if zygote_modifiers:
-                for mod in zygote_modifiers:
-                    self._pop_ref.add_zygote_modifier(mod)
-            if gamete_modifiers or zygote_modifiers:
-                self._pop_ref.refresh_modifier_maps()
-            self._config = self._pop_ref.config
+            candidate = self._genetic_candidate()
+            candidate.modifiers(gamete_modifiers, zygote_modifiers)
+            self._commit_genetic_candidate(candidate)
             return self
 
         from natal.frontend.genetics.compile import next_modifier_id
 
-        # Candidate lists: shallow copies so a failed rebuild never leaves
-        # half-registered modifiers on the Configurator.  Manual modifiers
-        # keep insertion order (no id sort) — ids are assigned once from
-        # the pre-call state and incremented per entry, matching the
-        # historical build-time registration.
-        gamete_list = list(self.gamete_modifiers)
-        zygote_list = list(self.zygote_modifiers)
-        next_gid = next_modifier_id(gamete_list)
-        if gamete_modifiers:
-            for mod in gamete_modifiers:
-                gamete_list.append((next_gid, None, mod))
-                next_gid += 1
-        next_zid = next_modifier_id(zygote_list)
-        if zygote_modifiers:
-            for mod in zygote_modifiers:
-                zygote_list.append((next_zid, None, mod))
-                next_zid += 1
+        candidate = copy(self)
+        candidate._manual_gamete = list(self._manual_gamete)
+        candidate._manual_zygote = list(self._manual_zygote)
+        for modifier in gamete_modifiers or ():
+            candidate._manual_gamete.append((next_modifier_id(candidate._manual_gamete), None, modifier))
+        for modifier in zygote_modifiers or ():
+            candidate._manual_zygote.append((next_modifier_id(candidate._manual_zygote), None, modifier))
         if gamete_modifiers or zygote_modifiers:
-            self._compile_candidate_maps(gamete_list, zygote_list)
-        self.gamete_modifiers = gamete_list
-        self.zygote_modifiers = zygote_list
+            candidate._compile_specification(preserve_fitness=True)
+            self._adopt_compilation(candidate)
         return self
 
     @_declared
@@ -1600,12 +1517,28 @@ class Configurator:
             if patch_dict is not None:
                 writes[patch_name] = patch_dict
         if writes:
+            if self._pop_ref is not None:
+                current = Configurator.for_population(self._pop_ref)
+                self._fitness_base = current._fitness_base
+                self._fitness_steps = list(current._fitness_steps)
+                self._presets = list(current._presets)
+                self._manual_gamete = list(current._manual_gamete)
+                self._manual_zygote = list(current._manual_zygote)
             # geno_tensor kind: pattern dicts delegate to
             # write_fitness_field inside the writer; the writer also
             # pushes the whole tensors to the live Rust session.
             writer = self._make_writer()
             writer.apply(writes, mode=mode)
             self._config = writer.draft
+            step: dict[str, object] = {name: value for name, value in (("viability", viability), ("fecundity", fecundity), ("sexual_selection", sexual_selection), ("zygote_viability", zygote_viability)) if value is not None}
+            step["mode"] = mode
+            self._fitness_steps.append((len(self._presets), deepcopy(step)))
+            if self._compiled_model is not None:
+                from dataclasses import replace
+
+                self._compiled_model = replace(self._compiled_model, config=self._config)
+            if self._pop_ref is not None:
+                self._pop_ref._current_definition = self._definition_for_compile()  # pyright: ignore[reportPrivateUsage]  # publish successful normalized runtime declarations.
         return self
 
     # -- deprecated compression methods (use setup(compress=True)) ----------------
@@ -1826,78 +1759,34 @@ class Configurator:
                     f"on the preset object."
                 )
 
-        # Execute the recipe exactly once, on the live population, with the
-        # candidate preset swapped into the registry (plan 5.1: no
-        # clone-to-validate followed by a second execution on the real
-        # object).  A failure rolls the population back from snapshots
-        # before re-raising, so neither the session nor the committed
-        # declaration is polluted.  Outside this guarantee: the user
-        # recipe's own side effects on the world (files, globals) and any
-        # NATAL state it mutates beyond the modifier/fitness surfaces
-        # below (e.g. calling pop.add_gamete_modifier itself).
-        candidate = copy(preset)
+        updated = copy(preset)
         for attr, value in changes.items():
-            setattr(candidate, attr, value)
+            setattr(updated, attr, value)
+        candidate = self._genetic_candidate()
+        candidate._presets = [updated if item is preset else item for item in candidate._presets]
+        # Reconfiguration explicitly resets manual fitness under the frozen
+        # preset contract; ordinary refresh preserves the ordered declarations.
+        candidate._fitness_base = tuple(np.ones_like(array) for array in candidate._fitness_base)
+        candidate._fitness_steps = []
+        candidate._compile_specification()
+        self._commit_genetic_candidate(candidate, publish_definition=False)
+        rollback_actions = getattr(pop, "_event_rollback_actions", None)
+        if rollback_actions is not None:
+            # Preserve the external preset's identity while allowing the whole
+            # callback to fail after this individual reconfiguration succeeds.
+            previous = {attr: getattr(preset, attr) for attr in changes}
 
-        saved_presets = list(pop._presets)  # pyright: ignore[reportPrivateUsage]
-        saved_config = pop._config  # pyright: ignore[reportPrivateUsage]
-        assert saved_config is not None  # a live population always has a config
-        saved_gamete_modifiers = list(pop._gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
-        saved_zygote_modifiers = list(pop._zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
-        saved_needs_rebuild = getattr(pop, "_rust_needs_rebuild", False)
-        # refresh_modifier_maps marks the rebuild flag mid-rebuild; a
-        # failed transaction must restore it — leaving it set would force a
-        # full session rebuild (and RNG reset) on the next run.
-        # the reconfigure must survive the restore, so snapshot-and-restore
-        # rather than clear.
-        # reapply_preset_fitness clears the shared fitness arrays in place,
-        # so a failed run must restore their contents, not just the config
-        # reference.
-        saved_fitness = tuple(
-            tensor.copy()
-            for tensor in (
-                saved_config.viability_fitness,
-                saved_config.fecundity_fitness,
-                saved_config.sexual_selection_fitness,
-                saved_config.zygote_viability_fitness,
-            )
-        )
-        try:
-            pop._presets = [  # pyright: ignore[reportPrivateUsage]
-                candidate if registered is preset else registered
-                for registered in saved_presets
-            ]
-            pop.refresh_modifiers()
-            pop.reapply_preset_fitness()
-        except BaseException:
-            pop._rust_needs_rebuild = saved_needs_rebuild  # pyright: ignore[reportPrivateUsage]  # a failed transaction must not force a rebuild (RNG reset) on the next run
-            pop._presets = saved_presets  # pyright: ignore[reportPrivateUsage]
-            pop._config = saved_config  # pyright: ignore[reportPrivateUsage]
-            pop._gamete_modifiers[:] = saved_gamete_modifiers  # pyright: ignore[reportPrivateUsage]
-            pop._zygote_modifiers[:] = saved_zygote_modifiers  # pyright: ignore[reportPrivateUsage]
-            for tensor, saved in zip(
-                (
-                    saved_config.viability_fitness,
-                    saved_config.fecundity_fitness,
-                    saved_config.sexual_selection_fitness,
-                    saved_config.zygote_viability_fitness,
-                ),
-                saved_fitness,
-            ):
-                tensor[...] = saved
-            raise
+            def restore_preset() -> None:
+                for attr, value in previous.items():
+                    setattr(preset, attr, value)
 
-        # ── Commit phase: the candidate products are already live on the
-        # population; adopt the attribute changes onto the registered
-        # object and restore its identity in the registry so add_preset's
-        # idempotency-by-identity keeps working.
+            rollback_actions.append(restore_preset)
         for attr, value in changes.items():
             setattr(preset, attr, value)
-        pop._presets = [  # pyright: ignore[reportPrivateUsage]
-            preset if registered is candidate else registered
-            for registered in pop._presets  # pyright: ignore[reportPrivateUsage]
-        ]
-        self._config = pop.config
+        pop._presets = [preset if item is updated else item for item in pop._presets]  # pyright: ignore[reportPrivateUsage]  # preserve registration identity after successful commit.
+
+        candidate._presets = list(pop.presets)
+        pop._current_definition = candidate._definition_for_compile()  # pyright: ignore[reportPrivateUsage]  # preserve recipe identity in future declarations.
 
         # Plan 5.3: record the committed reconfiguration so the post-build
         # history is replayable next to the frozen definition.  A failed
@@ -1916,6 +1805,119 @@ class Configurator:
         log.append((int(pop.tick), preset.name, dict(changes)))
 
         return self
+
+    def _definition_for_compile(self, *, build_name: str | None = None) -> ModelDefinition:
+        """Capture normalized inputs rather than reconstructing declarations from outputs."""
+        from natal.frontend.data.definition import ModelDefinition
+        from natal.frontend.genetics.definition_compiler import NormalizedModel
+
+        inputs = NormalizedModel(
+            self._config, self.registry, tuple(self._presets),
+            tuple(self._manual_gamete), tuple(self._manual_zygote),
+            self._fitness_base, tuple(self._fitness_steps), self._compilation_key,
+            tuple(self._hook_calls), self._observation_groups,
+            self._observation_collapse_age, self._record_history_mode,
+            self._record_history_max_rows, self._compress,
+            None if self._declared_zygote_types is None else cast("frozenset[str] | frozenset[int]", frozenset(self._declared_zygote_types)),
+        )
+        return ModelDefinition(
+            self.species, bool(self._config.discrete_generation),
+            tuple(self._declaration_log), build_name if build_name is not None else getattr(self, "_name", None), normalized=inputs,
+        )
+
+    def _compile_specification(self, *, preserve_fitness: bool = False) -> None:
+        """Expand recipes once; map-only changes preserve current fitness overrides."""
+        from dataclasses import replace
+
+        from natal.frontend.genetics.definition_compiler import (
+            FITNESS_FIELDS,
+            compile_definition,
+        )
+
+        fitness = {name: getattr(self._config, name).copy() for name in FITNESS_FIELDS} if preserve_fitness else {}
+        self._compilation_key = object()
+        result = compile_definition(self._definition_for_compile())
+        if preserve_fitness:
+            result = replace(result, config=result.config._replace(**fitness))
+        self._config = result.config
+        self._registry = result.registry
+        self.gamete_modifiers = list(result.gamete_modifiers)
+        self.zygote_modifiers = list(result.zygote_modifiers)
+        self._compiled_model = result
+
+    def _adopt_compilation(self, candidate: Configurator) -> None:
+        """Publish an already validated build candidate without rerunning recipes."""
+        self._config = candidate._config
+        self._registry = candidate._registry
+        self._presets = list(candidate._presets)
+        self._manual_gamete = list(candidate._manual_gamete)
+        self._manual_zygote = list(candidate._manual_zygote)
+        self.gamete_modifiers = list(candidate.gamete_modifiers)
+        self.zygote_modifiers = list(candidate.zygote_modifiers)
+        self._compiled_model = candidate._compiled_model
+        self._compilation_key = candidate._compilation_key
+
+    def _genetic_candidate(self) -> Configurator:
+        """Create the build compiler's isolated candidate for a runtime update."""
+        pop = self._pop_ref
+        if pop is None:
+            raise RuntimeError("A runtime candidate requires a population.")
+        from natal.frontend.genetics.definition_compiler import copy_registry
+
+        candidate = Configurator.for_population(pop)
+        candidate._config = pop.config
+        candidate._pop_ref = None
+        candidate._registry = copy_registry(candidate.registry)
+        candidate.gamete_modifiers = list(pop.gamete_modifiers)
+        candidate.zygote_modifiers = list(pop.zygote_modifiers)
+        return candidate
+
+    def _commit_genetic_candidate(self, candidate: Configurator, *, publish_definition: bool = True) -> None:
+        """Commit products; reconfiguration publishes its final recipe identities later."""
+        from natal.contracts.materialize import materialize
+
+        pop = self._pop_ref
+        if pop is None:
+            raise RuntimeError("A runtime commit requires a population.")
+        old = pop.config
+        new = candidate._config
+        if old.n_ztypes != new.n_ztypes or old.n_gtypes != new.n_gtypes or old.ztype_names != new.ztype_names or old.gtype_names != new.gtype_names:
+            raise ValueError("Runtime genetic updates cannot change the active type layout.")
+        fields = [
+            "viability_fitness", "fecundity_fitness", "sexual_selection_fitness",
+            "zygote_viability_fitness", "offspring_tensor", "meiosis_map",
+            "female_ztype_compatibility", "male_ztype_compatibility",
+        ]
+        if self._hook_context is not None:
+            self._hook_context.ensure_active()
+            backend = getattr(pop, "_event_transaction", None)
+        elif getattr(pop, "_running", False) or getattr(pop, "_rust_run_active", False):
+            raise RuntimeError("External genetic writes are forbidden during run")
+        else:
+            backend = getattr(pop, "_runtime_parameter_writer", None)
+            if backend is None:
+                backend = getattr(pop, "_rust_lifecycle_backend", None)
+        if backend is None:
+            raise RuntimeError("A runtime genetic commit requires a native session")
+        backend.refresh_params(fields, materialize(new).params)
+        pop.set_config(new)
+        pop._manual_gamete = list(candidate._manual_gamete)  # pyright: ignore[reportPrivateUsage]  # publish successful declaration metadata.
+        pop._manual_zygote = list(candidate._manual_zygote)  # pyright: ignore[reportPrivateUsage]
+        pop._presets = list(candidate._presets)  # pyright: ignore[reportPrivateUsage]  # compiled candidate metadata commits with its tensors.
+        pop._gamete_modifiers = list(candidate.gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
+        pop._zygote_modifiers = list(candidate.zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
+        if publish_definition:
+            pop._current_definition = candidate._definition_for_compile()  # pyright: ignore[reportPrivateUsage]  # committed declarations follow their validated products.
+        self._config = new
+        from natal.frontend.configurator._writers import contract_to_draft_field
+
+        for field in fields:
+            name = contract_to_draft_field(field)
+            pop.log_param_value(
+                field, np.array(getattr(old, name), dtype=np.float64, copy=True),
+                np.array(getattr(new, name), dtype=np.float64, copy=True),
+                event="genetics",
+            )
 
     # -- apply / build ---------------------------------------------------------
 
@@ -1947,19 +1949,11 @@ class Configurator:
                 .reproduction(eggs=100)
                 .build(name="pop")
 
-        Internally it: (1) syncs equilibrium metrics via :meth:`apply`,
-        (2) runs compression if enabled, (3) flushes deferred-write buffers,
-        (4) merges hooks, and (5) passes ``self._config`` to the Population
-        constructor.
-
-        .. note::
-
-           ``fitness()`` and ``initial_state()`` store their patches in
-           deferred buffers rather than writing config immediately.  The
-           buffers are flushed here — AFTER compression — so all genotype
-           selectors resolve to compressed indices.  Genotypes pruned by
-           compression raise ``ValueError`` at flush time instead of being
-           silently dropped.
+        Build finalizes the normalized declaration, reuses already compiled
+        recipe products, applies optional index compression, and freezes the
+        observation and history layout before handing execution to Rust.
+        Fitness and initial-state declarations take effect when their chain
+        methods run; build preserves those values on the final active axes.
 
         Args:
             name: Population name (falls back to ``.setup(name=...)``
@@ -1973,6 +1967,34 @@ class Configurator:
             depending on whether *self._config* carries the
             discrete-generation flag.
         """
+        from natal.frontend.genetics.definition_compiler import compile_definition
+
+        if hook_items:
+            # Inline registrations have the same defaults and declaration
+            # ownership as the fluent hooks() spelling.
+            self.hooks(*hook_items)
+        if self._species is not None:
+            definition = self._definition_for_compile()
+            inputs = definition.normalized
+            assert inputs is not None
+            # Layout, hooks, and recording policies consume the same normalized
+            # inputs as genetic compilation; no raw journal replay is needed.
+            self._hook_calls = list(inputs.hook_calls)
+            self._observation_groups = inputs.observation_groups
+            self._observation_collapse_age = inputs.observation_collapse_age
+            self._record_history_mode = inputs.history_mode
+            self._record_history_max_rows = inputs.history_max_rows
+            self._compress = inputs.compress
+            self._declared_zygote_types = None if inputs.declared_zygote_types is None else cast("set[str] | set[int]", set(inputs.declared_zygote_types))  # homogeneous selector kind is retained by freezing.
+            compiled = compile_definition(definition, cached=self._compiled_model)
+            self._config = compiled.config
+            self._registry = compiled.registry
+            self.gamete_modifiers = list(compiled.gamete_modifiers)
+            self.zygote_modifiers = list(compiled.zygote_modifiers)
+            self._compiled_model = compiled
+            # Compilation owns its products now. Drop the temporary input
+            # snapshots before materializing another complete native contract.
+            del definition, inputs
         # Sync equilibrium metrics and apply index compression (if enabled).
         self.apply()
 
@@ -2020,6 +2042,7 @@ class Configurator:
                 zygote_modifiers=self.zygote_modifiers,
                 compress=True,
                 declared_zygote_types=self._declared_zygote_types,
+                prepared=True,
             )
             if compression_applied:
                 self._compression_applied = True
@@ -2065,31 +2088,23 @@ class Configurator:
         # Freeze the declaration snapshot onto the population (plan 5.1
         # slice 3): the ordered journal plus the declared identity.  The
         # snapshot is frozen — runtime updates never rewrite it.
-        from natal.frontend.data.definition import ModelDefinition
-
-        pop._definition = ModelDefinition(  # pyright: ignore[reportPrivateUsage]  # build() is the sanctioned attachment point
-            species=self._species,
-            discrete_generation=bool(final_config.discrete_generation),
-            journal=tuple(
-                (name, dict(kwargs)) for name, kwargs in self._declaration_log
-            ),
-            build_name=name,
-        )
+        pop._definition = self._definition_for_compile(build_name=name)  # pyright: ignore[reportPrivateUsage]  # one owned frozen declaration; avoid snapshotting it three times.
+        pop._current_definition = pop._definition  # pyright: ignore[reportPrivateUsage]  # initial normalized declaration is the runtime compiler source.
 
         # Configurator applies modifiers before Population construction.  Carry
         # both the recipe objects and their current derived callables across the
         # boundary so refresh_modifiers() and reconfigure_preset() behave the
         # same for build-time and runtime preset registration.
+        pop._manual_gamete = list(self._manual_gamete)  # pyright: ignore[reportPrivateUsage]  # preserve manual declarations across future refreshes.
+        pop._manual_zygote = list(self._manual_zygote)  # pyright: ignore[reportPrivateUsage]
         pop._presets = list(self._presets)  # pyright: ignore[reportPrivateUsage]
         pop._gamete_modifiers = list(self.gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
         pop._zygote_modifiers = list(self.zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
 
         # Replay stored .hooks() calls (plus any passed inline) BEFORE the
-        # backend enable below: enable_rust_backend snapshots both the CSR
+        # backend enable below: _initialize_session snapshots both the CSR
         # program and the Python-callback bridges.
         hook_calls: list[HookCall] = list(self._hook_calls)
-        if hook_items:
-            hook_calls.append((tuple(hook_items), {}))
         for items, kwargs in hook_calls:
             pop.register_hooks(  # pyright: ignore[reportPrivateUsage]
                 *items,
@@ -2110,7 +2125,7 @@ class Configurator:
                 "only execution backend. Build it with `maturin develop` "
                 "before constructing populations."
             )
-        pop.enable_rust_backend()  # type: ignore[reportAttributeAccessIssue]  # both concrete Population classes expose this method
+        pop._initialize_session()  # type: ignore[reportAttributeAccessIssue]  # both concrete Population classes expose this method
 
         # Compile and freeze the recording plan.
         self._compile_recording_plan(pop)
@@ -2129,7 +2144,9 @@ class Configurator:
         from natal.frontend.output.history import History
         from natal.frontend.output.observation import build_identity_observation
 
-        config = pop.config
+        # Only immutable dimensions and model kind are required here.
+        config = pop._config  # pyright: ignore[reportPrivateUsage]  # build-time layout metadata; no native parameter query.
+        assert config is not None
         if config.discrete_generation:
             kind = "discrete_generation"
             has_sperm = False
@@ -2144,15 +2161,15 @@ class Configurator:
             observation = build_identity_observation(
                 pop.index_registry,
                 n_ztypes=pop.index_registry.n_ztypes,
-                n_sexes=pop.config.n_sexes,
-                n_ages=pop.config.n_ages,
+                n_sexes=config.n_sexes,
+                n_ages=config.n_ages,
             )
         else:
             observation = ObservationFilter(pop.index_registry).build_from_selectors(
                 groups=dict(obs_groups),
                 collapse_age=self._observation_collapse_age,
-                n_sexes=pop.config.n_sexes,
-                n_ages=pop.config.n_ages,
+                n_sexes=config.n_sexes,
+                n_ages=config.n_ages,
                 n_ztypes=pop.index_registry.n_ztypes,
             )
         pop._observation = observation  # type: ignore[reportPrivateUsage]  # build-time installation of the immutable canonical rule

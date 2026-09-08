@@ -11,13 +11,15 @@ Callback hooks let you write code that operates on the simulation state directly
 |---|---|
 | `pop.tick` | Current simulation tick (read-only). |
 | `pop.deme_id` | Deme index of this invocation (`0` panmictic, the live deme index under a SpatialPopulation, read-only). |
-| `pop.state` | Writable state view (short-term loan; writes take effect immediately). |
-| `pop.params` | Writable parameter surface (same writer stack as `pop.params`; attribute writes are bounds-validated and reach the draft, the live Rust session, and the parameter snapshot log). |
+| `pop.state` | Writable transaction candidate, materialized on first state or metrics access; commits when the callback succeeds. |
+| `pop.params` | Writable parameter surface (same writer stack as `pop.params`; attribute writes are validated in the candidate and reach the Rust session and audit log when the callback succeeds). |
 | `pop.blueprint` | Read-only dimensions, name catalogs, and engine switches (`n_sexes`, `n_ages`, `n_ztypes`, `discrete`, `stochastic`, `continuous_sampling`, `extreme_speed_mode`, `ztype_names`, `gtype_names`). |
 | `pop.metrics` | On-demand metrics view (recomputed on every access). |
-| `pop.rng` | Deterministic random stream (derived from population slot, tick, deme, hook index; never touches global `numpy.random`). |
+| `pop.rng` | Controlled sampler of the persistent Rust RNG stream for this deme; never touches global `numpy.random`. |
 | `pop.update()` | Returns a runtime `Configurator` bound to the owning population (same syntax as the build chain). |
 | `pop.stop()` / `pop.stop_requested` | Request/query run termination at the event boundary. |
+
+Parameter candidates are copied into Python only when the callback accesses parameters or configuration. Callbacks that only count visits, inspect state, or draw random numbers do not transfer parameter tensors. Validated writes update the native transaction directly, and an exception discards that callback's candidate.
 
 ### Basic Usage
 
@@ -134,7 +136,7 @@ def balance_population(pop: TickContext, drive: int, wt: int) -> int:
 
 ## Random Sampling Inside Hooks
 
-Randomness inside callback hooks must come from `pop.rng` (an `np.random.Generator`). Global `np.random` state is never touched:
+Randomness inside callback hooks must come from `pop.rng` (the controlled Rust sampler). Global `np.random` state is never touched:
 
 ```python
 from natal.frontend.hooks import hook
@@ -144,9 +146,8 @@ from natal.frontend.hooks.tick_context import TickContext
 @hook(event="late", priority=10)
 def stochastic_culling_hook(pop: TickContext) -> int:
     if pop.tick > 50:
-        # pop.rng is an invocation-independent deterministic stream:
-        # the same (slot, tick, deme, hook index) yields the same draws
-        # on the reference and Rust backends
+        # Draws advance this deme's persistent Rust stream.
+        # Checkpoint restoration also restores the stream position.
         survival_prob = 0.9
         n_current = pop.state.individual_count[:, :, 0]
         pop.state.individual_count[:, :, 0] = pop.rng.binomial(
@@ -155,7 +156,7 @@ def stochastic_culling_hook(pop: TickContext) -> int:
     return 0
 ```
 
-The stream is derived from `population slot ^ (tick * 1_000_003) ^ ((deme_id + 7) * 6_559) ^ ((hook_index + 1) * 31)`. **Reproducibility scope**: for the same `setup(stochastic=True, seed=...)` and the same hook combination, the engine produces bit-reproducible deterministic (`stochastic=False`) trajectories and identical random draws from seed-driven streams across processes; any global custom randomness (`np.random.seed(...)` etc.) is outside the promise.
+The sampler supports `random`, `uniform`, `normal`, `integers`, and `binomial`; binomial counts and probabilities can broadcast over arrays. Repeated accesses within a callback use the same stream. Failed callbacks discard their candidate draws. Replaying a checkpoint with the same hooks and parameters reproduces the subsequent draws. Retained RNG, parameter, and update handles reject access after the callback ends.
 
 ## Execution Paths
 
@@ -234,21 +235,22 @@ def heatwave(pop: TickContext) -> int:
 Semantics (uniform across entry points):
 
 - Writes are jsonc-bounds-validated; values outside the `parameters.jsonc` `bounds` raise `ValueError`;
-- Visible to later stages of the same tick (in-tick writes land in the session ecology columns; out-of-band `trigger_event` writes land in the draft directly);
+- Visible to later stages of the same tick (both in-tick and explicit `trigger_event` writes commit through the owning Rust session);
 - Every actual change appends to `pop.params_log` as `(tick, name, old, new)`;
 - Vector/tensor parameters use `pop.params.tensor_write(name, values)`.
 
-Custom fields are read/written via `pop.state` / `config.custom['name'][()]`, initialized at build time with `.custom(temperature=25.0)` and changed at runtime via `pop.update().custom(...)`. Custom fields are not in the parameter registry, so `pop.params` cannot reach them.
+Custom fields are read via `population.config.custom['name']`, initialized at build time with `.custom(temperature=25.0)` and changed at runtime via `pop.update().custom(...)`. Custom values preserve bool/int/float types and the shape of arrays of any rank. Spatial custom values belong to their own deme and are included in checkpoints. Custom fields are not in the parameter registry, so `pop.params` cannot reach them.
 
 For chain-style updates inside a hook, use the Configurator returned by `pop.update()` (same syntax as the build chain).
 
-## Slice-④ Consistency Terms
+## Event transactions
 
-- **`stop()` in the late event**: halts immediately at the event boundary; the rest of the current tick does not execute and the tick does not advance.
-- **After `stop()`**: `run()` must be preceded by `reset()`; otherwise `run()` raises.
-- **Hook exceptions**: a raised callback crosses the bridge back to Python wrapped as `RuntimeError` whose message embeds the original error text (plain-model bridges keep the original exception in `__cause__`; the spatial bridge embeds it in the message only); out-of-band invocation (`trigger_event`, finish events) propagates the original exception unchanged.
-- **Spatial `ctx.update()` defers to the next tick**: inside a spatial run, a hook's parameter write lands in the deme draft and is pulled into the session columns when the tick returns, so it binds from the FOLLOWING tick (the same deferred-write semantics as plain-model hooks). A parameter written by both a declarative `Op.set_param` and `ctx.update()` in the same tick follows last-writer-wins in the runtime (the Python callback fires after the declarative hooks of that event).
-- **Rust hook-side parameter writes merge after `run()`** (post-HB-2 fix): session-side writes evolve inside the session ecology columns; when `run()` returns, the audited transitions are appended to `params_log` under their own commit ticks and the final values are synchronized into the draft -- no dirty-bridge push-back needed.
+- A callback commits state, ecology, genetic parameters, custom values, and RNG position together. Invalid state or an exception discards that callback's candidate; earlier successful callbacks remain committed.
+- Declarative operations execute in priority order and see earlier writes in the same event. Their final parameter changes commit once per native event, so repeated writes to one parameter produce one audit row from its initial to final value. Python callbacks commit separately after the declarative event and produce their own rows.
+- A successful parameter update is visible to later callbacks and stages of the same tick in ordinary and spatial models. Rust owns the current values and the parameter log; Python configuration reads return isolated snapshots. Spatial `ctx.params.tensor_write()` and deme parameter writes fork changed genetics inside the native session and leave other demes unchanged.
+- Callback exceptions preserve their original Python type. A failed session requires reset or checkpoint restoration before another run.
+- `stop()` halts at the current event boundary and preserves its state and phase. The tick does not advance; continuing requires reset or restoration of a Ready checkpoint.
+- State arrays cross into Python only when a callback accesses state or metrics. A callback using only parameters or RNG creates no Python state arrays.
 
 ## Related Sections
 

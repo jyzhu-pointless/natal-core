@@ -297,7 +297,7 @@ def _scene_age_rust() -> dict[str, str]:
             low_density_growth_rate=6,
         )
         .build()
-        .enable_rust_backend(seed=3)
+        ._initialize_session(seed=3)
     )
     digests = {"t0": _digest(_age_state_arrays(pop))}
     for _ in range(4):
@@ -372,7 +372,7 @@ def _scene_discrete_rust() -> dict[str, str]:
             low_density_growth_rate=6,
         )
         .build()
-        .enable_rust_backend(seed=17)
+        ._initialize_session(seed=17)
     )
     digests = {"t0": _digest(_discrete_state_arrays(pop))}
     for _ in range(4):
@@ -462,7 +462,7 @@ def _rust_scenario(kernel_mode: bool) -> dict[str, str]:
         row[row == 0] = 1.0
         adjacency = adjacency / row
         builder = builder.migration(adjacency=adjacency, migration_rate=0.25)
-    pop = builder.build().enable_rust_backend(seed=7)
+    pop = builder.build()._initialize_session(seed=7)
     digests = {"t0": _digest(_state_arrays(pop))}
     for _ in range(4):
         pop.run_tick()

@@ -32,6 +32,7 @@ import pytest
 
 import natal as nt
 from natal.backends.rust.rust_backend import rust_backend_available
+from natal.contracts.params import Params
 from natal.frontend.configurator import Configurator, _routes, set_param
 from natal.frontend.configurator._routes import (
     ROUTES_BY_METHOD,
@@ -114,8 +115,11 @@ class TestScalarShape:
         sent: dict[str, float] = {}
 
         class FakeSession:
+            def refresh_params(self, fields: list[str], source: Params) -> None:
+                raise AssertionError("Scalar batches must not materialize all tensors")
+
             def apply(self, writes: dict[str, float]) -> None:
-                sent.update(dict(writes))
+                sent.update(writes)
 
             def tensor_write(self, field: str, values: np.ndarray) -> None:
                 raise AssertionError(
@@ -125,7 +129,7 @@ class TestScalarShape:
         writer = CoreConfigWriter(_age_draft(), FakeSession())  # type: ignore[arg-type]  # structural fake of the runtime session protocol
         writer.apply({"sperm_displacement_rate": 0.4})
         # The scalar route resolves to the contract field name and the
-        # write flows into the session scalar channel immediately.
+        # write flows into the atomic session refresh immediately.
         assert sent == {"sperm_displacement_rate": 0.4}
         assert float(writer.draft.sperm_displacement_rate) == 0.4
 
@@ -244,8 +248,12 @@ class TestSlotShape:
         received: list[tuple[str, np.ndarray]] = []
 
         class FakeSession:
+            def refresh_params(self, fields: list[str], source: Params) -> None:
+                assert fields == ["survival_rates"]
+                received.append(("survival_rates", source.survival_rates.ravel().copy()))
+
             def apply(self, writes: dict[str, float]) -> None:
-                raise AssertionError("slot writes must use the tensor channel")
+                raise AssertionError("Routed writes must use the atomic refresh channel")
 
             def tensor_write(self, field: str, values: np.ndarray) -> None:
                 received.append((field, np.asarray(values).copy()))
@@ -370,7 +378,7 @@ class TestGenoTensorShape:
         ``run()`` would consume the stale table; if the run clobbered the
         draft, the written row would not survive the run.
         """
-        pop = _age_pop().enable_rust_backend(seed=0)
+        pop = _age_pop()._initialize_session(seed=0)
         backend = pop._rust_lifecycle_backend
         assert backend is not None
         table = pop.params.meiosis_map.array
@@ -674,7 +682,7 @@ class TestMeiosisDerivedRecompute:
         rst = _biased_meiosis_pop(
             "__slice3_c3d_rust__",
             {"female": {"WT|WT": 10}, "male": {"WT|WT": 10}},
-        ).enable_rust_backend(seed=42)
+        )._initialize_session(seed=42)
 
         for pop in (ref, rst):
             biased = pop.params.meiosis_map.array
@@ -1167,6 +1175,7 @@ class TestPlanCommitSplit:
         ]
         with pytest.raises(ValueError):
             plan_write(cfg, lookup("sex_ratio"), 7.0)
+        assert float(cfg.carrying_capacity) == before
         # The failed plan left the draft untouched; committing the valid
         # plan afterwards is still possible.
         cfg = commit_write(cfg, plans[0])

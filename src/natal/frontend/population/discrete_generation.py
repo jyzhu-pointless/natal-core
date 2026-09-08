@@ -165,9 +165,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         self._initialize_registry()
 
-        n_sexes = self.config.n_sexes
-        n_ztypes = self.config.n_ztypes
-        n_ages = self.config.n_ages
+        n_sexes = self._config.n_sexes
+        n_ztypes = self._config.n_ztypes
+        n_ages = self._config.n_ages
 
         # Create an empty state first so we can check whether the config's
         # default initial_individual_count has compatible dimensions --
@@ -180,7 +180,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             individual_count=np.zeros((n_sexes, n_ages, n_ztypes), dtype=np.float64),
         )
 
-        cfg_init_ind = self.config.initial_individual_count
+        cfg_init_ind = self._config.initial_individual_count
         if cfg_init_ind.shape == self._live_state().individual_count.shape:
             self._live_state().individual_count[:] = cfg_init_ind
 
@@ -341,7 +341,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 self._live_state().individual_count[sex_idx, 0, z_idx] = age0_count
                 self._live_state().individual_count[sex_idx, 1, z_idx] = age1_count
 
-    def enable_rust_backend(self, seed: int = 0) -> DiscreteGenerationPopulation:
+    def _initialize_session(self, seed: int = 0) -> DiscreteGenerationPopulation:
         """Enable the Rust backend for subsequent runs.
 
         CSR declarative hooks travel to Rust inside the ``HookProgram``;
@@ -365,6 +365,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         Raises:
             RuntimeError: If the Rust extension is unavailable.
         """
+        self._require_standalone_owner("_initialize_session")
         from natal.backends.rust.rust_backend import (
             RustDiscreteLifecycleBackend,
             rust_backend_available,
@@ -378,7 +379,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         hook_program = self._build_hook_program()
         self._run_program = self._run_program._replace(hooks=hook_program)
         backend = RustDiscreteLifecycleBackend(
-            self.config,
+            # Materialization copies the first owned draft itself; only an
+            # existing session needs a current native parameter snapshot.
+            self._config if self._rust_lifecycle_backend is None and self._config is not None else self.config,
             hook_program,
             seed=seed,
         )
@@ -399,35 +402,18 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         return self
 
     def _run_startup_sync(self) -> None:
-        """Rebuild the session when structural changes requested it.
-
-        Hook registration, modifier-map rebuilds, and blueprint-flag writes
-        are session structure, not values: the live session must be
-        rebuilt before the next run (RNG reseeds to the original seed —
-        the documented rebuild semantics).
-        """
-        if self._rust_needs_rebuild:
-            self._rust_needs_rebuild = False
-            self.enable_rust_backend(seed=int(self._rust_backend_seed or 0))
-
-    def _flush_runtime_fields_after_run(self) -> None:
-        """Sync the draft's runtime fields (ecology AND genetics) back into the session after a run.
-
-        In-run writes (hook callbacks, deferred pushes) land in the draft
-        only while the session owns its borrow; this boundary flush
-        re-materializes the contract params once and pulls every runtime
-        field, so the next run starts from the user-visible draft values
-        (including values a hook wrote through ``ctx.update()``).
-        """
-        from natal.frontend.population.base import RUNTIME_FLUSH_FIELDS
-
+        """Install changed execution flags and hooks without replacing state or RNG."""
+        if not self._rust_needs_rebuild:
+            return
         backend = self._rust_lifecycle_backend
         if backend is None:
-            return
-        from natal.contracts.materialize import materialize
-
-        params = materialize(self.config).params
-        backend.refresh_params(list(RUNTIME_FLUSH_FIELDS), params)
+            raise RuntimeError("The population session has not been initialized.")
+        config = self.config
+        program = self._build_hook_program()
+        backend.configure_program(program, config)
+        self._register_rust_callbacks(backend)
+        self._run_program = self._run_program._replace(hooks=program)
+        self._rust_needs_rebuild = False
 
     def _run_rust_lifecycle(
         self,
@@ -442,9 +428,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         if backend is None:
             # Instances that skipped ``build()`` (clones, direct
             # construction) lazily create their engine session at the
-            # first run boundary; ``enable_rust_backend`` installs the
+            # first run boundary; ``_initialize_session`` installs the
             # current live state into the fresh session.
-            self.enable_rust_backend(seed=int(self._rust_backend_seed or 0))
+            self._initialize_session(seed=int(self._rust_backend_seed or 0))
             backend = self._rust_lifecycle_backend
             assert backend is not None  # enable either returns or raises
 
@@ -460,9 +446,15 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             else 0
         )
 
-        # In-hook writes during the batch defer session pushes to the next run.
+        if history_obj is not None:
+            if clear_history_on_start:
+                self.clear_history()
+            if history_obj.schema.mode == "observation":
+                history_obj._configure_observation(self.observation)
+            backend.bind_history(history_obj._store, self._params_log)
+            history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+
         self._rust_run_active = True
-        self._rust_deferred_writes = False
         try:
             final_tick, history_new, was_stopped = backend.run(
                 n_steps=n_steps,
@@ -470,14 +462,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 observation_mask=self._observation_mask,
                 checkpoint_every=checkpoint_every,
             )
-            if self._rust_deferred_writes:
-                # Run-boundary ecology flush: in-run writes landed in the
-                # draft; the next run starts from the user-visible values.
-                self._flush_runtime_fields_after_run()
         finally:
             self._rust_run_active = False
-            # A failed run wrote nothing to the session (validation is
-            # atomic): the deferral flag must not leak into the next run.
             self._rust_deferred_writes = False
 
         # Merge the session's set_param writes (params_log rows under their
@@ -523,6 +509,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 native engine extension is unavailable (the session is
                 created by ``build()`` or lazily at the first run).
         """
+        self._require_standalone_owner("run")
+        if getattr(self, "_running", False):
+            raise RuntimeError("Nested run is forbidden")
+        if getattr(self, "_failed", False):
+            raise RuntimeError("Population has failed; restore a checkpoint or reset before run")
         if self._finished:
             raise RuntimeError(
                 f"Population '{self.name}' has finished. Cannot run() again after finish=True."
@@ -540,6 +531,10 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 finish=finish,
                 clear_history_on_start=clear_history_on_start,
             )
+        except BaseException:
+            self._failed = True
+            self._mark_state_cache_stale()
+            raise
         finally:
             self._running = False
 
@@ -553,10 +548,12 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def reset(self) -> None:
         """Reset tick, history, and population state to initial values."""
+        self._require_standalone_owner("reset")
         self._tick = 0
         if self._history_obj is not None:
             self._history_obj.clear()
         self._finished = False
+        self._failed = False
         # Guard against calls before __init__ finishes (e.g. during
         # BasePopulation.__init__ -> _initialize -> reset chain).
         if hasattr(self, "_initial_population_snapshot"):
@@ -573,6 +570,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             # The session owns the runtime state: the reset container
             # becomes the new session state.
             backend.set_state(self._state)
+            backend.reseed(int(self._rust_backend_seed or 0))
+            backend.clear_checkpoints()
             self._state_cache_stale = False
 
     def get_total_count(self) -> int:
@@ -593,6 +592,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def clear_history(self) -> None:
         """Clear history rows and the paired session checkpoints."""
+        self._require_standalone_owner("clear_history")
         super().clear_history()
 
     def export_state(self) -> NDArray[np.float64]:
@@ -626,7 +626,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 invariants (``n_ages == 2``, ``new_adult_age == 1``,
                 ``adult_ages == [1]``).
         """
-        self._config = _require_discrete_config(config)
+        self._require_standalone_owner("import_config")
+        self._install_config(_require_discrete_config(config))
 
     def import_state(
         self,
@@ -643,6 +644,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             state: New state as a ``DiscretePopulationState``, flat ndarray,
                 or dict with ``individual_count`` key.
         """
+        self._require_standalone_owner("import_state")
         # ── Phase 1: parse and validate all inputs ──
         if isinstance(state, np.ndarray):
             state_obj = parse_flattened_discrete_state(
@@ -668,18 +670,19 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 f"{expected_shape}, got {state_obj.individual_count.shape}"
             )
 
-        # ── Phase 2: commit atomically ──
-        self._state = DiscretePopulationState(
+        self._validate_import_values(state_obj)
+        candidate = DiscretePopulationState(
             n_tick=int(state_obj.n_tick),
             individual_count=state_obj.individual_count.copy(),
         )
-        self._tick = int(state_obj.n_tick)
         backend = self._rust_lifecycle_backend
         if backend is not None:
-            # The session owns the runtime state (plan S2): the imported
-            # container becomes the new session state.
-            backend.set_state(self._state)
-            self._state_cache_stale = False
+            # Publish Python views only after the native transaction accepts
+            # the complete candidate; a rejected import preserves the timeline.
+            backend.set_state(candidate)
+        self._state = candidate
+        self._tick = candidate.n_tick
+        self._state_cache_stale = False
         self.clear_history()
 
     def _refresh_state_cache_from_session(self) -> None:

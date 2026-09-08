@@ -26,7 +26,7 @@ from natal.frontend.genetics import Species, build_compression_mask
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
-    from natal.frontend.genetics.compile import GameteList, ZygoteList
+    from natal.frontend.genetics.compile import GameteList, RecipeHost, ZygoteList
 
 # ── Registry builder (shared by Configurator and adapter) ──────────────────────
 
@@ -80,6 +80,8 @@ def rebuild_config_maps(
     zygote_modifiers: ZygoteList,
     compress: bool = False,
     declared_zygote_types: set[str] | set[int] | None = None,
+    prepared: bool = False,
+    host: RecipeHost | None = None,
 ) -> tuple[ModelDraft, bool]:
     """Apply gamete/zygote modifiers and rebuild ``offspring_tensor``.
 
@@ -107,6 +109,9 @@ def rebuild_config_maps(
         declared_zygote_types: Genotypes the user declared (string
             selectors or raw indices) that must survive compression
             pruning even when unreachable from the initial state.
+        host: Isolated recipe host supplied to modifiers that inspect configuration.
+        prepared: Reuse already compiled modifier maps when finalizing a build;
+            compression must not execute user recipes a second time.
 
     Returns:
         ``(new_config, compression_applied)`` — the rebuilt draft and
@@ -114,7 +119,10 @@ def rebuild_config_maps(
         *registry* is compressed in place when compression applies.
     """
     from natal.frontend.data._engine import recompute_offspring_tensor
-    from natal.frontend.genetics.compile import compile_modifier_maps
+    from natal.frontend.genetics.compile import (
+        compile_modifier_maps,
+        project_mendelian_maps,
+    )
 
     # ---- resolve genotype/haplotype lists from the registry ----
     haploid_genotypes = registry.index_to_haplo
@@ -123,27 +131,26 @@ def rebuild_config_maps(
         # species has no haploid genotypes (no sex chromosomes)
         return config, False
 
-    n_glabs = int(config.n_glabs)
-
     # ---- the unified compiler: baseline from the species cache,
     # modifier recipes chained, offspring derived — the same spelling
     # the population-side refresh uses ----
-    bp = species.get_config_blueprint()
-    zygotes_to_gametes_map, gametes_to_zygotes_map, _derived = (
-        compile_modifier_maps(
-            bp["zygotes_to_gametes_map"],
-            bp["gametes_to_zygotes_map"],
-            gamete_modifiers=gamete_modifiers,
-            zygote_modifiers=zygote_modifiers,
-            registry=registry,
-            population=None,
+    if prepared:
+        zygotes_to_gametes_map = config.zygotes_to_gametes_map.copy()
+        gametes_to_zygotes_map = config.gametes_to_zygotes_map.copy()
+    else:
+        baseline_z2g, baseline_g2z = project_mendelian_maps(species, registry)
+        zygotes_to_gametes_map, gametes_to_zygotes_map, _derived = (
+            compile_modifier_maps(
+                baseline_z2g,
+                baseline_g2z,
+                gamete_modifiers=gamete_modifiers,
+                zygote_modifiers=zygote_modifiers,
+                registry=registry,
+                population=host,
+            )
         )
-    )
 
     # ---- index compression (optional) ----
-    n_g_compressed = int(config.n_ztypes)
-    n_hg_effective = int(config.n_gtypes) // n_glabs
-    n_glabs_effective = n_glabs
     gtype_mask = np.array([], dtype=np.int32)
     ztype_mask = np.array([], dtype=np.int32)
     compression_applied = False
@@ -216,8 +223,6 @@ def rebuild_config_maps(
             return config, compression_applied
 
     # GType (gamete-axis) compression.
-    n_hg_effective = int(config.n_gtypes) // n_glabs
-    n_glabs_effective = n_glabs
     gtype_compressed = False
     _hl_active = gtype_mask >= 0
     if gtype_mask.size > 0:
@@ -225,7 +230,6 @@ def rebuild_config_maps(
         if n_hl_compressed < zygotes_to_gametes_map.shape[2]:
             zygotes_to_gametes_map = zygotes_to_gametes_map[:, :, _hl_active]
             gametes_to_zygotes_map = gametes_to_zygotes_map[_hl_active, :, :][:, _hl_active, :]
-            n_hg_effective = n_hl_compressed
             gtype_compressed = True
 
     # ZType (genotype-axis) compression.
@@ -235,7 +239,6 @@ def rebuild_config_maps(
         gametes_to_zygotes_map = gametes_to_zygotes_map[:, :, _z_active]
 
         config = compress_config(config, ztype_mask)
-        n_g_compressed = int(config.n_ztypes)
         registry.compress(ztype_mask, gtype_mask)
 
     # ---- recompute offspring probability tensor from the updated maps via
@@ -250,8 +253,8 @@ def rebuild_config_maps(
         "zygotes_to_gametes_map": zygotes_to_gametes_map,
         "gametes_to_zygotes_map": gametes_to_zygotes_map,
         "offspring_tensor": offspring_tensor,
-        "n_ztypes": n_g_compressed,
-        "n_gtypes": n_hg_effective if gtype_compressed else n_hg_effective * n_glabs_effective,
+        "n_ztypes": int(zygotes_to_gametes_map.shape[1]),
+        "n_gtypes": int(zygotes_to_gametes_map.shape[2]),
     }
     if gtype_compressed:
         # The registry compressed gtypes with the same flat mask; slice the

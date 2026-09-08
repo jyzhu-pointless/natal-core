@@ -883,6 +883,10 @@ pub struct EcoCtx<'a> {
     pub params: &'a mut Params,
     /// Shared genetics tables for config assembly.
     pub genetics: &'a TensorSet,
+    /// Candidate genetics committed by Python callbacks at this event.
+    pub updated_genetics: Option<TensorSet>,
+    /// Current within-tick stage, retained when a callback stops or fails.
+    pub phase: usize,
     /// Deme column the writes target (0 for panmictic sessions and for
     /// the per-deme local copies of spatial ticks).
     pub deme: usize,
@@ -922,7 +926,7 @@ impl EcoCtx<'_> {
             }
             let old = self.params.eco_value(id, self.deme);
             if old != *value {
-                self.journal.push((self.tick, id, old, *value));
+                self.journal.push((self.tick, id, old, *value, self.phase));
             }
             self.params.set_eco_value(id, self.deme, *value);
         }
@@ -935,8 +939,13 @@ impl EcoCtx<'_> {
     /// A fresh [`SimConfig`] reflecting committed set_param writes, or an
     /// error string when assembly validation fails.
     pub fn assemble(&self) -> Result<SimConfig, String> {
-        SimConfig::assemble_deme(self.bp, self.params, self.genetics, self.deme)
-            .map_err(|err| err.to_string())
+        SimConfig::assemble_deme(
+            self.bp,
+            self.params,
+            self.updated_genetics.as_ref().unwrap_or(self.genetics),
+            self.deme,
+        )
+        .map_err(|err| err.to_string())
     }
 
     /// Re-assemble the discrete-generation config from current ecology.
@@ -946,8 +955,12 @@ impl EcoCtx<'_> {
     /// or an error string when assembly validation fails.
     pub fn assemble_discrete(&self) -> Result<crate::discrete::DiscreteConfig, String> {
         // DiscreteConfig reads the deme-0 column (panmictic sessions).
-        crate::discrete::DiscreteConfig::assemble(self.bp, self.params, self.genetics)
-            .map_err(|err| err.to_string())
+        crate::discrete::DiscreteConfig::assemble(
+            self.bp,
+            self.params,
+            self.updated_genetics.as_ref().unwrap_or(self.genetics),
+        )
+        .map_err(|err| err.to_string())
     }
 }
 
@@ -992,6 +1005,7 @@ pub fn run_tick(
     // under its own tick value (the ctx outlives one batch, not one tick).
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.tick = tick;
+        ctx.phase = 0;
     }
     let mut rebuilt: Option<SimConfig> = None;
 
@@ -1010,11 +1024,17 @@ pub fn run_tick(
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(0, ind, sperm, tick, deme_id)?;
+        result =
+            hooks.fire_python_callbacks(0, ind, sperm, tick, deme_id, rng, eco_values, eco_ctx)?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
-        if hooks.has_set_param {
+        if hooks.has_set_param
+            || hooks
+                .python_callbacks
+                .iter()
+                .any(|callbacks| !callbacks.is_empty())
+        {
             rebuilt = Some(ctx.assemble()?);
         }
     }
@@ -1023,8 +1043,14 @@ pub fn run_tick(
     }
 
     let cfg_after_first: &SimConfig = rebuilt.as_ref().unwrap_or(cfg);
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.phase = 1;
+    }
     reproduction(rng, cfg_after_first, ind, sperm)?;
 
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.phase = 2;
+    }
     result = hooks.execute_event(
         rng,
         1,
@@ -1040,11 +1066,17 @@ pub fn run_tick(
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(1, ind, sperm, tick, deme_id)?;
+        result =
+            hooks.fire_python_callbacks(1, ind, sperm, tick, deme_id, rng, eco_values, eco_ctx)?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
-        if hooks.has_set_param {
+        if hooks.has_set_param
+            || hooks
+                .python_callbacks
+                .iter()
+                .any(|callbacks| !callbacks.is_empty())
+        {
             rebuilt = Some(ctx.assemble()?);
         }
     }
@@ -1053,8 +1085,14 @@ pub fn run_tick(
     }
 
     let cfg_after_early: &SimConfig = rebuilt.as_ref().unwrap_or(cfg);
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.phase = 3;
+    }
     survival(rng, cfg_after_early, ind, sperm)?;
 
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.phase = 4;
+    }
     result = hooks.execute_event(
         rng,
         2,
@@ -1070,11 +1108,17 @@ pub fn run_tick(
         eco_values,
     );
     if result == 0 {
-        result = hooks.fire_python_callbacks(2, ind, sperm, tick, deme_id)?;
+        result =
+            hooks.fire_python_callbacks(2, ind, sperm, tick, deme_id, rng, eco_values, eco_ctx)?;
     }
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
-        if hooks.has_set_param {
+        if hooks.has_set_param
+            || hooks
+                .python_callbacks
+                .iter()
+                .any(|callbacks| !callbacks.is_empty())
+        {
             rebuilt = Some(ctx.assemble()?);
         }
     }
@@ -1083,6 +1127,9 @@ pub fn run_tick(
     }
 
     let cfg_after_late: &SimConfig = rebuilt.as_ref().unwrap_or(cfg);
+    if let Some(ctx) = eco_ctx.as_mut() {
+        ctx.phase = 5;
+    }
     aging(cfg_after_late, ind, sperm);
     Ok(0)
 }
@@ -1121,6 +1168,9 @@ pub fn run_tick(
 /// ``restore_checkpoint`` rolls back everything, not just counts.
 #[derive(Clone)]
 pub struct TickCheckpoint {
+    /// Lifecycle status and cursor distinguish partial snapshots.
+    pub execution: crate::execution::Execution,
+    pub phase: usize,
     /// Tick the checkpoint was captured at.
     pub tick: i64,
     /// Flattened individual counts at capture time.
@@ -1133,6 +1183,8 @@ pub struct TickCheckpoint {
     pub eco_scalars: Vec<f64>,
     /// Ecology vectors in ``ECOLOGY_VECTORS`` order.
     pub eco_vectors: Vec<Vec<f64>>,
+    /// User-defined ecology belongs to the same atomic checkpoint.
+    pub custom_slots: std::collections::HashMap<String, crate::contract::CustomSlot>,
 }
 
 /// Capture one checkpoint into *store* from the current batch state.
@@ -1148,6 +1200,9 @@ pub(crate) fn capture_checkpoint(
     eco_ctx: &Option<EcoCtx<'_>>,
     store: &mut Vec<TickCheckpoint>,
 ) -> Result<(), String> {
+    if store.iter().any(|checkpoint| checkpoint.tick == tick) {
+        return Ok(());
+    }
     let (eco_scalars, eco_vectors) = match eco_ctx
         .as_ref()
         .map(|ctx| ctx.params.ecology_snapshot_words())
@@ -1157,12 +1212,18 @@ pub(crate) fn capture_checkpoint(
         None => (Vec::new(), Vec::new()),
     };
     store.push(TickCheckpoint {
+        execution: crate::execution::Execution::Ready,
+        phase: 0,
         tick,
         ind: ind.to_vec(),
         sperm: sperm.to_vec(),
         rng_words: rng.state_words(),
         eco_scalars,
         eco_vectors,
+        custom_slots: eco_ctx
+            .as_ref()
+            .map(|ctx| ctx.params.custom_slots[ctx.deme].clone())
+            .unwrap_or_default(),
     });
     Ok(())
 }

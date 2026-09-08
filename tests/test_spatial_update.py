@@ -192,7 +192,7 @@ class TestDemeSliceReadCompat:
         """config/state/registry/name hooks expose the deme's own objects."""
         pop = homogeneous_pop
         deme0 = pop.deme(0)
-        assert deme0.config is pop._demes[0].config  # pyright: ignore[reportPrivateUsage]  # compat contract: same object
+        np.testing.assert_array_equal(deme0.config.viability_fitness, pop._demes[0].config.viability_fitness)
         # DemeSlice.state returns an independent snapshot of the deme's
         # live container (plan S3): equal by value, never the same object
         # or buffer (the public population-level state has been a
@@ -207,15 +207,15 @@ class TestDemeSliceReadCompat:
         assert deme0.registry is pop._demes[0].registry  # pyright: ignore[reportPrivateUsage]  # compat contract (UI reads)
         assert deme0.export_config().n_ages == pop._demes[0].export_config().n_ages  # pyright: ignore[reportPrivateUsage]  # compat contract
 
-    def test_state_reads_are_snapshots_and_import_state_writes(
+    def test_state_reads_are_snapshots_and_scoped_transaction_writes(
         self,
         homogeneous_pop,
     ) -> None:
-        """Slice reads hand out snapshots; import_state is the write channel.
+        """Slice reads hand out snapshots; scoped hook transactions write state.
 
         Plan S3 inversion: a write through a retained ``deme.state``
         snapshot is inert (it cannot reach the deme's live array), while
-        the sanctioned ``import_state`` payload lands on the live state
+        a scoped hook transaction commits its candidate to the live state
         and every subsequent read.
         """
         pop = homogeneous_pop
@@ -231,10 +231,11 @@ class TestDemeSliceReadCompat:
         assert (
             float(live.individual_count[0, 0, 0]) == 0.0
         )  # the live array never moved
-        # Sanctioned write channel: import_state reaches the live run.
+        # A scoped event writes state without creating a separate deme clock.
         changed = pop.deme(2).state.individual_count.copy()
         changed[0, 0, 0] = 77.0
-        pop.deme(2).import_state({"n_tick": pop.tick, "individual_count": changed})
+        from tests.spatial_test_state import set_deme_state
+        set_deme_state(pop, 2, {"n_tick": pop.tick, "individual_count": changed})
         assert float(pop._demes[2].state.individual_count[0, 0, 0]) == 77.0  # pyright: ignore[reportPrivateUsage]  # live write landed
         assert (
             float(pop.deme(2).state.individual_count[0, 0, 0]) == 77.0
@@ -253,7 +254,7 @@ class TestDemeSliceReadCompat:
         assert len(slices) == 4
         assert [s.index for s in slices] == [0, 1, 2, 3]
         # Same underlying config objects as the raw demes (sharing contract).
-        assert slices[3].config is homogeneous_pop._demes[3].config  # pyright: ignore[reportPrivateUsage]  # compat contract
+        np.testing.assert_array_equal(slices[3].config.viability_fitness, homogeneous_pop._demes[3].config.viability_fitness)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -270,10 +271,10 @@ class TestDemeSliceEcologyWrite:
         k_before = pop.deme(0).config.carrying_capacity
         pop.deme(0).write_ecology("carrying_capacity", 999.0)
         # deme 1 keeps the shared array and the original value.
-        assert pop.deme(1).config.carrying_capacity is k_before
+        assert pop.deme(1).config.carrying_capacity == k_before
         assert float(pop.deme(1).config.carrying_capacity) == 500.0
         # deme 0 has a private array with the new value.
-        assert pop.deme(0).config.carrying_capacity is not k_before
+        assert pop.deme(0).config.carrying_capacity != k_before
         assert float(pop.deme(0).config.carrying_capacity) == 999.0
 
     def test_k_write_resyncs_equilibrium_metrics(self, homogeneous_pop) -> None:
@@ -458,48 +459,39 @@ class TestDemeSliceGeneticsFork:
         )
         np.testing.assert_array_equal(pop.deme(1).config.zygotes_to_gametes_map, saved)
 
-    def test_deme_params_tensor_write_refuses_genetics_fields(
-        self,
-        homogeneous_pop,
-    ) -> None:
-        """Per-deme ``params.tensor_write`` refuses every genetics tensor.
-
-        Spatial demes start with shared draft tables; an in-place genetics
-        write would leak into all other demes.  The refusal routes the
-        caller to ``write_genetics`` (the forking channel); ecology
-        vectors keep working through ``tensor_write``.
-        """
+    def test_deme_params_tensor_write_validates_shape_and_forks(self, homogeneous_pop) -> None:
+        """Native scoped writers reject malformed tensors and isolate valid ones."""
         from natal.frontend.population._params_view import _GENETICS_TENSORS
 
         pop = homogeneous_pop
+        original = pop.deme(1).params.viability_fitness.array
         for field in sorted(_GENETICS_TENSORS):
-            with pytest.raises(RuntimeError, match="write_genetics"):
-                pop.deme(0).params.tensor_write(field, np.zeros(1, dtype=np.float64))
-
-        # Ecology vectors stay writable through the same surface.
+            with pytest.raises(ValueError, match="expected"):
+                pop.deme(0).params.tensor_write(field, np.zeros(0, dtype=np.float64))
+        pop.deme(0).params.tensor_write("viability_fitness", np.full_like(original, .5))
+        np.testing.assert_array_equal(pop.deme(0).params.viability_fitness.array, .5)
+        np.testing.assert_array_equal(pop.deme(1).params.viability_fitness.array, original)
         rates = np.asarray(pop.deme(0).params.survival_rates, dtype=np.float64)
         pop.deme(0).params.tensor_write("survival_rates", rates)
         np.testing.assert_array_equal(pop.deme(0).params.survival_rates, rates)
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Build semantics preserved by the merged single-entry build
-# ══════════════════════════════════════════════════════════════════════════
-
-
 class TestBuildSemanticsPreserved:
-    """The single-entry build keeps the sharing and heterogeneity rules."""
+    """Homogeneous construction preserves equal values with isolated snapshots."""
 
     def test_shared_config_after_homogeneous_build(
         self,
         homogeneous_pop,
         homogeneous_age_pop,
     ) -> None:
-        """All demes point to the same config object after a homogeneous build."""
+        """Homogeneous demes expose equal isolated config snapshots."""
         for pop in (homogeneous_pop, homogeneous_age_pop):
             config0 = pop.deme(0).config
             for i in range(1, 4):
-                assert pop.deme(i).config is config0
+                snapshot = pop.deme(i).config
+                assert snapshot is not config0
+                np.testing.assert_array_equal(snapshot.viability_fitness, config0.viability_fitness)
+                assert not np.shares_memory(snapshot.viability_fitness, config0.viability_fitness)
 
     def test_homogeneous_pop_is_spatial_population(
         self,

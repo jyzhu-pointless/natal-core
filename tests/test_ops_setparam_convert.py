@@ -460,7 +460,7 @@ def test_set_param_spatial_per_deme_columns() -> None:
             event="early",
         )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    spatial.enable_rust_backend(seed=0)
+    spatial._initialize_session(seed=0)
     spatial.run(1, record_every=0)
 
     # The python dispatch path writes every deme's own draft via its
@@ -484,7 +484,7 @@ def test_set_param_spatial_per_deme_columns() -> None:
             event="early",
         )
     spatial2 = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
-    spatial2.enable_rust_backend(seed=0)
+    spatial2._initialize_session(seed=0)
     spatial2.run(1, record_every=0)
     assert d0.params.carrying_capacity == 222.0
     assert d2.params.carrying_capacity == 222.0
@@ -516,7 +516,7 @@ def test_mixed_program_session_column_tracks_draft() -> None:
         event="early",
         name="mixed_program",
     )
-    pop.enable_rust_backend(seed=11)
+    pop._initialize_session(seed=11)
     session = pop._rust_lifecycle_backend._session  # noqa: SLF001
 
     k_manual = 800.0

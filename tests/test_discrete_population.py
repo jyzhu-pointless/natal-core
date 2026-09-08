@@ -5,6 +5,7 @@ import pytest
 
 import natal as nt
 from natal.frontend.data import DiscretePopulationState, ModelDraft
+from tests._config_assertions import assert_config_equal
 
 
 def _make_species(name: str = "DiscSp"):
@@ -212,7 +213,7 @@ class TestStateAndConfigInterop:
             pop.import_config(bad)
 
         # State unchanged after the exception.
-        assert pop.export_config() is original_config
+        assert_config_equal(pop.export_config(), original_config)
         assert pop.export_config().n_ages == 2
         assert pop.export_config().new_adult_age == 1
 
@@ -230,7 +231,7 @@ class TestStateAndConfigInterop:
         with pytest.raises(ValueError, match="adult_ages"):
             pop.import_config(bad)
 
-        assert pop.export_config() is original_config
+        assert_config_equal(pop.export_config(), original_config)
         np.testing.assert_array_equal(pop.state.individual_count, original_counts)
 
     def test_import_config_rejects_population_config(self):
@@ -248,7 +249,7 @@ class TestStateAndConfigInterop:
         original_config = pop.export_config()
         with pytest.raises(ValueError, match="zero adult survival"):
             pop.import_config(age_config)
-        assert pop.export_config() is original_config
+        assert_config_equal(pop.export_config(), original_config)
 
     def test_import_config_rejects_dict(self):
         """import_config rejects a dict with TypeError — no dict path exists."""
@@ -258,7 +259,7 @@ class TestStateAndConfigInterop:
         original_config = pop.export_config()
         with pytest.raises(TypeError):
             pop.import_config({"n_ages": 2})  # type: ignore[arg-type]
-        assert pop.export_config() is original_config
+        assert_config_equal(pop.export_config(), original_config)
 
     def test_constructor_rejects_population_config(self):
         """DiscreteGenerationPopulation.__init__ rejects PopulationConfig."""
@@ -284,7 +285,7 @@ class TestStateAndConfigInterop:
         new_config = pop.export_config()._replace(stochastic=True)
         pop.import_config(new_config)
 
-        assert pop.export_config() is new_config
+        assert_config_equal(pop.export_config(), new_config)
         assert pop.export_config().stochastic is True
 
 

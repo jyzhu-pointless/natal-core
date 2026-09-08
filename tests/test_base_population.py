@@ -9,9 +9,9 @@ Covers:
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 import natal as nt
+from tests._config_assertions import assert_config_equal
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Shared helper
@@ -129,11 +129,14 @@ class TestClone:
         clone = pop._clone("clone_of_species")
         assert clone.species is pop.species
 
-    def test_clone_shares_config(self, simple_species: nt.Species) -> None:
+    def test_clone_config_snapshots_are_equal_and_isolated(self, simple_species: nt.Species) -> None:
         pop = _build_pop(simple_species, "clone_config")
         clone = pop._clone("clone_of_config")
-        # Config is shared by reference (shallow copy)
-        assert clone.config is pop.config
+        # Public reads return independent snapshots with equal values.
+        snapshot = clone.config
+        assert_config_equal(snapshot, pop.config)
+        snapshot.viability_fitness[...] = 0.0
+        assert_config_equal(clone.config, pop.config)
 
     def test_clone_has_independent_state(self, simple_species: nt.Species) -> None:
         pop = _build_pop(
@@ -158,7 +161,7 @@ class TestClone:
 
     def test_clone_preserves_tick(self, simple_species: nt.Species) -> None:
         pop = _build_pop(simple_species, "clone_tick")
-        pop.tick = 42
+        pop.import_state(pop.state._replace(n_tick=42))
         clone = pop._clone("clone_of_tick")
         assert clone.tick == 42
 

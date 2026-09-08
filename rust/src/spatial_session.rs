@@ -1,20 +1,19 @@
 //! PyO3 sessions for homogeneous and heterogeneous spatial multi-deme runs.
 
-use numpy::{
-    PyArray1, PyReadonlyArray1, PyReadonlyArray3, PyReadonlyArray4, PyUntypedArrayMethods,
-};
-use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
+use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray4, PyUntypedArrayMethods};
+use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::config::SimConfig;
 use crate::contract::{is_genetics_tensor, Blueprint, Params, TensorSet, GENETICS_TENSORS};
 use crate::discrete::DiscreteConfig;
+use crate::history::{HistoryStore, SharedHistory};
 use crate::hooks::HookProgram;
 use crate::rng::{new_rng, SessionRng};
 
 /// Convert internal kernel error strings into ``PyRuntimeError``.
 fn map_lifecycle_error(err: String) -> PyErr {
-    PyRuntimeError::new_err(err)
+    crate::hook_transaction::map_error(err)
 }
 
 /// PyO3 session for heterogeneous spatial multi-deme runs.
@@ -37,6 +36,9 @@ fn map_lifecycle_error(err: String) -> PyErr {
 /// replaces the whole runtime atomically so `restore -> run` replays the
 /// original stochastic trajectory.
 pub struct SpatialTickCheckpoint {
+    /// Lifecycle status and cursor retained by manual snapshots.
+    pub execution: crate::execution::Execution,
+    pub phase: usize,
     /// Tick the checkpoint was captured at.
     pub tick: i64,
     /// Flattened stacked individual counts.
@@ -61,8 +63,12 @@ pub struct HeterogeneousSpatialEngineSession {
     state_ind: Vec<f64>,
     state_sperm: Vec<f64>,
     state_tick: i64,
+    execution: crate::execution::Execution,
+    phase: usize,
     /// Record-aligned restorable boundaries (plan S4 CheckpointStore).
     checkpoints: Vec<SpatialTickCheckpoint>,
+    /// Shared native numerical history and per-deme log cursors.
+    history_store: Option<SharedHistory>,
     /// Discrete-generation demes tick the discrete lifecycle and carry no
     /// sperm plane (``state_sperm`` is a session-maintained zero sink the
     /// lifecycle never reads; migration's virgin bookkeeping sees zeros).
@@ -77,6 +83,129 @@ pub struct HeterogeneousSpatialEngineSession {
 
 #[pymethods]
 impl HeterogeneousSpatialEngineSession {
+    /// Execute one explicit event against a managed deme's native state.
+    fn trigger_deme_event(&mut self, deme: usize, event: usize) -> PyResult<i32> {
+        if deme >= self.deme_variants.len() || event >= 4 {
+            return Err(PyValueError::new_err("unknown deme or hook event"));
+        }
+        let mut params = self.ecology.single_deme(deme);
+        let mut values = params.eco_values_row(0);
+        let n_ages = self.blueprint.n_ages;
+        let z = self.blueprint.n_ztypes;
+        let ind_stride = 2 * n_ages * z;
+        let sperm_stride = n_ages * z * z;
+        let ind = &mut self.state_ind[deme * ind_stride..(deme + 1) * ind_stride];
+        let sperm = &mut self.state_sperm[deme * sperm_stride..(deme + 1) * sperm_stride];
+        let mut ctx = Some(crate::lifecycle::EcoCtx {
+            bp: &self.blueprint,
+            params: &mut params,
+            genetics: &self.variants[self.deme_variants[deme]],
+            updated_genetics: None,
+            phase: event * 2,
+            deme: 0,
+            tick: self.state_tick,
+            journal: Vec::new(),
+        });
+        let mut result = self.hooks.execute_event(
+            &mut self.rngs[deme],
+            event as i64,
+            ind,
+            sperm,
+            2,
+            n_ages,
+            z,
+            self.state_tick,
+            self.blueprint.stochastic,
+            self.blueprint.continuous_sampling,
+            deme as i64,
+            &mut values,
+        );
+        let outcome = (|| -> Result<(), String> {
+            if result == 0 {
+                result = self.hooks.fire_python_callbacks(
+                    event,
+                    ind,
+                    sperm,
+                    self.state_tick,
+                    deme as i64,
+                    &mut self.rngs[deme],
+                    &mut values,
+                    &mut ctx,
+                )?;
+            }
+            if let Some(context) = ctx.as_mut() {
+                context.commit(&values)?;
+            }
+            Ok(())
+        })();
+        if let Some(context) = ctx.as_mut() {
+            if let Some(shared) = &self.history_store {
+                let store = shared.lock().unwrap();
+                if let Some(log) = store.extra_logs.get(deme) {
+                    for (tick, id, old, new, phase) in context.journal.drain(..) {
+                        log.lock()
+                            .unwrap()
+                            .push(crate::history::LogEntry::from_phase(
+                                (
+                                    tick,
+                                    crate::contract::ECO_PARAM_COLUMNS[id].to_owned(),
+                                    old,
+                                    new,
+                                ),
+                                phase,
+                                deme,
+                            ));
+                    }
+                }
+            } else {
+                self.eco_journal.extend(
+                    context
+                        .journal
+                        .drain(..)
+                        .map(|(tick, id, old, new, phase)| (deme, tick, id, old, new, phase)),
+                );
+            }
+        }
+        let genetics = ctx
+            .as_mut()
+            .and_then(|context| context.updated_genetics.take());
+        drop(ctx);
+        self.ecology.replace_deme(deme, &params);
+        if let Some(genetics) = genetics {
+            let variant = self
+                .variants
+                .iter()
+                .position(|value| value == &genetics)
+                .unwrap_or_else(|| {
+                    self.variants.push(genetics);
+                    self.variants.len() - 1
+                });
+            self.deme_variants[deme] = variant;
+        }
+        self.hooks
+            .callback_commits
+            .lock()
+            .expect("callback queue poisoned")
+            .clear();
+        if let Err(error) = outcome {
+            self.execution = crate::execution::Execution::Failed;
+            return Err(map_lifecycle_error(error));
+        }
+        if result != 0 {
+            self.execution = crate::execution::Execution::Stopped;
+        }
+        Ok(result)
+    }
+
+    /// Read native execution state and its within-tick phase cursor.
+    fn execution_state(&self) -> (&str, usize) {
+        (self.execution.name(), self.phase)
+    }
+    /// Mark an explicit user finish without discarding state or history.
+    fn stop(&mut self) {
+        self.execution = crate::execution::Execution::Stopped;
+    }
+
     /// Create a heterogeneous spatial session from columnized contracts.
     ///
     /// ## Parameters
@@ -102,7 +231,8 @@ impl HeterogeneousSpatialEngineSession {
     /// ## Errors
     /// Returns ``PyValueError`` when any contract piece is inconsistent, a
     /// deme variant id is out of range, or the stacked state does not
-    /// match the blueprint dimensions.
+    /// match the blueprint dimensions, contains non-finite or negative
+    /// values, or has a negative tick.
     #[new]
     #[pyo3(signature = (blueprint, ecology_columns, tensor_bank, deme_variant_ids, individual_count_all, sperm_storage_all, tick, model=String::from("age_structured"), stay_after_send=false, seed=0))]
     #[allow(clippy::too_many_arguments)] // One-time build handoff of the owned run data.
@@ -118,6 +248,7 @@ impl HeterogeneousSpatialEngineSession {
         stay_after_send: bool,
         seed: u64,
     ) -> PyResult<Self> {
+        validate_state_tick(tick)?;
         let bp = Blueprint::from_python(blueprint)?;
         bp.validate()?;
         let ecology = Params::from_columns(ecology_columns, bp.n_demes)?;
@@ -178,10 +309,13 @@ impl HeterogeneousSpatialEngineSession {
             state_ind,
             state_sperm,
             state_tick: tick,
+            execution: crate::execution::Execution::Ready,
+            phase: 0,
             discrete,
             stay_after_send,
             eco_journal: Vec::new(),
             checkpoints: Vec::new(),
+            history_store: None,
         })
     }
 
@@ -246,6 +380,121 @@ impl HeterogeneousSpatialEngineSession {
         self.variants[variant_id].pull_fields(&self.blueprint, &fields, source)
     }
 
+    /// Validate and atomically merge an explicit compiled deme update.
+    fn refresh_deme_parameters(
+        &mut self,
+        deme: usize,
+        fields: Vec<String>,
+        source: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        if deme >= self.deme_variants.len() {
+            return Err(PyValueError::new_err("deme out of range"));
+        }
+        let mut params = self.ecology.single_deme(deme);
+        let mut genetics = self.variants[self.deme_variants[deme]].clone();
+        params.pull_fields(&self.blueprint, 0, &fields, source, Some(&mut genetics))?;
+        self.ecology.replace_deme(deme, &params);
+        let variant = self
+            .variants
+            .iter()
+            .position(|value| value == &genetics)
+            .unwrap_or_else(|| {
+                self.variants.push(genetics);
+                self.variants.len() - 1
+            });
+        self.deme_variants[deme] = variant;
+        Ok(())
+    }
+
+    /// Validate custom values before replacing the selected deme candidate.
+    fn set_deme_custom_slots(&mut self, deme: usize, source: &Bound<'_, PyAny>) -> PyResult<()> {
+        if deme >= self.deme_variants.len() {
+            return Err(PyValueError::new_err("deme out of range"));
+        }
+        self.ecology.custom_slots[deme] = crate::contract::custom_slots_from_python(source)?;
+        Ok(())
+    }
+
+    /// Read one current scalar from the selected deme's native column.
+    fn get_deme_scalar(&self, deme: usize, name: &str) -> PyResult<f64> {
+        if deme >= self.deme_variants.len() {
+            return Err(PyValueError::new_err("deme out of range"));
+        }
+        self.ecology.single_deme(deme).get_scalar(name)
+    }
+
+    /// Read a detached ecology or genetics tensor for one deme.
+    fn get_deme_tensor<'py>(
+        &self,
+        py: Python<'py>,
+        deme: usize,
+        name: &str,
+    ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+        if deme >= self.deme_variants.len() {
+            return Err(PyValueError::new_err("deme out of range"));
+        }
+        crate::contract::session_get_tensor(
+            py,
+            &self.ecology.single_deme(deme),
+            &self.variants[self.deme_variants[deme]],
+            name,
+        )
+    }
+
+    /// Read detached custom values for a managed deme.
+    fn get_deme_custom_slots<'py>(
+        &self,
+        py: Python<'py>,
+        deme: usize,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        if deme >= self.deme_variants.len() {
+            return Err(PyValueError::new_err("deme out of range"));
+        }
+        crate::contract::custom_slots_to_python(py, &self.ecology.custom_slots[deme])
+    }
+
+    /// Validate one deme's scalar candidates before replacing its column.
+    fn apply_deme(
+        &mut self,
+        deme: usize,
+        writes: std::collections::HashMap<String, f64>,
+    ) -> PyResult<()> {
+        if deme >= self.deme_variants.len() {
+            return Err(PyValueError::new_err("deme out of range"));
+        }
+        let mut candidate = self.ecology.single_deme(deme);
+        candidate.apply(writes)?;
+        self.ecology.replace_deme(deme, &candidate);
+        Ok(())
+    }
+
+    /// Commit a validated whole tensor, forking only changed genetic values.
+    fn tensor_write_deme(&mut self, deme: usize, name: &str, values: Vec<f64>) -> PyResult<()> {
+        if deme >= self.deme_variants.len() {
+            return Err(PyValueError::new_err("deme out of range"));
+        }
+        let mut params = self.ecology.single_deme(deme);
+        let mut genetics = self.variants[self.deme_variants[deme]].clone();
+        crate::contract::session_tensor_write(
+            &self.blueprint,
+            &mut params,
+            &mut genetics,
+            name,
+            values,
+        )?;
+        self.ecology.replace_deme(deme, &params);
+        let variant = self
+            .variants
+            .iter()
+            .position(|value| value == &genetics)
+            .unwrap_or_else(|| {
+                self.variants.push(genetics);
+                self.variants.len() - 1
+            });
+        self.deme_variants[deme] = variant;
+        Ok(())
+    }
+
     /// Number of genetics variants in the bank (read-only introspection).
     fn n_variants(&self) -> usize {
         self.variants.len()
@@ -302,13 +551,15 @@ impl HeterogeneousSpatialEngineSession {
     /// depend on thread scheduling.  Each callable receives
     /// ``(ind, sperm, tick, deme_id)`` copies; a nonzero return stops the
     /// run at that boundary.
+    #[pyo3(signature = (first, early, late, finish=None))]
     fn set_python_callbacks(
         &mut self,
         first: Vec<Py<PyAny>>,
         early: Vec<Py<PyAny>>,
         late: Vec<Py<PyAny>>,
+        finish: Option<Vec<Py<PyAny>>>,
     ) {
-        self.hooks.python_callbacks = vec![first, early, late];
+        self.hooks.python_callbacks = vec![first, early, late, finish.unwrap_or_default()];
     }
 
     /// Clear all Python callbacks.
@@ -332,8 +583,11 @@ impl HeterogeneousSpatialEngineSession {
     /// ## Returns
     /// A list of ``(deme, tick, param_id, old, new)`` tuples (change-only
     /// rows, commit order), cleared by the drain.
-    fn drain_eco_journal(&mut self) -> Vec<crate::spatial::SpatialEcoJournalRow> {
+    fn drain_eco_journal(&mut self) -> Vec<(usize, i64, usize, f64, f64)> {
         std::mem::take(&mut self.eco_journal)
+            .into_iter()
+            .map(|(deme, tick, id, old, new, _)| (deme, tick, id, old, new))
+            .collect()
     }
 
     /// Replace the live migration-rate column used by the migration stage.
@@ -382,127 +636,60 @@ impl HeterogeneousSpatialEngineSession {
     /// ``PyValueError`` when an in-run ``Op.set_param`` value fails the
     /// bounds gate.
     fn run_tick(&mut self) -> PyResult<i64> {
-        let n_demes = self.deme_variants.len();
-        // Per-deme ECO scratch rows for OP_SET_PARAM; written back into
-        // the ecology columns after all demes ticked.
-        let mut eco_all = vec![0.0; n_demes * crate::hooks::N_ECO_PARAMS];
-        for deme in 0..n_demes {
-            for id in 0..crate::hooks::N_ECO_PARAMS {
-                eco_all[deme * crate::hooks::N_ECO_PARAMS + id] = self.ecology.eco_value(id, deme);
+        self.execution.begin()?;
+        let before_tick = self.state_tick;
+        let journal_start = self.eco_journal.len();
+        let outcome = self.run_inner();
+        if let Some(shared) = &self.history_store {
+            let store = shared.lock().unwrap();
+            for (deme, tick, parameter, old, new, phase) in self.eco_journal.drain(journal_start..)
+            {
+                if let Some(log) = store.extra_logs.get(deme) {
+                    log.lock()
+                        .unwrap()
+                        .push(crate::history::LogEntry::from_phase(
+                            (
+                                tick,
+                                crate::contract::ECO_PARAM_COLUMNS[parameter].to_owned(),
+                                old,
+                                new,
+                            ),
+                            phase,
+                            deme,
+                        ));
+                }
             }
         }
-        let tick = self.state_tick;
-        let code = if self.discrete {
-            let mut configs = Vec::with_capacity(n_demes);
-            for (deme, &variant) in self.deme_variants.iter().enumerate() {
-                let tensors = self
-                    .variants
-                    .get(variant)
-                    .ok_or_else(|| PyValueError::new_err("variant id out of range"))?;
-                configs.push(DiscreteConfig::assemble(
-                    &self.blueprint,
-                    &self.ecology.single_deme(deme),
-                    tensors,
-                )?);
+        self.execution = match &outcome {
+            Ok(value) if value == &before_tick => crate::execution::Execution::Stopped,
+            Ok(_) => {
+                self.phase = 0;
+                crate::execution::Execution::Ready
             }
-            crate::spatial::run_spatial_tick_discrete(
-                &configs,
-                &self.hooks,
-                &mut self.rngs,
-                &mut self.state_ind,
-                tick,
-                &mut eco_all,
-                &self.blueprint,
-                &self.ecology,
-                &self.variants,
-                &self.deme_variants,
-                &mut self.eco_journal,
-            )
-        } else {
-            let mut configs = Vec::with_capacity(n_demes);
-            for (deme, &variant) in self.deme_variants.iter().enumerate() {
-                let tensors = self
-                    .variants
-                    .get(variant)
-                    .ok_or_else(|| PyValueError::new_err("variant id out of range"))?;
-                configs.push(SimConfig::assemble_deme(
-                    &self.blueprint,
-                    &self.ecology,
-                    tensors,
-                    deme,
-                )?);
-            }
-            crate::spatial::run_spatial_tick_heterogeneous(
-                &configs,
-                &self.hooks,
-                &mut self.rngs,
-                &mut self.state_ind,
-                &mut self.state_sperm,
-                tick,
-                &mut eco_all,
-                &self.blueprint,
-                &self.ecology,
-                &self.variants,
-                &self.deme_variants,
-                &mut self.eco_journal,
-            )
+            Err(_) => crate::execution::Execution::Failed,
+        };
+        outcome
+    }
+
+    /// Advance and retain spatial boundaries entirely inside the session.
+    fn run_steps(&mut self, n_ticks: i64, record_interval: i64) -> PyResult<(i64, bool)> {
+        if n_ticks < 0 {
+            return Err(PyValueError::new_err("n_steps must be >= 0"));
         }
-        .map_err(map_lifecycle_error)?;
-        for deme in 0..n_demes {
-            for id in 0..crate::hooks::N_ECO_PARAMS {
-                self.ecology.set_eco_value(
-                    id,
-                    deme,
-                    eco_all[deme * crate::hooks::N_ECO_PARAMS + id],
-                );
+        if record_interval > 0 && self.state_tick % record_interval == 0 {
+            self.record_history(true)?;
+        }
+        for _ in 0..n_ticks {
+            let previous = self.state_tick;
+            self.run_tick()?;
+            if self.state_tick == previous {
+                return Ok((self.state_tick, true));
+            }
+            if record_interval > 0 && self.state_tick % record_interval == 0 {
+                self.record_history(true)?;
             }
         }
-        if code != 0 {
-            // A stop keeps the modifications up to the boundary and
-            // freezes the tick (plan 7.4).
-            return Ok(self.state_tick);
-        }
-        // Migration stage: the frozen CSR and the live rate column, after
-        // the lifecycle, on the same per-deme streams.  The zero-rate
-        // identity mirrors the Python kernel's skip contract bitwise; the
-        // discrete sperm plane is all-zero, so virgin bookkeeping sees
-        // every female and no extra RNG draws are consumed.
-        let all_zero = self.ecology.migration_rate.iter().all(|&rate| rate <= 0.0);
-        if !all_zero {
-            let (ind, sperm) = if self.blueprint.stochastic {
-                crate::spatial::migrate_csr_stochastic_rngs(
-                    &mut self.rngs,
-                    &self.state_ind,
-                    &self.state_sperm,
-                    &self.blueprint.migration_indptr,
-                    &self.blueprint.migration_dest_idx,
-                    &self.blueprint.migration_weights,
-                    &self.ecology.migration_rate,
-                    self.blueprint.continuous_sampling,
-                    n_demes,
-                    self.blueprint.n_ages,
-                    self.blueprint.n_ztypes,
-                )
-            } else {
-                crate::spatial::migrate_csr_deterministic(
-                    &self.state_ind,
-                    &self.state_sperm,
-                    &self.blueprint.migration_indptr,
-                    &self.blueprint.migration_dest_idx,
-                    &self.blueprint.migration_weights,
-                    &self.ecology.migration_rate,
-                    self.stay_after_send,
-                    n_demes,
-                    self.blueprint.n_ages,
-                    self.blueprint.n_ztypes,
-                )
-            }
-            .map_err(map_lifecycle_error)?;
-            self.state_ind = ind;
-            self.state_sperm = sperm;
-        }
-        self.state_tick += 1;
-        Ok(self.state_tick)
+        Ok((self.state_tick, false))
     }
 
     /// Capture one restorable boundary from the owned runtime.
@@ -513,6 +700,8 @@ impl HeterogeneousSpatialEngineSession {
     /// unaffected.
     fn capture_checkpoint(&mut self) -> i64 {
         self.checkpoints.push(SpatialTickCheckpoint {
+            execution: self.execution,
+            phase: self.phase,
             tick: self.state_tick,
             ind: self.state_ind.clone(),
             sperm: self.state_sperm.clone(),
@@ -537,15 +726,23 @@ impl HeterogeneousSpatialEngineSession {
     /// The restored tick, or ``None`` when no checkpoint covers *tick*
     /// (the caller falls back to its own restore path); on ``None`` the
     /// runtime is untouched.
-    fn restore_from_checkpoint(&mut self, tick: i64) -> Option<i64> {
-        let index = self
+    fn restore_from_checkpoint(&mut self, tick: i64) -> PyResult<Option<i64>> {
+        let Some(index) = self
             .checkpoints
             .iter()
-            .rposition(|checkpoint| checkpoint.tick <= tick)?;
+            .rposition(|checkpoint| checkpoint.tick == tick)
+        else {
+            return Ok(None);
+        };
+        if let Some(store) = &self.history_store {
+            store.lock().unwrap().restore_timeline(tick)?;
+        }
         let checkpoint = &self.checkpoints[index];
         self.state_ind = checkpoint.ind.clone();
         self.state_sperm = checkpoint.sperm.clone();
         self.state_tick = checkpoint.tick;
+        self.execution = checkpoint.execution;
+        self.phase = checkpoint.phase;
         self.rngs = checkpoint
             .rng_words
             .iter()
@@ -554,7 +751,73 @@ impl HeterogeneousSpatialEngineSession {
         self.ecology = checkpoint.ecology.clone();
         // Future checkpoints are invalid once the timeline rewinds.
         self.checkpoints.truncate(index + 1);
-        Some(self.state_tick)
+        Ok(Some(self.state_tick))
+    }
+
+    /// Project the current engine-owned state without exporting raw arrays.
+    fn observe_current<'py>(
+        &self,
+        py: Python<'py>,
+        mask: numpy::PyReadonlyArray1<'py, f64>,
+        selected: Vec<usize>,
+        collapse_age: bool,
+        aggregate: bool,
+    ) -> PyResult<(i64, Bound<'py, PyArray1<f64>>)> {
+        let values = crate::history::project(
+            &self.state_ind,
+            mask.as_slice()?,
+            [
+                self.blueprint.n_demes,
+                self.blueprint.n_sexes,
+                self.blueprint.n_ages,
+                self.blueprint.n_ztypes,
+            ],
+            &selected,
+            collapse_age,
+            aggregate,
+        )?;
+        Ok((self.state_tick, PyArray1::from_vec(py, values)))
+    }
+
+    /// Bind the native store owned by the public History adapter.
+    fn bind_history(&mut self, history: PyRef<'_, HistoryStore>) {
+        self.history_store = Some(std::sync::Arc::clone(&history.data));
+    }
+
+    /// Record directly from native stacked state without Python snapshots.
+    fn record_history(&mut self, continuation: bool) -> PyResult<()> {
+        let shared = self
+            .history_store
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("History is not initialized"))?
+            .clone();
+        let (added, raw, earliest) = {
+            let mut history = shared.lock().unwrap();
+            let sperm = if self.discrete {
+                &[][..]
+            } else {
+                &self.state_sperm[..]
+            };
+            let added = history.record(self.state_tick, &self.state_ind, sperm, continuation)?;
+            if added {
+                if let Some(boundary) = history.boundaries.back_mut() {
+                    boundary.1 = self.phase;
+                    boundary.2 = self.execution.name().to_owned();
+                }
+            }
+            (
+                added,
+                history.raw,
+                history.rows.front().map(|row| row[0] as i64),
+            )
+        };
+        if added && raw {
+            self.capture_checkpoint();
+        }
+        if let Some(tick) = earliest {
+            self.checkpoints.retain(|cp| cp.tick >= tick);
+        }
+        Ok(())
     }
 
     /// Drop checkpoints older than *from_tick* (history eviction pair).
@@ -630,6 +893,20 @@ impl HeterogeneousSpatialEngineSession {
                 .unbind()
                 .into_any(),
         ));
+        let declared: Vec<i64> = self
+            .ecology
+            .equilibrium_declared
+            .iter()
+            .map(|present| i64::from(*present))
+            .collect();
+        columns.push((
+            "equilibrium_declared".to_string(),
+            PyArr::from_slice(py, &declared)
+                .into_pyobject(py)
+                .unwrap()
+                .unbind()
+                .into_any(),
+        ));
         push_f64(
             &mut columns,
             "external_expected_eggs",
@@ -683,13 +960,15 @@ impl HeterogeneousSpatialEngineSession {
     /// - `tick`: The authoritative tick.
     ///
     /// ## Errors
-    /// Returns ``PyValueError`` on shape mismatches.
+    /// Returns ``PyValueError`` on shape mismatches, non-finite or negative
+    /// state values, or a negative tick.
     fn set_state(
         &mut self,
         individual_count_all: PyReadonlyArray4<'_, f64>,
         sperm_storage_all: PyReadonlyArray4<'_, f64>,
         tick: i64,
     ) -> PyResult<()> {
+        validate_state_tick(tick)?;
         // Validate both planes before committing either: a failed import
         // must leave the owned state untouched (transactional boundary).
         let n_demes = self.deme_variants.len();
@@ -698,62 +977,18 @@ impl HeterogeneousSpatialEngineSession {
         self.state_ind = ind;
         self.state_sperm = sperm;
         self.state_tick = tick;
+        self.execution = crate::execution::Execution::Ready;
+        self.phase = 0;
         Ok(())
     }
+}
 
-    /// Install one deme's state slice (per-deme import handoff).
-    ///
-    /// ## Parameters
-    /// - `deme`: Deme index to overwrite.
-    /// - `individual_count`: ``(2, n_ages, n_ztypes)`` counts.
-    /// - `sperm_storage`: ``(n_ages, n_ztypes, n_ztypes)`` storage.
-    /// - `tick`: The authoritative tick (all demes share the tick axis).
-    ///
-    /// ## Errors
-    /// Returns ``PyValueError`` for an out-of-range deme or a shape
-    /// mismatch.
-    #[pyo3(signature = (deme, individual_count, sperm_storage, tick))]
-    fn set_deme_state(
-        &mut self,
-        deme: usize,
-        individual_count: PyReadonlyArray3<'_, f64>,
-        sperm_storage: PyReadonlyArray3<'_, f64>,
-        tick: i64,
-    ) -> PyResult<()> {
-        let bp = &self.blueprint;
-        if deme >= self.deme_variants.len() {
-            return Err(PyValueError::new_err(format!(
-                "deme {deme} out of range for {} demes",
-                self.deme_variants.len()
-            )));
-        }
-        let shape = individual_count.shape();
-        if shape != [2, bp.n_ages, bp.n_ztypes] {
-            return Err(PyValueError::new_err(format!(
-                "individual_count must have shape (2, {}, {}), got {shape:?}",
-                bp.n_ages, bp.n_ztypes
-            )));
-        }
-        let sperm_shape = sperm_storage.shape();
-        if sperm_shape != [bp.n_ages, bp.n_ztypes, bp.n_ztypes] {
-            return Err(PyValueError::new_err(format!(
-                "sperm_storage must have shape ({}, {}, {}), got {sperm_shape:?}",
-                bp.n_ages, bp.n_ztypes, bp.n_ztypes
-            )));
-        }
-        let ind_stride = 2 * bp.n_ages * bp.n_ztypes;
-        let sperm_stride = bp.n_ages * bp.n_ztypes * bp.n_ztypes;
-        let ind_src = individual_count
-            .as_slice()
-            .map_err(|err| PyValueError::new_err(err.to_string()))?;
-        let sperm_src = sperm_storage
-            .as_slice()
-            .map_err(|err| PyValueError::new_err(err.to_string()))?;
-        self.state_ind[deme * ind_stride..(deme + 1) * ind_stride].copy_from_slice(ind_src);
-        self.state_sperm[deme * sperm_stride..(deme + 1) * sperm_stride].copy_from_slice(sperm_src);
-        self.state_tick = tick;
-        Ok(())
+/// Reject invalid clocks before any state import can commit.
+fn validate_state_tick(tick: i64) -> PyResult<()> {
+    if tick < 0 {
+        return Err(PyValueError::new_err("state tick must be nonnegative"));
     }
+    Ok(())
 }
 
 /// Validate a stacked initial-state array against the blueprint.
@@ -769,10 +1004,18 @@ fn validate_stacked_ind(
             bp.n_ages, bp.n_ztypes
         )));
     }
-    Ok(array
+    let values = array
         .as_slice()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?
-        .to_vec())
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(PyValueError::new_err(
+            "individual_count_all must contain finite nonnegative values",
+        ));
+    }
+    Ok(values.to_vec())
 }
 
 /// Validate a stacked sperm-storage array against the blueprint.
@@ -788,8 +1031,172 @@ fn validate_stacked_sperm(
             "sperm_storage_all must have shape {want:?}, got {shape:?}"
         )));
     }
-    Ok(array
+    let values = array
         .as_slice()
-        .map_err(|err| PyValueError::new_err(err.to_string()))?
-        .to_vec())
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(PyValueError::new_err(
+            "sperm_storage_all must contain finite nonnegative values",
+        ));
+    }
+    Ok(values.to_vec())
+}
+
+impl HeterogeneousSpatialEngineSession {
+    fn run_inner(&mut self) -> PyResult<i64> {
+        let n_demes = self.deme_variants.len();
+        // Per-deme ECO scratch rows for OP_SET_PARAM; written back into
+        // the ecology columns after all demes ticked.
+        let mut eco_all = vec![0.0; n_demes * crate::hooks::N_ECO_PARAMS];
+        for deme in 0..n_demes {
+            for id in 0..crate::hooks::N_ECO_PARAMS {
+                eco_all[deme * crate::hooks::N_ECO_PARAMS + id] = self.ecology.eco_value(id, deme);
+            }
+        }
+        let tick = self.state_tick;
+        let code = if self.discrete {
+            let mut configs = Vec::with_capacity(n_demes);
+            for (deme, &variant) in self.deme_variants.iter().enumerate() {
+                let tensors = self
+                    .variants
+                    .get(variant)
+                    .ok_or_else(|| PyValueError::new_err("variant id out of range"))?;
+                configs.push(DiscreteConfig::assemble(
+                    &self.blueprint,
+                    &self.ecology.single_deme(deme),
+                    tensors,
+                )?);
+            }
+            crate::spatial::run_spatial_tick_discrete(
+                &configs,
+                &self.hooks,
+                &mut self.rngs,
+                &mut self.state_ind,
+                tick,
+                &mut eco_all,
+                &self.blueprint,
+                &self.ecology,
+                &self.variants,
+                &self.deme_variants,
+                &mut self.eco_journal,
+            )
+        } else {
+            let mut configs = Vec::with_capacity(n_demes);
+            for (deme, &variant) in self.deme_variants.iter().enumerate() {
+                let tensors = self
+                    .variants
+                    .get(variant)
+                    .ok_or_else(|| PyValueError::new_err("variant id out of range"))?;
+                configs.push(SimConfig::assemble_deme(
+                    &self.blueprint,
+                    &self.ecology,
+                    tensors,
+                    deme,
+                )?);
+            }
+            crate::spatial::run_spatial_tick_heterogeneous(
+                &configs,
+                &self.hooks,
+                &mut self.rngs,
+                &mut self.state_ind,
+                &mut self.state_sperm,
+                tick,
+                &mut eco_all,
+                &self.blueprint,
+                &self.ecology,
+                &self.variants,
+                &self.deme_variants,
+                &mut self.eco_journal,
+            )
+        };
+        self.phase = self
+            .hooks
+            .phase_marks
+            .lock()
+            .expect("phase queue poisoned")
+            .drain(..)
+            .min()
+            .unwrap_or(0);
+        if code.is_ok() {
+            for deme in 0..n_demes {
+                for id in 0..crate::hooks::N_ECO_PARAMS {
+                    self.ecology.set_eco_value(
+                        id,
+                        deme,
+                        eco_all[deme * crate::hooks::N_ECO_PARAMS + id],
+                    );
+                }
+            }
+        }
+        // Every callback committed to its local context before later stages;
+        // merge complete candidates before migration consumes updated rates.
+        for (deme, params, genetics) in self
+            .hooks
+            .callback_commits
+            .lock()
+            .expect("callback queue poisoned")
+            .drain(..)
+        {
+            self.ecology.replace_deme(deme, &params);
+            let variant = self
+                .variants
+                .iter()
+                .position(|value| value == &genetics)
+                .unwrap_or_else(|| {
+                    self.variants.push(genetics);
+                    self.variants.len() - 1
+                });
+            self.deme_variants[deme] = variant;
+        }
+        let code = code.map_err(map_lifecycle_error)?;
+        if code != 0 {
+            // A stop keeps the modifications up to the boundary and
+            // freezes the tick (plan 7.4).
+            return Ok(self.state_tick);
+        }
+        // Migration stage: the frozen CSR and the live rate column, after
+        // the lifecycle, on the same per-deme streams.  The zero-rate
+        // identity mirrors the Python kernel's skip contract bitwise; the
+        // discrete sperm plane is all-zero, so virgin bookkeeping sees
+        // every female and no extra RNG draws are consumed.
+        let all_zero = self.ecology.migration_rate.iter().all(|&rate| rate <= 0.0);
+        if !all_zero {
+            let (ind, sperm) = if self.blueprint.stochastic {
+                crate::spatial::migrate_csr_stochastic_rngs(
+                    &mut self.rngs,
+                    &self.state_ind,
+                    &self.state_sperm,
+                    &self.blueprint.migration_indptr,
+                    &self.blueprint.migration_dest_idx,
+                    &self.blueprint.migration_weights,
+                    &self.ecology.migration_rate,
+                    self.blueprint.continuous_sampling,
+                    n_demes,
+                    self.blueprint.n_ages,
+                    self.blueprint.n_ztypes,
+                )
+            } else {
+                crate::spatial::migrate_csr_deterministic(
+                    &self.state_ind,
+                    &self.state_sperm,
+                    &self.blueprint.migration_indptr,
+                    &self.blueprint.migration_dest_idx,
+                    &self.blueprint.migration_weights,
+                    &self.ecology.migration_rate,
+                    self.stay_after_send,
+                    n_demes,
+                    self.blueprint.n_ages,
+                    self.blueprint.n_ztypes,
+                )
+            }
+            .map_err(map_lifecycle_error)?;
+            self.state_ind = ind;
+            self.state_sperm = sperm;
+        }
+        self.state_tick += 1;
+        Ok(self.state_tick)
+    }
 }

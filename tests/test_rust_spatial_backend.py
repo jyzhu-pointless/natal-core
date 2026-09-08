@@ -332,7 +332,7 @@ def test_real_discrete_spatial_population_rust_migration(
     spatial = SpatialPopulation(
         demes=demes, adjacency=adjacency, migration_rate=0.2
     )
-    spatial.enable_rust_backend(seed=8)
+    spatial._initialize_session(seed=8)
 
     spatial.run_tick()
 
@@ -378,7 +378,7 @@ def test_real_discrete_spatial_wf_rust_runs(config: object) -> None:
         row_normalize=True,
     )
     spatial = SpatialPopulation(demes=demes, adjacency=adjacency, migration_rate=0.2)
-    spatial.enable_rust_backend(seed=9)
+    spatial._initialize_session(seed=9)
     spatial.run_tick()
 
     assert spatial.tick == 1
@@ -482,7 +482,7 @@ def test_real_spatial_population_rust_migration(config: object) -> None:
     spatial = SpatialPopulation(
         demes=demes, adjacency=adjacency, migration_rate=0.2
     )
-    spatial.enable_rust_backend(seed=7)
+    spatial._initialize_session(seed=7)
 
     before = sum(
         float(deme.state.individual_count.sum()) for deme in spatial.demes

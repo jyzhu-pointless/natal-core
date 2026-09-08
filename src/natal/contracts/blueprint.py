@@ -20,7 +20,7 @@ access) resolve names through it instead of threading indices around.
 
 from __future__ import annotations
 
-from typing import NamedTuple, TypeVar
+from typing import NamedTuple, TypeVar, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -46,8 +46,9 @@ def frozen(array: _FrozenArrayT) -> _FrozenArrayT:
     Returns:
         The same array, now read-only.
     """
-    array.setflags(write=False)
-    return array
+    immutable = np.frombuffer(array.tobytes(order="C"), dtype=array.dtype).reshape(array.shape)
+    return cast(_FrozenArrayT, immutable)
+
 
 
 class Blueprint(NamedTuple):

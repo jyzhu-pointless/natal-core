@@ -22,7 +22,6 @@ import natal as nt
 from natal.frontend.hooks import Op
 from natal.frontend.hooks.tick_context import TickContext
 
-
 # ---------------------------------------------------------------------------
 # Builders
 # ---------------------------------------------------------------------------
@@ -275,16 +274,19 @@ def test_metrics_match_manual_numpy() -> None:
 
     @nt.hook(event="first")
     def capture(pop: TickContext) -> int:
+        _ = pop.metrics  # Materialize a detached state during the active event.
         captured.append(pop)
         return 0
 
     pop = _build_discrete("s4_metrics", hook_items=[capture])
     # Uneven starting distribution.  Setup writes target the live
     # container: pop.state is a snapshot since the R5 fix.
-    pop._state.individual_count[0, 1, 0] = 30.0  # female WT|WT
-    pop._state.individual_count[1, 1, 0] = 50.0  # male WT|WT
-    pop._state.individual_count[0, 1, 2] = 20.0  # female Dr|Dr
+    state = pop.state
+    state.individual_count[0, 1, 0] = 30.0  # female WT|WT
+    state.individual_count[1, 1, 0] = 50.0  # male WT|WT
+    state.individual_count[0, 1, 2] = 20.0  # female Dr|Dr
 
+    pop.import_state(state)
     pop.trigger_event("first")  # observe mid-tick state, no lifecycle stages
     ctx = captured[0]
     ic = pop.state.individual_count
@@ -323,6 +325,7 @@ def test_metrics_c_star_s_star_recompute_on_demand() -> None:
 
     @nt.hook(event="first")
     def capture(pop: TickContext) -> int:
+        _ = pop.metrics  # Materialize a detached state during the active event.
         captured.append(pop)
         return 0
 
@@ -341,8 +344,10 @@ def test_metrics_c_star_s_star_recompute_on_demand() -> None:
     )
     # Adults drive egg production; give the population a breeding base.
     # Live-container writes (pop.state snapshots since R5).
-    pop._state.individual_count[:, 1, :] = 50.0
-    pop._state.individual_count[:] *= 2.0  # mutate state before the hook runs
+    state = pop.state
+    state.individual_count[:, 1, :] = 50.0
+    state.individual_count[:] *= 2.0  # mutate state before the hook runs
+    pop.import_state(state)
     pop.trigger_event("first")
 
     ctx = captured[0]
