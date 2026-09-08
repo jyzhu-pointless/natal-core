@@ -333,6 +333,14 @@ class RustLifecycleBackend:
         """Drop every stored checkpoint (paired with ``clear_history``)."""
         _session_call(lambda: self._session.clear_checkpoints())
 
+    def retain_checkpoints_from(self, from_tick: int) -> None:
+        """Drop checkpoints older than *from_tick* (history eviction pair).
+
+        Args:
+            from_tick: Drop checkpoints captured at ticks below this value.
+        """
+        _session_call(lambda: self._session.retain_checkpoints_from(int(from_tick)))
+
     def truncate_checkpoints(self, retain_until_tick: int) -> None:
         """Drop checkpoints captured after *retain_until_tick*."""
         _session_call(
@@ -634,6 +642,14 @@ class RustDiscreteLifecycleBackend:
     def clear_checkpoints(self) -> None:
         """Drop every stored checkpoint (paired with ``clear_history``)."""
         _session_call(lambda: self._session.clear_checkpoints())
+
+    def retain_checkpoints_from(self, from_tick: int) -> None:
+        """Drop checkpoints older than *from_tick* (history eviction pair).
+
+        Args:
+            from_tick: Drop checkpoints captured at ticks below this value.
+        """
+        _session_call(lambda: self._session.retain_checkpoints_from(int(from_tick)))
 
     def truncate_checkpoints(self, retain_until_tick: int) -> None:
         """Drop checkpoints captured after *retain_until_tick*."""
@@ -1025,6 +1041,14 @@ class RustHeterogeneousSpatialLifecycleBackend:
         """
         restored = _session_call(lambda: self._session.restore_from_checkpoint(int(tick)))
         return None if restored is None else int(restored)
+
+    def retain_checkpoints_from(self, from_tick: int) -> None:
+        """Drop checkpoints older than *from_tick* (history eviction pair).
+
+        Args:
+            from_tick: Drop checkpoints captured at ticks below this value.
+        """
+        _session_call(lambda: self._session.retain_checkpoints_from(int(from_tick)))
 
     def truncate_checkpoints(self, retain_until_tick: int) -> None:
         """Drop checkpoints newer than *retain_until_tick*.

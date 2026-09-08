@@ -172,7 +172,9 @@ that observation. Omitting both methods therefore gives an identity
 | `"observation"` | Compressed — only values from the canonical observation are stored; an omitted `with_observation()` uses identity groups |
 
 `max_rows` controls FIFO eviction: when the number of stored records exceeds
-this value, the oldest entries are removed. `None` means unlimited.
+this value, the oldest entries are removed. `None` applies the population's
+bounded default (`max_history`, 5000 rows); evicted rows also drop their
+paired restore checkpoints.
 
 `pop.history` is a typed `History` container. Raw history exposes `ticks`,
 `individual_count`, and, where applicable, `sperm_storage`; observation-mode

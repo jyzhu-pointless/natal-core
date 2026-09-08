@@ -983,7 +983,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
             observation=None,
             spatial_layout=None,
         )
-        self._history_obj = History(schema)
+        self._history_obj = History(schema, max_rows=self.max_history)
 
     # ========================================================================
     # Core methods

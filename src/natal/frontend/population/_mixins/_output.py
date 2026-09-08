@@ -110,6 +110,10 @@ class OutputMixin(ModifierPresetMixin):
             if tick in history_obj.ticks:
                 raise ValueError(f"History already contains tick {tick}.")
             history_obj._append(batch)  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
+        # Evicted history rows take their checkpoints with them (plan S4).
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None and history_obj.ticks:
+            backend.retain_checkpoints_from(int(history_obj.ticks[0]))
 
     def clear_history(self) -> None:
         """Remove all rows while preserving the frozen History schema.
@@ -244,6 +248,11 @@ class OutputMixin(ModifierPresetMixin):
         history_obj._append_continuation(  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
             HistoryBatch(schema=schema, rows=rows)
         )
+        # Evicted history rows take their checkpoints with them: the
+        # store stays bounded by the same max_rows budget (plan S4).
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None and history_obj.ticks:
+            backend.retain_checkpoints_from(int(history_obj.ticks[0]))
 
     # ── Population queries ─────────────────────────────────────────
     # From base.py:963-982

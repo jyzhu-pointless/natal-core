@@ -557,6 +557,12 @@ impl HeterogeneousSpatialEngineSession {
         Some(self.state_tick)
     }
 
+    /// Drop checkpoints older than *from_tick* (history eviction pair).
+    fn retain_checkpoints_from(&mut self, from_tick: i64) {
+        self.checkpoints
+            .retain(|checkpoint| checkpoint.tick >= from_tick);
+    }
+
     /// Truncate checkpoints newer than *retain_until_tick*.
     fn truncate_checkpoints(&mut self, retain_until_tick: i64) {
         self.checkpoints

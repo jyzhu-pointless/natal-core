@@ -297,7 +297,7 @@ providing lossless projection without requiring manual group definitions.
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `mode` | `"raw"` | `"raw"` for full-state recording; `"observation"` for compressed aggregate recording |
-| `max_rows` | `None` | Maximum snapshots to keep (FIFO eviction). `None` = unlimited |
+| `max_rows` | `None` | Maximum snapshots to keep (FIFO eviction). `None` applies the population's bounded default (`max_history`, 5000 rows) — evicted rows also drop their paired restore checkpoints |
 
 ### Runtime Recording Configuration
 

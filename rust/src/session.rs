@@ -648,6 +648,16 @@ impl EngineSession {
     /// Paired with the history truncate after a restore: reruns from the
     /// restored tick overwrite later ticks, so stale future checkpoints
     /// must not survive.
+    /// Drop checkpoints older than *from_tick* (history eviction pair).
+    ///
+    /// When the recording plan evicts the oldest history rows, their
+    /// checkpoints stop being restorable and must be dropped with them so
+    /// the store stays bounded.
+    fn retain_checkpoints_from(&mut self, from_tick: i64) {
+        self.checkpoints
+            .retain(|checkpoint| checkpoint.tick >= from_tick);
+    }
+
     fn truncate_checkpoints(&mut self, retain_until_tick: i64) {
         self.checkpoints.retain(|cp| cp.tick <= retain_until_tick);
     }

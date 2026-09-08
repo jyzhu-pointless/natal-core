@@ -1688,8 +1688,9 @@ class Configurator:
         Args:
             mode: ``"raw"`` for full-state recording or ``"observation"``
                 for compressed observation-aggregate recording.
-            max_rows: Maximum number of records to keep (FIFO eviction).
-                ``None`` means unlimited.
+            max_rows: Maximum number of records to keep (FIFO eviction);
+                ``None`` applies the population's bounded default
+                (``max_history``).
 
         Returns:
             Self for chaining.
@@ -2129,5 +2130,10 @@ class Configurator:
         # because every Population now owns an Observation.
         pop._observation_mask = plan.observation_mask  # type: ignore[reportPrivateUsage]  # frozen engine input derived from RecordingPlan
         pop._recording_plan = plan  # type: ignore[reportPrivateUsage]  # configurator sets private attr on population
-        pop._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]  # configurator sets private attr
+        # max_rows=None means "the population default bound" so recording
+        # stays bounded unless the caller raises the limit explicitly.
+        pop._history_obj = History(  # type: ignore[reportPrivateUsage]  # configurator sets private attr
+            plan.schema,
+            max_rows=max_rows if max_rows is not None else pop.max_history,
+        )
 

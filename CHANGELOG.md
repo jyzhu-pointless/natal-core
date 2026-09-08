@@ -56,6 +56,11 @@
 - **Spatial update internals**: replace the private `_SpatialUpdate` facade and
   method-name batching table with typed Configurator dispatch and explicit
   `batch_setting()` values.
+- **Bounded recording memory (plan S4)**: plain populations now wire their
+  `max_history` bound (default 5000 rows) into History; `record_history(max_rows=None)`
+  applies the population default instead of unbounded growth, and evicted
+  history rows drop their paired session checkpoints (plain, discrete, and
+  spatial) so the checkpoint store stays bounded by the same budget.
 - **Spatial full checkpoint restore (plan S4 CheckpointStore)**: the spatial
   session now stores restorable boundaries (stacked state, every per-deme RNG
   stream, and the ecology columns) at record-aligned raw-history ticks;

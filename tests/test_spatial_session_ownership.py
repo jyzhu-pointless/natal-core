@@ -959,3 +959,64 @@ def test_spatial_restore_rolls_back_vector_columns() -> None:
         np.testing.assert_array_equal(
             np.asarray(deme.params.survival_rates), original[deme_id]
         )
+
+
+def test_checkpoint_eviction_tracks_history_eviction() -> None:
+    """Evicted history rows take their checkpoints: the store stays
+    bounded by the same budget, and the newest boundary stays
+    restorable."""
+    population = _build_stochastic_spatial("own_evict", 95)
+    # Shrink the history bound: only the newest 2 rows survive.
+    population._history_obj.max_rows = 2  # pyright: ignore[reportPrivateUsage]
+    population.run(5, record_every=1)
+    assert len(population.history.ticks) == 2
+    oldest_tick = population.history.ticks[0]
+    # The newest restorable boundary still replays bitwise against a twin
+    # that only recorded the same window.
+    restored = _build_stochastic_spatial("own_evict_twin", 95)
+    restored.run(5, record_every=1)
+    restored.restore_checkpoint(int(oldest_tick))
+    restored.run(5 - int(oldest_tick), record_every=1)
+    np.testing.assert_array_equal(_stacked(restored), _stacked(population))
+
+
+def test_plain_record_snapshot_pairs_checkpoint_eviction() -> None:
+    """Plain-model manual snapshots also drop evicted checkpoints:
+    restoring an evicted tick raises cleanly instead of half-restoring
+    (the tick is rewound, then the missing history row aborts)."""
+    population = (
+        nt.AgeStructuredPopulation.setup(
+            species=_species("own_snap_evictsp"),
+            name="own_snap_evict",
+            stochastic=True,
+        )
+        .age_structure(n_ages=3, new_adult_age=1)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0.0, 100.0, 0.0]},
+                "male": {"WT|WT": [0.0, 100.0, 0.0]},
+            }
+        )
+        .reproduction(
+            female_age_based_mating_rate=[0.0, 1.0, 0.0],
+            male_age_based_mating_rate=[0.0, 1.0, 0.0],
+            eggs_per_female=4.0,
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.0],
+            male_age_based_survival=[1.0, 0.9, 0.0],
+        )
+        .competition(carrying_capacity=100000.0)
+        .record_history(mode="raw", max_rows=2)
+        .build()
+    )
+    population.enable_rust_backend(seed=96)
+    population.run(3, record_every=2)
+    assert population.history.ticks == (0, 2)
+    population.record_snapshot()
+    assert population.history.ticks == (2, 3)
+    # The tick-0 checkpoint was evicted with its row: restoring it raises
+    # cleanly and leaves the population at the manual snapshot tick.
+    with pytest.raises(ValueError):
+        population.restore_checkpoint(0)
+    assert population.tick == 3

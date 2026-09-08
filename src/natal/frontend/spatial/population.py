@@ -1645,6 +1645,10 @@ class SpatialPopulation:
             # Stored AFTER the row is committed: a rejected snapshot must
             # not leave a checkpoint behind.
             backend.capture_checkpoint()
+        # Evicted history rows take their checkpoints with them (plan S4
+        # bounded-memory contract).
+        if backend is not None and history_obj.ticks:
+            backend.retain_checkpoints_from(int(history_obj.ticks[0]))
 
     def record_snapshot(self) -> None:
         """Record the current stable state across all demes into history.
