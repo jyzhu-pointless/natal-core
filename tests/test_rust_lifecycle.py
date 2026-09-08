@@ -15,7 +15,6 @@ from scipy import stats
 from natal.backends.reference.lifecycle import run_structured_tick
 from natal.backends.rust.rust_backend import (
     RustLifecycleBackend,
-    rust_backend_available,
 )
 from natal.frontend.configurator import Configurator
 from natal.frontend.data import ModelDraft, PopulationState
@@ -23,11 +22,6 @@ from natal.frontend.genetics import Species
 from natal.frontend.hooks import Op
 from natal.frontend.hooks.types import HookProgram, empty_hook_program
 from natal.frontend.population.age_structured import AgeStructuredPopulation
-
-pytestmark = pytest.mark.skipif(
-    not rust_backend_available(),
-    reason="natal._engine_rs is not built; run `maturin develop` first",
-)
 
 
 def _noop(state: PopulationState, config: ModelDraft, deme_id: int) -> int:
@@ -95,7 +89,9 @@ def _make_state(config: ModelDraft, seed: int) -> PopulationState:
     return PopulationState(n_tick=10, individual_count=ind, sperm_storage=sperm)
 
 
-def _plan_for_ops(species: Species, ops: list[object], event: str) -> tuple[ModelDraft, HookProgram]:
+def _plan_for_ops(
+    species: Species, ops: list[object], event: str
+) -> tuple[ModelDraft, HookProgram]:
     """Compile *ops* into a CSR program using a fresh throwaway population."""
     pop = (
         Configurator.from_species(species)
@@ -125,7 +121,9 @@ def test_deterministic_three_ticks_match_reference(deterministic_pop: object) ->
         )
         rust_next, rust_result = backend.run_tick(state)
         assert rust_result == reference_result
-        assert np.array_equal(rust_next.individual_count, reference_next.individual_count)
+        assert np.array_equal(
+            rust_next.individual_count, reference_next.individual_count
+        )
         assert np.array_equal(rust_next.sperm_storage, reference_next.sperm_storage)
         state = rust_next
         reference_state = reference_next
@@ -142,7 +140,9 @@ def test_declarative_hook_tick_matches_reference() -> None:
         species,
         [
             Op.scale(genotypes="*", ages="*", sex="both", factor=0.5),
-            Op.add(genotypes="A|A", ages="*", sex="female", delta=3.0, when="tick >= 0"),
+            Op.add(
+                genotypes="A|A", ages="*", sex="female", delta=3.0, when="tick >= 0"
+            ),
         ],
         "early",
     )
@@ -156,7 +156,9 @@ def test_declarative_hook_tick_matches_reference() -> None:
     reference_next, reference_result, _config = run_structured_tick(
         reference_state, config, program, _noop, _noop, _noop
     )
-    rust_next, rust_result = RustLifecycleBackend(config, program, seed=0).run_tick(state)
+    rust_next, rust_result = RustLifecycleBackend(config, program, seed=0).run_tick(
+        state
+    )
 
     assert rust_result == reference_result
     assert np.array_equal(rust_next.individual_count, reference_next.individual_count)
@@ -199,7 +201,9 @@ def test_declarative_stop_hook_matches_reference() -> None:
     reference_next, reference_result, _config = run_structured_tick(
         reference_state, config, program, _noop, _noop, _noop
     )
-    rust_next, rust_result = RustLifecycleBackend(config, program, seed=0).run_tick(state)
+    rust_next, rust_result = RustLifecycleBackend(config, program, seed=0).run_tick(
+        state
+    )
 
     assert reference_result == 1
     assert rust_result == 1
@@ -222,7 +226,9 @@ def test_run_tick_does_not_mutate_input(deterministic_pop: object) -> None:
     assert np.array_equal(state.sperm_storage, original_sperm)
 
 
-def test_stochastic_totals_are_distributionally_equivalent(stochastic_pop: object) -> None:
+def test_stochastic_totals_are_distributionally_equivalent(
+    stochastic_pop: object,
+) -> None:
     """Compare final total population moments over independent replicates."""
     pop = stochastic_pop
     config = pop.config
@@ -234,7 +240,9 @@ def test_stochastic_totals_are_distributionally_equivalent(stochastic_pop: objec
     for index in range(replicates):
         state = _make_state(config, seed=10_000 + index)
         state.sperm_storage.fill(0.0)
-        backend = RustLifecycleBackend(config, empty_hook_program(), seed=20_000 + index)
+        backend = RustLifecycleBackend(
+            config, empty_hook_program(), seed=20_000 + index
+        )
         for _ in range(ticks):
             state, result = backend.run_tick(state)
             assert result == 0

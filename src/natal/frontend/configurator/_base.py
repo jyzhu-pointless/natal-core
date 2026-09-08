@@ -129,7 +129,9 @@ def normalize_observation_groups(groups: object) -> dict[str, IndividualSelector
     from natal.frontend.patterns import IndividualSelector
 
     if not isinstance(groups, MappingABC):
-        raise TypeError("groups must be a non-empty mapping of IndividualSelector values")
+        raise TypeError(
+            "groups must be a non-empty mapping of IndividualSelector values"
+        )
     if not groups:
         raise ValueError("groups must be non-empty")
     typed_groups = cast(Mapping[object, object], groups)
@@ -140,9 +142,7 @@ def normalize_observation_groups(groups: object) -> dict[str, IndividualSelector
         if not label:
             raise ValueError("Observation group labels must be non-empty")
         if not isinstance(selector, IndividualSelector):
-            raise TypeError(
-                f"Observation group {label!r} must use IndividualSelector"
-            )
+            raise TypeError(f"Observation group {label!r} must use IndividualSelector")
         normalized[label] = selector
     return normalized
 
@@ -298,7 +298,6 @@ def _extract_refs_from_callable(func: Callable[..., Any]) -> set[str]:
 # ── Configurator ───────────────────────────────────────────────────────────────
 
 
-
 _P = ParamSpec("_P")
 
 
@@ -324,7 +323,9 @@ def _declared(
     from inspect import signature
 
     @wraps(method)
-    def wrapper(self: Configurator, *args: _P.args, **kwargs: _P.kwargs) -> Configurator:
+    def wrapper(
+        self: Configurator, *args: _P.args, **kwargs: _P.kwargs
+    ) -> Configurator:
         # bind WITHOUT apply_defaults: only what the caller explicitly
         # passed is journaled; replay re-applies the method defaults for
         # the rest.  Variadic parameters are normalized so the journal
@@ -357,7 +358,6 @@ def _declared(
         return result
 
     return wrapper
-
 
 
 def replay_declarations(
@@ -494,7 +494,6 @@ class Configurator:
         """The wrapped ModelDraft (read-only accessor)."""
         return self._config
 
-
     # -- recipe-host surface (build-side candidate compile) ------------------
     # These three read-only properties complete the RecipeHost protocol
     # alongside the existing ``config`` property: preset / modifier /
@@ -578,13 +577,21 @@ class Configurator:
 
         if gamete_mod is not None:
             gamete_modifiers.append(
-                (next_modifier_id(gamete_modifiers), f"{preset.name}/gamete", gamete_mod)
+                (
+                    next_modifier_id(gamete_modifiers),
+                    f"{preset.name}/gamete",
+                    gamete_mod,
+                )
             )
             gamete_modifiers.sort(key=lambda x: x[0])
 
         if zygote_mod is not None:
             zygote_modifiers.append(
-                (next_modifier_id(zygote_modifiers), f"{preset.name}/zygote", zygote_mod)
+                (
+                    next_modifier_id(zygote_modifiers),
+                    f"{preset.name}/zygote",
+                    zygote_mod,
+                )
             )
             zygote_modifiers.sort(key=lambda x: x[0])
 
@@ -635,11 +642,14 @@ class Configurator:
             from natal.frontend.data import build_discrete_engine_config
 
             config = build_discrete_engine_config(
-                n_genotypes=n_g, n_gtypes=n_hg, n_glabs=n_gl,
+                n_genotypes=n_g,
+                n_gtypes=n_hg,
+                n_glabs=n_gl,
                 n_slabs=n_sl,
                 gamete_labels=species.gamete_labels or ["default"],
                 somatic_labels=species.somatic_labels or ["default"],
-                zygotes_to_gametes_map=z2g, gametes_to_zygotes_map=g2z,
+                zygotes_to_gametes_map=z2g,
+                gametes_to_zygotes_map=g2z,
                 has_sex_chromosomes=has_sc,
             )
             result = Configurator(config, species=species)
@@ -648,12 +658,17 @@ class Configurator:
             from natal.frontend.data import build_population_config
 
             config = build_population_config(
-                n_genotypes=n_g, n_gtypes=n_hg, n_glabs=n_gl,
+                n_genotypes=n_g,
+                n_gtypes=n_hg,
+                n_glabs=n_gl,
                 n_slabs=n_sl,
                 gamete_labels=species.gamete_labels or ["default"],
                 somatic_labels=species.somatic_labels or ["default"],
-                zygotes_to_gametes_map=z2g, gametes_to_zygotes_map=g2z,
-                n_ages=2, new_adult_age=1, carrying_capacity=1000.0,
+                zygotes_to_gametes_map=z2g,
+                gametes_to_zygotes_map=g2z,
+                n_ages=2,
+                new_adult_age=1,
+                carrying_capacity=1000.0,
                 has_sex_chromosomes=has_sc,
             )
             result = Configurator(config, species=species)
@@ -769,15 +784,18 @@ class Configurator:
                 # lands in the draft and the run boundary flushes it.
                 object.__setattr__(self._pop_ref, "_rust_deferred_writes", True)
             return CoreConfigWriter(
-                self._config, backend,
+                self._config,
+                backend,
                 on_replace=_publish,
-                species=self._species, registry=self._registry,
+                species=self._species,
+                registry=self._registry,
                 param_log=self._pop_ref.log_param_change,
             )
         return DraftWriter(
             self._config,
             on_replace=_publish,
-            species=self._species, registry=self._registry,
+            species=self._species,
+            registry=self._registry,
         )
 
     # -- setup flags -----------------------------------------------------------
@@ -791,9 +809,10 @@ class Configurator:
         continuous_sampling: bool | None = None,
         fixed_egg_count: bool | None = None,
         compress: bool = False,
-        backend: Literal["auto", "rust", "python"] | None = None,
         declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
-        declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
+        declared_genotypes: Sequence[str]
+        | Sequence[int]
+        | None = None,  # deprecated alias
     ) -> Self:
         """Configure simulation flags and optional population name.
 
@@ -821,11 +840,6 @@ class Configurator:
                 distributions instead of discrete counts.
             fixed_egg_count: If ``True``, disable Poisson noise on egg counts.
             compress: If ``True``, enable full index compression at build time.
-            backend: Lifecycle backend selector used by ``build()``.
-                ``None`` preserves any earlier setting; ``"python"`` forces
-                the pure-Python reference; ``"auto"`` (the default) selects
-                Rust when the extension is available and falls back to the
-                reference otherwise; ``"rust"`` forces the Rust backend.
             declared_zygote_types: Optional sequence of genotype selectors to protect
                 from compression pruning.
 
@@ -836,13 +850,13 @@ class Configurator:
             self._name = name
         if compress:
             self._compress = True
-        if backend is not None:
-            self._backend: Literal["auto", "rust", "python"] = backend
         if declared_genotypes is not None:
             import warnings
+
             warnings.warn(
                 "declared_genotypes is deprecated. Use declared_zygote_types instead.",
-                FutureWarning, stacklevel=2,
+                FutureWarning,
+                stacklevel=2,
             )
             if declared_zygote_types is not None:
                 raise ValueError(
@@ -851,7 +865,9 @@ class Configurator:
                 )
             declared_zygote_types = declared_genotypes
         if declared_zygote_types is not None:
-            self._declared_zygote_types = cast("set[str] | set[int]", set(declared_zygote_types))
+            self._declared_zygote_types = cast(
+                "set[str] | set[int]", set(declared_zygote_types)
+            )
         overrides: dict[str, bool] = {}
         if stochastic is not None:
             overrides["stochastic"] = stochastic
@@ -875,10 +891,11 @@ class Configurator:
     # parameters live in the route table (parameters.jsonc), not in the
     # method bodies.
 
-
     @_declared
     def age_structure(
-        self, n_ages: int, new_adult_age: int,
+        self,
+        n_ages: int,
+        new_adult_age: int,
         generation_time: float | None = None,
     ) -> Self:
         """Lock population dimensions.
@@ -956,6 +973,7 @@ class Configurator:
         # Rebuild registry for the new n_ages (affects genotype lookup dims).
         if self._species is not None:
             from natal.frontend.configurator._base import build_registry
+
             self._registry = build_registry(self._species)
         return self
 
@@ -1067,10 +1085,26 @@ class Configurator:
         eggs_per_female: float | None = None,
         sex_ratio: float | None = None,
         sperm_displacement_rate: float | None = None,
-        female_age_based_mating_rate: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        male_age_based_mating_rate: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        age_based_reproduction_rate: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        female_age_based_fertility: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        female_age_based_mating_rate: float
+        | list[float]
+        | dict[int, float]
+        | Callable[[int], float]
+        | None = None,
+        male_age_based_mating_rate: float
+        | list[float]
+        | dict[int, float]
+        | Callable[[int], float]
+        | None = None,
+        age_based_reproduction_rate: float
+        | list[float]
+        | dict[int, float]
+        | Callable[[int], float]
+        | None = None,
+        female_age_based_fertility: float
+        | list[float]
+        | dict[int, float]
+        | Callable[[int], float]
+        | None = None,
         female_adult_mating_rate: float | None = None,
         male_adult_mating_rate: float | None = None,
         fixed_egg_count: bool | None = None,
@@ -1152,8 +1186,16 @@ class Configurator:
     def survival(
         self,
         *,
-        female_age_based_survival: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
-        male_age_based_survival: float | list[float] | dict[int, float] | Callable[[int], float] | None = None,
+        female_age_based_survival: float
+        | list[float]
+        | dict[int, float]
+        | Callable[[int], float]
+        | None = None,
+        male_age_based_survival: float
+        | list[float]
+        | dict[int, float]
+        | Callable[[int], float]
+        | None = None,
         female_age0_survival: float | None = None,
         male_age0_survival: float | None = None,
     ) -> Self:
@@ -1193,8 +1235,13 @@ class Configurator:
     @_declared
     def initial_state(
         self,
-        individual_count: Mapping[str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]],
-        sperm_storage: Mapping[str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]] | None = None,
+        individual_count: Mapping[
+            str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]
+        ],
+        sperm_storage: Mapping[
+            str, Mapping[str, float | Sequence[int | float] | Mapping[int, int | float]]
+        ]
+        | None = None,
     ) -> Self:
         """Set the initial population distribution (deferred — applied at build time).
 
@@ -1245,9 +1292,11 @@ class Configurator:
             overrides: dict[str, object] = {"initial_individual_count": array}
             if sperm_storage is not None:
                 import warnings
+
                 warnings.warn(
                     "sperm_storage is ignored for discrete-generation populations.",
-                    UserWarning, stacklevel=2,
+                    UserWarning,
+                    stacklevel=2,
                 )
             self._config = self._config._replace(**overrides)
             return self
@@ -1262,13 +1311,14 @@ class Configurator:
         )
         overrides = {"initial_individual_count": array}
         if sperm_storage is not None:
-            overrides["initial_sperm_storage"] = \
+            overrides["initial_sperm_storage"] = (
                 PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage(
                     species=self._species,
                     sperm_storage=sperm_storage,
                     n_ages=n_ages,
                     new_adult_age=new_adult_age,
                 )
+            )
         self._config = self._config._replace(**overrides)
         return self
 
@@ -1568,9 +1618,11 @@ class Configurator:
             removed in a future version.
         """
         import warnings
+
         warnings.warn(
             "compress_gametes() is deprecated. Use setup(compress=True) instead.",
-            FutureWarning, stacklevel=2,
+            FutureWarning,
+            stacklevel=2,
         )
         self._compress = enabled
         return self
@@ -1583,9 +1635,11 @@ class Configurator:
             removed in a future version.
         """
         import warnings
+
         warnings.warn(
             "compress_genotypes() is deprecated. Use setup(compress=True) instead.",
-            FutureWarning, stacklevel=2,
+            FutureWarning,
+            stacklevel=2,
         )
         self._compress = enabled
         return self
@@ -1629,9 +1683,17 @@ class Configurator:
                 *hook_items, event=event, priority=priority, deme=deme, name=name
             )
             return self
-        self._hook_calls.append((hook_items, {
-            "event": event, "priority": priority, "deme": deme, "name": name,
-        }))
+        self._hook_calls.append(
+            (
+                hook_items,
+                {
+                    "event": event,
+                    "priority": priority,
+                    "deme": deme,
+                    "name": name,
+                },
+            )
+        )
         return self
 
     # -- observations ------------------------------------------------------------
@@ -1706,13 +1768,9 @@ class Configurator:
                 "been built. Use pop.clear_history() to reset."
             )
         if mode not in ("raw", "observation"):
-            raise ValueError(
-                f"mode must be 'raw' or 'observation', got {mode!r}"
-            )
+            raise ValueError(f"mode must be 'raw' or 'observation', got {mode!r}")
         if max_rows is not None and max_rows < 1:
-            raise ValueError(
-                f"max_rows must be >= 1 or None, got {max_rows}"
-            )
+            raise ValueError(f"max_rows must be >= 1 or None, got {max_rows}")
         self._record_history_mode = mode
         self._record_history_max_rows: Optional[int] = max_rows
         return self
@@ -1947,9 +2005,7 @@ class Configurator:
                     existing = self._declared_zygote_types
                     self._declared_zygote_types = cast(
                         "set[str] | set[int]",
-                        (existing | hook_refs)
-                        if existing is not None
-                        else hook_refs,
+                        (existing | hook_refs) if existing is not None else hook_refs,
                     )
 
             # Build-time compression runs the candidate compile with the
@@ -1972,6 +2028,7 @@ class Configurator:
         # Custom kwargs (accumulated by .custom()) applied to final config.
         if self._custom_kwargs:
             from natal.frontend.data import build_custom_slots
+
             final_config = final_config._replace(
                 custom=build_custom_slots(self._custom_kwargs)
             )
@@ -1985,13 +2042,14 @@ class Configurator:
                 DiscreteGenerationPopulation,
             )
 
-            pop: DiscreteGenerationPopulation | AgeStructuredPopulation = \
+            pop: DiscreteGenerationPopulation | AgeStructuredPopulation = (
                 DiscreteGenerationPopulation(
                     species=self._species,
                     population_config=final_config,
                     index_registry=self._registry,
                     name=name,
                 )
+            )
         else:
             from natal.frontend.population.age_structured import (
                 AgeStructuredPopulation,
@@ -2041,34 +2099,26 @@ class Configurator:
                 name=cast("str | None", kwargs["name"]),
             )
 
-        # Apply the requested lifecycle backend.  ``auto`` (the default)
-        # selects Rust when the extension is importable and silently falls
-        # back to the pure-Python reference otherwise; ``rust`` propagates
-        # the failure.  The legacy compiled-backend selector was retired:
-        # request ``rust`` or ``python`` explicitly.
-        backend = getattr(self, "_backend", "auto")
-        if backend == "python":
-            pop._python_backend = True  # pyright: ignore[reportPrivateUsage]
-        elif backend in ("auto", "rust"):
-            from natal.backends.rust.rust_backend import rust_backend_available
+        # The Rust engine is the ONLY execution backend (plan S6): every
+        # population builds its session here, and a missing extension is a
+        # hard error — there is no silent fallback.
+        from natal.backends.rust.rust_backend import rust_backend_available
 
-            if backend == "rust" or rust_backend_available():
-                try:
-                    pop.enable_rust_backend()  # type: ignore[reportAttributeAccessIssue]  # both concrete Population classes expose this method
-                except RuntimeError:
-                    if backend == "rust":
-                        raise
-        elif backend == "numba":
-            raise ValueError(
-                "backend='numba' was removed. Use backend='rust' (native "
-                "extension) or backend='python' (pure-Python reference)."
+        if not rust_backend_available():
+            raise RuntimeError(
+                "natal._engine_rs is not available; the Rust engine is the "
+                "only execution backend. Build it with `maturin develop` "
+                "before constructing populations."
             )
+        pop.enable_rust_backend()  # type: ignore[reportAttributeAccessIssue]  # both concrete Population classes expose this method
 
         # Compile and freeze the recording plan.
         self._compile_recording_plan(pop)
         return pop
 
-    def _compile_recording_plan(self, pop: AgeStructuredPopulation | DiscreteGenerationPopulation) -> None:
+    def _compile_recording_plan(
+        self, pop: AgeStructuredPopulation | DiscreteGenerationPopulation
+    ) -> None:
         """Compile and freeze the :class:`RecordingPlan` on the population.
 
         Called at the end of :meth:`build` after all observations and
@@ -2136,4 +2186,3 @@ class Configurator:
             plan.schema,
             max_rows=max_rows if max_rows is not None else pop.max_history,
         )
-

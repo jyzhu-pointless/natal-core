@@ -894,6 +894,9 @@ class SpatialPopulation:
         # Spatial hooks are local-to-deme by design, so container-level hooks
         # must always be rebuilt from all demes.
         self._hooks = self._compile_spatial_hooks_from_demes()
+        # Session structure staleness flag (plan S2/S3): set by hook
+        # registration and consumed by the next rust run boundary.
+        self._rust_needs_rebuild = False
 
         migration_mode = resolve_migration_mode(
             strategy=migration_strategy,
@@ -1612,9 +1615,7 @@ class SpatialPopulation:
         # second checkpoint carrying whatever ecology changed since.
         will_store = self._tick not in history_obj.ticks
         capture = (
-            backend is not None
-            and history_obj.schema.mode == "raw"
-            and will_store
+            backend is not None and history_obj.schema.mode == "raw" and will_store
         )
         if history_obj.schema.mode == "observation":
             values = self.observation.apply(ind_all)
@@ -2362,6 +2363,11 @@ class SpatialPopulation:
     def _refresh_spatial_hooks(self) -> None:
         """Rebuild the aggregate compiled hooks (single rebuild entrypoint)."""
         self._hooks = self._compile_spatial_hooks_from_demes()
+        # Hook structure is session state (plan S3): the changed descriptors
+        # must reach the HookProgram and the callback bridges, so the live
+        # session rebuilds before the next run — the container-level twin
+        # of the panmictic ``_rust_needs_rebuild`` semantics.
+        self._rust_needs_rebuild = True
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """Trigger an event and execute all registered hooks for a specific deme.
@@ -2928,6 +2934,11 @@ class SpatialPopulation:
         )
         self._rust_spatial_seed = seed
         self._rust_states_dirty = False
+        self._rust_needs_rebuild = False
+        # The fresh session already carries every deme's hook structure;
+        # stale per-deme panmictic flags must not re-trigger rebuilds.
+        for deme in self._demes:
+            deme._rust_needs_rebuild = False  # pyright: ignore[reportPrivateUsage]  # demes are same-package engine hosts; the flag is the shared rebuild contract
         if self._has_python_hooks():
             self._register_spatial_rust_callbacks(self._rust_spatial_backend)
         return self
@@ -3094,6 +3105,10 @@ class SpatialPopulation:
         backend = getattr(self, "_rust_spatial_backend", None)
         if backend is None:
             raise RuntimeError("Rust spatial backend is not enabled.")
+        self._rebuild_stale_spatial_session()
+        backend = self._rust_spatial_backend
+        if backend is None:  # pragma: no cover - rebuild guarantees a session
+            raise RuntimeError("Rust spatial backend vanished during rebuild.")
         previous_tick = int(self._tick)
         next_tick = int(backend.run_tick())
         # Deferred-write sync (plan 7.2): a Python hook that wrote params
@@ -3131,6 +3146,28 @@ class SpatialPopulation:
             for deme in self._demes:
                 deme.tick = previous_tick
         return was_stopped
+
+    def _rebuild_stale_spatial_session(self) -> None:
+        """Rebuild the session when hook structure changed after enable.
+
+        Mirrors the panmictic ``_rust_needs_rebuild`` semantics (plan S2):
+        hook registration is session structure, so the next run starts from
+        a session whose HookProgram and Python-callback bridges include the
+        change.  The rebuild uses the enable-time base seed — the documented
+        refresh reseeding semantics.
+
+        Raises:
+            RuntimeError: If the Rust extension is unavailable.
+        """
+        container_stale = bool(getattr(self, "_rust_needs_rebuild", False))
+        deme_stale = any(
+            getattr(deme, "_rust_needs_rebuild", False) for deme in self._demes
+        )
+        if not container_stale and not deme_stale:
+            return
+        self._ensure_rust_states_fresh()
+        seed = int(getattr(self, "_rust_spatial_seed", None) or 0)
+        self.enable_rust_backend(seed=seed)
 
     def _ensure_rust_states_fresh(self) -> None:
         """Refresh the per-deme state caches from the session snapshot.

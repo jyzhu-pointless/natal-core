@@ -14,7 +14,6 @@ from typing import (
     Callable,
     Dict,
     List,
-    Literal,
     Optional,
     Sequence,
     Set,
@@ -45,6 +44,7 @@ HookCallback = Callable[..., object]
 # Age-structured population model (based on BasePopulation)
 # =============================================================================
 
+
 class AgeStructuredPopulation(BasePopulation[PopulationState]):
     """Age-structured population model (overlapping generations).
 
@@ -63,8 +63,19 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         population_config: ModelDraft,
         name: Optional[str] = None,
         index_registry: Optional[IndexRegistry] = None,
-        initial_individual_count: Optional[Mapping[str, Mapping[Union[Genotype, str], Union[List[int], Dict[int, int]]]]] = None,
-        initial_sperm_storage: Optional[Mapping[Union[Genotype, str], Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], float]]]] = None,
+        initial_individual_count: Optional[
+            Mapping[
+                str, Mapping[Union[Genotype, str], Union[List[int], Dict[int, int]]]
+            ]
+        ] = None,
+        initial_sperm_storage: Optional[
+            Mapping[
+                Union[Genotype, str],
+                Mapping[
+                    Union[Genotype, str], Union[Dict[int, float], List[float], float]
+                ],
+            ]
+        ] = None,
         hook_items: Optional[List[object]] = None,
     ):
         """Initialize an age-structured population instance using a ModelDraft.
@@ -121,7 +132,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             self._live_state().sperm_storage[:] = cfg_init_sperm
 
         self.snapshots = {}
-        self._python_backend = False
         # True while a Rust batch run executes; in-hook writes defer to the
         # next run (session borrow held by the engine).
         self._rust_run_active = False
@@ -168,11 +178,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         stochastic: bool = True,
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
-        backend: Literal["auto", "rust", "python"] = "auto",
         *,
         compress: bool = False,
         declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
-        declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
+        declared_genotypes: Sequence[str]
+        | Sequence[int]
+        | None = None,  # deprecated alias
     ) -> Configurator:
         """Start building an age-structured population with overlapping generations.
 
@@ -195,10 +206,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             fixed_egg_count: If ``True``, disable Poisson noise on egg counts
                 so each female produces exactly the specified number of eggs.
                 Defaults to ``False``.
-            backend: Lifecycle backend selector.  ``"auto"`` (default) chooses
-                Rust when the extension is available and falls back to the
-                pure-Python reference otherwise; ``"rust"`` forces Rust;
-                ``"python"`` forces the pure-Python reference.
             compress: If ``True``, enable full index compression at build
                 time, pruning unreachable GTypes and ZTypes to shrink
                 internal arrays. Defaults to ``False``.
@@ -233,14 +240,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,
             fixed_egg_count=fixed_egg_count,
-            backend=backend,
             compress=compress,
             declared_zygote_types=declared_zygote_types,
         )
 
     def _distribute_initial_population(
-        self,
-        distribution: Mapping[str, Mapping[Union[Genotype, str], object]]
+        self, distribution: Mapping[str, Mapping[Union[Genotype, str], object]]
     ) -> None:
         """Distribute initial population from a specification dictionary.
 
@@ -269,7 +274,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 )
 
                 if isinstance(genotype_key, str):
-                    pattern = ZygoteTypePattern.from_slab_key(genotype_key, self.species)
+                    pattern = ZygoteTypePattern.from_slab_key(
+                        genotype_key, self.species
+                    )
                 else:
                     parser = GenotypePatternParser(self.species)
                     pattern = ZygoteTypePattern(
@@ -280,31 +287,50 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
                 if isinstance(age_data, list):
                     for age, raw_count in enumerate(cast(List[object], age_data)):
-                        if not isinstance(raw_count, (int, float)) or isinstance(raw_count, bool):
-                            raise TypeError(f"Age count must be numeric, got {type(raw_count)}")
+                        if not isinstance(raw_count, (int, float)) or isinstance(
+                            raw_count, bool
+                        ):
+                            raise TypeError(
+                                f"Age count must be numeric, got {type(raw_count)}"
+                            )
                         count = float(raw_count)
                         if age < self.config.n_ages and count > 0:
-                            self._live_state().individual_count[sex_idx, age, z_idx] = count
+                            self._live_state().individual_count[sex_idx, age, z_idx] = (
+                                count
+                            )
                 elif isinstance(age_data, dict):
-                    for age_raw, raw_count in cast(Dict[object, object], age_data).items():
+                    for age_raw, raw_count in cast(
+                        Dict[object, object], age_data
+                    ).items():
                         if not isinstance(age_raw, int):
                             raise TypeError(f"Age key must be int, got {type(age_raw)}")
-                        if not isinstance(raw_count, (int, float)) or isinstance(raw_count, bool):
-                            raise TypeError(f"Age count must be numeric, got {type(raw_count)}")
+                        if not isinstance(raw_count, (int, float)) or isinstance(
+                            raw_count, bool
+                        ):
+                            raise TypeError(
+                                f"Age count must be numeric, got {type(raw_count)}"
+                            )
                         age = age_raw
                         count = float(raw_count)
                         if age < self.config.n_ages and count > 0:
-                            self._live_state().individual_count[sex_idx, age, z_idx] = count
+                            self._live_state().individual_count[sex_idx, age, z_idx] = (
+                                count
+                            )
                 else:
-                    raise TypeError(f"age_data must be a list or dict, got {type(age_data)}")
+                    raise TypeError(
+                        f"age_data must be a list or dict, got {type(age_data)}"
+                    )
 
     def _distribute_initial_sperm_storage(
         self,
         species: Species,
         sperm_storage_dist: Mapping[
             Union[Genotype, str],
-            Mapping[Union[Genotype, str], Union[Dict[int, float], List[float], Tuple[float, ...], float, int]],
-        ]
+            Mapping[
+                Union[Genotype, str],
+                Union[Dict[int, float], List[float], Tuple[float, ...], float, int],
+            ],
+        ],
     ) -> None:
         """Populate the internal sperm storage from user-provided initial distribution.
 
@@ -326,8 +352,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         from natal.frontend.patterns import GenotypePatternParser, ZygoteTypePattern
 
         for female_key, male_dict in sperm_storage_dist.items():
-            assert isinstance(female_key, (str, Genotype)), \
+            assert isinstance(female_key, (str, Genotype)), (
                 f"Female genotype key must be Genotype or str, got {type(female_key)}"
+            )
 
             if isinstance(female_key, str):
                 female_pattern = ZygoteTypePattern.from_slab_key(female_key, species)
@@ -340,8 +367,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             f_z = self.registry.resolve_default_ztype_index(female_pattern)
 
             for male_key, age_data in male_dict.items():
-                assert isinstance(male_key, (str, Genotype)), \
+                assert isinstance(male_key, (str, Genotype)), (
                     f"Male genotype key must be Genotype or str, got {type(male_key)}"
+                )
 
                 if isinstance(male_key, str):
                     male_pattern = ZygoteTypePattern.from_slab_key(male_key, species)
@@ -353,59 +381,86 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
                 m_z = self.registry.resolve_default_ztype_index(male_pattern)
 
-                assert isinstance(age_data, (dict, list, tuple, int, float)), \
+                assert isinstance(age_data, (dict, list, tuple, int, float)), (
                     f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}"
+                )
 
                 # Parse age_data: supports multiple formats
                 if isinstance(age_data, dict):
                     # Dict format: {age: count, ...}
-                    for age_raw, raw_count in cast(Dict[object, object], age_data).items():
+                    for age_raw, raw_count in cast(
+                        Dict[object, object], age_data
+                    ).items():
                         if not isinstance(age_raw, int):
                             raise TypeError(f"Age must be int, got {type(age_raw)}")
-                        if not isinstance(raw_count, (int, float)) or isinstance(raw_count, bool):
-                            raise TypeError(f"Sperm count must be numeric, got {type(raw_count)}")
+                        if not isinstance(raw_count, (int, float)) or isinstance(
+                            raw_count, bool
+                        ):
+                            raise TypeError(
+                                f"Sperm count must be numeric, got {type(raw_count)}"
+                            )
                         age = age_raw
                         count = float(raw_count)
                         if age < 0 or age >= self.n_ages:
-                            raise ValueError(f"Age {age} out of range [0, {self.n_ages})")
+                            raise ValueError(
+                                f"Age {age} out of range [0, {self.n_ages})"
+                            )
                         if count < 0:
-                            raise ValueError(f"Sperm count must be non-negative, got {count}")
+                            raise ValueError(
+                                f"Sperm count must be non-negative, got {count}"
+                            )
                         if count > 0:
                             self._live_state().sperm_storage[age, f_z, m_z] = count
 
                 elif isinstance(age_data, list):
                     # List format: [count_age0, count_age1, ...]
                     for age, raw_count in enumerate(cast(List[object], age_data)):
-                        if not isinstance(raw_count, (int, float)) or isinstance(raw_count, bool):
-                            raise TypeError(f"Sperm count must be numeric, got {type(raw_count)}")
+                        if not isinstance(raw_count, (int, float)) or isinstance(
+                            raw_count, bool
+                        ):
+                            raise TypeError(
+                                f"Sperm count must be numeric, got {type(raw_count)}"
+                            )
                         count = float(raw_count)
                         if age >= self.n_ages:
                             break
                         if count < 0:
-                            raise ValueError(f"Sperm count must be non-negative, got {count}")
+                            raise ValueError(
+                                f"Sperm count must be non-negative, got {count}"
+                            )
                         if count > 0:
                             self._live_state().sperm_storage[age, f_z, m_z] = count
 
                 elif isinstance(age_data, tuple):
                     # Tuple format: (count_age0, count_age1, ...)
                     for age, raw_count in enumerate(cast(Tuple[object, ...], age_data)):
-                        if not isinstance(raw_count, (int, float)) or isinstance(raw_count, bool):
-                            raise TypeError(f"Sperm count must be numeric, got {type(raw_count)}")
+                        if not isinstance(raw_count, (int, float)) or isinstance(
+                            raw_count, bool
+                        ):
+                            raise TypeError(
+                                f"Sperm count must be numeric, got {type(raw_count)}"
+                            )
                         count = float(raw_count)
                         if age >= self.n_ages:
                             break
                         if count < 0:
-                            raise ValueError(f"Sperm count must be non-negative, got {count}")
+                            raise ValueError(
+                                f"Sperm count must be non-negative, got {count}"
+                            )
                         if count > 0:
                             self._live_state().sperm_storage[age, f_z, m_z] = count
 
                 else:
                     # Scalar format: apply to all adult ages
                     if age_data < 0:
-                        raise ValueError(f"Sperm count must be non-negative, got {age_data}")
+                        raise ValueError(
+                            f"Sperm count must be non-negative, got {age_data}"
+                        )
                     if age_data > 0:
                         for age in range(self.new_adult_age, self.n_ages):
-                            self._live_state().sperm_storage[age, f_z, m_z] = float(age_data)
+                            self._live_state().sperm_storage[age, f_z, m_z] = float(
+                                age_data
+                            )
 
     def _refresh_state_cache_from_session(self) -> None:
         """Pull the session-owned state into the local cache (plan S2).
@@ -452,7 +507,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         if self._history_obj is not None:
             self._history_obj.clear()
         self._finished = False
-        if hasattr(self, '_initial_population_snapshot'):
+        if hasattr(self, "_initial_population_snapshot"):
             ind_copy, sperm_copy, _ = self._initial_population_snapshot
 
             self._state = PopulationState.create(
@@ -505,7 +560,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         return self._live_state().individual_count[Sex.MALE.value, :, :].sum()
 
-    def get_adult_count(self, sex: str = 'both') -> int:
+    def get_adult_count(self, sex: str = "both") -> int:
         """Return the number of adult individuals for the given sex.
 
         Args:
@@ -517,16 +572,24 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Raises:
             ValueError: If the sex identifier is not recognized.
         """
-        if sex not in ('female', 'male', 'both', 'F', 'M'):
+        if sex not in ("female", "male", "both", "F", "M"):
             raise ValueError(f"sex must be 'female', 'male', or 'both', got '{sex}'")
 
         total = 0
 
-        if sex in ('female', 'F', 'both'):
-            total += self._live_state().individual_count[Sex.FEMALE.value, self.new_adult_age:self.n_ages, :].sum()
+        if sex in ("female", "F", "both"):
+            total += (
+                self._live_state()
+                .individual_count[Sex.FEMALE.value, self.new_adult_age : self.n_ages, :]
+                .sum()
+            )
 
-        if sex in ('male', 'M', 'both'):
-            total += self._live_state().individual_count[Sex.MALE.value, self.new_adult_age:self.n_ages, :].sum()
+        if sex in ("male", "M", "both"):
+            total += (
+                self._live_state()
+                .individual_count[Sex.MALE.value, self.new_adult_age : self.n_ages, :]
+                .sum()
+            )
 
         return int(total)
 
@@ -569,7 +632,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         return self._live_state().flatten_all()
 
-    def import_state(self, state: Union[PopulationState, NDArray[np.float64], Dict[str, np.ndarray], Tuple[np.ndarray, np.ndarray]]) -> None:
+    def import_state(
+        self,
+        state: Union[
+            PopulationState,
+            NDArray[np.float64],
+            Dict[str, np.ndarray],
+            Tuple[np.ndarray, np.ndarray],
+        ],
+    ) -> None:
         """Import state and reset the history timeline.
 
         All validation happens before any mutation — a failed import leaves the
@@ -590,7 +661,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         elif isinstance(state, dict):
             state_obj = PopulationState(
                 n_tick=int(state.get("n_tick", self._tick)),
-                individual_count=np.asarray(state["individual_count"], dtype=np.float64),
+                individual_count=np.asarray(
+                    state["individual_count"], dtype=np.float64
+                ),
                 sperm_storage=np.asarray(state["sperm_storage"], dtype=np.float64),
             )
         else:
@@ -768,7 +841,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 are now registered.
         """
         if self._rust_backend_seed is None:
-            raise RuntimeError("Rust backend is not enabled; call enable_rust_backend() first.")
+            raise RuntimeError(
+                "Rust backend is not enabled; call enable_rust_backend() first."
+            )
         return self.enable_rust_backend(seed=self._rust_backend_seed)
 
     @property
@@ -822,7 +897,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._run_startup_sync()
         backend = self._rust_lifecycle_backend
         if backend is None:
-            raise RuntimeError("Rust backend is not enabled; call enable_rust_backend() first.")
+            raise RuntimeError(
+                "Rust backend is not enabled; call enable_rust_backend() first."
+            )
 
         observation_mask = self._observation_mask
         # Raw-mode runs keep a full record-aligned checkpoint per recorded
@@ -881,7 +958,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         n_steps: int,
         record_every: Optional[int] = None,
         finish: bool = False,
-        clear_history_on_start: bool = False
+        clear_history_on_start: bool = False,
     ) -> AgeStructuredPopulation:
         """Run multi-step evolution using the unified lifecycle engine.
 
@@ -1041,9 +1118,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Raises:
             RuntimeError: If the population is already finished and cannot continue.
         """
-        return self.run(n_steps=1, record_every=self.record_every, clear_history_on_start=False)
+        return self.run(
+            n_steps=1, record_every=self.record_every, clear_history_on_start=False
+        )
 
-    def get_age_distribution(self, sex: str = 'both') -> np.ndarray:
+    def get_age_distribution(self, sex: str = "both") -> np.ndarray:
         """Return the age distribution for the requested sex.
 
         Args:
@@ -1055,13 +1134,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Raises:
             ValueError: If sex identifier is invalid.
         """
-        if sex not in ('female', 'male', 'both', 'F', 'M'):
+        if sex not in ("female", "male", "both", "F", "M"):
             raise ValueError(f"sex must be 'female', 'male', or 'both', got '{sex}'")
 
         # Access directly from PopulationState
-        if sex in ('female', 'F'):
-            return self._live_state().individual_count[Sex.FEMALE.value, :, :].sum(axis=1)
-        elif sex in ('male', 'M'):
+        if sex in ("female", "F"):
+            return (
+                self._live_state().individual_count[Sex.FEMALE.value, :, :].sum(axis=1)
+            )
+        elif sex in ("male", "M"):
             return self._live_state().individual_count[Sex.MALE.value, :, :].sum(axis=1)
         else:
             return self._live_state().individual_count.sum(axis=(0, 2))
@@ -1073,13 +1154,19 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             Use ``self.registry.ztype_index()`` + manual array sum instead.
         """
         import warnings
+
         warnings.warn(
             "get_genotype_count is deprecated; use registry + manual sum",
-            DeprecationWarning, stacklevel=2,
+            DeprecationWarning,
+            stacklevel=2,
         )
         genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
-        female_count = self._live_state().individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
-        male_count = self._live_state().individual_count[Sex.MALE.value, :, genotype_idx].sum()
+        female_count = (
+            self._live_state().individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
+        )
+        male_count = (
+            self._live_state().individual_count[Sex.MALE.value, :, genotype_idx].sum()
+        )
         return (female_count, male_count)
 
     @property
@@ -1091,9 +1178,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             instead.
         """
         import warnings
+
         warnings.warn(
             "genotypes_present is deprecated; use registry + manual count check",
-            DeprecationWarning, stacklevel=2,
+            DeprecationWarning,
+            stacklevel=2,
         )
         present: Set[Genotype] = set()
         for z_idx, (genotype, _slab) in enumerate(self.registry.index_to_ztype):
@@ -1108,7 +1197,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
     def __repr__(self) -> str:
         """Return a compact string representation of the population."""
-        return (f"AgeStructuredPopulation(name='{self.name}', n_ages={self.n_ages}, "
-                f"total_count={self.get_total_count()}, "
-                f"adult_females={self.get_adult_count('female')}, "
-                f"adult_males={self.get_adult_count('male')})")
+        return (
+            f"AgeStructuredPopulation(name='{self.name}', n_ages={self.n_ages}, "
+            f"total_count={self.get_total_count()}, "
+            f"adult_females={self.get_adult_count('female')}, "
+            f"adult_males={self.get_adult_count('male')})"
+        )

@@ -47,19 +47,10 @@ from natal.backends.reference.simulation.age_structured import (
 from contextlib import contextmanager
 
 
-@contextmanager
-def python_reference():
-    """Portable stand-in for the retired compiled-backend disable guard.
-
-    The only non-Rust execution vehicle is the pure-Python reference;
-    this context manager is a semantic no-op kept so test bodies that
-    previously forced the Python path stay readable.
-    """
-    yield
-
 # ===========================================================================
 # compute_equilibrium_metrics
 # ===========================================================================
+
 
 class TestComputeEquilibriumMetrics:
     """Tests for compute_equilibrium_metrics."""
@@ -68,29 +59,34 @@ class TestComputeEquilibriumMetrics:
         """Auto-derive equilibrium distribution from carrying_capacity."""
         n_ages = 5
         eggs_per_female = 10.0
-        age_surv = np.array([
-            [1.0, 0.8, 0.6, 0.4, 0.0],
-            [1.0, 0.7, 0.5, 0.3, 0.0],
-        ], dtype=np.float64)
-        age_mating = np.array([
-            [0.0, 0.0, 0.2, 0.5, 0.0],
-            [0.0, 0.0, 0.2, 0.5, 0.0],
-        ], dtype=np.float64)
+        age_surv = np.array(
+            [
+                [1.0, 0.8, 0.6, 0.4, 0.0],
+                [1.0, 0.7, 0.5, 0.3, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        age_mating = np.array(
+            [
+                [0.0, 0.0, 0.2, 0.5, 0.0],
+                [0.0, 0.0, 0.2, 0.5, 0.0],
+            ],
+            dtype=np.float64,
+        )
         fert = np.ones(n_ages, dtype=np.float64)
         comp_strength = np.array([1.0, 0.5, 0.2], dtype=np.float64)
 
-        with python_reference():
-            comp, surv = compute_equilibrium_metrics(
-                carrying_capacity=1000.0,
-                eggs_per_female=eggs_per_female,
-                age_based_survival_rates=age_surv,
-                age_based_mating_rates=age_mating,
-                female_age_based_fertility=fert,
-                relative_competition_strength=comp_strength,
-                sex_ratio=0.5,
-                new_adult_age=2,
-                n_ages=n_ages,
-            )
+        comp, surv = compute_equilibrium_metrics(
+            carrying_capacity=1000.0,
+            eggs_per_female=eggs_per_female,
+            age_based_survival_rates=age_surv,
+            age_based_mating_rates=age_mating,
+            female_age_based_fertility=fert,
+            relative_competition_strength=comp_strength,
+            sex_ratio=0.5,
+            new_adult_age=2,
+            n_ages=n_ages,
+        )
 
         assert comp > 0.0
         assert surv > 0.0
@@ -102,10 +98,13 @@ class TestComputeEquilibriumMetrics:
     def test_custom_equilibrium_distribution(self) -> None:
         """Use user-provided equilibrium distribution."""
         n_ages = 4
-        eq_dist = np.array([
-            [0.0, 400.0, 320.0, 128.0],
-            [0.0, 400.0, 280.0, 84.0],
-        ], dtype=np.float64)
+        eq_dist = np.array(
+            [
+                [0.0, 400.0, 320.0, 128.0],
+                [0.0, 400.0, 280.0, 84.0],
+            ],
+            dtype=np.float64,
+        )
 
         age_surv = np.ones((2, n_ages), dtype=np.float64)
         age_mating = np.zeros((2, n_ages), dtype=np.float64)
@@ -116,19 +115,18 @@ class TestComputeEquilibriumMetrics:
         fert = np.ones(n_ages, dtype=np.float64)
         comp_strength = np.array([1.0, 0.5, 0.2], dtype=np.float64)
 
-        with python_reference():
-            comp, surv = compute_equilibrium_metrics(
-                carrying_capacity=800.0,
-                eggs_per_female=10.0,
-                age_based_survival_rates=age_surv,
-                age_based_mating_rates=age_mating,
-                female_age_based_fertility=fert,
-                relative_competition_strength=comp_strength,
-                sex_ratio=0.5,
-                new_adult_age=2,
-                n_ages=n_ages,
-                equilibrium_individual_count=eq_dist,
-            )
+        comp, surv = compute_equilibrium_metrics(
+            carrying_capacity=800.0,
+            eggs_per_female=10.0,
+            age_based_survival_rates=age_surv,
+            age_based_mating_rates=age_mating,
+            female_age_based_fertility=fert,
+            relative_competition_strength=comp_strength,
+            sex_ratio=0.5,
+            new_adult_age=2,
+            n_ages=n_ages,
+            equilibrium_individual_count=eq_dist,
+        )
 
         assert comp > 0.0
         assert surv > 0.0
@@ -140,10 +138,13 @@ class TestComputeEquilibriumMetrics:
     def test_external_expected_eggs(self) -> None:
         """Use external_expected_eggs to override egg production for survival rate."""
         n_ages = 4
-        eq_dist = np.array([
-            [0.0, 400.0, 320.0, 128.0],
-            [0.0, 400.0, 280.0, 84.0],
-        ], dtype=np.float64)
+        eq_dist = np.array(
+            [
+                [0.0, 400.0, 320.0, 128.0],
+                [0.0, 400.0, 280.0, 84.0],
+            ],
+            dtype=np.float64,
+        )
         age_surv = np.ones((2, n_ages), dtype=np.float64)
         age_mating = np.zeros((2, n_ages), dtype=np.float64)
         age_mating[0, 2] = 0.2
@@ -153,20 +154,19 @@ class TestComputeEquilibriumMetrics:
         fert = np.ones(n_ages, dtype=np.float64)
         comp_strength = np.array([1.0, 0.5, 0.2], dtype=np.float64)
 
-        with python_reference():
-            comp, surv = compute_equilibrium_metrics(
-                carrying_capacity=800.0,
-                eggs_per_female=10.0,
-                age_based_survival_rates=age_surv,
-                age_based_mating_rates=age_mating,
-                female_age_based_fertility=fert,
-                relative_competition_strength=comp_strength,
-                sex_ratio=0.5,
-                new_adult_age=2,
-                n_ages=n_ages,
-                equilibrium_individual_count=eq_dist,
-                external_expected_eggs=5000.0,
-            )
+        comp, surv = compute_equilibrium_metrics(
+            carrying_capacity=800.0,
+            eggs_per_female=10.0,
+            age_based_survival_rates=age_surv,
+            age_based_mating_rates=age_mating,
+            female_age_based_fertility=fert,
+            relative_competition_strength=comp_strength,
+            sex_ratio=0.5,
+            new_adult_age=2,
+            n_ages=n_ages,
+            equilibrium_individual_count=eq_dist,
+            external_expected_eggs=5000.0,
+        )
 
         assert comp > 0.0
         assert surv > 0.0
@@ -183,18 +183,17 @@ class TestComputeEquilibriumMetrics:
         fert = np.ones(n_ages, dtype=np.float64)
         comp_strength = np.array([1.0, 0.5], dtype=np.float64)
 
-        with python_reference():
-            comp, surv = compute_equilibrium_metrics(
-                carrying_capacity=100.0,
-                eggs_per_female=0.0,
-                age_based_survival_rates=age_surv,
-                age_based_mating_rates=age_mating,
-                female_age_based_fertility=fert,
-                relative_competition_strength=comp_strength,
-                sex_ratio=0.5,
-                new_adult_age=1,
-                n_ages=n_ages,
-            )
+        comp, surv = compute_equilibrium_metrics(
+            carrying_capacity=100.0,
+            eggs_per_female=0.0,
+            age_based_survival_rates=age_surv,
+            age_based_mating_rates=age_mating,
+            female_age_based_fertility=fert,
+            relative_competition_strength=comp_strength,
+            sex_ratio=0.5,
+            new_adult_age=1,
+            n_ages=n_ages,
+        )
 
         assert surv == 1.0
         assert comp == 0.0
@@ -208,19 +207,18 @@ class TestComputeEquilibriumMetrics:
         comp_strength = np.array([1.0, 0.5, 0.2], dtype=np.float64)
         repro_rates = np.array([0.0, 0.0, 0.1, 0.0], dtype=np.float64)
 
-        with python_reference():
-            comp, surv = compute_equilibrium_metrics(
-                carrying_capacity=100.0,
-                eggs_per_female=10.0,
-                age_based_survival_rates=age_surv,
-                age_based_mating_rates=age_mating,
-                female_age_based_fertility=fert,
-                relative_competition_strength=comp_strength,
-                sex_ratio=0.5,
-                new_adult_age=2,
-                n_ages=n_ages,
-                age_based_reproduction_rates=repro_rates,
-            )
+        comp, surv = compute_equilibrium_metrics(
+            carrying_capacity=100.0,
+            eggs_per_female=10.0,
+            age_based_survival_rates=age_surv,
+            age_based_mating_rates=age_mating,
+            female_age_based_fertility=fert,
+            relative_competition_strength=comp_strength,
+            sex_ratio=0.5,
+            new_adult_age=2,
+            n_ages=n_ages,
+            age_based_reproduction_rates=repro_rates,
+        )
 
         assert comp >= 0.0
         assert surv >= 0.0
@@ -231,6 +229,7 @@ class TestComputeEquilibriumMetrics:
 # ===========================================================================
 # compute_scaling_factor_fixed
 # ===========================================================================
+
 
 class TestComputeScalingFactorFixed:
     """Tests for compute_scaling_factor_fixed."""
@@ -255,6 +254,7 @@ class TestComputeScalingFactorFixed:
 # ===========================================================================
 # compute_scaling_factor_logistic
 # ===========================================================================
+
 
 class TestComputeScalingFactorLogistic:
     """Tests for compute_scaling_factor_logistic."""
@@ -306,6 +306,7 @@ class TestComputeScalingFactorLogistic:
 # compute_scaling_factor_beverton_holt
 # ===========================================================================
 
+
 class TestComputeScalingFactorBevertonHolt:
     """Tests for compute_scaling_factor_beverton_holt."""
 
@@ -342,6 +343,7 @@ class TestComputeScalingFactorBevertonHolt:
 # compute_actual_competition_strength
 # ===========================================================================
 
+
 class TestComputeActualCompetitionStrength:
     """Tests for compute_actual_competition_strength."""
 
@@ -369,28 +371,31 @@ class TestComputeActualCompetitionStrength:
 # recruit_juveniles_sampling
 # ===========================================================================
 
+
 class TestRecruitJuvenilesSampling:
     """Tests for recruit_juveniles_sampling."""
 
     def test_deterministic_under_k_returns_exact(self) -> None:
         f = np.array([1.5, 2.5], dtype=np.float64)
         m = np.array([1.0, 1.0], dtype=np.float64)
-        with python_reference():
-            f_new, m_new = recruit_juveniles_sampling(
-                (f, m), carrying_capacity=100, n_ztypes=2,
-                stochastic=False,
-            )
+        f_new, m_new = recruit_juveniles_sampling(
+            (f, m),
+            carrying_capacity=100,
+            n_ztypes=2,
+            stochastic=False,
+        )
         assert np.array_equal(f_new, f)
         assert np.array_equal(m_new, m)
 
     def test_deterministic_over_k_scales_down(self) -> None:
         f = np.array([10.0, 10.0], dtype=np.float64)
         m = np.array([10.0, 10.0], dtype=np.float64)
-        with python_reference():
-            f_new, m_new = recruit_juveniles_sampling(
-                (f, m), carrying_capacity=20, n_ztypes=2,
-                stochastic=False,
-            )
+        f_new, m_new = recruit_juveniles_sampling(
+            (f, m),
+            carrying_capacity=20,
+            n_ztypes=2,
+            stochastic=False,
+        )
         expected = np.array([5.0, 5.0], dtype=np.float64)
         assert np.allclose(f_new, expected)
         assert np.allclose(m_new, expected)
@@ -398,22 +403,24 @@ class TestRecruitJuvenilesSampling:
     def test_zero_total(self) -> None:
         f = np.zeros(2, dtype=np.float64)
         m = np.zeros(2, dtype=np.float64)
-        with python_reference():
-            f_new, m_new = recruit_juveniles_sampling(
-                (f, m), carrying_capacity=100, n_ztypes=2,
-                stochastic=False,
-            )
+        f_new, m_new = recruit_juveniles_sampling(
+            (f, m),
+            carrying_capacity=100,
+            n_ztypes=2,
+            stochastic=False,
+        )
         assert np.all(f_new == 0.0)
         assert np.all(m_new == 0.0)
 
     def test_deterministic_partial_scale(self) -> None:
         f = np.array([50.0, 0.0], dtype=np.float64)
         m = np.array([0.0, 50.0], dtype=np.float64)
-        with python_reference():
-            f_new, m_new = recruit_juveniles_sampling(
-                (f, m), carrying_capacity=50, n_ztypes=2,
-                stochastic=False,
-            )
+        f_new, m_new = recruit_juveniles_sampling(
+            (f, m),
+            carrying_capacity=50,
+            n_ztypes=2,
+            stochastic=False,
+        )
         assert np.allclose(f_new, [25.0, 0.0])
         assert np.allclose(m_new, [0.0, 25.0])
 
@@ -421,17 +428,19 @@ class TestRecruitJuvenilesSampling:
         f = np.array([100.0, 50.0], dtype=np.float64)
         m = np.array([50.0, 100.0], dtype=np.float64)
         np.random.seed(42)
-        with python_reference():
-            f_new, m_new = recruit_juveniles_sampling(
-                (f, m), carrying_capacity=100, n_ztypes=2,
-                stochastic=True,
-            )
+        f_new, m_new = recruit_juveniles_sampling(
+            (f, m),
+            carrying_capacity=100,
+            n_ztypes=2,
+            stochastic=True,
+        )
         assert abs(f_new.sum() + m_new.sum() - 100.0) < 1.0
 
 
 # ===========================================================================
 # recruit_juveniles_given_scaling_factor_sampling
 # ===========================================================================
+
 
 class TestRecruitJuvenilesGivenScalingFactor:
     """Tests for recruit_juveniles_given_scaling_factor_sampling."""
@@ -440,44 +449,48 @@ class TestRecruitJuvenilesGivenScalingFactor:
         f = np.array([10.0, 20.0], dtype=np.float64)
         m = np.array([30.0, 40.0], dtype=np.float64)
         factor = 0.5
-        with python_reference():
-            f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
-                (f, m), scaling_factor=factor, n_ztypes=2,
-                stochastic=False,
-            )
+        f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
+            (f, m),
+            scaling_factor=factor,
+            n_ztypes=2,
+            stochastic=False,
+        )
         assert np.allclose(f_new, [5.0, 10.0])
         assert np.allclose(m_new, [15.0, 20.0])
 
     def test_zero_total(self) -> None:
         f = np.zeros(2, dtype=np.float64)
         m = np.zeros(2, dtype=np.float64)
-        with python_reference():
-            f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
-                (f, m), scaling_factor=0.5, n_ztypes=2,
-                stochastic=False,
-            )
+        f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
+            (f, m),
+            scaling_factor=0.5,
+            n_ztypes=2,
+            stochastic=False,
+        )
         assert np.all(f_new == 0.0)
         assert np.all(m_new == 0.0)
 
     def test_zero_factor(self) -> None:
         f = np.array([10.0, 20.0], dtype=np.float64)
         m = np.array([30.0, 40.0], dtype=np.float64)
-        with python_reference():
-            f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
-                (f, m), scaling_factor=0.0, n_ztypes=2,
-                stochastic=False,
-            )
+        f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
+            (f, m),
+            scaling_factor=0.0,
+            n_ztypes=2,
+            stochastic=False,
+        )
         assert np.all(f_new == 0.0)
         assert np.all(m_new == 0.0)
 
     def test_full_preservation(self) -> None:
         f = np.array([10.0, 20.0], dtype=np.float64)
         m = np.array([30.0, 40.0], dtype=np.float64)
-        with python_reference():
-            f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
-                (f, m), scaling_factor=1.0, n_ztypes=2,
-                stochastic=False,
-            )
+        f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
+            (f, m),
+            scaling_factor=1.0,
+            n_ztypes=2,
+            stochastic=False,
+        )
         assert np.allclose(f_new, f)
         assert np.allclose(m_new, m)
 
@@ -485,11 +498,12 @@ class TestRecruitJuvenilesGivenScalingFactor:
         f = np.array([100.0, 50.0], dtype=np.float64)
         m = np.array([50.0, 100.0], dtype=np.float64)
         np.random.seed(42)
-        with python_reference():
-            f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
-                (f, m), scaling_factor=0.5, n_ztypes=2,
-                stochastic=True,
-            )
+        f_new, m_new = recruit_juveniles_given_scaling_factor_sampling(
+            (f, m),
+            scaling_factor=0.5,
+            n_ztypes=2,
+            stochastic=True,
+        )
         total = f_new.sum() + m_new.sum()
         assert abs(total - 150.0) < 1.0
 
@@ -497,6 +511,7 @@ class TestRecruitJuvenilesGivenScalingFactor:
 # ===========================================================================
 # compute_mating_probability_matrix
 # ===========================================================================
+
 
 class TestComputeMatingProbabilityMatrix:
     """Tests for compute_mating_probability_matrix."""
@@ -507,7 +522,7 @@ class TestComputeMatingProbabilityMatrix:
         male_counts = np.array([10.0, 20.0, 30.0], dtype=np.float64)
         P = compute_mating_probability_matrix(sel_matrix, male_counts, n_ztypes)
         assert P.shape == (3, 3)
-        assert np.allclose(P[0], [10.0/60, 20.0/60, 30.0/60])
+        assert np.allclose(P[0], [10.0 / 60, 20.0 / 60, 30.0 / 60])
         assert np.allclose(P.sum(axis=1), 1.0)
 
     def test_zero_male_counts(self) -> None:
@@ -522,7 +537,7 @@ class TestComputeMatingProbabilityMatrix:
         sel_matrix = np.ones((3, 3), dtype=np.float64)
         male_counts = np.array([0.0, 10.0, 20.0], dtype=np.float64)
         P = compute_mating_probability_matrix(sel_matrix, male_counts, n_ztypes)
-        assert np.allclose(P[0], [0.0, 10.0/30, 20.0/30])
+        assert np.allclose(P[0], [0.0, 10.0 / 30, 20.0 / 30])
         assert np.allclose(P.sum(axis=1), 1.0)
 
     def test_subnormal_male_counts_are_treated_as_absent(self) -> None:
@@ -537,9 +552,7 @@ class TestComputeMatingProbabilityMatrix:
             "py_func",
             compute_mating_probability_matrix,
         )
-        probabilities = python_impl(
-            sel_matrix, male_counts, n_ztypes
-        )
+        probabilities = python_impl(sel_matrix, male_counts, n_ztypes)
 
         assert np.all(np.isfinite(probabilities))
         assert np.array_equal(probabilities, np.zeros((2, 2)))
@@ -559,9 +572,7 @@ class TestComputeMatingProbabilityMatrix:
             "py_func",
             compute_mating_probability_matrix,
         )
-        probabilities = python_impl(
-            sel_matrix, male_counts, n_ztypes
-        )
+        probabilities = python_impl(sel_matrix, male_counts, n_ztypes)
 
         assert np.all(np.isfinite(probabilities))
         assert np.allclose(probabilities, [[0.2, 0.8], [0.2, 0.8]])
@@ -571,31 +582,41 @@ class TestComputeMatingProbabilityMatrix:
 # sample_mating (deterministic)
 # ===========================================================================
 
+
 class TestSampleMating:
     """Tests for sample_mating — deterministic path."""
 
     def test_deterministic_basic(self) -> None:
         n_ages = 3
         n_ztypes = 2
-        female_counts = np.array([
-            [10.0, 5.0],
-            [10.0, 5.0],
-            [10.0, 5.0],
-        ], dtype=np.float64)
+        female_counts = np.array(
+            [
+                [10.0, 5.0],
+                [10.0, 5.0],
+                [10.0, 5.0],
+            ],
+            dtype=np.float64,
+        )
         sperm_store = np.zeros((n_ages, n_ztypes, n_ztypes), dtype=np.float64)
-        mating_prob = np.array([
-            [0.5, 0.5],
-            [0.5, 0.5],
-        ], dtype=np.float64)
+        mating_prob = np.array(
+            [
+                [0.5, 0.5],
+                [0.5, 0.5],
+            ],
+            dtype=np.float64,
+        )
         female_rates = np.array([0.0, 0.8, 0.8], dtype=np.float64)
-        with python_reference():
-            S = sample_mating(
-                female_counts, sperm_store, mating_prob,
-                female_rates, sperm_displacement_rate=0.0,
-                adult_start_idx=1, n_ages=n_ages,
-                n_ztypes=n_ztypes,
-                stochastic=False,
-            )
+        S = sample_mating(
+            female_counts,
+            sperm_store,
+            mating_prob,
+            female_rates,
+            sperm_displacement_rate=0.0,
+            adult_start_idx=1,
+            n_ages=n_ages,
+            n_ztypes=n_ztypes,
+            stochastic=False,
+        )
         assert S.shape == (3, 2, 2)
         # Age 0: female_rate=0.0 -> no mating
         assert np.allclose(S[0], 0.0)
@@ -610,25 +631,34 @@ class TestSampleMating:
         """Deterministic: virgin females mate, no existing sperm to displace."""
         n_ages = 2
         n_ztypes = 2
-        female_counts = np.array([
-            [0.0, 0.0],
-            [10.0, 0.0],  # gf=0 has 10 females at age 1
-        ], dtype=np.float64)
+        female_counts = np.array(
+            [
+                [0.0, 0.0],
+                [10.0, 0.0],  # gf=0 has 10 females at age 1
+            ],
+            dtype=np.float64,
+        )
         # Start with NO existing sperm storage (all are virgins)
         sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
-        mating_prob = np.array([
-            [0.4, 0.6],
-            [0.5, 0.5],
-        ], dtype=np.float64)
+        mating_prob = np.array(
+            [
+                [0.4, 0.6],
+                [0.5, 0.5],
+            ],
+            dtype=np.float64,
+        )
         female_rates = np.array([0.0, 0.8], dtype=np.float64)
-        with python_reference():
-            S = sample_mating(
-                female_counts, sperm_store, mating_prob,
-                female_rates, sperm_displacement_rate=0.5,
-                adult_start_idx=1, n_ages=n_ages,
-                n_ztypes=n_ztypes,
-                stochastic=False,
-            )
+        S = sample_mating(
+            female_counts,
+            sperm_store,
+            mating_prob,
+            female_rates,
+            sperm_displacement_rate=0.5,
+            adult_start_idx=1,
+            n_ages=n_ages,
+            n_ztypes=n_ztypes,
+            stochastic=False,
+        )
         # Deterministic: virgins = 10, n_mating_virgins = 10 * 0.8 = 8
         # p_remating = 0.5 * 0.8 = 0.4, but mated_count = 0 so n_remating = 0
         # n_new_mating = 8, allocated by mating_prob: [8*0.4=3.2, 8*0.6=4.8]
@@ -645,10 +675,16 @@ class TestSampleMating:
         mating_prob = np.array([[0.5, 0.5], [0.5, 0.5]], dtype=np.float64)
         female_rates = np.array([0.8], dtype=np.float64)
         S = sample_mating(
-            female_counts, sperm_store, mating_prob,
-            female_rates, sperm_displacement_rate=0.1,
-            adult_start_idx=0, n_ages=n_ages, n_ztypes=n_ztypes,
-            stochastic=True, continuous_sampling=False,
+            female_counts,
+            sperm_store,
+            mating_prob,
+            female_rates,
+            sperm_displacement_rate=0.1,
+            adult_start_idx=0,
+            n_ages=n_ages,
+            n_ztypes=n_ztypes,
+            stochastic=True,
+            continuous_sampling=False,
         )
         assert S.shape == (1, 2, 2)
         assert S.sum() > 0
@@ -690,20 +726,24 @@ class TestSampleMating:
         sperm_store = np.zeros((2, 2, 2), dtype=np.float64)
         mating_prob = np.ones((2, 2), dtype=np.float64) * 0.5
         female_rates = np.array([0.0, 0.8], dtype=np.float64)
-        with python_reference():
-            S = sample_mating(
-                female_counts, sperm_store, mating_prob,
-                female_rates, sperm_displacement_rate=0.0,
-                adult_start_idx=1, n_ages=n_ages,
-                n_ztypes=n_ztypes,
-                stochastic=False,
-            )
+        S = sample_mating(
+            female_counts,
+            sperm_store,
+            mating_prob,
+            female_rates,
+            sperm_displacement_rate=0.0,
+            adult_start_idx=1,
+            n_ages=n_ages,
+            n_ztypes=n_ztypes,
+            stochastic=False,
+        )
         assert np.allclose(S, 0.0)
 
 
 # ===========================================================================
 # compute_offspring_probability_tensor
 # ===========================================================================
+
 
 class TestComputeOffspringProbabilityTensor:
     """Tests for compute_offspring_probability_tensor."""
@@ -719,8 +759,11 @@ class TestComputeOffspringProbabilityTensor:
         h2g[1, 0, 1] = 1.0
 
         tensor = compute_offspring_probability_tensor(
-            meiosis_f, meiosis_m, h2g,
-            n_ztypes=n_ztypes, n_gtypes=n_gtypes,
+            meiosis_f,
+            meiosis_m,
+            h2g,
+            n_ztypes=n_ztypes,
+            n_gtypes=n_gtypes,
         )
         assert tensor.shape == (2, 2, 2)
         assert tensor[0, 0, 0] == pytest.approx(1.0)
@@ -740,22 +783,31 @@ class TestApplySurvivalRatesDeterministic:
     def test_1d_survival_rates(self) -> None:
         n_ages = 3
         n_ztypes = 2
-        female = np.array([
-            [10.0, 20.0],
-            [30.0, 40.0],
-            [50.0, 60.0],
-        ], dtype=np.float64)
-        male = np.array([
-            [5.0, 10.0],
-            [15.0, 20.0],
-            [25.0, 30.0],
-        ], dtype=np.float64)
+        female = np.array(
+            [
+                [10.0, 20.0],
+                [30.0, 40.0],
+                [50.0, 60.0],
+            ],
+            dtype=np.float64,
+        )
+        male = np.array(
+            [
+                [5.0, 10.0],
+                [15.0, 20.0],
+                [25.0, 30.0],
+            ],
+            dtype=np.float64,
+        )
         surv_f = np.array([0.9, 0.8, 0.7], dtype=np.float64)
         surv_m = np.array([0.8, 0.7, 0.6], dtype=np.float64)
 
         f_new, m_new = apply_survival_rates_deterministic(
-            (female, male), surv_f, surv_m,
-            n_ztypes=n_ztypes, n_ages=n_ages,
+            (female, male),
+            surv_f,
+            surv_m,
+            n_ztypes=n_ztypes,
+            n_ages=n_ages,
         )
         assert np.allclose(f_new, female * surv_f[:, np.newaxis])
         assert np.allclose(m_new, male * surv_m[:, np.newaxis])
@@ -764,6 +816,7 @@ class TestApplySurvivalRatesDeterministic:
 # ===========================================================================
 # apply_survival_rates_deterministic_with_sperm_storage — 1D rates
 # ===========================================================================
+
 
 class TestApplySurvivalRatesDeterministicWithSpermStorage:
     """Tests for apply_survival_rates_deterministic_with_sperm_storage.
@@ -778,19 +831,25 @@ class TestApplySurvivalRatesDeterministicWithSpermStorage:
         # cannot unify with the direct-assignment path).  Access the underlying
         # Python function to verify algorithm correctness.
         _surv_func = apply_survival_rates_deterministic_with_sperm_storage
-        if hasattr(_surv_func, 'py_func'):
+        if hasattr(_surv_func, "py_func"):
             _surv_func = _surv_func.py_func
 
         n_ages = 2
         n_ztypes = 2
-        female = np.array([
-            [10.0, 20.0],
-            [30.0, 40.0],
-        ], dtype=np.float64)
-        male = np.array([
-            [1.0, 2.0],
-            [3.0, 4.0],
-        ], dtype=np.float64)
+        female = np.array(
+            [
+                [10.0, 20.0],
+                [30.0, 40.0],
+            ],
+            dtype=np.float64,
+        )
+        male = np.array(
+            [
+                [1.0, 2.0],
+                [3.0, 4.0],
+            ],
+            dtype=np.float64,
+        )
         sperm = np.zeros((2, 2, 2), dtype=np.float64)
         sperm[0, 0, :] = [5.0, 3.0]
         sperm[0, 1, :] = [4.0, 6.0]
@@ -801,8 +860,12 @@ class TestApplySurvivalRatesDeterministicWithSpermStorage:
         surv_m = np.array([0.8, 0.7], dtype=np.float64)
 
         f_new, m_new, s_new = _surv_func(
-            (female, male), sperm, surv_f, surv_m,
-            n_ztypes=n_ztypes, n_ages=n_ages,
+            (female, male),
+            sperm,
+            surv_f,
+            surv_m,
+            n_ztypes=n_ztypes,
+            n_ages=n_ages,
         )
         assert np.allclose(f_new[0], female[0] * 0.9)
         assert np.allclose(f_new[1], female[1] * 0.8)
@@ -815,6 +878,7 @@ class TestApplySurvivalRatesDeterministicWithSpermStorage:
 # ===========================================================================
 # compute_age_based_survival_rates
 # ===========================================================================
+
 
 class TestComputeAgeBasedSurvivalRates:
     """Tests for compute_age_based_survival_rates."""
@@ -832,6 +896,7 @@ class TestComputeAgeBasedSurvivalRates:
 # compute_viability_survival_rates
 # ===========================================================================
 
+
 class TestComputeViabilitySurvivalRates:
     """Tests for compute_viability_survival_rates."""
 
@@ -843,7 +908,11 @@ class TestComputeViabilitySurvivalRates:
         m_v = np.array([0.7, 0.8, 0.9], dtype=np.float64)
 
         f_out, m_out = compute_viability_survival_rates(
-            f_v, m_v, n_ztypes, target_age, n_ages,
+            f_v,
+            m_v,
+            n_ztypes,
+            target_age,
+            n_ages,
         )
         assert f_out.shape == (n_ages, n_ztypes)
         assert m_out.shape == (n_ages, n_ztypes)
@@ -860,12 +929,13 @@ class TestComputeViabilitySurvivalRates:
 # apply_survival_rates_deterministic — 2D rate path
 # ===========================================================================
 
+
 class TestApplySurvivalRatesDeterministic2D:
     """Tests for apply_survival_rates_deterministic with 2D survival arrays."""
 
     def test_both_2d(self) -> None:
         _func = apply_survival_rates_deterministic
-        if hasattr(_func, 'py_func'):
+        if hasattr(_func, "py_func"):
             _func = _func.py_func
         n_ages = 2
         n_ztypes = 2
@@ -875,14 +945,18 @@ class TestApplySurvivalRatesDeterministic2D:
         surv_m = np.array([[0.8, 0.7], [0.6, 0.5]], dtype=np.float64)
 
         f_new, m_new = _func(
-            (female, male), surv_f, surv_m, n_ztypes, n_ages,
+            (female, male),
+            surv_f,
+            surv_m,
+            n_ztypes,
+            n_ages,
         )
         assert np.allclose(f_new, female * surv_f)
         assert np.allclose(m_new, male * surv_m)
 
     def test_female_2d_male_1d(self) -> None:
         _func = apply_survival_rates_deterministic
-        if hasattr(_func, 'py_func'):
+        if hasattr(_func, "py_func"):
             _func = _func.py_func
         n_ages = 2
         n_ztypes = 2
@@ -892,7 +966,11 @@ class TestApplySurvivalRatesDeterministic2D:
         surv_m = np.array([0.8, 0.7], dtype=np.float64)  # 1D
 
         f_new, m_new = _func(
-            (female, male), surv_f, surv_m, n_ztypes, n_ages,
+            (female, male),
+            surv_f,
+            surv_m,
+            n_ztypes,
+            n_ages,
         )
         assert np.allclose(f_new, female * surv_f)
         assert np.allclose(m_new, male * surv_m[:, None])
@@ -902,13 +980,14 @@ class TestApplySurvivalRatesDeterministic2D:
 # apply_survival_rates_deterministic_with_sperm_storage
 # ===========================================================================
 
+
 class TestDeterministicSurvivalWithSpermStorage:
     """Tests for apply_survival_rates_deterministic_with_sperm_storage (exact
     multiplication path, no sampling)."""
 
     def test_basic(self) -> None:
         _func = apply_survival_rates_deterministic_with_sperm_storage
-        if hasattr(_func, 'py_func'):
+        if hasattr(_func, "py_func"):
             _func = _func.py_func
 
         n_ages = 2
@@ -921,8 +1000,12 @@ class TestDeterministicSurvivalWithSpermStorage:
         surv_m = np.array([0.8, 0.7], dtype=np.float64)
 
         f_new, m_new, s_new = _func(
-            (female, male), sperm, surv_f, surv_m,
-            n_ztypes=n_ztypes, n_ages=n_ages,
+            (female, male),
+            sperm,
+            surv_f,
+            surv_m,
+            n_ztypes=n_ztypes,
+            n_ages=n_ages,
         )
         # Deterministic: exact multiplication, no sampling.
         np.testing.assert_array_equal(f_new[0], female[0] * 0.9)
@@ -932,11 +1015,10 @@ class TestDeterministicSurvivalWithSpermStorage:
         np.testing.assert_array_equal(s_new[1, 0, 0], 4.0 * 0.8)
 
 
-
-
 # ===========================================================================
 # recruit_juveniles_sampling — continuous sampling path
 # ===========================================================================
+
 
 class TestRecruitJuvenilesSamplingContinuous:
     """Tests for recruit_juveniles_sampling continuous-sampling path."""
@@ -945,8 +1027,11 @@ class TestRecruitJuvenilesSamplingContinuous:
         female = np.array([60.0, 40.0], dtype=np.float64)
         male = np.array([50.0, 30.0], dtype=np.float64)
         result = recruit_juveniles_sampling(
-            (female, male), carrying_capacity=200,
-            n_ztypes=2, stochastic=True, continuous_sampling=True,
+            (female, male),
+            carrying_capacity=200,
+            n_ztypes=2,
+            stochastic=True,
+            continuous_sampling=True,
         )
         f_new, m_new = result
         assert f_new.shape == (2,)
@@ -960,6 +1045,7 @@ class TestRecruitJuvenilesSamplingContinuous:
 # recruit_juveniles_given_scaling_factor_sampling — continuous sampling
 # ===========================================================================
 
+
 class TestRecruitJuvenilesGivenScalingFactorContinuous:
     """Tests for recruit_juveniles_given_scaling_factor_sampling continuous path."""
 
@@ -967,8 +1053,11 @@ class TestRecruitJuvenilesGivenScalingFactorContinuous:
         female = np.array([30.0, 20.0], dtype=np.float64)
         male = np.array([25.0, 15.0], dtype=np.float64)
         result = recruit_juveniles_given_scaling_factor_sampling(
-            (female, male), scaling_factor=0.5,
-            n_ztypes=2, stochastic=True, continuous_sampling=True,
+            (female, male),
+            scaling_factor=0.5,
+            n_ztypes=2,
+            stochastic=True,
+            continuous_sampling=True,
         )
         f_new, m_new = result
         assert f_new.shape == (2,)
@@ -987,7 +1076,7 @@ class TestSampleMatingContinuous:
         remating displacement (line 180-184), and new mating allocation
         (line 221-225)."""
         _func = sample_mating
-        if hasattr(_func, 'py_func'):
+        if hasattr(_func, "py_func"):
             _func = _func.py_func
 
         n_ages = 1
@@ -1000,10 +1089,16 @@ class TestSampleMatingContinuous:
         sperm_displacement_rate = 0.05
 
         result = _func(
-            female_counts, existing_sperm, mating_prob,
-            female_mating_rates_by_age, sperm_displacement_rate,
-            adult_start_idx=0, n_ages=n_ages, n_ztypes=n_ztypes,
-            stochastic=True, continuous_sampling=True,
+            female_counts,
+            existing_sperm,
+            mating_prob,
+            female_mating_rates_by_age,
+            sperm_displacement_rate,
+            adult_start_idx=0,
+            n_ages=n_ages,
+            n_ztypes=n_ztypes,
+            stochastic=True,
+            continuous_sampling=True,
         )
         assert result is not None
         assert result.shape == (1, 2, 2)
@@ -1013,12 +1108,13 @@ class TestSampleMatingContinuous:
 # sample_survival_with_sperm_storage — continuous sampling path
 # ===========================================================================
 
+
 class TestSampleSurvivalWithSpermStorageContinuous:
     """Continuous-sampling path for sample_survival_with_sperm_storage."""
 
     def test_continuous_sampling(self) -> None:
         _func = sample_survival_with_sperm_storage
-        if hasattr(_func, 'py_func'):
+        if hasattr(_func, "py_func"):
             _func = _func.py_func
 
         n_ages = 2
@@ -1031,16 +1127,19 @@ class TestSampleSurvivalWithSpermStorageContinuous:
         surv_m = np.array([0.8, 0.7], dtype=np.float64)
 
         f_new, m_new, s_new = _func(
-            (female, male), sperm, surv_f, surv_m,
-            n_ztypes=n_ztypes, n_ages=n_ages,
+            (female, male),
+            sperm,
+            surv_f,
+            surv_m,
+            n_ztypes=n_ztypes,
+            n_ages=n_ages,
         )
         # The function always uses stochastic binomial draws internally.
         assert f_new.shape == female.shape
         assert m_new.shape == male.shape
         assert s_new.shape == sperm.shape
 
-
-# ===========================================================================
+    # ===========================================================================
 
     def test_sex_chromosome_male_only_path(self) -> None:
         """has_sex_chromosomes=True with male_only sex chrom (covers line 523)."""
@@ -1055,19 +1154,27 @@ class TestSampleSurvivalWithSpermStorageContinuous:
         female_only = np.array([False, False], dtype=np.bool_)
         male_only = np.array([False, True], dtype=np.bool_)
         compat = np.ones(n_ztypes, dtype=np.float64)
-        n_f, n_m = _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_ztypes=n_ztypes,
-            female_ztype_compatibility=compat,
-            male_ztype_compatibility=compat,
-            female_only_by_sex_chrom=female_only,
-            male_only_by_sex_chrom=male_only,
-            n_glabs=1, age_based_reproduction_rates=None, female_age_based_fertility=None,
-            stochastic=False, has_sex_chromosomes=True,
-            sex_ratio=0.5,
+        n_f, n_m = (
+            _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
+                sperm_storage_by_male_genotype=sperm_store,
+                fertility_f=fertility_f,
+                fertility_m=fertility_m,
+                offspring_probability=offspring_prob,
+                average_eggs_per_wt_female=10.0,
+                adult_start_idx=1,
+                n_ages=n_ages,
+                n_ztypes=n_ztypes,
+                female_ztype_compatibility=compat,
+                male_ztype_compatibility=compat,
+                female_only_by_sex_chrom=female_only,
+                male_only_by_sex_chrom=male_only,
+                n_glabs=1,
+                age_based_reproduction_rates=None,
+                female_age_based_fertility=None,
+                stochastic=False,
+                has_sex_chromosomes=True,
+                sex_ratio=0.5,
+            )
         )
         # Genotype 1 is male-only -> all offspring of that genotype should be male
         assert n_f[1] == 0
@@ -1091,18 +1198,24 @@ class TestSampleSurvivalWithSpermStorageContinuous:
         f_compat = np.array([0.8, 0.5], dtype=np.float64)
         m_compat = np.array([0.2, 0.5], dtype=np.float64)
         none_only = np.zeros(n_ztypes, dtype=np.bool_)
-        n_f, n_m = _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_ztypes=n_ztypes,
-            female_ztype_compatibility=f_compat,
-            male_ztype_compatibility=m_compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            stochastic=False, has_sex_chromosomes=True,
-            sex_ratio=0.5,
+        n_f, n_m = (
+            _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
+                sperm_storage_by_male_genotype=sperm_store,
+                fertility_f=fertility_f,
+                fertility_m=fertility_m,
+                offspring_probability=offspring_prob,
+                average_eggs_per_wt_female=10.0,
+                adult_start_idx=1,
+                n_ages=n_ages,
+                n_ztypes=n_ztypes,
+                female_ztype_compatibility=f_compat,
+                male_ztype_compatibility=m_compat,
+                female_only_by_sex_chrom=none_only,
+                male_only_by_sex_chrom=none_only,
+                stochastic=False,
+                has_sex_chromosomes=True,
+                sex_ratio=0.5,
+            )
         )
         # Genotype 0: f_w=0.8, m_w=0.2 => p_f=0.8, so 80% should be female
         total_g0 = n_f[0] + n_m[0]
@@ -1121,18 +1234,23 @@ class TestSampleSurvivalWithSpermStorageContinuous:
         offspring_prob[0, 0, 0] = 1.0
         compat = np.ones(n_ztypes, dtype=np.float64)
         none_only = np.zeros(n_ztypes, dtype=np.bool_)
-        n_f, n_m = _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
-            sperm_storage_by_male_genotype=sperm_store,
-            fertility_f=fertility_f, fertility_m=fertility_m,
-            offspring_probability=offspring_prob,
-            average_eggs_per_wt_female=10.0,
-            adult_start_idx=1, n_ages=n_ages, n_ztypes=n_ztypes,
-            female_ztype_compatibility=compat,
-            male_ztype_compatibility=compat,
-            female_only_by_sex_chrom=none_only,
-            male_only_by_sex_chrom=none_only,
-            stochastic=False,
-            sex_ratio=0.5,
+        n_f, n_m = (
+            _fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction(
+                sperm_storage_by_male_genotype=sperm_store,
+                fertility_f=fertility_f,
+                fertility_m=fertility_m,
+                offspring_probability=offspring_prob,
+                average_eggs_per_wt_female=10.0,
+                adult_start_idx=1,
+                n_ages=n_ages,
+                n_ztypes=n_ztypes,
+                female_ztype_compatibility=compat,
+                male_ztype_compatibility=compat,
+                female_only_by_sex_chrom=none_only,
+                male_only_by_sex_chrom=none_only,
+                stochastic=False,
+                sex_ratio=0.5,
+            )
         )
         assert n_f.sum() == 0
         assert n_m.sum() == 0

@@ -135,14 +135,19 @@ def _fresh_discrete_species() -> nt.Species:
 
 def _age_draft() -> ModelDraft:
     return build_population_config(
-        n_genotypes=4, n_gtypes=4, n_glabs=1, n_ages=3, new_adult_age=1,
+        n_genotypes=4,
+        n_gtypes=4,
+        n_glabs=1,
+        n_ages=3,
+        new_adult_age=1,
     )
 
 
-def _age_pop(backend: str = "python") -> nt.AgeStructuredPopulation:
+def _age_pop() -> nt.AgeStructuredPopulation:
     return (
         nt.AgeStructuredPopulation.setup(
-            _fresh_age_species(), stochastic=False, backend=backend,
+            _fresh_age_species(),
+            stochastic=False,
         )
         .age_structure(4, 2)
         .initial_state(
@@ -159,7 +164,6 @@ def _age_pop(backend: str = "python") -> nt.AgeStructuredPopulation:
 
 def _discrete_pop(
     mode: str | int,
-    backend: str = "python",
     *,
     r: float = 3.5,
     k: float = 400.0,
@@ -167,12 +171,15 @@ def _discrete_pop(
 ) -> nt.DiscreteGenerationPopulation:
     return (
         nt.DiscreteGenerationPopulation.setup(
-            _fresh_discrete_species(), stochastic=False, backend=backend,
+            _fresh_discrete_species(),
+            stochastic=False,
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=eggs, sex_ratio=0.5)
         .competition(
-            carrying_capacity=k, low_density_growth_rate=r, growth_mode=mode,
+            carrying_capacity=k,
+            low_density_growth_rate=r,
+            growth_mode=mode,
         )
         .initial_state(
             individual_count={"female": {"WT|WT": 900}, "male": {"WT|WT": 900}},
@@ -215,7 +222,7 @@ class TestMethodLevelAtomicity:
         ]
 
     def test_core_writer_rejected_batch_zero_writes_both_sides(self):
-        pop = _age_pop(backend="rust")
+        pop = _age_pop()
         session = pop._rust_lifecycle_backend._session  # noqa: SLF001 — readback channel
         writer = _pop_writer(pop)
         draft_k0 = float(pop.config.carrying_capacity)
@@ -241,16 +248,18 @@ class TestMethodLevelAtomicity:
         # The illegal entry is a geno_tensor shape mismatch inside a batch
         # that also carries a scalar: plans are all resolved before any
         # commit, so neither side may move.
-        pop = _age_pop(backend="rust")
+        pop = _age_pop()
         session = pop._rust_lifecycle_backend._session  # noqa: SLF001
         writer = _pop_writer(pop)
         rates0 = np.asarray(pop.config.age_based_survival_rates).copy()
         k0 = session.get_scalar("carrying_capacity")
         with pytest.raises(ValueError, match="requires an array of shape"):
-            writer.apply({
-                "carrying_capacity": 555.0,
-                "fecundity": np.ones((5, 5)),
-            })
+            writer.apply(
+                {
+                    "carrying_capacity": 555.0,
+                    "fecundity": np.ones((5, 5)),
+                }
+            )
         assert float(pop.config.carrying_capacity) != 555.0
         np.testing.assert_array_equal(
             np.asarray(pop.config.age_based_survival_rates), rates0
@@ -258,7 +267,7 @@ class TestMethodLevelAtomicity:
         assert session.get_scalar("carrying_capacity") == k0
 
     def test_tensor_write_size_mismatch_zero_writes_both_sides(self):
-        pop = _age_pop(backend="rust")
+        pop = _age_pop()
         session = pop._rust_lifecycle_backend._session  # noqa: SLF001
         rates0 = np.asarray(pop.config.age_based_survival_rates).copy()
         session0 = np.asarray(session.get_tensor("survival_rates")).copy()
@@ -417,7 +426,7 @@ class TestModeEnumMatrix:
 @RUST
 class TestParamsSessionSurface:
     def _rust_age_pop(self) -> nt.AgeStructuredPopulation:
-        return _age_pop(backend="rust")
+        return _age_pop()
 
     def _session(self, pop: nt.AgeStructuredPopulation) -> object:
         return pop._rust_lifecycle_backend._session  # noqa: SLF001
@@ -454,7 +463,8 @@ class TestParamsSessionSurface:
             np.asarray(pop.config.age_based_survival_rates), draft0
         )
         np.testing.assert_array_equal(
-            np.asarray(session.get_tensor("survival_rates")), session0  # type: ignore[attr-defined]
+            np.asarray(session.get_tensor("survival_rates")),
+            session0,  # type: ignore[attr-defined]
         )
 
     def test_direct_subscript_write_is_rejected(self):
@@ -509,26 +519,66 @@ class TestVocabularyAxisCombos:
     @pytest.mark.parametrize(
         ("method", "kwargs", "field", "expected"),
         [
-            ("survival", {"female_age_based_survival": [0.1, 0.2, 0.3]},
-             "age_based_survival_rates", [[0.1, 0.2, 0.3], [0.0, 1.0, 1.0]]),
-            ("survival", {"male_age_based_survival": 0.6},
-             "age_based_survival_rates", [[0.0, 1.0, 1.0], [0.6, 0.6, 0.6]]),
-            ("survival", {"female_age0_survival": 0.05},
-             "age_based_survival_rates", [[0.05, 1.0, 1.0], [0.0, 1.0, 1.0]]),
-            ("survival", {"male_age0_survival": 0.04},
-             "age_based_survival_rates", [[0.0, 1.0, 1.0], [0.04, 1.0, 1.0]]),
-            ("reproduction", {"female_age_based_mating_rate": 0.8},
-             "age_based_mating_rates", [[0.8, 0.8, 0.8], [0.0, 1.0, 1.0]]),
-            ("reproduction", {"male_age_based_mating_rate": [0.2, 0.3, 0.4]},
-             "age_based_mating_rates", [[0.0, 1.0, 1.0], [0.2, 0.3, 0.4]]),
-            ("reproduction", {"female_adult_mating_rate": 0.33},
-             "age_based_mating_rates", [[0.0, 0.33, 1.0], [0.0, 1.0, 1.0]]),
-            ("reproduction", {"male_adult_mating_rate": 0.44},
-             "age_based_mating_rates", [[0.0, 1.0, 1.0], [0.0, 0.44, 1.0]]),
-            ("reproduction", {"age_based_reproduction_rate": 0.9},
-             "age_based_reproduction_rates", [0.9, 0.9, 0.9]),
-            ("reproduction", {"female_age_based_fertility": [0.5, 0.6, 0.7]},
-             "female_age_based_fertility", [0.5, 0.6, 0.7]),
+            (
+                "survival",
+                {"female_age_based_survival": [0.1, 0.2, 0.3]},
+                "age_based_survival_rates",
+                [[0.1, 0.2, 0.3], [0.0, 1.0, 1.0]],
+            ),
+            (
+                "survival",
+                {"male_age_based_survival": 0.6},
+                "age_based_survival_rates",
+                [[0.0, 1.0, 1.0], [0.6, 0.6, 0.6]],
+            ),
+            (
+                "survival",
+                {"female_age0_survival": 0.05},
+                "age_based_survival_rates",
+                [[0.05, 1.0, 1.0], [0.0, 1.0, 1.0]],
+            ),
+            (
+                "survival",
+                {"male_age0_survival": 0.04},
+                "age_based_survival_rates",
+                [[0.0, 1.0, 1.0], [0.04, 1.0, 1.0]],
+            ),
+            (
+                "reproduction",
+                {"female_age_based_mating_rate": 0.8},
+                "age_based_mating_rates",
+                [[0.8, 0.8, 0.8], [0.0, 1.0, 1.0]],
+            ),
+            (
+                "reproduction",
+                {"male_age_based_mating_rate": [0.2, 0.3, 0.4]},
+                "age_based_mating_rates",
+                [[0.0, 1.0, 1.0], [0.2, 0.3, 0.4]],
+            ),
+            (
+                "reproduction",
+                {"female_adult_mating_rate": 0.33},
+                "age_based_mating_rates",
+                [[0.0, 0.33, 1.0], [0.0, 1.0, 1.0]],
+            ),
+            (
+                "reproduction",
+                {"male_adult_mating_rate": 0.44},
+                "age_based_mating_rates",
+                [[0.0, 1.0, 1.0], [0.0, 0.44, 1.0]],
+            ),
+            (
+                "reproduction",
+                {"age_based_reproduction_rate": 0.9},
+                "age_based_reproduction_rates",
+                [0.9, 0.9, 0.9],
+            ),
+            (
+                "reproduction",
+                {"female_age_based_fertility": [0.5, 0.6, 0.7]},
+                "female_age_based_fertility",
+                [0.5, 0.6, 0.7],
+            ),
         ],
     )
     def test_age_vocabulary_writes_exact_cells(
@@ -549,19 +599,43 @@ class TestVocabularyAxisCombos:
         [
             # Discrete drafts normalize to 2 ages; the survival vocabulary
             # keeps working on the unified (2, 2) vectors.
-            ("survival", {"female_age0_survival": 0.8},
-             "age_based_survival_rates", [[0.8, 0.0], [1.0, 0.0]]),
-            ("survival", {"male_age0_survival": 0.6},
-             "age_based_survival_rates", [[1.0, 0.0], [0.6, 0.0]]),
-            ("survival", {"female_age_based_survival": 0.7},
-             "age_based_survival_rates", [[0.7, 0.7], [1.0, 0.0]]),
-            ("survival", {"male_age_based_survival": [0.4, 0.5]},
-             "age_based_survival_rates", [[1.0, 0.0], [0.4, 0.5]]),
+            (
+                "survival",
+                {"female_age0_survival": 0.8},
+                "age_based_survival_rates",
+                [[0.8, 0.0], [1.0, 0.0]],
+            ),
+            (
+                "survival",
+                {"male_age0_survival": 0.6},
+                "age_based_survival_rates",
+                [[1.0, 0.0], [0.6, 0.0]],
+            ),
+            (
+                "survival",
+                {"female_age_based_survival": 0.7},
+                "age_based_survival_rates",
+                [[0.7, 0.7], [1.0, 0.0]],
+            ),
+            (
+                "survival",
+                {"male_age_based_survival": [0.4, 0.5]},
+                "age_based_survival_rates",
+                [[1.0, 0.0], [0.4, 0.5]],
+            ),
             # Discrete mating / reproduction vocabulary.
-            ("reproduction", {"female_adult_mating_rate": 0.9},
-             "age_based_mating_rates", [[0.0, 0.9], [0.0, 1.0]]),
-            ("reproduction", {"male_adult_mating_rate": 0.7},
-             "age_based_mating_rates", [[0.0, 1.0], [0.0, 0.7]]),
+            (
+                "reproduction",
+                {"female_adult_mating_rate": 0.9},
+                "age_based_mating_rates",
+                [[0.0, 0.9], [0.0, 1.0]],
+            ),
+            (
+                "reproduction",
+                {"male_adult_mating_rate": 0.7},
+                "age_based_mating_rates",
+                [[0.0, 1.0], [0.0, 0.7]],
+            ),
         ],
     )
     def test_discrete_vocabulary_writes_exact_cells(
@@ -646,7 +720,8 @@ class TestVocabularyAxisCombos:
         }
         pop_a = (
             nt.DiscreteGenerationPopulation.setup(
-                discrete_species, stochastic=False,
+                discrete_species,
+                stochastic=False,
             )
             .survival(female_age0_survival=0.8, male_age0_survival=0.6)
             .reproduction(eggs_per_female=6.0, sex_ratio=0.5)
@@ -656,13 +731,15 @@ class TestVocabularyAxisCombos:
         )
         pop_b = (
             nt.DiscreteGenerationPopulation.setup(
-                discrete_species, stochastic=False,
+                discrete_species,
+                stochastic=False,
             )
             .initial_state(individual_count=initial)
             .build()
         )
         pop_b.update().survival(
-            female_age0_survival=0.8, male_age0_survival=0.6,
+            female_age0_survival=0.8,
+            male_age0_survival=0.6,
         )
         pop_b.update().reproduction(eggs_per_female=6.0, sex_ratio=0.5)
         pop_b.update().competition(**demographics())
@@ -680,16 +757,29 @@ class TestVocabularyAxisCombos:
 
 class TestRouteTableIntegrity:
     SEVEN_KINDS = {
-        "scalar", "geno_tensor", "slot", "sex_row", "bool", "age_vec",
+        "scalar",
+        "geno_tensor",
+        "slot",
+        "sex_row",
+        "bool",
+        "age_vec",
         "mode_enum",
     }
     EXPECTED_COUNTS = {
-        "scalar": 15, "geno_tensor": 8, "slot": 7, "sex_row": 5,
-        "bool": 4, "age_vec": 2, "mode_enum": 1,
+        "scalar": 15,
+        "geno_tensor": 8,
+        "slot": 7,
+        "sex_row": 5,
+        "bool": 4,
+        "age_vec": 2,
+        "mode_enum": 1,
     }
     EXPECTED_SENSITIVE = {
-        "carrying_capacity", "eggs_per_female", "sex_ratio",
-        "external_expected_eggs", "equilibrium_distribution",
+        "carrying_capacity",
+        "eggs_per_female",
+        "sex_ratio",
+        "external_expected_eggs",
+        "equilibrium_distribution",
     }
 
     def _unique_entries(self) -> list[object]:
@@ -709,7 +799,8 @@ class TestRouteTableIntegrity:
         # The six fitness tensors are the genetics section; the two
         # initial-state tensors are genotype-indexed but ecological.
         geno = [
-            e for e in self._unique_entries()
+            e
+            for e in self._unique_entries()
             if e.kind == "geno_tensor"  # type: ignore[attr-defined]
         ]
         genetics = [
@@ -718,19 +809,25 @@ class TestRouteTableIntegrity:
             if e.section == "genetics"  # type: ignore[attr-defined]
         ]
         assert {e.name for e in geno} == {  # type: ignore[attr-defined]
-            "initial_individual_count", "initial_sperm_storage",
-            "viability", "fecundity", "sexual_selection",
-            "zygote_viability", "female_ztype_compatibility",
+            "initial_individual_count",
+            "initial_sperm_storage",
+            "viability",
+            "fecundity",
+            "sexual_selection",
+            "zygote_viability",
+            "female_ztype_compatibility",
             "male_ztype_compatibility",
         }
         assert set(genetics) == {
-            "viability", "fecundity", "sexual_selection",
-            "zygote_viability", "female_ztype_compatibility",
+            "viability",
+            "fecundity",
+            "sexual_selection",
+            "zygote_viability",
+            "female_ztype_compatibility",
             "male_ztype_compatibility",
         }
         for entry in geno:
-            if entry.name not in ("initial_individual_count",
-                                  "initial_sperm_storage"):  # type: ignore[attr-defined]
+            if entry.name not in ("initial_individual_count", "initial_sperm_storage"):  # type: ignore[attr-defined]
                 assert entry.section == "genetics"  # type: ignore[attr-defined]
 
     def test_sensitive_set_is_exactly_the_documented_five(self):
@@ -748,10 +845,7 @@ class TestRouteTableIntegrity:
                 assert lookup(alias) is canonical
 
     def test_full_key_lookup_matches_short_name(self):
-        assert (
-            lookup("competition.carrying_capacity")
-            is lookup("carrying_capacity")
-        )
+        assert lookup("competition.carrying_capacity") is lookup("carrying_capacity")
 
     @pytest.mark.parametrize(
         ("alias", "field", "value"),
@@ -764,7 +858,10 @@ class TestRouteTableIntegrity:
         ],
     )
     def test_legacy_aliases_still_writable(
-        self, alias: str, field: str, value: float,
+        self,
+        alias: str,
+        field: str,
+        value: float,
     ):
         cfg = _age_draft()
         live = dispatch(cfg, alias, value)
@@ -822,8 +919,10 @@ def _manual_discrete_ricker_trajectory(
         weights = ss * (adult_m * mating_m)[None, :]
         row_sums = weights.sum(axis=1, keepdims=True)
         probs = np.divide(
-            weights, row_sums,
-            out=np.zeros_like(weights), where=row_sums > 0.0,
+            weights,
+            row_sums,
+            out=np.zeros_like(weights),
+            where=row_sums > 0.0,
         )
         pairs = (adult_f * mating_f)[:, None] * probs
         # Fertilization: pairs * p_reproduce * eggs * fec_f * fec_m,
@@ -856,7 +955,8 @@ def _age_pop_rust(mode: str) -> nt.AgeStructuredPopulation:
     """
     return (
         nt.AgeStructuredPopulation.setup(
-            _fresh_age_species(), stochastic=False, backend="rust",
+            _fresh_age_species(),
+            stochastic=False,
         )
         .age_structure(4, 2)
         .survival(female_age_based_survival=0.8, male_age_based_survival=0.8)
@@ -881,7 +981,7 @@ class TestRickerEnginePath:
     def test_rust_discrete_ricker_matches_manual_recursion(self):
         # growth_mode="ricker" parses at the route layer to 4 and the Rust
         # kernel must run the exact Ricker recursion, tick by tick.
-        pop = _discrete_pop("ricker", backend="rust")
+        pop = _discrete_pop("ricker")
         assert pop.params.growth_mode == 4
         manual = _manual_discrete_ricker_trajectory(pop, n_ticks=10)
         assert len(manual) == 10
@@ -898,8 +998,8 @@ class TestRickerEnginePath:
     def test_rust_mode4_overcompensates_where_mode3_compensates(self):
         # Above equilibrium the ricker curve must under-retain relative to
         # beverton_holt (overcompensation): the trajectories must differ.
-        pop_ricker = _discrete_pop("ricker", backend="rust")
-        pop_bh = _discrete_pop("beverton_holt", backend="rust")
+        pop_ricker = _discrete_pop("ricker")
+        pop_bh = _discrete_pop("beverton_holt")
         traj_ricker: list[float] = []
         traj_bh: list[float] = []
         for _ in range(10):
@@ -920,9 +1020,7 @@ class TestRickerEnginePath:
             traj_b = np.asarray(pop_bh.state.individual_count)
             if not np.allclose(traj_r, traj_b):
                 return
-        pytest.fail(
-            "age-structured rust mode 4 is indistinguishable from mode 3"
-        )
+        pytest.fail("age-structured rust mode 4 is indistinguishable from mode 3")
 
 
 # ── 8. HookConfigWriter ───────────────────────────────────────────────────────
@@ -947,7 +1045,7 @@ class TestHookConfigWriterDirect:
         assert session.other_calls == []
 
     def test_binds_no_draft_and_schedules_no_rebuild(self):
-        pop = _age_pop(backend="rust")
+        pop = _age_pop()
         backend = pop._rust_lifecycle_backend  # noqa: SLF001
         writer = HookConfigWriter(backend)
         assert getattr(writer, "draft", None) is None
@@ -967,7 +1065,7 @@ class TestHookConfigWriterDirect:
         writer — a bare session push leaves no deferral and is therefore
         not overwritten.
         """
-        pop = _discrete_pop(0, backend="rust")
+        pop = _discrete_pop(0)
         session = pop._rust_lifecycle_backend._session  # noqa: SLF001
         writer = HookConfigWriter(pop._rust_lifecycle_backend)  # noqa: SLF001
         writer.apply({"carrying_capacity": 300.0})
@@ -1007,7 +1105,9 @@ class TestParamsViewReadSurface:
         narrowed = np.asarray(view, dtype=np.float32)
         assert narrowed.dtype == np.float32
         np.testing.assert_allclose(
-            narrowed, np.asarray(pop.config.viability_fitness), rtol=1e-6,
+            narrowed,
+            np.asarray(pop.config.viability_fitness),
+            rtol=1e-6,
         )
 
     def test_tensor_view_plain_index_reads_return_copies(self):
@@ -1018,9 +1118,7 @@ class TestParamsViewReadSurface:
         assert isinstance(row, np.ndarray)
         np.testing.assert_array_equal(row, arr[0])
         row[:] = 99.0
-        np.testing.assert_array_equal(
-            np.asarray(pop.config.viability_fitness), arr
-        )
+        np.testing.assert_array_equal(np.asarray(pop.config.viability_fitness), arr)
         # Tuple index whose last element is not a pattern string.
         cell = pop.params.viability[0, 1, 0]
         assert cell == float(arr[0, 1, 0])
@@ -1028,9 +1126,7 @@ class TestParamsViewReadSurface:
     def test_scalar_reads_per_python_type(self):
         pop = _age_pop()
         # 0-d ndarray float scalar.
-        assert pop.params.carrying_capacity == float(
-            pop.config.carrying_capacity
-        )
+        assert pop.params.carrying_capacity == float(pop.config.carrying_capacity)
         # int dtype scalar (mode_enum row).
         assert pop.params.growth_mode == int(pop.config.juvenile_growth_mode)
         # age_vec row read returns a copy.
@@ -1094,12 +1190,8 @@ class TestParamsViewReadSurface:
             contract_to_draft_field,
         )
 
-        assert contract_to_draft_field("survival_rates") == (
-            "age_based_survival_rates"
-        )
-        assert contract_to_draft_field("carrying_capacity") == (
-            "carrying_capacity"
-        )
+        assert contract_to_draft_field("survival_rates") == ("age_based_survival_rates")
+        assert contract_to_draft_field("carrying_capacity") == ("carrying_capacity")
 
 
 # ── 10. slice-3 negative contracts ───────────────────────────────────────────
@@ -1114,9 +1206,16 @@ def _registry_probe_entry(
     from natal.frontend.utils.parameters import ParamDescriptor
 
     return ParamDescriptor(
-        domain="competition", name=name, method="competition",
-        kind="scalar", section="ecology", config_field=config_field,
-        config_path=(), dtype=float, bounds=(0.0, 10.0), sensitive=False,
+        domain="competition",
+        name=name,
+        method="competition",
+        kind="scalar",
+        section="ecology",
+        config_field=config_field,
+        config_path=(),
+        dtype=float,
+        bounds=(0.0, 10.0),
+        sensitive=False,
     )
 
 
@@ -1137,7 +1236,8 @@ class TestNegativeContractsSlice3:
         # Whole-table declaration with an out-of-bounds cell.
         with pytest.raises(ValueError, match="requires all values in"):
             dispatch(
-                cfg, "equilibrium_distribution",
+                cfg,
+                "equilibrium_distribution",
                 np.array([[10.0, 5.0, 1.0], [10.0, 5.0, 1e13]]),
             )
         # Single per-sex row with an out-of-bounds element.
@@ -1155,9 +1255,16 @@ class TestNegativeContractsSlice3:
         from natal.frontend.utils.parameters import ParamDescriptor
 
         entry = ParamDescriptor(
-            domain="setup", name="probe", method="setup", kind="bool",
-            section="ecology", config_field="fixed_egg_count",
-            config_path=(1,), dtype=bool, bounds=(0.0, 1.0), sensitive=False,
+            domain="setup",
+            name="probe",
+            method="setup",
+            kind="bool",
+            section="ecology",
+            config_field="fixed_egg_count",
+            config_path=(1,),
+            dtype=bool,
+            bounds=(0.0, 1.0),
+            sensitive=False,
         )
         with pytest.raises(ValueError, match="bool rows must have"):
             _routes._build_routes({"setup.probe": entry})
@@ -1170,10 +1277,12 @@ class TestNegativeContractsSlice3:
         first = _registry_probe_entry("carrying_capacity", name="probe")
         second = _registry_probe_entry("eggs_per_female", name="probe")
         with pytest.raises(ValueError, match="collides"):
-            _routes._build_routes({
-                "competition.probe": first,
-                "reproduction.probe": second,
-            })
+            _routes._build_routes(
+                {
+                    "competition.probe": first,
+                    "reproduction.probe": second,
+                }
+            )
 
     def test_route_entry_is_frozen(self):
         entry = lookup("carrying_capacity")
@@ -1187,15 +1296,22 @@ class TestNegativeContractsSlice3:
 
     def test_replace_field_classification(self):
         for field in (
-            "stochastic", "continuous_sampling", "fixed_egg_count",
-            "has_sex_chromosomes", "external_expected_eggs",
-            "equilibrium_individual_distribution", "initial_individual_count",
+            "stochastic",
+            "continuous_sampling",
+            "fixed_egg_count",
+            "has_sex_chromosomes",
+            "external_expected_eggs",
+            "equilibrium_individual_distribution",
+            "initial_individual_count",
             "initial_sperm_storage",
         ):
             assert is_replace_field(field)
         for field in (
-            "carrying_capacity", "eggs_per_female", "sex_ratio",
-            "sperm_displacement_rate", "low_density_growth_rate",
+            "carrying_capacity",
+            "eggs_per_female",
+            "sex_ratio",
+            "sperm_displacement_rate",
+            "low_density_growth_rate",
             "juvenile_growth_mode",
         ):
             assert is_replace_field(field)
@@ -1236,7 +1352,9 @@ class TestRickerCrossBackend:
     entirely (WF fused tick), while the Rust kernel ran true Ricker.
     """
 
-    def _reference_trajectory(self, species_name: str, mode: int, ticks: int) -> list[float]:
+    def _reference_trajectory(
+        self, species_name: str, mode: int, ticks: int
+    ) -> list[float]:
         import natal as nt
 
         sp = nt.Species.from_dict(
@@ -1285,7 +1403,7 @@ class TestRickerCrossBackend:
             f"({unregulated[-1]})"
         )
 
-    def _age_trajectory(self, species_name: str, mode: int, backend: str) -> list[float]:
+    def _age_trajectory(self, species_name: str, mode: int) -> list[float]:
         import natal as nt
 
         sp = nt.Species.from_dict(
@@ -1294,7 +1412,7 @@ class TestRickerCrossBackend:
             gamete_labels=["default"],
         )
         builder = (
-            nt.AgeStructuredPopulation.setup(sp, stochastic=False, backend=backend)
+            nt.AgeStructuredPopulation.setup(sp, stochastic=False)
             .initial_state(
                 individual_count={
                     "female": {"A|A": [50.0, 4500.0]},
@@ -1310,8 +1428,6 @@ class TestRickerCrossBackend:
             )
         )
         pop = builder.build()
-        if backend == "rust":
-            pop.enable_rust_backend(seed=0)
         pop.run(3, record_every=0)
         return [float(pop.state.individual_count.sum())]
 
@@ -1321,13 +1437,12 @@ class TestRickerCrossBackend:
         Regression guard for the silent-BH fallback in the age-structured
         lifecycle scaling dispatch (shared by the reference).
         """
-        for backend in ("python",):
-            ricker = self._age_trajectory(f"slice3_age_rick_{backend}", 4, backend)
-            bh = self._age_trajectory(f"slice3_age_bh_{backend}", 3, backend)
-            assert ricker[-1] != bh[-1], (
-                f"backend={backend}: mode 4 trajectory identical to mode 3 "
-                f"({ricker[-1]}) — silent-BH fallback regression"
-            )
+        ricker = self._age_trajectory("slice3_age_rick", 4)
+        bh = self._age_trajectory("slice3_age_bh", 3)
+        assert ricker[-1] != bh[-1], (
+            f"mode 4 trajectory identical to mode 3 "
+            f"({ricker[-1]}) — silent-BH fallback regression"
+        )
 
     def test_rust_ricker_matches_python_reference(self) -> None:
         """Rust and Python reference ricker trajectories agree closely."""

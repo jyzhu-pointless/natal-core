@@ -10,18 +10,12 @@ import natal as nt
 from natal.backends.reference.lifecycle import run_discrete_tick, run_wf_tick
 from natal.backends.rust.rust_backend import (
     RustDiscreteLifecycleBackend,
-    rust_backend_available,
 )
 from natal.frontend.configurator import Configurator
 from natal.frontend.data import DiscretePopulationState, ModelDraft
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.types import HookProgram
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
-
-pytestmark = pytest.mark.skipif(
-    not rust_backend_available(),
-    reason="natal._engine_rs is not built; run `maturin develop` first",
-)
 
 
 def _empty_hook_program() -> HookProgram:
@@ -68,7 +62,12 @@ def species() -> Species:
 
 @pytest.fixture(scope="module")
 def config(species: Species) -> ModelDraft:
-    return Configurator.from_species(species, discrete=True).setup(stochastic=False).build().config
+    return (
+        Configurator.from_species(species, discrete=True)
+        .setup(stochastic=False)
+        .build()
+        .config
+    )
 
 
 def _state(config: ModelDraft, seed: int) -> DiscretePopulationState:
@@ -110,7 +109,9 @@ def test_discrete_batch_matches_reference(config: ModelDraft) -> None:
         n_tick=state.n_tick,
         individual_count=state.individual_count.copy(),
     )
-    expected_rows = [np.concatenate(([expected_state.n_tick], expected_state.flatten_all()[1:]))]
+    expected_rows = [
+        np.concatenate(([expected_state.n_tick], expected_state.flatten_all()[1:]))
+    ]
     for _ in range(3):
         expected_state, result, _cfg = run_discrete_tick(
             expected_state, config, _empty_hook_program(), _noop, _noop, _noop
@@ -173,12 +174,17 @@ def test_real_discrete_population_matches_reference(species: Species) -> None:
     reference.run(5, record_every=1, clear_history_on_start=True)
     rust_pop.run(5, record_every=1, clear_history_on_start=True)
     assert rust_pop.using_rust_backend is True
-    assert np.array_equal(rust_pop.state.individual_count, reference.state.individual_count)
-    assert np.array_equal(rust_pop.history.individual_count, reference.history.individual_count)
+    assert np.array_equal(
+        rust_pop.state.individual_count, reference.state.individual_count
+    )
+    assert np.array_equal(
+        rust_pop.history.individual_count, reference.history.individual_count
+    )
 
 
 def test_real_wf_population_matches_reference(species: Species) -> None:
     """A real DiscreteGenerationPopulation in WF mode must match the reference."""
+
     def build_wf(name: str) -> DiscreteGenerationPopulation:
         pop = (
             nt.DiscreteGenerationPopulation.setup(species, stochastic=False, name=name)
@@ -258,13 +264,12 @@ def test_stochastic_discrete_is_distributionally_equivalent(species: Species) ->
     assert abs(rust_mean - reference_mean) < max(5.0, 0.15 * reference_mean)
 
 
-def test_setup_backend_auto_and_runtime_update(species: Species) -> None:
-    """Build-time backend selection and runtime config sync for discrete."""
-    def build(name: str, backend: str) -> DiscreteGenerationPopulation:
+def test_runtime_config_update_syncs_before_run(species: Species) -> None:
+    """Runtime config sync: pop.update() changes are picked up before the next run."""
+
+    def build(name: str) -> DiscreteGenerationPopulation:
         return (
-            nt.DiscreteGenerationPopulation.setup(
-                species, stochastic=False, name=name, backend=backend
-            )
+            nt.DiscreteGenerationPopulation.setup(species, stochastic=False, name=name)
             .initial_state(
                 individual_count={
                     "female": {"A|A": 40, "A|B": 20},
@@ -275,39 +280,23 @@ def test_setup_backend_auto_and_runtime_update(species: Species) -> None:
             .build()
         )
 
-    auto_pop = build("discrete_auto", "auto")
-    python_pop = build("discrete_python", "python")
-    assert auto_pop.using_rust_backend is True
-    assert python_pop.using_rust_backend is False
-
-    reference = build("discrete_runtime_ref", "python")
-    rust_pop = build("discrete_runtime_rust", "rust")
+    reference = build("discrete_runtime_ref")
+    rust_pop = build("discrete_runtime_rust")
     reference.update().competition(carrying_capacity=500.0)
     rust_pop.update().competition(carrying_capacity=500.0)
     reference.run(5, record_every=1, clear_history_on_start=True)
     rust_pop.run(5, record_every=1, clear_history_on_start=True)
     assert rust_pop.using_rust_backend is True
-    assert np.array_equal(rust_pop.state.individual_count, reference.state.individual_count)
-
-
-def test_backend_python_forces_python_fallback(species: Species) -> None:
-    """``backend="python"`` must bypass the Rust path entirely."""
-    pop = (
-        nt.DiscreteGenerationPopulation.setup(
-            species, stochastic=False, name="discrete_python", backend="python"
-        )
-        .initial_state(individual_count={"female": {"A|A": 20}, "male": {"A|A": 20}})
-        .build()
+    assert np.array_equal(
+        rust_pop.state.individual_count, reference.state.individual_count
     )
-    assert pop.using_rust_backend is False
-    assert pop._python_backend is True
-    pop.run(3, record_every=1)
-    assert pop.tick == 3
 
 
 def test_custom_hooks_work_with_discrete_rust(species: Species) -> None:
     pop = (
-        nt.DiscreteGenerationPopulation.setup(species, stochastic=False, name="discrete_custom")
+        nt.DiscreteGenerationPopulation.setup(
+            species, stochastic=False, name="discrete_custom"
+        )
         .initial_state(individual_count={"female": {"A|A": 20}, "male": {"A|A": 20}})
         .hooks(_discrete_custom_noop)
         .build()

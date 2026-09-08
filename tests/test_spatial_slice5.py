@@ -41,7 +41,9 @@ def _species(prefix: str) -> Species:
     return Species.from_dict(prefix, {"chr1": {"loc": ["WT", "Dr"]}})
 
 
-def _builder(species: Species, n_demes: int, topology=None, pop_type: str = "age_structured"):
+def _builder(
+    species: Species, n_demes: int, topology=None, pop_type: str = "age_structured"
+):
     return SpatialPopulation.builder(
         species, n_demes=n_demes, topology=topology, pop_type=pop_type
     )
@@ -108,8 +110,9 @@ class TestBlueprintCsr:
         """Panmictic contracts: one deme, empty CSR, all-zero rate column."""
         species = _species("slice5_panmictic")
         draft = (
-            __import__("natal")
-            .frontend.population.age_structured.AgeStructuredPopulation
+            __import__(
+                "natal"
+            ).frontend.population.age_structured.AgeStructuredPopulation
             and None
         )
         del draft  # the real draft comes from the builder below
@@ -170,6 +173,7 @@ class TestParamsRateColumn:
 
     def test_tensor_write_broadcasts_and_engines_consume(self) -> None:
         """A validated rate write reaches the engine on the very next tick."""
+
         def build(name: str):
             pop = _simple_pop(name, migration_rate=0.25)
             return pop
@@ -345,30 +349,29 @@ class TestEngineEquivalence:
         (tests/test_spatial_slice5_adversarial.py).
         """
         pop = _simple_pop("dispatch_numpy")
-        with python_reference():
-            ind, sperm, _ = _snapshot(pop)
-            csr = pop.migration_csr
-            rate = pop.params.migration_rate
-            expected = ind.astype(np.float64).copy()
-            for src in range(pop.n_demes):
-                lo, hi = int(csr.indptr[src]), int(csr.indptr[src + 1])
-                for sex in range(2):
-                    for age in range(2):
-                        for z in range(3):
-                            value = expected[src, sex, age, z]
-                            outbound = value * rate[src, sex, age]
-                            expected[src, sex, age, z] -= outbound
-                            for pos in range(lo, hi):
-                                dst = int(csr.dest_idx[pos])
-                                expected[dst, sex, age, z] += outbound * float(
-                                    csr.weights[pos]
-                                )
-            ind2, sperm2, _ = _snapshot(pop)
-            # One tick (lifecycle + migration) conserves total mass.
-            assert np.isclose(ind2.sum() + sperm2.sum(), ind.sum() + sperm.sum())
-            # The numpy walk-through above (rate x CSR on the pre-tick
-            # state, no lifecycle) is documented for reference.
-            del expected
+        ind, sperm, _ = _snapshot(pop)
+        csr = pop.migration_csr
+        rate = pop.params.migration_rate
+        expected = ind.astype(np.float64).copy()
+        for src in range(pop.n_demes):
+            lo, hi = int(csr.indptr[src]), int(csr.indptr[src + 1])
+            for sex in range(2):
+                for age in range(2):
+                    for z in range(3):
+                        value = expected[src, sex, age, z]
+                        outbound = value * rate[src, sex, age]
+                        expected[src, sex, age, z] -= outbound
+                        for pos in range(lo, hi):
+                            dst = int(csr.dest_idx[pos])
+                            expected[dst, sex, age, z] += outbound * float(
+                                csr.weights[pos]
+                            )
+        ind2, sperm2, _ = _snapshot(pop)
+        # One tick (lifecycle + migration) conserves total mass.
+        assert np.isclose(ind2.sum() + sperm2.sum(), ind.sum() + sperm.sum())
+        # The numpy walk-through above (rate x CSR on the pre-tick
+        # state, no lifecycle) is documented for reference.
+        del expected
 
     def test_zero_rate_write_keeps_source_dominant(self) -> None:
         """A zero outbound rate leaves the source deme's share dominant.
@@ -481,7 +484,12 @@ class TestRustCsrMigration:
             ind.copy(), sperm.copy(), csr, rate
         )
         rust_ind, rust_sperm = rust_migrate_csr_deterministic(
-            ind, sperm, csr.indptr, csr.dest_idx, csr.weights, rate,
+            ind,
+            sperm,
+            csr.indptr,
+            csr.dest_idx,
+            csr.weights,
+            rate,
             csr.stay_after_send,
         )
         assert np.allclose(rust_ind, ref_ind, rtol=1e-12, atol=1e-12)
@@ -575,22 +583,18 @@ def _snapshot(pop: SpatialPopulation) -> tuple[np.ndarray, np.ndarray, int]:
 from contextlib import contextmanager
 
 
-@contextmanager
-def python_reference():
-    """Context manager marking the spatial run as reference-path bound.
-
-    The reference is the only non-Rust execution vehicle; the guard is a
-    no-op kept for readability of test bodies that assert reference-path
-    behavior.
-    """
-    yield
-
-
 def _reference_csr_migration(ind, sperm, csr, rate):
     """Run one deterministic CSR migration through the reference kernel."""
     from natal.backends.reference.spatial_migrator import run_spatial_migration
 
     return run_spatial_migration(
-        ind, sperm, csr.indptr, csr.dest_idx, csr.weights, rate,
-        False, False, csr.stay_after_send,
+        ind,
+        sperm,
+        csr.indptr,
+        csr.dest_idx,
+        csr.weights,
+        rate,
+        False,
+        False,
+        csr.stay_after_send,
     )

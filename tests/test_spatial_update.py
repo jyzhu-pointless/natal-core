@@ -47,15 +47,22 @@ def species():
 def _build_discrete(species, *, n_demes: int = 4, k: float = 500.0):
     topo = nt.SquareGrid(2, 2)
     return (
-        nt.SpatialPopulation
-        .builder(species, n_demes=n_demes, topology=topo, pop_type="discrete_generation")
+        nt.SpatialPopulation.builder(
+            species, n_demes=n_demes, topology=topo, pop_type="discrete_generation"
+        )
         .setup(name="write_plane", stochastic=False)
-        .initial_state(individual_count={
-            "female": {"WT|WT": 100}, "male": {"WT|WT": 100},
-        })
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": 100},
+                "male": {"WT|WT": 100},
+            }
+        )
         .reproduction(eggs_per_female=10)
-        .competition(carrying_capacity=k, low_density_growth_rate=6.0,
-                     juvenile_growth_mode="beverton_holt")
+        .competition(
+            carrying_capacity=k,
+            low_density_growth_rate=6.0,
+            juvenile_growth_mode="beverton_holt",
+        )
         .build()
     )
 
@@ -67,17 +74,26 @@ def _build_two_allele_discrete(name: str):
         structure={"auto": {"A": ["WT", "Dr"]}},
     )
     return (
-        nt.SpatialPopulation
-        .builder(species, n_demes=4, topology=nt.SquareGrid(2, 2),
-                 pop_type="discrete_generation")
+        nt.SpatialPopulation.builder(
+            species,
+            n_demes=4,
+            topology=nt.SquareGrid(2, 2),
+            pop_type="discrete_generation",
+        )
         .setup(name=name, stochastic=False)
-        .initial_state(individual_count={
-            "female": {"WT|WT": 100}, "male": {"WT|WT": 100},
-        })
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": 100},
+                "male": {"WT|WT": 100},
+            }
+        )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0,
-                     juvenile_growth_mode="beverton_holt")
+        .competition(
+            carrying_capacity=100000.0,
+            low_density_growth_rate=2.0,
+            juvenile_growth_mode="beverton_holt",
+        )
         .build()
     )
 
@@ -85,16 +101,23 @@ def _build_two_allele_discrete(name: str):
 def _build_age(species, *, n_demes: int = 4, k: float = 500.0):
     topo = nt.SquareGrid(2, 2)
     return (
-        nt.SpatialPopulation
-        .builder(species, n_demes=n_demes, topology=topo, pop_type="age_structured")
+        nt.SpatialPopulation.builder(
+            species, n_demes=n_demes, topology=topo, pop_type="age_structured"
+        )
         .setup(name="write_plane_age", stochastic=False)
         .age_structure(n_ages=2, new_adult_age=1)
-        .initial_state(individual_count={
-            "female": {"WT|WT": {1: 100}}, "male": {"WT|WT": {1: 100}},
-        })
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": {1: 100}},
+                "male": {"WT|WT": {1: 100}},
+            }
+        )
         .reproduction(eggs_per_female=10)
-        .competition(carrying_capacity=k, low_density_growth_rate=6.0,
-                     juvenile_growth_mode="beverton_holt")
+        .competition(
+            carrying_capacity=k,
+            low_density_growth_rate=6.0,
+            juvenile_growth_mode="beverton_holt",
+        )
         .build()
     )
 
@@ -139,7 +162,8 @@ class TestSpatialUpdateRemoved:
         assert not hasattr(spatial_population, "_SpatialUpdate")
 
     def test_spatial_configurator_batchable_constant_removed(
-        self, homogeneous_pop,
+        self,
+        homogeneous_pop,
     ) -> None:
         """Runtime dispatch must not depend on a method-name allowlist."""
         updater = homogeneous_pop.deme(0)
@@ -184,7 +208,8 @@ class TestDemeSliceReadCompat:
         assert deme0.export_config().n_ages == pop._demes[0].export_config().n_ages  # pyright: ignore[reportPrivateUsage]  # compat contract
 
     def test_state_reads_are_snapshots_and_import_state_writes(
-        self, homogeneous_pop,
+        self,
+        homogeneous_pop,
     ) -> None:
         """Slice reads hand out snapshots; import_state is the write channel.
 
@@ -200,16 +225,20 @@ class TestDemeSliceReadCompat:
         assert snapshot is not live
         assert not np.may_share_memory(snapshot.individual_count, live.individual_count)
         snapshot.individual_count[0, 0, 0] = 77.0
-        assert float(pop.deme(2).state.individual_count[0, 0, 0]) == 0.0  # write through the snapshot is inert
-        assert float(live.individual_count[0, 0, 0]) == 0.0  # the live array never moved
+        assert (
+            float(pop.deme(2).state.individual_count[0, 0, 0]) == 0.0
+        )  # write through the snapshot is inert
+        assert (
+            float(live.individual_count[0, 0, 0]) == 0.0
+        )  # the live array never moved
         # Sanctioned write channel: import_state reaches the live run.
         changed = pop.deme(2).state.individual_count.copy()
         changed[0, 0, 0] = 77.0
-        pop.deme(2).import_state(
-            {"n_tick": pop.tick, "individual_count": changed}
-        )
+        pop.deme(2).import_state({"n_tick": pop.tick, "individual_count": changed})
         assert float(pop._demes[2].state.individual_count[0, 0, 0]) == 77.0  # pyright: ignore[reportPrivateUsage]  # live write landed
-        assert float(pop.deme(2).state.individual_count[0, 0, 0]) == 77.0  # reads see it
+        assert (
+            float(pop.deme(2).state.individual_count[0, 0, 0]) == 77.0
+        )  # reads see it
 
     def test_attribute_writes_forward_to_deme(self, homogeneous_pop) -> None:
         """Attribute assignment through the slice reaches the deme."""
@@ -236,7 +265,7 @@ class TestDemeSliceEcologyWrite:
     """write_ecology updates column, draft, and derived metrics atomically."""
 
     def test_deme0_k_write_does_not_affect_deme1(self, homogeneous_pop) -> None:
-        """ deme 0 gets a private K; deme 1's array stays untouched."""
+        """deme 0 gets a private K; deme 1's array stays untouched."""
         pop = homogeneous_pop
         k_before = pop.deme(0).config.carrying_capacity
         pop.deme(0).write_ecology("carrying_capacity", 999.0)
@@ -258,9 +287,7 @@ class TestDemeSliceEcologyWrite:
     def test_vector_write_lands_per_deme(self, homogeneous_age_pop) -> None:
         """A survival vector write touches only the target deme."""
         pop = homogeneous_age_pop
-        saved = [
-            pop.deme(i).config.age_based_survival_rates.copy() for i in range(4)
-        ]
+        saved = [pop.deme(i).config.age_based_survival_rates.copy() for i in range(4)]
         pop.deme(1).write_ecology("survival_rates", np.array([[0.5, 0.6], [0.5, 0.6]]))
         np.testing.assert_array_equal(
             pop.deme(1).config.age_based_survival_rates,
@@ -268,7 +295,8 @@ class TestDemeSliceEcologyWrite:
         )
         for i in (0, 2, 3):
             np.testing.assert_array_equal(
-                pop.deme(i).config.age_based_survival_rates, saved[i],
+                pop.deme(i).config.age_based_survival_rates,
+                saved[i],
                 err_msg=f"deme {i} survival leaked from a deme-1 write",
             )
 
@@ -282,7 +310,8 @@ class TestDemeSliceEcologyWrite:
             column[0] = 1.0  # type: ignore[index]  # write-protection contract
 
     def test_whole_column_tensor_write_broadcasts(
-        self, homogeneous_pop,
+        self,
+        homogeneous_pop,
     ) -> None:
         """A scalar column write broadcasts and syncs every deme draft."""
         pop = homogeneous_pop
@@ -292,7 +321,8 @@ class TestDemeSliceEcologyWrite:
             assert float(pop.deme(i).config.carrying_capacity) == 250.0
 
     def test_k_write_changes_trajectory_only_at_target(
-        self, homogeneous_pop,
+        self,
+        homogeneous_pop,
     ) -> None:
         """A K drop shrinks only the written deme after a run."""
         pop = homogeneous_pop
@@ -326,16 +356,13 @@ class TestDemeSliceGeneticsFork:
     def test_fitness_replace_isolated_to_target(self, homogeneous_pop) -> None:
         """fitness on deme 0 leaves demes 1-3 bitwise unchanged."""
         pop = homogeneous_pop
-        saved = [
-            pop.deme(i).config.viability_fitness.copy() for i in range(4)
-        ]
-        pop.deme(0).write_genetics(
-            "viability_fitness", np.full_like(saved[0], 0.5)
-        )
+        saved = [pop.deme(i).config.viability_fitness.copy() for i in range(4)]
+        pop.deme(0).write_genetics("viability_fitness", np.full_like(saved[0], 0.5))
         assert float(pop.deme(0).config.viability_fitness[0, 0, 0]) == 0.5
         for i in range(1, 4):
             np.testing.assert_array_equal(
-                pop.deme(i).config.viability_fitness, saved[i],
+                pop.deme(i).config.viability_fitness,
+                saved[i],
                 err_msg=f"deme {i} viability changed by a deme-0 genetics write",
             )
 
@@ -425,18 +452,15 @@ class TestDemeSliceGeneticsFork:
             pop.deme(0).write_genetics("meiosis_map", negative)
 
         # Zero writes: both demes' tables are bitwise unchanged.
-        np.testing.assert_array_equal(
-            pop.deme(0).config.zygotes_to_gametes_map, saved
-        )
+        np.testing.assert_array_equal(pop.deme(0).config.zygotes_to_gametes_map, saved)
         np.testing.assert_array_equal(
             pop.deme(0).config.offspring_tensor, saved_offspring
         )
-        np.testing.assert_array_equal(
-            pop.deme(1).config.zygotes_to_gametes_map, saved
-        )
+        np.testing.assert_array_equal(pop.deme(1).config.zygotes_to_gametes_map, saved)
 
     def test_deme_params_tensor_write_refuses_genetics_fields(
-        self, homogeneous_pop,
+        self,
+        homogeneous_pop,
     ) -> None:
         """Per-deme ``params.tensor_write`` refuses every genetics tensor.
 
@@ -450,16 +474,12 @@ class TestDemeSliceGeneticsFork:
         pop = homogeneous_pop
         for field in sorted(_GENETICS_TENSORS):
             with pytest.raises(RuntimeError, match="write_genetics"):
-                pop.deme(0).params.tensor_write(
-                    field, np.zeros(1, dtype=np.float64)
-                )
+                pop.deme(0).params.tensor_write(field, np.zeros(1, dtype=np.float64))
 
         # Ecology vectors stay writable through the same surface.
         rates = np.asarray(pop.deme(0).params.survival_rates, dtype=np.float64)
         pop.deme(0).params.tensor_write("survival_rates", rates)
-        np.testing.assert_array_equal(
-            pop.deme(0).params.survival_rates, rates
-        )
+        np.testing.assert_array_equal(pop.deme(0).params.survival_rates, rates)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -471,7 +491,9 @@ class TestBuildSemanticsPreserved:
     """The single-entry build keeps the sharing and heterogeneity rules."""
 
     def test_shared_config_after_homogeneous_build(
-        self, homogeneous_pop, homogeneous_age_pop,
+        self,
+        homogeneous_pop,
+        homogeneous_age_pop,
     ) -> None:
         """All demes point to the same config object after a homogeneous build."""
         for pop in (homogeneous_pop, homogeneous_age_pop):
@@ -480,7 +502,8 @@ class TestBuildSemanticsPreserved:
                 assert pop.deme(i).config is config0
 
     def test_homogeneous_pop_is_spatial_population(
-        self, homogeneous_pop,
+        self,
+        homogeneous_pop,
     ) -> None:
         """build() still returns a SpatialPopulation (single entry point)."""
         assert isinstance(homogeneous_pop, SpatialPopulation)
@@ -598,34 +621,26 @@ class TestVariantEquilibriumDeclaration:
             == 100.0 / ext1
         )
 
-    def test_variant_python_fallback_carries_the_two_params(self, monkeypatch) -> None:
-        """The forced-Python derive branch carries declared + external.
+    def test_variant_derive_carries_the_two_params(self) -> None:
+        """The derive surface honors declared + external bit-for-bit.
 
         Slice 2 retired the variant recompute (the metrics are derived
-        on read), so the parity target is the derive surface itself:
-        with the Rust kernel blocked, the pure-Python branch must honor
-        the declared distribution and the egg override bit-for-bit.
+        on read): the declared distribution drives the competition mass
+        and the egg override drives the expected survival rate.
         """
         from natal.frontend.data._engine import (
             derive_equilibrium_metrics_from_draft,
         )
 
-        pop, declared = self._eggs_heterogeneous_population(
+        pop, _declared = self._eggs_heterogeneous_population(
             "eq_fallback_variant2", external_females=100.0
         )
         cfg = pop.demes[1].config
-        rust = derive_equilibrium_metrics_from_draft(cfg)
+        metrics = derive_equilibrium_metrics_from_draft(cfg)
 
-        monkeypatch.setitem(__import__("sys").modules, "natal._engine_rs", None)
-        py = derive_equilibrium_metrics_from_draft(cfg)
-        monkeypatch.undo()
-
-        assert py == rust  # bit-for-bit across both branches
-        # The declared distribution drives the competition mass (1000,
-        # not the derivation-mode 2530) and the override drives s*.
-        assert rust[0] == 1000.0
+        assert metrics[0] == 1000.0
         ext = float(cfg.external_expected_eggs)
-        assert rust[1] == 100.0 / ext
+        assert metrics[1] == 100.0 / ext
 
     def test_variant_metrics_isolated_between_demes(self) -> None:
         """A runtime ecology write on deme 0 leaves deme 1's metrics alone."""
@@ -694,9 +709,7 @@ class TestEquilibriumDistributionChannels:
         declared = np.zeros((2, 4))
         declared[0, 1] = 50.0
         declared[1, 1] = 50.0
-        eggs: object = (
-            nt.batch_setting([10.0, 20.0]) if heterogeneous else 10.0
-        )
+        eggs: object = nt.batch_setting([10.0, 20.0]) if heterogeneous else 10.0
         age_kwargs: dict[str, object] = {"n_ages": 4, "new_adult_age": 1}
         survival_kwargs: dict[str, object] = {
             "female_age_based_survival": [1.0, 0.9, 0.7, 0.0],
@@ -709,9 +722,7 @@ class TestEquilibriumDistributionChannels:
         else:
             raise ValueError(f"unknown channel {channel!r}")
         return (
-            nt.SpatialPopulation.builder(
-                species, n_demes=2, pop_type="age_structured"
-            )
+            nt.SpatialPopulation.builder(species, n_demes=2, pop_type="age_structured")
             .setup(name=name, stochastic=False)
             .age_structure(**age_kwargs)
             .initial_state(
@@ -755,9 +766,7 @@ class TestEquilibriumDistributionChannels:
         deme must stay on the declared distribution (500 / 1000), not the
         derivation mode the pre-fix variant recompute produced.
         """
-        pop = self._population(
-            "eq_channel_replay", "age_structure", heterogeneous=True
-        )
+        pop = self._population("eq_channel_replay", "age_structure", heterogeneous=True)
         assert derive_equilibrium_metrics_from_draft(pop.demes[0].config)[0] == 500.0
         assert derive_equilibrium_metrics_from_draft(pop.demes[1].config)[0] == 1000.0
 
@@ -773,9 +782,7 @@ class TestEquilibriumChannelAdversarial:
     ``generation_time`` dead channel.
     """
 
-    AGE_DECLARED = np.array(
-        [[0.0, 50.0, 0.0, 0.0], [0.0, 50.0, 0.0, 0.0]]
-    )
+    AGE_DECLARED = np.array([[0.0, 50.0, 0.0, 0.0], [0.0, 50.0, 0.0, 0.0]])
 
     @staticmethod
     def _species(tag: str) -> nt.Species:
@@ -926,8 +933,7 @@ class TestEquilibriumChannelAdversarial:
             entries = builder._declaration_log  # pyright: ignore[reportPrivateUsage]  # the log is the replay contract under test; no public accessor exists
             comp_entries = [kw for m, kw in entries if m == "competition"]
             assert any(
-                kw.get("equilibrium_distribution") is not None
-                for kw in comp_entries
+                kw.get("equilibrium_distribution") is not None for kw in comp_entries
             ), f"{channel}: no competition entry carries the declaration"
 
     def test_homogeneous_build_keeps_declaration(self) -> None:
@@ -1030,9 +1036,7 @@ class TestEquilibriumChannelAdversarial:
         that forwarded None as a clearing write would flip the draft back
         to derivation mode.
         """
-        pop = self._population(
-            "none_tail", "age_structure", tail_competition_decl=None
-        )
+        pop = self._population("none_tail", "age_structure", tail_competition_decl=None)
         cfg = pop.demes[0].config
         stored = cfg.equilibrium_individual_distribution
         assert stored is not None, "explicit None cleared the declaration"

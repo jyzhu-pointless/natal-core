@@ -173,10 +173,7 @@ class TickMetrics:
         total = self.total
         if total <= 0.0:
             return dict.fromkeys(self._blueprint.ztype_names, 0.0)
-        return {
-            name: count / total
-            for name, count in self.genotype_counts.items()
-        }
+        return {name: count / total for name, count in self.genotype_counts.items()}
 
     @property
     def allele_frequencies(self) -> dict[str, dict[str, float]]:
@@ -224,9 +221,7 @@ class TickMetrics:
                 freqs[locus.name] = {}
         return freqs
 
-    def _genotype_for_name(
-        self, name: str, ztypes: List[Tuple[Any, str]]
-    ) -> Any:
+    def _genotype_for_name(self, name: str, ztypes: List[Tuple[Any, str]]) -> Any:
         """Resolve one catalog name to its ``Genotype`` (or ``None``).
 
         Catalog names carry an optional slab qualifier (``"WT|WT@slab"`` or
@@ -256,9 +251,7 @@ class TickMetrics:
 
     def _equilibrium_metrics(self) -> tuple[float, float]:
         """Compute the (C*, s*) pair from the current sex-age totals."""
-        from natal.backends.reference.simulation.age_structured import (
-            compute_equilibrium_metrics,
-        )
+        from natal.frontend.data._engine import equilibrium_metrics_dispatch
 
         config = self._config
         ic = self._state.individual_count
@@ -267,19 +260,23 @@ class TickMetrics:
         distribution = np.zeros((2, n_ages), dtype=np.float64)
         n_rows = min(2, sex_age.shape[0])
         distribution[:n_rows, :] = sex_age[:n_rows, :n_ages]
-        return compute_equilibrium_metrics(
+        reproduction = (
+            config.age_based_reproduction_rates
+            if config.age_based_reproduction_rates is not None
+            else config.age_based_mating_rates[0]
+        )
+        return equilibrium_metrics_dispatch(
             carrying_capacity=float(config.carrying_capacity),
             eggs_per_female=float(config.eggs_per_female),
-            age_based_survival_rates=config.age_based_survival_rates,
-            age_based_mating_rates=config.age_based_mating_rates,
-            female_age_based_fertility=config.female_age_based_fertility,
-            relative_competition_strength=(
-                config.age_based_relative_competition_strength
-            ),
             sex_ratio=float(config.sex_ratio),
+            survival_rates=config.age_based_survival_rates,
+            reproduction_rates=reproduction,
+            fertility=config.female_age_based_fertility,
+            competition_weights=config.age_based_relative_competition_strength,
             new_adult_age=int(config.new_adult_age),
             n_ages=n_ages,
-            equilibrium_individual_count=distribution,
+            declared_distribution=distribution,
+            external_expected_eggs=None,
         )
 
 
@@ -513,9 +510,7 @@ class HookRunner:
         self._pop = pop
         self._callbacks: dict[
             int, List[Tuple[int, Callable[[TickContext], Optional[int]], Any]]
-        ] = {
-            event_id: [] for event_id in range(len(EVENT_NAMES))
-        }
+        ] = {event_id: [] for event_id in range(len(EVENT_NAMES))}
         for desc in pop.compiled_hook_descriptors:
             if desc.callback is None:
                 continue

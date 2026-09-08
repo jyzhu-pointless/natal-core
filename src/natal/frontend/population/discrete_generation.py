@@ -15,7 +15,6 @@ from typing import (
     Callable,
     Dict,
     List,
-    Literal,
     Optional,
     Sequence,
     Tuple,
@@ -114,7 +113,12 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         name: Optional[str] = None,
         index_registry: Optional[IndexRegistry] = None,
         initial_individual_count: Optional[
-            Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int], int, float]]]
+            Dict[
+                str,
+                Dict[
+                    Union[Genotype, str], Union[List[int], Dict[int, int], int, float]
+                ],
+            ]
         ] = None,
         hook_items: Optional[List[object]] = None,
     ):
@@ -188,7 +192,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self._live_state().individual_count.fill(0.0)
             self._distribute_initial_population(initial_individual_count)
 
-        self._python_backend = False
         # True while a Rust batch run executes; in-hook writes defer to the
         # next run (session borrow held by the engine).
         self._rust_run_active = False
@@ -227,11 +230,12 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         stochastic: bool = True,
         continuous_sampling: bool = False,
         fixed_egg_count: bool = False,
-        backend: Literal["auto", "rust", "python"] = "auto",
         *,
         compress: bool = False,
         declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
-        declared_genotypes: Sequence[str] | Sequence[int] | None = None,  # deprecated alias
+        declared_genotypes: Sequence[str]
+        | Sequence[int]
+        | None = None,  # deprecated alias
     ) -> Configurator:
         """Fluent population construction entry point.
 
@@ -253,7 +257,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,
             fixed_egg_count=fixed_egg_count,
-            backend=backend,
             compress=compress,
             declared_zygote_types=declared_zygote_types,
         )
@@ -285,15 +288,22 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 return 0.0, float(age_data[0])
             if len(age_data) == 2:
                 return float(age_data[0]), float(age_data[1])
-            raise ValueError(f"Discrete initial list must have length <= 2, got {len(age_data)}")
+            raise ValueError(
+                f"Discrete initial list must have length <= 2, got {len(age_data)}"
+            )
         unsupported_keys = [k for k in age_data.keys() if k not in (0, 1)]
         if unsupported_keys:
-            raise ValueError(f"Discrete initial dict supports only age keys 0 and 1, got {unsupported_keys}")
+            raise ValueError(
+                f"Discrete initial dict supports only age keys 0 and 1, got {unsupported_keys}"
+            )
         return float(age_data.get(0, 0.0)), float(age_data.get(1, 0.0))
 
     def _distribute_initial_population(
         self,
-        distribution: Dict[str, Dict[Union[Genotype, str], Union[List[int], Dict[int, int], int, float]]],
+        distribution: Dict[
+            str,
+            Dict[Union[Genotype, str], Union[List[int], Dict[int, int], int, float]],
+        ],
     ) -> None:
         """Distribute individuals across genotypes and ages from a nested dict.
 
@@ -319,7 +329,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 )
 
                 if isinstance(genotype_key, str):
-                    pattern = ZygoteTypePattern.from_slab_key(genotype_key, self.species)
+                    pattern = ZygoteTypePattern.from_slab_key(
+                        genotype_key, self.species
+                    )
                 else:
                     parser = GenotypePatternParser(self.species)
                     pattern = ZygoteTypePattern(
@@ -421,7 +433,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             RuntimeError: If the backend was never enabled.
         """
         if self._rust_backend_seed is None:
-            raise RuntimeError("Rust backend is not enabled; call enable_rust_backend() first.")
+            raise RuntimeError(
+                "Rust backend is not enabled; call enable_rust_backend() first."
+            )
         return self.enable_rust_backend(seed=self._rust_backend_seed)
 
     @property
@@ -719,7 +733,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._finished = False
         # Guard against calls before __init__ finishes (e.g. during
         # BasePopulation.__init__ -> _initialize -> reset chain).
-        if hasattr(self, '_initial_population_snapshot'):
+        if hasattr(self, "_initial_population_snapshot"):
             ind_copy, _, _ = self._initial_population_snapshot
             self._state = DiscretePopulationState.create(
                 n_sexes=self.config.n_sexes,
@@ -741,11 +755,15 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def get_female_count(self) -> int:
         """Return the total number of female individuals."""
-        return int(round(np.sum(self._live_state().individual_count[int(Sex.FEMALE.value)])))
+        return int(
+            round(np.sum(self._live_state().individual_count[int(Sex.FEMALE.value)]))
+        )
 
     def get_male_count(self) -> int:
         """Return the total number of male individuals."""
-        return int(round(np.sum(self._live_state().individual_count[int(Sex.MALE.value)])))
+        return int(
+            round(np.sum(self._live_state().individual_count[int(Sex.MALE.value)]))
+        )
 
     def clear_history(self) -> None:
         """Clear history rows and the paired session checkpoints."""
@@ -786,7 +804,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def import_state(
         self,
-        state: Union[DiscretePopulationState, NDArray[np.float64], Dict[str, np.ndarray]],
+        state: Union[
+            DiscretePopulationState, NDArray[np.float64], Dict[str, np.ndarray]
+        ],
     ) -> None:
         """Replace the current state and reset the history timeline.
 
@@ -810,7 +830,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         else:
             state_obj = DiscretePopulationState(
                 n_tick=int(state.get("n_tick", self._tick)),
-                individual_count=np.asarray(state["individual_count"], dtype=np.float64),
+                individual_count=np.asarray(
+                    state["individual_count"], dtype=np.float64
+                ),
             )
 
         expected_shape = self._live_state().individual_count.shape

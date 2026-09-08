@@ -15,6 +15,10 @@ from numpy.typing import NDArray
 from .config import ModelDraft
 from .constants import LOGISTIC
 
+# Compatibility-gate tolerance: the same 1e-10 threshold the numeric
+# kernels use to decide whether a probability column is "reachable".
+_EPS = 1e-10
+
 
 class _ComputedMaps(NamedTuple):
     """Intermediate result of shared config computation.
@@ -27,34 +31,36 @@ class _ComputedMaps(NamedTuple):
     # -- Dimensions --
     n_sexes: int
     n_ages: int
-    n_genotypes_orig: int   # G_orig (pre-expansion)
+    n_genotypes_orig: int  # G_orig (pre-expansion)
     n_gtypes: int
     n_glabs: int
     n_slabs: int
-    n_ztypes: int           # engine-visible G = G_orig × n_slabs
-    n_g_compressed: int     # after slab expansion (may differ from n_ztypes if compressed later)
+    n_ztypes: int  # engine-visible G = G_orig × n_slabs
+    n_g_compressed: (
+        int  # after slab expansion (may differ from n_ztypes if compressed later)
+    )
     n_hg_effective: int
     n_glabs_effective: int
     new_adult_age: int
     adult_ages: NDArray[np.int64]
 
     # -- Demographic arrays --
-    mating: NDArray[np.float64]          # (2, A)
-    reproduction: NDArray[np.float64]    # (A,)
-    survival: NDArray[np.float64]        # (2, A)
+    mating: NDArray[np.float64]  # (2, A)
+    reproduction: NDArray[np.float64]  # (A,)
+    survival: NDArray[np.float64]  # (2, A)
     female_fertility: NDArray[np.float64]  # (A,)
 
     # -- Fitness arrays --
-    viability: NDArray[np.float64]       # (2, A, G×S)
-    fecundity: NDArray[np.float64]       # (2, G×S)
-    sexual: NDArray[np.float64]          # (G×S, G×S)
-    zygote: NDArray[np.float64]          # (2, G×S)
-    competition: NDArray[np.float64]     # (A,)
+    viability: NDArray[np.float64]  # (2, A, G×S)
+    fecundity: NDArray[np.float64]  # (2, G×S)
+    sexual: NDArray[np.float64]  # (G×S, G×S)
+    zygote: NDArray[np.float64]  # (2, G×S)
+    competition: NDArray[np.float64]  # (A,)
 
     # -- Expanded maps (pre-compression) --
-    meiosis_f: NDArray[np.float64]       # (G×S, HL)
-    meiosis_m: NDArray[np.float64]       # (G×S, HL)
-    zygote_map: NDArray[np.float64]      # (HL, HL, G×S)
+    meiosis_f: NDArray[np.float64]  # (G×S, HL)
+    meiosis_m: NDArray[np.float64]  # (G×S, HL)
+    zygote_map: NDArray[np.float64]  # (HL, HL, G×S)
 
     # -- Compatibility --
     female_ztype_compatibility: NDArray[np.float64]
@@ -130,7 +136,6 @@ def build_config_maps(
 
     Not part of the public API.
     """
-    import natal.backends.reference.simulation.age_structured as alg
 
     assert n_genotypes > 0 and n_gtypes > 0 and n_glabs > 0, "invalid dimensions"
     assert n_ages > 0, "n_ages must be positive"
@@ -187,7 +192,9 @@ def build_config_maps(
         set_juvenile_values_to_zero: bool = False,
     ) -> NDArray[np.float64]:
         if arr is not None:
-            assert arr.shape == expected_shape, f"invalid shape for {name}: expected {expected_shape}, got {arr.shape}"
+            assert arr.shape == expected_shape, (
+                f"invalid shape for {name}: expected {expected_shape}, got {arr.shape}"
+            )
             return arr
         arr2 = default_value(expected_shape, np.float64)
         if set_juvenile_values_to_zero:
@@ -198,36 +205,62 @@ def build_config_maps(
         return arr2
 
     mating = _validate_or_default_array(
-        age_based_mating_rates, (n_sexes_i, n_ages_i), "age_based_mating_rates",
-        has_sex_dim=True, set_juvenile_values_to_zero=True,
+        age_based_mating_rates,
+        (n_sexes_i, n_ages_i),
+        "age_based_mating_rates",
+        has_sex_dim=True,
+        set_juvenile_values_to_zero=True,
     )
     reproduction = _validate_or_default_array(
-        age_based_reproduction_rates, (n_ages_i,), "age_based_reproduction_rates",
-        has_sex_dim=False, set_juvenile_values_to_zero=True,
+        age_based_reproduction_rates,
+        (n_ages_i,),
+        "age_based_reproduction_rates",
+        has_sex_dim=False,
+        set_juvenile_values_to_zero=True,
     )
     survival = _validate_or_default_array(
-        age_based_survival_rates, (n_sexes_i, n_ages_i), "age_based_survival_rates",
-        has_sex_dim=True, set_juvenile_values_to_zero=True,
+        age_based_survival_rates,
+        (n_sexes_i, n_ages_i),
+        "age_based_survival_rates",
+        has_sex_dim=True,
+        set_juvenile_values_to_zero=True,
     )
     female_fertility = _validate_or_default_array(
-        female_age_based_fertility, (n_ages_i,), "female_age_based_fertility",
-        has_sex_dim=False, set_juvenile_values_to_zero=True,
+        female_age_based_fertility,
+        (n_ages_i,),
+        "female_age_based_fertility",
+        has_sex_dim=False,
+        set_juvenile_values_to_zero=True,
     )
-    viability = _validate_or_default_array(viability_fitness, (n_sexes_i, n_ages_i, n_ztypes_i), "viability_fitness")
-    fecundity = _validate_or_default_array(fecundity_fitness, (n_sexes_i, n_ztypes_i), "fecundity_fitness")
-    sexual = _validate_or_default_array(sexual_selection_fitness, (n_ztypes_i, n_ztypes_i), "sexual_selection_fitness")
-    zygote = _validate_or_default_array(zygote_viability_fitness, (n_sexes_i, n_ztypes_i), "zygote_viability_fitness")
+    viability = _validate_or_default_array(
+        viability_fitness, (n_sexes_i, n_ages_i, n_ztypes_i), "viability_fitness"
+    )
+    fecundity = _validate_or_default_array(
+        fecundity_fitness, (n_sexes_i, n_ztypes_i), "fecundity_fitness"
+    )
+    sexual = _validate_or_default_array(
+        sexual_selection_fitness, (n_ztypes_i, n_ztypes_i), "sexual_selection_fitness"
+    )
+    zygote = _validate_or_default_array(
+        zygote_viability_fitness, (n_sexes_i, n_ztypes_i), "zygote_viability_fitness"
+    )
     competition = _validate_or_default_array(
-        age_based_relative_competition_strength, (n_ages_i,), "age_based_relative_competition_strength",
+        age_based_relative_competition_strength,
+        (n_ages_i,),
+        "age_based_relative_competition_strength",
     )
     # Use n_ztypes_i for the genotype axis when maps are pre-expanded.
     _n_g_axis = n_ztypes_i if pre_expanded else n_genotypes_i
     z2g = _validate_or_default_array(
-        zygotes_to_gametes_map, (n_sexes_i, _n_g_axis, n_hg_glabs), "zygotes_to_gametes_map",
+        zygotes_to_gametes_map,
+        (n_sexes_i, _n_g_axis, n_hg_glabs),
+        "zygotes_to_gametes_map",
         default_value=np.zeros,
     )
     g2z = _validate_or_default_array(
-        gametes_to_zygotes_map, (n_hg_glabs, n_hg_glabs, _n_g_axis), "gametes_to_zygotes_map",
+        gametes_to_zygotes_map,
+        (n_hg_glabs, n_hg_glabs, _n_g_axis),
+        "gametes_to_zygotes_map",
         default_value=np.zeros,
     )
     # Index compression mask placeholders (compression is applied externally).
@@ -251,11 +284,12 @@ def build_config_maps(
     if has_sex_chromosomes:
         _ztype_index: dict[tuple[int, int], int] = {
             (g, s): g * n_slabs_i + s
-            for g in range(n_genotypes_i) for s in range(n_slabs_i)
+            for g in range(n_genotypes_i)
+            for s in range(n_slabs_i)
         }
         for g_off in range(n_genotypes_i):
-            f_ok = female_ztype_compatibility[g_off] > alg.EPS
-            m_ok = male_ztype_compatibility[g_off] > alg.EPS
+            f_ok = female_ztype_compatibility[g_off] > _EPS
+            m_ok = male_ztype_compatibility[g_off] > _EPS
             if n_slabs_i > 1:
                 for s in range(n_slabs_i):
                     z = _ztype_index[(g_off, s)]
@@ -469,7 +503,8 @@ def build_population_config(
         infer_capacity_from_initial_state=infer_capacity_from_initial_state,
         equilibrium_individual_distribution=equilibrium_individual_distribution,
         external_expected_eggs=external_expected_eggs,
-        pre_expanded=zygotes_to_gametes_map is not None and zygotes_to_gametes_map.shape[1] > n_genotypes,
+        pre_expanded=zygotes_to_gametes_map is not None
+        and zygotes_to_gametes_map.shape[1] > n_genotypes,
     )
 
     resolved_ztype_names = (

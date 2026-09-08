@@ -69,17 +69,16 @@ __all__ = [
 # Type aliases for population and builder types used throughout.
 PopulationInstance = Union[AgeStructuredPopulation, DiscreteGenerationPopulation]
 _HookItem = Union[
-Callable[..., object],  # object: hook callback return type varies by hook category
+    Callable[..., object],  # object: hook callback return type varies by hook category
     Dict[str, List[Tuple[Callable[..., object], Optional[str], Optional[int]]]],
 ]
-
 
 
 # ---------------------------------------------------------------------------
 # BatchSetting
 # ---------------------------------------------------------------------------
 
-_T = TypeVar('_T')
+_T = TypeVar("_T")
 
 
 class BatchSetting(Generic[_T]):
@@ -125,7 +124,9 @@ class BatchSetting(Generic[_T]):
         self._fn: Optional[Callable[..., float]] = None
         self._fn_param_count: Optional[int] = None
         self._values: Optional[List[_T]] = None
-        self._values_array: Optional[NDArray[np.floating[Any]]]  # Any: dtype parameter — npt.NDArray shorthand = None
+        self._values_array: Optional[
+            NDArray[np.floating[Any]]
+        ]  # Any: dtype parameter — npt.NDArray shorthand = None
         self._n_demes: Optional[int] = None
 
         if callable(values):
@@ -214,16 +215,17 @@ class BatchSetting(Generic[_T]):
             # Auto-detect parameter count: 2 → (row, col), else (flat_idx).
             if self._fn_param_count is None:
                 import inspect
+
                 try:
                     sig = inspect.signature(fn)
                     self._fn_param_count = len(sig.parameters)
                 except (ValueError, TypeError):
                     self._fn_param_count = 1
             if self._fn_param_count >= 2:
-                return cast(List[_T], [
-                    float(fn(*topology.from_index(i)))
-                    for i in range(n_demes)
-                ])
+                return cast(
+                    List[_T],
+                    [float(fn(*topology.from_index(i))) for i in range(n_demes)],
+                )
             return cast(List[_T], [float(fn(i)) for i in range(n_demes)])
 
         raise ValueError(f"Unknown kind: {self._kind}")
@@ -249,13 +251,15 @@ class BatchSetting(Generic[_T]):
             if self._values_array is not None and self._values_array.size > 0:
                 flat = self._values_array.ravel(order="C")
                 val = flat[0]
-                return val.item() if hasattr(val, 'item') else val
+                return val.item() if hasattr(val, "item") else val
             return None
         return None  # spatial kind: deferred until expand() has topology
 
 
 def batch_setting(
-    values: Union[Sequence[_T], NDArray[np.floating[Any]], Callable[..., float], BatchSetting[_T]],
+    values: Union[
+        Sequence[_T], NDArray[np.floating[Any]], Callable[..., float], BatchSetting[_T]
+    ],
 ) -> BatchSetting[_T]:
     """Create a ``BatchSetting`` for per-deme parameter specification.
 
@@ -282,7 +286,9 @@ def batch_setting(
 # ---------------------------------------------------------------------------
 
 
-def _make_hashable(value: Any) -> Any:  # Any param+return: accepts arbitrary types for dict-key conversion
+def _make_hashable(
+    value: Any,
+) -> Any:  # Any param+return: accepts arbitrary types for dict-key conversion
     """Recursively convert *value* into a hashable form for deduplication.
 
     Used by the heterogeneous build to detect which demes have identical
@@ -362,7 +368,11 @@ def _genetics_batch_names(batch_param_names: List[str]) -> List[str]:
     ]
 
 
-def _float_value(value: object, *, name: str) -> float:  # object: accepts any scalar from configurator replay log (int, float, np.generic)
+def _float_value(
+    value: object, *, name: str
+) -> (
+    float
+):  # object: accepts any scalar from configurator replay log (int, float, np.generic)
     """Narrow a replay-log scalar before converting it to float.
 
     Args:
@@ -470,13 +480,18 @@ _DISCRETE_VECTOR_CELLS: dict[str, tuple[str, tuple[int, ...]]] = {
     "male_adult_mating_rate": ("age_based_mating_rates", (1, 1)),
 }
 
+
 def _is_0d_field(config: ModelDraft, name: str) -> bool:
     """Return True if the config field *name* is a 0-d ndarray."""
     val = getattr(config, name, None)
     return isinstance(val, np.ndarray) and val.ndim == 0
 
 
-def _object_sequence(value: object, *, name: str) -> Sequence[object]:  # object: accepts any sequence from configurator replay log (list, tuple, ndarray)
+def _object_sequence(
+    value: object, *, name: str
+) -> Sequence[
+    object
+]:  # object: accepts any sequence from configurator replay log (list, tuple, ndarray)
     """Validate a replay-log value used as positional arguments.
 
     Args:
@@ -497,6 +512,7 @@ def _object_sequence(value: object, *, name: str) -> Sequence[object]:  # object
 # ---------------------------------------------------------------------------
 # SpatialConfigurator
 # ---------------------------------------------------------------------------
+
 
 class SpatialConfigurator:
     """Fluent builder for ``SpatialPopulation``.
@@ -544,14 +560,14 @@ class SpatialConfigurator:
         self._observation_groups: dict[str, IndividualSelector] | None = None
         self._observation_collapse_age: bool = False
         self._observation_demes: tuple[int, ...] = tuple(range(n_demes))
-        self._observation_deme_mode: Literal[
-            "preserve", "aggregate"
-        ] = "preserve"
+        self._observation_deme_mode: Literal["preserve", "aggregate"] = "preserve"
         self._record_history_mode: Literal["raw", "observation"] = "raw"
         self._record_history_max_rows: int | None = None
 
         # Runtime population reference (None at build time; set by for_population).
-        self._pop_ref: Optional[Any] = None  # Any: stores a Population reference; concrete type varies
+        self._pop_ref: Optional[Any] = (
+            None  # Any: stores a Population reference; concrete type varies
+        )
 
         # Create the template configurator (new path).  The unified
         # Configurator serves both granularities — the flag only picks the
@@ -564,7 +580,9 @@ class SpatialConfigurator:
             )
 
         # Accumulated batch settings: param_name -> BatchSetting.
-        self._batch_settings: Dict[str, BatchSetting[Any]] = {}  # Any: BatchSetting value type varies per config field
+        self._batch_settings: Dict[
+            str, BatchSetting[Any]
+        ] = {}  # Any: BatchSetting value type varies per config field
 
         # Declaration journal (plan 5.1): the spatial twin of the plain
         # Configurator's _declaration_log — same entry type, plus raw
@@ -578,7 +596,9 @@ class SpatialConfigurator:
         self._migration_kernel: Optional[NDArray[np.float64]] = None
         self._migration_kernel_batch: Optional[BatchSetting[Any]] = None
         self._migration_rate: RateDeclaration = 0.0
-        self._migration_strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = "auto"
+        self._migration_strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = (
+            "auto"
+        )
         self._migration_adjacency: Optional[object] = None
         self._kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None
         self._deme_kernel_ids: Optional[NDArray[np.int64]] = None
@@ -593,9 +613,7 @@ class SpatialConfigurator:
         self._compress: bool = False
         self._declared_zygote_types: set[str] | set[int] | None = None
 
-    def _compress_once(
-        self, expanded: Dict[str, List[Any]]
-    ) -> set[int]:
+    def _compress_once(self, expanded: Dict[str, List[Any]]) -> set[int]:
         """Compute the union of ztype indices reachable anywhere in the system.
 
         Builds the first group's template to obtain a resolved
@@ -620,7 +638,8 @@ class SpatialConfigurator:
             name: expanded[name][0] for name in batch_param_names
         }
         full_template = self._build_template_for_group(
-            first_sig, compress=False,
+            first_sig,
+            compress=False,
         )
         full_config = full_template.export_config()
         full_registry = full_template.index_registry
@@ -670,6 +689,7 @@ class SpatialConfigurator:
 
         # ── Step 3: Seeds from hook genotype refs ──────────────────────
         from natal.frontend.configurator._base import collect_hook_genotype_refs
+
         hook_strs: set[str] = set()
         for method_name, kwargs in self._declaration_log:
             if method_name == "hooks":
@@ -679,7 +699,9 @@ class SpatialConfigurator:
                         collect_hook_genotype_refs([(tuple(hook_items), {})])
                     )
         resolved = self._resolve_declared_to_ints(
-            hook_strs, full_registry, full_config.n_slabs,
+            hook_strs,
+            full_registry,
+            full_config.n_slabs,
         )
         if resolved:
             seeds.update(resolved)
@@ -695,14 +717,17 @@ class SpatialConfigurator:
                     seeds.add(item)  # int — already a ztype index
             if str_decl:
                 resolved_decl = self._resolve_declared_to_ints(
-                    str_decl, full_registry, full_config.n_slabs,
+                    str_decl,
+                    full_registry,
+                    full_config.n_slabs,
                 )
                 if resolved_decl:
                     seeds.update(resolved_decl)
 
         # ── Step 5: Build combined modifier maps & BFS ─────────────────
         combined_z2g, combined_g2z = self._build_combined_modifier_maps(
-            expanded, full_config,
+            expanded,
+            full_config,
         )
         _, _, ztype_mask, _ = build_compression_mask(
             combined_z2g,
@@ -734,9 +759,7 @@ class SpatialConfigurator:
             for gt in dips:
                 if str(gt) == dg:
                     for s in range(n_slabs_int):
-                        result.add(
-                            registry.ztype_index(gt, registry.slab_labels[s])
-                        )
+                        result.add(registry.ztype_index(gt, registry.slab_labels[s]))
         return result
 
     def _build_combined_modifier_maps(
@@ -760,14 +783,11 @@ class SpatialConfigurator:
         sigs: list[Dict[str, Any]] = []
         for i in range(n_demes):
             sig_key = tuple(
-                (name, _make_hashable(expanded[name][i]))
-                for name in batch_param_names
+                (name, _make_hashable(expanded[name][i])) for name in batch_param_names
             )
             if sig_key not in seen:
                 seen.add(sig_key)
-                sigs.append({
-                    name: expanded[name][i] for name in batch_param_names
-                })
+                sigs.append({name: expanded[name][i] for name in batch_param_names})
 
         # Mendelian baseline from species cache.
         bp = self._species.get_config_blueprint()
@@ -789,10 +809,19 @@ class SpatialConfigurator:
             # Do a lightweight replay — only need modifiers.
             cfg = Configurator.for_age_structured(self._species)
             for method_name, kwargs in self._declaration_log:
-                if method_name in ("hooks", "initial_state", "setup",
-                                   "reproduction", "competition",
-                                   "age_structure", "survival", "fitness",
-                                   "custom", "with_observation", "migration"):
+                if method_name in (
+                    "hooks",
+                    "initial_state",
+                    "setup",
+                    "reproduction",
+                    "competition",
+                    "age_structure",
+                    "survival",
+                    "fitness",
+                    "custom",
+                    "with_observation",
+                    "migration",
+                ):
                     continue  # irrelevant for modifier collection
 
                 # Substitute batch values.
@@ -801,7 +830,9 @@ class SpatialConfigurator:
                     if key in sig:
                         resolved[key] = sig[key]
                     elif isinstance(value, BatchSetting):
-                        first: Any = cast(BatchSetting[Any], value).first_value()  # Any: BatchSetting value type is unknown until expansion
+                        first: Any = (
+                            cast(BatchSetting[Any], value).first_value()
+                        )  # Any: BatchSetting value type is unknown until expansion
                         if first is not None:
                             resolved[key] = first
                     else:
@@ -862,7 +893,6 @@ class SpatialConfigurator:
     # ------------------------------------------------------------------
     # Internal: batch detection and delegation
     # ------------------------------------------------------------------
-
 
     def _call_template(
         self,
@@ -1045,7 +1075,9 @@ class SpatialConfigurator:
         n_ages: int = 8,
         new_adult_age: int = 2,
         generation_time: Optional[float] = None,
-        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64]]] = None,
+        equilibrium_distribution: Optional[
+            Union[List[float], NDArray[np.float64]]
+        ] = None,
     ) -> SpatialConfigurator:
         """Configure age structure (age-structured models only).
 
@@ -1074,14 +1106,17 @@ class SpatialConfigurator:
         )
         if equilibrium_distribution is not None:
             self._detect_and_delegate(
-                "competition", {"equilibrium_distribution": equilibrium_distribution},
+                "competition",
+                {"equilibrium_distribution": equilibrium_distribution},
             )
         return result
 
     def initial_state(
         self,
         individual_count: Any,  # Any: accepts nested dict, list, or ndarray — validated internally
-        sperm_storage: Optional[Any] = None,  # Any: accepts nested dict, list, or ndarray — validated internally  # Any: accepts nested dict, list, or ndarray — validated internally
+        sperm_storage: Optional[
+            Any
+        ] = None,  # Any: accepts nested dict, list, or ndarray — validated internally  # Any: accepts nested dict, list, or ndarray — validated internally
     ) -> SpatialConfigurator:
         """Configure the initial population state.
 
@@ -1219,7 +1254,9 @@ class SpatialConfigurator:
         age_1_carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
         old_juvenile_carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
         expected_num_new_adult_females: Union[int, None, BatchSetting[Any]] = None,
-        equilibrium_distribution: Optional[Union[List[float], NDArray[np.float64], BatchSetting[Any]]] = None,
+        equilibrium_distribution: Optional[
+            Union[List[float], NDArray[np.float64], BatchSetting[Any]]
+        ] = None,
         # Discrete-generation params
         carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
     ) -> SpatialConfigurator:
@@ -1296,7 +1333,7 @@ class SpatialConfigurator:
         self._declaration_log.append(("presets", {"preset_list": preset_list}))
         # concrete_args contains GeneticPreset instances resolved from potential
         # BatchSetting wrappers; cast needed because first_value() returns object.
-        self._call_template("presets", *cast('list[GeneticPreset]', concrete_args))
+        self._call_template("presets", *cast("list[GeneticPreset]", concrete_args))
         return self
 
     def fitness(
@@ -1330,7 +1367,9 @@ class SpatialConfigurator:
             },
         )
 
-    def custom(self, **kwargs: bool | int | float | NDArray[np.float64]) -> SpatialConfigurator:
+    def custom(
+        self, **kwargs: bool | int | float | NDArray[np.float64]
+    ) -> SpatialConfigurator:
         """Register custom named slots on every deme's draft.
 
         Custom slots are container-uniform: the kwargs are replayed onto
@@ -1363,8 +1402,12 @@ class SpatialConfigurator:
 
     def modifiers(
         self,
-        gamete_modifiers: Optional[List[Tuple[int, Optional[str], Callable[..., object]]]] = None,
-        zygote_modifiers: Optional[List[Tuple[int, Optional[str], Callable[..., object]]]] = None,
+        gamete_modifiers: Optional[
+            List[Tuple[int, Optional[str], Callable[..., object]]]
+        ] = None,
+        zygote_modifiers: Optional[
+            List[Tuple[int, Optional[str], Callable[..., object]]]
+        ] = None,
     ) -> SpatialConfigurator:
         """Configure custom modifier functions.
 
@@ -1423,12 +1466,9 @@ class SpatialConfigurator:
         self._observation_collapse_age = collapse_age
         if deme_mode not in ("preserve", "aggregate"):
             raise ValueError(
-                "deme_mode must be 'preserve' or 'aggregate', "
-                f"got {deme_mode!r}"
+                f"deme_mode must be 'preserve' or 'aggregate', got {deme_mode!r}"
             )
-        selected_demes = (
-            tuple(range(self._n_demes)) if demes is None else tuple(demes)
-        )
+        selected_demes = tuple(range(self._n_demes)) if demes is None else tuple(demes)
         if not selected_demes:
             raise ValueError("Observation selects no demes")
         if any(type(index) is not int for index in selected_demes):
@@ -1477,13 +1517,9 @@ class SpatialConfigurator:
                 "been built."
             )
         if mode not in ("raw", "observation"):
-            raise ValueError(
-                f"mode must be 'raw' or 'observation', got {mode!r}"
-            )
+            raise ValueError(f"mode must be 'raw' or 'observation', got {mode!r}")
         if max_rows is not None and max_rows < 1:
-            raise ValueError(
-                f"max_rows must be >= 1 or None, got {max_rows}"
-            )
+            raise ValueError(f"max_rows must be >= 1 or None, got {max_rows}")
         self._record_history_mode = mode
         self._record_history_max_rows = max_rows
         return self
@@ -1497,7 +1533,9 @@ class SpatialConfigurator:
         kernel: Optional[NDArray[np.float64]] = None,
         migration_rate: float = 0.0,
         strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = "auto",
-        adjacency: Optional[object] = None,  # object: adjacency matrix (NDArray, list, or None) — duck-typed
+        adjacency: Optional[
+            object
+        ] = None,  # object: adjacency matrix (NDArray, list, or None) — duck-typed
         kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None,
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
@@ -1558,7 +1596,9 @@ class SpatialConfigurator:
     # Parameter introspection (mirrors PopulationBuilderBase)
     # ------------------------------------------------------------------
 
-    def get_params(self) -> dict[str, object]:  # object: config field values (int, float, ndarray, bool)
+    def get_params(
+        self,
+    ) -> dict[str, object]:  # object: config field values (int, float, ndarray, bool)
         """Return all registered parameter values.
 
         Merges spatial-specific params with values read from the template config.
@@ -1570,7 +1610,9 @@ class SpatialConfigurator:
         for key, desc in ALL_PARAMETERS.items():
             if desc.config_field is None or desc.kind == "geno_tensor":
                 continue
-            field: object = getattr(self._template.config, desc.config_field, None)  # object: config fields have heterogeneous types
+            field: object = getattr(
+                self._template.config, desc.config_field, None
+            )  # object: config fields have heterogeneous types
             if field is None:
                 continue
             val: object  # object: config field values are heterogeneous (int, float, ndarray)
@@ -1583,7 +1625,9 @@ class SpatialConfigurator:
             params[key] = val
         return params
 
-    def get_param(self, domain: str, name: str) -> object | None:  # object: config field value (int, float, ndarray, bool, None)
+    def get_param(
+        self, domain: str, name: str
+    ) -> object | None:  # object: config field value (int, float, ndarray, bool, None)
         """Look up a single registered parameter value."""
         return self.get_params().get(f"{domain}.{name}")
 
@@ -1675,6 +1719,19 @@ class SpatialConfigurator:
             ),
             build_name=self._spatial_name,
         )
+        # The Rust engine is the ONLY execution backend (plan S6): the
+        # spatial population builds its session here with the default seed
+        # 0, and a missing extension is a hard error — no silent fallback
+        # to the Python tick orchestration.
+        from natal.backends.rust.rust_backend import rust_backend_available
+
+        if not rust_backend_available():
+            raise RuntimeError(
+                "natal._engine_rs is not available; the Rust engine is the "
+                "only execution backend. Build it with `maturin develop` "
+                "before constructing populations."
+            )
+        spatial.enable_rust_backend(seed=0)
         self._compile_recording_plan(spatial)
         return spatial
 
@@ -1733,14 +1790,18 @@ class SpatialConfigurator:
         genetics_signatures: List[tuple[tuple[str, Any], ...]] = []
         full_signatures: List[tuple[tuple[str, Any], ...]] = []
         for i in range(self._n_demes):
-            genetics_signatures.append(tuple(
-                (name, _make_hashable(expanded[name][i]))
-                for name in genetics_param_names
-            ))
-            full_signatures.append(tuple(
-                (name, _make_hashable(expanded[name][i]))
-                for name in all_param_names
-            ))
+            genetics_signatures.append(
+                tuple(
+                    (name, _make_hashable(expanded[name][i]))
+                    for name in genetics_param_names
+                )
+            )
+            full_signatures.append(
+                tuple(
+                    (name, _make_hashable(expanded[name][i]))
+                    for name in all_param_names
+                )
+            )
 
         # 3. Group deme indices by genetics signature.
         #    [1,1,1,...,2,...,1] → 2 groups, not n_demes groups.
@@ -1754,18 +1815,20 @@ class SpatialConfigurator:
         #    (heavy ndarrays stay shared) or a full replay fallback.
         demes: List[PopulationInstance] = [None] * self._n_demes  # type: ignore[list-item]  # None placeholder; each slot filled before return
         base_config: ModelDraft | None = None
-        base_template: Optional[PopulationInstance] = None   # template deme from first group — cloned via _clone_deme
+        base_template: Optional[PopulationInstance] = (
+            None  # template deme from first group — cloned via _clone_deme
+        )
 
         for _sig, indices in groups.items():
             first_idx = indices[0]
             sig_map: Dict[str, Any] = {
-                name: expanded[name][first_idx]
-                for name in all_param_names
+                name: expanded[name][first_idx] for name in all_param_names
             }
 
             if base_config is None:
                 group_template = self._build_template_for_group(
-                    sig_map, extra_declared=union_declared,
+                    sig_map,
+                    extra_declared=union_declared,
                 )
                 base_config = group_template.export_config()
                 base_template = group_template
@@ -1774,14 +1837,18 @@ class SpatialConfigurator:
                 # the first group's template.
                 assert base_template is not None  # set in first-group branch above
                 group_template = self._deme_from_replace(
-                    sig_map, base_config, base_template, first_idx,
+                    sig_map,
+                    base_config,
+                    base_template,
+                    first_idx,
                 )
             else:
                 # Fallback: parameter not recognized by _can_use_replace
                 # (e.g. fitness dict, custom modifier). Full builder replay —
                 # all arrays freshly allocated, no sharing with base_config.
                 group_template = self._build_template_for_group(
-                    sig_map, extra_declared=union_declared,
+                    sig_map,
+                    extra_declared=union_declared,
                 )
 
             demes[first_idx] = group_template
@@ -1859,16 +1926,20 @@ class SpatialConfigurator:
         if "individual_count" in value_map:
             state.individual_count[:] = variant_config.initial_individual_count
         if "sperm_storage" in value_map:
-            ss = getattr(state, 'sperm_storage', None)
+            ss = getattr(state, "sperm_storage", None)
             if ss is not None:
                 ss[:] = variant_config.initial_sperm_storage
         # Update snapshot so reset() restores this deme's initial state.
-        ss_snap = getattr(state, 'sperm_storage', None)
-        object.__setattr__(deme, '_initial_population_snapshot', (
-            state.individual_count.copy(),
-            ss_snap.copy() if ss_snap is not None else None,
-            None,
-        ))
+        ss_snap = getattr(state, "sperm_storage", None)
+        object.__setattr__(
+            deme,
+            "_initial_population_snapshot",
+            (
+                state.individual_count.copy(),
+                ss_snap.copy() if ss_snap is not None else None,
+                None,
+            ),
+        )
         return deme
 
     @staticmethod
@@ -1941,7 +2012,9 @@ class SpatialConfigurator:
         """
         from natal.frontend.configurator import PopulationConfigBuilder
 
-        replace_kwargs: Dict[str, Any] = {}  # Any: config field values (int, float, ndarray, bool)
+        replace_kwargs: Dict[
+            str, Any
+        ] = {}  # Any: config field values (int, float, ndarray, bool)
 
         for kwarg, raw_val in sig_map.items():
             # sig_map values are genuinely polymorphic (float, int, dict, …);
@@ -1981,9 +2054,7 @@ class SpatialConfigurator:
             # --- 1b. discrete scalars: one cell of a copied unified vector ---
             if kwarg in _DISCRETE_VECTOR_CELLS:
                 field_name, cell = _DISCRETE_VECTOR_CELLS[kwarg]
-                arr = np.array(
-                    getattr(base_config, field_name), dtype=np.float64
-                )
+                arr = np.array(getattr(base_config, field_name), dtype=np.float64)
                 # sig_map values are pre-validated scalars (see _can_use_replace).
                 arr[cell] = float(val)  # type: ignore[reportArgumentType]  # BatchSetting already expanded upstream
                 replace_kwargs[field_name] = arr
@@ -1992,21 +2063,24 @@ class SpatialConfigurator:
             # --- 2. rename ---
             config_field = _KWARG_RENAMES.get(kwarg, kwarg)
             # Wrap scalar values for 0-d ndarray config fields.
-            if _is_0d_field(base_config, config_field) and not isinstance(val, np.ndarray):
+            if _is_0d_field(base_config, config_field) and not isinstance(
+                val, np.ndarray
+            ):
                 replace_kwargs[config_field] = np.array(
                     _float_value(val, name=config_field)
                 )
             else:
                 replace_kwargs[config_field] = val
 
-
         variant = base_config._replace(**replace_kwargs)
 
         return variant
 
     def _build_template_for_group(
-        self, sig_map: Dict[str, object],
-        *, extra_declared: set[int] | None = None,
+        self,
+        sig_map: Dict[str, object],
+        *,
+        extra_declared: set[int] | None = None,
         compress: bool | None = None,
     ) -> PopulationInstance:
         """Build a single template deme for one config-signature group.

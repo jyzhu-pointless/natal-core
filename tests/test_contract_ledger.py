@@ -174,7 +174,10 @@ MUST_NOT_EXIST: tuple[RemovalEntry, ...] = (
     ),
     RemovalEntry(
         item_id="backend-selector",
-        description="backend= selection, enable/disable facades, and their exports/stubs",
+        description=(
+            "backend= selection (removed at S6 batch A), enable/disable "
+            "facades, and their exports/stubs"
+        ),
         owner_stage="S6",
         status="pending",
     ),
@@ -380,16 +383,33 @@ def _pending_probe_backends_reference() -> None:
 
 
 def _pending_probe_backend_selector() -> None:
-    """The backend= kwarg and the enable/disable facades must still exist."""
+    """The backend= kwarg is gone; the enable/disable facades remain until S6.
+
+    S6 batch A removed the ``backend=`` selection kwarg from every ``setup``
+    signature (plan must-not-exist item 2).  The enable/disable facades and
+    their exports/stubs still exist until batch B deletes the reference
+    engine; this pending probe pins both halves of that split.
+    """
+    from natal.frontend.configurator._base import Configurator
+    from natal.frontend.population.age_structured import AgeStructuredPopulation
     from natal.frontend.population.discrete_generation import (
         DiscreteGenerationPopulation,
     )
     from natal.frontend.spatial.population import SpatialPopulation
 
-    assert (
-        "backend" in inspect.signature(DiscreteGenerationPopulation.setup).parameters
-    ), "DiscreteGenerationPopulation.setup lost the backend= selector kwarg"
-    for cls in (DiscreteGenerationPopulation, SpatialPopulation):
+    for cls in (AgeStructuredPopulation, DiscreteGenerationPopulation):
+        assert "backend" not in inspect.signature(cls.setup).parameters, (
+            f"{cls.__name__}.setup still carries the retired backend= selector "
+            "kwarg — the S6 batch A removal regressed"
+        )
+    assert "backend" not in inspect.signature(Configurator.setup).parameters, (
+        "Configurator.setup still carries the retired backend= selector kwarg"
+    )
+    for cls in (
+        AgeStructuredPopulation,
+        DiscreteGenerationPopulation,
+        SpatialPopulation,
+    ):
         assert hasattr(cls, "enable_rust_backend")
         assert hasattr(cls, "disable_rust_backend")
 

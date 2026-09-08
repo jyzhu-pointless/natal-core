@@ -1,20 +1,20 @@
 """Adversarial tests for the slice-4 hook domain and recording.
 
-Every semantic asserted here was probed empirically on all backends
-before being locked in.  Directions covered (beyond
+Every semantic asserted here was probed empirically on the Rust
+lifecycle backend before being locked in.  Directions covered (beyond
 ``tests/test_hooks_slice4.py``):
 
 1. ``stop()`` semantics per event (first/early/late), the
    finished-guard / ``reset()`` recovery state machine, and stop-flag
    non-leakage across runs.
 2. The two-layer state loan: hook writes feed subsequent engine stages;
-   external tampering with ``pop.state`` between runs is rejected by the
-   History boundary guard on every backend.
+   external tampering with ``pop._state`` between runs cannot reach the
+   session-owned engine (plan S2).
 3. ``metrics`` exact numeric agreement for a known allele mixture,
    including the zero-total degenerate case.
 4. Parameter snapshot completeness: no-change runs append zero rows, the
    log tuple is an immutable per-call snapshot, and hook writes carry
-   the hook's tick on the Rust backend too.
+   the hook's tick.
 5. Negative contract: the njit-era registration surface
    (``set_hook`` / ``get_hooks`` / ``remove_hook`` / ``hook_entries`` /
    ``njit_fn`` / ``py_wrapper`` / ``hook_set_param`` / ``unified_hook``)
@@ -44,9 +44,6 @@ import natal as nt
 from natal.frontend.hooks import Op
 from natal.frontend.hooks.tick_context import TickContext
 
-_BACKENDS = ["rust", "python"]
-
-
 # ---------------------------------------------------------------------------
 # Builders and helpers
 # ---------------------------------------------------------------------------
@@ -55,7 +52,6 @@ _BACKENDS = ["rust", "python"]
 def _build(
     name: str,
     *,
-    backend: str = "python",
     hooks: list[object] | None = None,
     alleles: tuple[str, ...] = ("WT", "Dr"),
     carrying_capacity: float | None = None,
@@ -77,7 +73,6 @@ def _build(
             species=species,
             name=name,
             stochastic=False,
-            backend=backend,  # type: ignore[arg-type]
         )
         .initial_state(
             individual_count={
@@ -113,8 +108,7 @@ def _live_ctx(pop: nt.DiscreteGenerationPopulation) -> TickContext:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_first_stop_prevents_downstream_events_and_tick(backend: str) -> None:
+def test_first_stop_prevents_downstream_events_and_tick() -> None:
     """A first-event stop skips early/late/aging and freezes the tick."""
     events: list[str] = []
 
@@ -138,7 +132,7 @@ def test_first_stop_prevents_downstream_events_and_tick(backend: str) -> None:
         return 0
 
     pop = _build(
-        f"s4x_first_stop_{backend}", backend=backend,
+        f"s4x_first_stop",
         hooks=[stopper, early_marker, late_marker],
     )
     pop.run(n_steps=5)
@@ -154,8 +148,7 @@ def test_first_stop_prevents_downstream_events_and_tick(backend: str) -> None:
     assert float(ic[:, 1, :].sum()) == 0.0
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_early_stop_skips_late_and_aging(backend: str) -> None:
+def test_early_stop_skips_late_and_aging() -> None:
     """An early-event stop skips the late event and the aging stage."""
     events: list[str] = []
 
@@ -178,7 +171,7 @@ def test_early_stop_skips_late_and_aging(backend: str) -> None:
         return 0
 
     pop = _build(
-        f"s4x_early_stop_{backend}", backend=backend,
+        f"s4x_early_stop",
         hooks=[first_marker, early_stopper, late_marker],
     )
     pop.run(n_steps=3)  # must not resume after the stop
@@ -193,8 +186,7 @@ def test_early_stop_skips_late_and_aging(backend: str) -> None:
     assert float(ic[:, 1, 2].sum()) == 0.0
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_late_stop_halts_at_event_boundary_before_aging(backend: str) -> None:
+def test_late_stop_halts_at_event_boundary_before_aging() -> None:
     """A late-event stop ends the run immediately; aging does not run.
 
     Implemented semantics (identical on rust / python): the tick
@@ -211,7 +203,8 @@ def test_late_stop_halts_at_event_boundary_before_aging(backend: str) -> None:
         return 0
 
     pop = _build(
-        f"s4x_late_stop_{backend}", backend=backend, hooks=[late_stopper],
+        f"s4x_late_stop",
+        hooks=[late_stopper],
     )
     pop.run(n_steps=2)
 
@@ -224,8 +217,7 @@ def test_late_stop_halts_at_event_boundary_before_aging(backend: str) -> None:
     assert float(ic[:, 1, 2].sum()) == 0.0
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_stop_guard_blocks_rerun_until_reset(backend: str) -> None:
+def test_stop_guard_blocks_rerun_until_reset() -> None:
     """After a stop the finished-guard rejects run(); reset() recovers."""
     calls: list[int] = []
     stop_already = {"done": False}
@@ -238,7 +230,7 @@ def test_stop_guard_blocks_rerun_until_reset(backend: str) -> None:
             pop.stop()
         return 0
 
-    pop = _build(f"s4x_guard_{backend}", backend=backend, hooks=[stop_once])
+    pop = _build("s4x_guard", hooks=[stop_once])
     pop.run(n_steps=3)
     assert pop._finished
     assert calls == [0]
@@ -265,7 +257,7 @@ def test_nonzero_return_stops_on_rust_backend() -> None:
         calls.append(pop.tick)
         return 7  # any nonzero code must stop
 
-    pop = _build("s4x_rust_ret", backend="rust", hooks=[return_stopper])
+    pop = _build("s4x_rust_ret", hooks=[return_stopper])
     pop.run(n_steps=4)
 
     assert calls == [0]
@@ -278,8 +270,7 @@ def test_nonzero_return_stops_on_rust_backend() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_hook_state_write_feeds_subsequent_engine_stages(backend: str) -> None:
+def test_hook_state_write_feeds_subsequent_engine_stages() -> None:
     """A hook's state write is consumed by the lifecycle stages after it."""
     captured: list[TickContext] = []
 
@@ -289,7 +280,7 @@ def test_hook_state_write_feeds_subsequent_engine_stages(backend: str) -> None:
         pop.state.individual_count[:, 0, 0] += 5.0
         return 0
 
-    pop = _build(f"s4x_loan_{backend}", backend=backend, hooks=[boost])
+    pop = _build("s4x_loan", hooks=[boost])
     pop.run(n_steps=1)
 
     # Aging (a later stage in the same tick) consumed the hook's values:
@@ -299,37 +290,27 @@ def test_hook_state_write_feeds_subsequent_engine_stages(backend: str) -> None:
     assert len(captured) == 1
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_external_state_tampering_between_runs_rejected(backend: str) -> None:
+def test_external_state_tampering_between_runs_rejected() -> None:
     """External state tampering between runs is contained.
 
-    Two layers enforce the long-term immutability contract:
-
-    - Python engine (reference path): the engine refuses to continue from
-      a state that diverges from the latest recorded history row — the
-      boundary guard raises.
-    - Rust engine (plan S2): the session owns the state outright, so a
-      tampered Python cache simply cannot reach the engine — the next
-      run's trajectory is bit-identical to an untampered twin.
+    The session owns the state outright (plan S2), so a tampered Python
+    cache simply cannot reach the engine — the next run's trajectory is
+    bit-identical to an untampered twin.
     """
-    pop = _build(f"s4x_tamper_{backend}", backend=backend)
-    twin = _build(f"s4x_tamper_{backend}_twin", backend=backend)
+    pop = _build("s4x_tamper")
+    twin = _build("s4x_tamper_twin")
     pop.run(n_steps=1)
     twin.run(n_steps=1)
 
-    # Tampering must reach the engine to exercise the layer: the public
-    # state snapshots since R5, so write the live container directly.
+    # The public state snapshots since R5, so write the live container
+    # (the cache) directly to attempt the tamper.
     pop._state.individual_count[0, 0, 0] = 777.0  # pyright: ignore[reportPrivateUsage]
 
-    if backend == "rust":
-        pop.run(n_steps=1)
-        twin.run(n_steps=1)
-        np.testing.assert_array_equal(
-            pop.state.individual_count, twin.state.individual_count
-        )
-    else:
-        with pytest.raises(ValueError, match="boundary"):
-            pop.run(n_steps=1)
+    pop.run(n_steps=1)
+    twin.run(n_steps=1)
+    np.testing.assert_array_equal(
+        pop.state.individual_count, twin.state.individual_count
+    )
 
 
 def test_blueprint_view_is_read_only_and_cached() -> None:
@@ -371,7 +352,9 @@ def test_metrics_mixture_exact_frequencies() -> None:
         return 0
 
     pop = _build(
-        "s4x_mixture", backend="rust", hooks=[capture], alleles=("A", "B"),
+        "s4x_mixture",
+        hooks=[capture],
+        alleles=("A", "B"),
     )
     aa = _ztype_index(_live_ctx(pop), "A|A")
     ab = _ztype_index(_live_ctx(pop), "A|B")
@@ -397,7 +380,9 @@ def test_metrics_mixture_exact_frequencies() -> None:
     np.testing.assert_allclose(ctx.metrics.by_sex, [600.0, 400.0])
     np.testing.assert_allclose(ctx.metrics.by_age, [1000.0, 0.0])
     assert ctx.metrics.genotype_frequencies == {
-        "A|A:default": 0.6, "A|B:default": 0.4, "B|B:default": 0.0,
+        "A|A:default": 0.6,
+        "A|B:default": 0.4,
+        "B|B:default": 0.0,
     }
 
     # Allele frequencies: two gene copies per diploid individual.
@@ -461,11 +446,11 @@ def test_params_log_snapshot_semantics_and_quiet_run() -> None:
         pop.params_log[0] = "x"  # type: ignore[index]
 
 
-@pytest.mark.parametrize("backend", ["rust"])
-def test_params_log_hook_write_tick_attribution(backend: str) -> None:
+def test_params_log_hook_write_tick_attribution() -> None:
     """A hook write lands as exactly one row stamped with the hook tick."""
     pop = _build(
-        f"s4x_hooklog_{backend}", backend=backend, carrying_capacity=100_000.0,
+        "s4x_hooklog",
+        carrying_capacity=100_000.0,
     )
     pop.run(n_steps=2)  # now at tick 2
 
@@ -496,9 +481,10 @@ def test_removed_hook_surface_inaccessible() -> None:
     # Hooks package surface.
     import natal.frontend.hooks as hooks_pkg
 
-    for attr in ("hook_set_param", "unified_hook", "set_hook",
-                 "is_njit_function"):
-        assert not hasattr(hooks_pkg, attr), f"natal.frontend.hooks.{attr} must not exist"
+    for attr in ("hook_set_param", "unified_hook", "set_hook", "is_njit_function"):
+        assert not hasattr(hooks_pkg, attr), (
+            f"natal.frontend.hooks.{attr} must not exist"
+        )
 
     # Descriptor payload: binary (plan | callback) only.
     @nt.hook(event="first")
@@ -608,8 +594,7 @@ def test_op_group_set_then_add_stacks_exactly() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_runtime_hooks_entry_bitwise_equals_build_time(backend: str) -> None:
+def test_runtime_hooks_entry_bitwise_equals_build_time() -> None:
     """Registering the same hook set at runtime reproduces the build path."""
 
     def make_tweak() -> Callable[[TickContext], int]:
@@ -623,9 +608,10 @@ def test_runtime_hooks_entry_bitwise_equals_build_time(backend: str) -> None:
     op_build = Op.set_count(genotypes="Dr|Dr", ages=0, sex="male", value=11.0)
     op_build.event = "first"
     pa = _build(
-        f"s4x_rt_a_{backend}", backend=backend, hooks=[make_tweak(), op_build],
+        "s4x_rt_a",
+        hooks=[make_tweak(), op_build],
     )
-    pb = _build(f"s4x_rt_b_{backend}", backend=backend)
+    pb = _build("s4x_rt_b")
     op_runtime = Op.set_count(genotypes="Dr|Dr", ages=0, sex="male", value=11.0)
     pb.update().hooks(make_tweak())
     pb.update().hooks(op_runtime, event="first")
@@ -633,9 +619,9 @@ def test_runtime_hooks_entry_bitwise_equals_build_time(backend: str) -> None:
     pa.run(n_steps=3)
     pb.run(n_steps=3)
 
-    assert np.array_equal(
-        pa.state.individual_count, pb.state.individual_count
-    ), "runtime registration must be bitwise-equivalent to build time"
+    assert np.array_equal(pa.state.individual_count, pb.state.individual_count), (
+        "runtime registration must be bitwise-equivalent to build time"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -905,8 +891,7 @@ def test_runner_skips_non_tick_event_descriptors() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_hook_exception_propagates_and_session_survives(backend: str) -> None:
+def test_hook_exception_propagates_and_session_survives() -> None:
     """A raising hook surfaces as a Python exception; the pop stays usable.
 
     The Rust bridge wraps the original error as ``RuntimeError`` with the
@@ -921,13 +906,9 @@ def test_hook_exception_propagates_and_session_survives(backend: str) -> None:
             raise ValueError("hook boom")
         return 0
 
-    pop = _build(f"s4x_boom_{backend}", backend=backend, hooks=[fragile])
-    if backend == "rust":
-        with pytest.raises(RuntimeError, match="python lifecycle callback failed"):
-            pop.run(n_steps=2)
-    else:
-        with pytest.raises(ValueError, match="hook boom"):
-            pop.run(n_steps=2)
+    pop = _build("s4x_boom", hooks=[fragile])
+    with pytest.raises(RuntimeError, match="python lifecycle callback failed"):
+        pop.run(n_steps=2)
 
     # The failure left a clean, restartable session: no dangling run flag,
     # tick not advanced, not marked finished — and a disarmed run completes.

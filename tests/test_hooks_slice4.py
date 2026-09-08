@@ -38,7 +38,6 @@ def _species(name: str) -> nt.Species:
 def _build_discrete(
     name: str,
     *,
-    backend: str = "python",
     hook_items: list[object] | None = None,
     carrying_capacity: float | None = None,
     eggs_per_female: float = 0.0,
@@ -56,7 +55,6 @@ def _build_discrete(
             species=_species(f"s4_{name}"),
             name=name,
             stochastic=False,
-            backend=backend,  # type: ignore[arg-type]
         )
         .initial_state(
             individual_count={
@@ -79,15 +77,11 @@ def _build_discrete(
 
 
 # ---------------------------------------------------------------------------
-# End-to-end: the nine-member TickContext on all three backends
+# End-to-end: the nine-member TickContext on the Rust lifecycle
 # ---------------------------------------------------------------------------
 
 
-_BACKENDS = ["rust", "python"]
-
-
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_single_param_hook_state_write_and_read_on_all_backends(backend: str) -> None:
+def test_single_param_hook_state_write_and_read() -> None:
     """A hook's state writes take effect and its reads see the live state."""
     seen: dict[str, float] = {}
 
@@ -99,9 +93,8 @@ def test_single_param_hook_state_write_and_read_on_all_backends(backend: str) ->
         seen["tick"] = pop.tick
         return 0
 
-    pop = _build_discrete(f"s4_state_{backend}", backend=backend, hook_items=[boost_males])
-    if backend == "rust":
-        assert pop.using_rust_backend
+    pop = _build_discrete("s4_state", hook_items=[boost_males])
+    assert pop.using_rust_backend
     pop.run(n_steps=1)
 
     assert seen["before"] == 100.0
@@ -112,8 +105,7 @@ def test_single_param_hook_state_write_and_read_on_all_backends(backend: str) ->
     assert float(pop.state.individual_count[1, 1, 0]) == 107.0
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_hook_reads_params_and_metrics_on_all_backends(backend: str) -> None:
+def test_hook_reads_params_and_metrics() -> None:
     """``pop.params`` and ``pop.metrics`` are readable inside hooks."""
     seen: dict[str, object] = {}
 
@@ -129,8 +121,7 @@ def test_hook_reads_params_and_metrics_on_all_backends(backend: str) -> None:
         return 0
 
     pop = _build_discrete(
-        f"s4_read_{backend}",
-        backend=backend,
+        "s4_read",
         hook_items=[probe],
         carrying_capacity=100_000.0,
     )
@@ -143,8 +134,7 @@ def test_hook_reads_params_and_metrics_on_all_backends(backend: str) -> None:
     assert seen["Dr|Dr"] == 200.0
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_stop_on_all_backends(backend: str) -> None:
+def test_stop() -> None:
     """stop() halts the run and the tick does not advance."""
     calls: list[int] = []
 
@@ -154,7 +144,7 @@ def test_stop_on_all_backends(backend: str) -> None:
         pop.stop()
         return 0
 
-    pop = _build_discrete(f"s4_stop_{backend}", backend=backend, hook_items=[stopper])
+    pop = _build_discrete("s4_stop", hook_items=[stopper])
     pop.run(n_steps=5)
 
     assert calls == [0]  # fired exactly once, at tick 0
@@ -197,8 +187,7 @@ def test_tick_and_deme_id_read_only() -> None:
         ctx.deme_id = 3  # type: ignore[misc]
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_deme_id_is_zero_on_panmictic_runs(backend: str) -> None:
+def test_deme_id_is_zero_on_panmictic_runs() -> None:
     """``pop.deme_id`` must be 0 (never -1) in panmictic hooks.
 
     Contract: deme_id is 0 for single-population models on every backend.
@@ -212,9 +201,7 @@ def test_deme_id_is_zero_on_panmictic_runs(backend: str) -> None:
         seen.append(int(pop.deme_id))
         return 0
 
-    pop = _build_discrete(
-        f"s4_deme_id_{backend}", backend=backend, hook_items=[record_deme]
-    )
+    pop = _build_discrete("s4_deme_id", hook_items=[record_deme])
     pop.run(n_steps=2)
 
     assert seen == [0, 0]
@@ -350,7 +337,7 @@ def test_metrics_c_star_s_star_recompute_on_demand() -> None:
     # Competition weights default to zero; give the age classes weight so
     # the density metric is sensitive to the live state.
     pop.params.tensor_write(
-        "age_based_relative_competition_strength",
+        "competition_weights",
         np.array([1.0, 1.0], dtype=np.float64),
     )
     # Adults drive egg production; give the population a breeding base.
@@ -416,24 +403,22 @@ def test_params_log_skips_writes_without_value_change() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("backend", _BACKENDS)
-def test_hook_param_write_visible_and_used_by_run(backend: str) -> None:
+def test_hook_param_write_visible_and_used_by_run() -> None:
     """In-hook writes are visible via pop.params and the engine uses them."""
+
     @nt.hook(event="first")
     def constrain(pop: TickContext) -> int:
         pop.params.carrying_capacity = 500.0
         return 0
 
     pop = _build_discrete(
-        f"s4_kwrite_{backend}",
-        backend=backend,
+        "s4_kwrite",
         hook_items=[constrain],
         eggs_per_female=10.0,
         carrying_capacity=100_000.0,
     )
     control = _build_discrete(
-        f"s4_kctl_{backend}",
-        backend=backend,
+        "s4_kctl",
         eggs_per_female=10.0,
         carrying_capacity=100_000.0,
     )
@@ -509,7 +494,9 @@ def test_duplicate_registration_is_idempotent() -> None:
     assert len(pop.get_compiled_hooks("first")) == 2
 
     pop.run(n_steps=1)
-    assert float(pop.state.individual_count[1, 1, 0]) == pytest.approx(7.0)  # applied once
+    assert float(pop.state.individual_count[1, 1, 0]) == pytest.approx(
+        7.0
+    )  # applied once
 
 
 def test_same_object_on_different_events_registers_twice() -> None:

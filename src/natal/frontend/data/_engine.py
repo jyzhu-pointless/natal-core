@@ -43,15 +43,15 @@ def equilibrium_metrics_dispatch(
     n_ages: int,
     declared_distribution: NDArray[np.float64] | None,
     external_expected_eggs: float | None,
-) -> tuple[float, float] | None:
-    """Run the Rust equilibrium kernel; ``None`` when it is unavailable.
+) -> tuple[float, float]:
+    """Run the Rust equilibrium kernel.
 
     Single dispatch point for the equilibrium calibration (plan 5.2):
     the sensitive-parameter sync path and the build-time map computation
     both funnel through here so the kernel choice cannot drift apart.
     Callers feed already-resolved reproduction vectors (the None-fallback
-    to the female mating row is caller policy) and translate ``None``
-    into their pure-Python fallback.
+    to the female mating row is caller policy).  The Rust engine is the
+    only execution backend (plan S6): a missing extension propagates.
 
     Args:
         carrying_capacity: Carrying capacity K (age-1 total).
@@ -68,12 +68,10 @@ def equilibrium_metrics_dispatch(
 
     Returns:
         ``(expected_competition_strength, expected_survival_rate)`` from
-        the Rust kernel, or ``None`` when the extension is absent.
+        the Rust kernel.
     """
-    try:
-        from natal._engine_rs import equilibrium_metrics_flat as rust_metrics
-    except ImportError:
-        return None
+    from natal._engine_rs import equilibrium_metrics_flat as rust_metrics
+
     declared = (
         np.ascontiguousarray(declared_distribution, dtype=np.float64)
         if declared_distribution is not None and declared_distribution.size > 0
@@ -96,22 +94,18 @@ def equilibrium_metrics_dispatch(
 
 def _rust_offspring_kernel(
     meiosis: NDArray[np.float64], fusion: NDArray[np.float64]
-) -> NDArray[np.float64] | None:
-    """Run the Rust offspring kernel when the extension is available.
+) -> NDArray[np.float64]:
+    """Run the Rust offspring kernel.
 
     Args:
         meiosis: Meiosis table of shape ``(2, n_ztypes, n_gtypes)``.
         fusion: Fusion table of shape ``(n_gtypes, n_gtypes, n_ztypes)``.
 
     Returns:
-        The flat kernel result reshaped to ``(n_ztypes,)*3``, or ``None``
-        when the extension is not importable (the pure-Python fallback
-        remains until the Rust-only stage retires it).
+        The flat kernel result reshaped to ``(n_ztypes,)*3``.
     """
-    try:
-        from natal._engine_rs import compute_offspring_tensor as rust_kernel
-    except ImportError:
-        return None
+    from natal._engine_rs import compute_offspring_tensor as rust_kernel
+
     flat = rust_kernel(
         np.ascontiguousarray(meiosis, dtype=np.float64),
         np.ascontiguousarray(fusion, dtype=np.float64),
@@ -131,10 +125,8 @@ def recompute_offspring_tensor(
     every caller — the writer channel, the spatial variant channel, the
     modifier refresh, the registry compression, and the build-time map
     computation — funnels through this one spelling so they cannot drift
-    apart.  The numeric kernel lives in Rust (plan 5.2); the pure-Python
-    spelling below is the extension-less fallback and both are
-    statement-for-statement identical, so results are bit-equal either
-    way.
+    apart.  The numeric kernel lives in Rust (plan 5.2) and is the only
+    execution backend (plan S6).
 
     Args:
         meiosis: Meiosis table of shape ``(2, n_ztypes, n_gtypes)``.
@@ -145,28 +137,7 @@ def recompute_offspring_tensor(
     """
     meiosis = np.ascontiguousarray(meiosis, dtype=np.float64)
     fusion = np.ascontiguousarray(fusion, dtype=np.float64)
-    rust_result = _rust_offspring_kernel(meiosis, fusion)
-    if rust_result is not None:
-        return rust_result
-    # Extension-less fallback: same statement order and zero-skips as the
-    # Rust kernel (bit-identical results).
-    from natal.backends.reference.simulation.age_structured import (
-        compute_offspring_probability_tensor,
-    )
-
-    # Single-gamete-label layouts collapse the label axis, so the
-    # ztype/gtype counts come from the meiosis table itself.
-    n_z = int(meiosis.shape[1])
-    n_g = int(meiosis.shape[2])
-    return np.ascontiguousarray(
-        compute_offspring_probability_tensor(
-            meiosis_f=meiosis[0],
-            meiosis_m=meiosis[1],
-            haplo_to_genotype_map=fusion,
-            n_ztypes=n_z,
-            n_gtypes=n_g,
-        )
-    )
+    return _rust_offspring_kernel(meiosis, fusion)
 
 
 def derive_equilibrium_metrics_from_draft(
@@ -192,7 +163,7 @@ def derive_equilibrium_metrics_from_draft(
         if draft.age_based_reproduction_rates is not None
         else draft.age_based_mating_rates[0]
     )
-    metrics = equilibrium_metrics_dispatch(
+    return equilibrium_metrics_dispatch(
         draft.carrying_capacity,
         draft.eggs_per_female,
         draft.sex_ratio,
@@ -204,27 +175,6 @@ def derive_equilibrium_metrics_from_draft(
         int(draft.n_ages),
         draft.equilibrium_individual_distribution,
         draft.external_expected_eggs,
-    )
-    if metrics is not None:
-        return metrics
-    # Extension-less fallback: the pure-Python spelling (retired at S6).
-    from natal.backends.reference.simulation.age_structured import (
-        compute_equilibrium_metrics,
-    )
-
-    return compute_equilibrium_metrics(
-        carrying_capacity=float(draft.carrying_capacity),
-        eggs_per_female=float(draft.eggs_per_female),
-        age_based_survival_rates=draft.age_based_survival_rates,
-        age_based_mating_rates=draft.age_based_mating_rates,
-        age_based_reproduction_rates=draft.age_based_reproduction_rates,
-        female_age_based_fertility=draft.female_age_based_fertility,
-        relative_competition_strength=draft.age_based_relative_competition_strength,
-        sex_ratio=float(draft.sex_ratio),
-        new_adult_age=int(draft.new_adult_age),
-        n_ages=int(draft.n_ages),
-        equilibrium_individual_count=draft.equilibrium_individual_distribution,
-        external_expected_eggs=draft.external_expected_eggs,
     )
 
 
@@ -253,8 +203,7 @@ def validate_meiosis_table(candidate: NDArray[np.float64]) -> None:
     if (candidate < 0.0).any():
         bad = int(np.count_nonzero(candidate < 0.0))
         raise ValueError(
-            "meiosis_map entries must be non-negative; "
-            f"{bad} entr(ies) violate this"
+            f"meiosis_map entries must be non-negative; {bad} entr(ies) violate this"
         )
 
 
@@ -264,7 +213,9 @@ def initialize_zygote_map(
     n_glabs: int = 1,
     n_slabs: int = 1,
     unordered: bool = False,
-    zygote_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+    zygote_modifiers: Optional[
+        List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]
+    ] = None,
 ) -> NDArray[np.float64]:
     """Initialize the ``gametes_to_zygotes_map`` tensor.
 
@@ -304,12 +255,12 @@ def initialize_zygote_map(
         raise ValueError("n_glabs must be positive")
 
     gametes_to_zygotes_map: NDArray[np.float64] = np.zeros(
-        (n_gtypes, n_gtypes, n_ztypes), dtype=np.float64,
+        (n_gtypes, n_gtypes, n_ztypes),
+        dtype=np.float64,
     )
 
     _gtype_index: dict[tuple[int, int], int] = {
-        (hi, gi): hi * n_glabs + gi
-        for hi in range(n_hg) for gi in range(n_glabs)
+        (hi, gi): hi * n_glabs + gi for hi in range(n_hg) for gi in range(n_glabs)
     }
 
     for idx_hg1, hg1 in enumerate(haploid_genotypes):
@@ -346,7 +297,9 @@ def initialize_gamete_map(
     diploid_genotypes: List[Genotype],
     n_glabs: int = 1,
     n_slabs: int = 1,
-    gamete_modifiers: Optional[List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]] = None,
+    gamete_modifiers: Optional[
+        List[Callable[[NDArray[np.float64]], NDArray[np.float64]]]
+    ] = None,
 ) -> NDArray[np.float64]:
     """Create and return a ``zygotes_to_gametes_map`` tensor.
 
@@ -385,13 +338,13 @@ def initialize_gamete_map(
     n_gtypes = n_hg * n_glabs
 
     zygotes_to_gametes_map: NDArray[np.float64] = np.zeros(
-        (n_sexes, n_ztypes, n_gtypes), dtype=np.float64,
+        (n_sexes, n_ztypes, n_gtypes),
+        dtype=np.float64,
     )
     haplo_to_idx = {hg: idx for idx, hg in enumerate(haploid_genotypes)}
 
     _gtype_index: dict[tuple[int, int], int] = {
-        (hi, gi): hi * n_glabs + gi
-        for hi in range(n_hg) for gi in range(n_glabs)
+        (hi, gi): hi * n_glabs + gi for hi in range(n_hg) for gi in range(n_glabs)
     }
 
     allowed_haplotypes_by_sex: dict[int, set[HaploidGenotype]] = {}
@@ -415,7 +368,9 @@ def initialize_gamete_map(
                 filtered_gametes = base_gametes
             else:
                 filtered_gametes = {
-                    gamete: freq for gamete, freq in base_gametes.items() if gamete in allowed
+                    gamete: freq
+                    for gamete, freq in base_gametes.items()
+                    if gamete in allowed
                 }
 
             total_freq = float(sum(filtered_gametes.values()))
@@ -431,7 +386,9 @@ def initialize_gamete_map(
                 baseline_freq = float(freq) * inv_total
                 for slab_idx in range(n_slabs):
                     ztype_idx = idx_genotype * n_slabs + slab_idx
-                    zygotes_to_gametes_map[sex_idx, ztype_idx, compressed_idx] = baseline_freq
+                    zygotes_to_gametes_map[sex_idx, ztype_idx, compressed_idx] = (
+                        baseline_freq
+                    )
 
     if gamete_modifiers:
         for modifier in gamete_modifiers:
@@ -568,7 +525,9 @@ def build_discrete_engine_config(
         fecundity_fitness=kwargs.pop("fecundity_fitness", None),
         sexual_selection_fitness=kwargs.pop("sexual_selection_fitness", None),
         zygote_viability_fitness=kwargs.pop("zygote_viability_fitness", None),
-        age_based_relative_competition_strength=kwargs.pop("age_based_relative_competition_strength", None),
+        age_based_relative_competition_strength=kwargs.pop(
+            "age_based_relative_competition_strength", None
+        ),
         sperm_displacement_rate=float(kwargs.pop("sperm_displacement_rate", 0.05)),
         eggs_per_female=float(kwargs.pop("eggs_per_female", 100.0)),
         fixed_egg_count=bool(kwargs.pop("fixed_egg_count", False)),
@@ -582,8 +541,12 @@ def build_discrete_engine_config(
         initial_individual_count=kwargs.pop("initial_individual_count", None),
         initial_sperm_storage=kwargs.pop("initial_sperm_storage", None),
         age_1_carrying_capacity=kwargs.pop("age_1_carrying_capacity", None),
-        old_juvenile_carrying_capacity=kwargs.pop("old_juvenile_carrying_capacity", None),
-        infer_capacity_from_initial_state=bool(kwargs.pop("infer_capacity_from_initial_state", True)),
+        old_juvenile_carrying_capacity=kwargs.pop(
+            "old_juvenile_carrying_capacity", None
+        ),
+        infer_capacity_from_initial_state=bool(
+            kwargs.pop("infer_capacity_from_initial_state", True)
+        ),
         equilibrium_individual_distribution=equilibrium_val,
         external_expected_eggs=kwargs.pop("external_expected_eggs", None),
         pre_expanded=zygotes_to_gametes_map.shape[1] > n_genotypes,
@@ -645,7 +608,6 @@ def build_discrete_engine_config(
         external_expected_eggs=None,
         discrete_generation=True,
     )
-
 
 
 def build_custom_slots(
@@ -741,13 +703,17 @@ def compress_config(
         "initial_individual_count": config.initial_individual_count[:, :, _z_active],
         "viability_fitness": config.viability_fitness[:, :, _z_active],
         "fecundity_fitness": config.fecundity_fitness[:, _z_active],
-        "sexual_selection_fitness": config.sexual_selection_fitness[_z_active, :][:, _z_active],
+        "sexual_selection_fitness": config.sexual_selection_fitness[_z_active, :][
+            :, _z_active
+        ],
         "zygote_viability_fitness": config.zygote_viability_fitness[:, _z_active],
         "female_ztype_compatibility": config.female_ztype_compatibility[_z_active],
         "male_ztype_compatibility": config.male_ztype_compatibility[_z_active],
         "female_only_by_sex_chrom": config.female_only_by_sex_chrom[_z_active],
         "male_only_by_sex_chrom": config.male_only_by_sex_chrom[_z_active],
-        "initial_sperm_storage": config.initial_sperm_storage[:, _z_active, :][:, :, _z_active],
+        "initial_sperm_storage": config.initial_sperm_storage[:, _z_active, :][
+            :, :, _z_active
+        ],
         "ztype_names": tuple(
             name
             for name, active in zip(config.ztype_names, _z_active.tolist())

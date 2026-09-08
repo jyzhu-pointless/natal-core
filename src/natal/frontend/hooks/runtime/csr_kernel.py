@@ -39,7 +39,7 @@ import numpy as np
 
 # prange removed — parallel=True on _execute_single_csr_hook was causing
 # OpenMP overhead (4-5x slowdown) for small genotype counts. See #perf.
-import natal.backends.reference.sampling as sampling
+from natal.frontend.hooks.runtime import sampling
 from natal.frontend.hooks.types import (
     COND_OP_AND,
     COND_OP_NOT,
@@ -76,6 +76,8 @@ def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
     if isinstance(selector, range):
         return deme_id in selector
     return deme_id in selector
+
+
 def njit_deme_selector_matches(
     sel_type: int,
     start: int,
@@ -126,6 +128,8 @@ _COND_TICK_GE = 3
 _COND_TICK_LT = 4
 _COND_TICK_LE = 5
 _COND_TICK_GT = 6
+
+
 def _check_csr_condition(cond_type: int, cond_param: int, tick: int) -> bool:
     """Evaluate a single atomic condition token against the current tick.
 
@@ -152,6 +156,8 @@ def _check_csr_condition(cond_type: int, cond_param: int, tick: int) -> bool:
     if cond_type >= COND_OP_AND:
         return False  # Logical operators should never reach the atomic evaluator.
     return True
+
+
 def _eval_csr_condition_program(
     cond_types: np.ndarray,
     cond_params: np.ndarray,
@@ -262,6 +268,8 @@ def _sample_survivors(
             return sampling.continuous_binomial(n_base, survival_prob)
         return float(sampling.binomial(int(round(n_base)), survival_prob))
     return n_base * survival_prob
+
+
 def _apply_target_without_sperm(
     current_count: float,
     target_count: float,
@@ -284,7 +292,11 @@ def _apply_target_without_sperm(
         return 0.0
 
     survival_prob = max(0.0, min(1.0, target_count / current_count))
-    return _sample_survivors(current_count, survival_prob, stochastic_flag, dirichlet_flag)
+    return _sample_survivors(
+        current_count, survival_prob, stochastic_flag, dirichlet_flag
+    )
+
+
 def _apply_target_with_sperm(
     current_count: float,
     target_count: float,
@@ -361,11 +373,17 @@ def _apply_target_with_sperm(
             n_sperm = sperm_row[gm_idx]
         else:
             n_sperm = float(int(round(sperm_row[gm_idx])))
-        sperm_row[gm_idx] = _sample_survivors(n_sperm, survival_prob, True, dirichlet_flag)
+        sperm_row[gm_idx] = _sample_survivors(
+            n_sperm, survival_prob, True, dirichlet_flag
+        )
         new_sperm_sum += sperm_row[gm_idx]
 
-    survivors_virgins = _sample_survivors(n_virgins, survival_prob, True, dirichlet_flag)
+    survivors_virgins = _sample_survivors(
+        n_virgins, survival_prob, True, dirichlet_flag
+    )
     return new_sperm_sum + survivors_virgins
+
+
 def _eval_rpn_value(
     rpn_kinds: np.ndarray,
     rpn_payload: np.ndarray,
@@ -433,6 +451,8 @@ def _eval_rpn_value(
             # Unknown token kinds cannot occur: compile-time validation
             # guarantees only RPN_* tokens enter the stream.
     return stack[0]
+
+
 def _convert_count(
     n_base: float,
     prob: float,
@@ -494,6 +514,8 @@ _OP_STOP_IF_ABOVE = 8
 _OP_STOP_IF_EXTINCTION = 9
 _OP_SET_PARAM = 10
 _OP_CONVERT = 11
+
+
 def _execute_single_csr_hook(
     hook_idx: int,
     n_hooks: int | np.integer[Any],
@@ -657,19 +679,23 @@ def _execute_single_csr_hook(
                             target = current
 
                         if sex_idx == 0 and sperm_storage is not None:
-                            individual_count[sex_idx, age, zidx] = _apply_target_with_sperm(
-                                current,
-                                target,
-                                sperm_storage[age, zidx, :],
-                                stochastic,
-                                continuous_sampling,
+                            individual_count[sex_idx, age, zidx] = (
+                                _apply_target_with_sperm(
+                                    current,
+                                    target,
+                                    sperm_storage[age, zidx, :],
+                                    stochastic,
+                                    continuous_sampling,
+                                )
                             )
                         else:
-                            individual_count[sex_idx, age, zidx] = _apply_target_without_sperm(
-                                current,
-                                target,
-                                stochastic,
-                                continuous_sampling,
+                            individual_count[sex_idx, age, zidx] = (
+                                _apply_target_without_sperm(
+                                    current,
+                                    target,
+                                    stochastic,
+                                    continuous_sampling,
+                                )
                             )
 
         # ---- OP_SET_PARAM: schedule check, RPN evaluation, eco write ----
@@ -774,6 +800,8 @@ def _execute_single_csr_hook(
 
 # Public alias — used by tests and external parity checks.
 execute_single_csr_hook = _execute_single_csr_hook
+
+
 def execute_csr_event_arrays(
     n_events: int | np.integer[Any],
     n_hooks: int | np.integer[Any],
@@ -896,6 +924,8 @@ def build_hook_program(program: HookProgram) -> HookProgram:
     Currently a no-op.
     """
     return program
+
+
 def execute_csr_event_program_with_state(
     program: HookProgram,
     event_id: int,
@@ -970,6 +1000,8 @@ def execute_csr_event_program_with_state(
         deme_id=deme_id,
         eco_values=eco_values,
     )
+
+
 def execute_csr_event_program(
     program: HookProgram,
     event_id: int,

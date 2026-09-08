@@ -13,11 +13,17 @@ from natal.frontend.data._engine import (
 def _make_neutral_config():
     """Build a small neutral discrete-generation config for testing."""
     sp = nt.Species.from_dict("wf_test", {"c1": {"l1": ["A", "a"]}})
-    return nt.DiscreteGenerationPopulation.setup(
-        species=sp, stochastic=False,
-    ).initial_state(
-        individual_count={"female": {"A|A": 50}, "male": {"a|a": 50}},
-    ).build().config
+    return (
+        nt.DiscreteGenerationPopulation.setup(
+            species=sp,
+            stochastic=False,
+        )
+        .initial_state(
+            individual_count={"female": {"A|A": 50}, "male": {"a|a": 50}},
+        )
+        .build()
+        .config
+    )
 
 
 class TestWFTickUnit:
@@ -42,7 +48,8 @@ class TestWFTickUnit:
             female_only=cfg.female_only_by_sex_chrom,
             male_only=cfg.male_only_by_sex_chrom,
             has_sex_chromosomes=cfg.has_sex_chromosomes,
-            mode=3, stochastic=False,  # deterministic
+            mode=3,
+            stochastic=False,  # deterministic
         )
 
         # Check aging: offspring → age 1 (adult), age 0 cleared
@@ -75,7 +82,8 @@ class TestWFTickUnit:
                 female_only=cfg.female_only_by_sex_chrom,
                 male_only=cfg.male_only_by_sex_chrom,
                 has_sex_chromosomes=cfg.has_sex_chromosomes,
-                mode=3, stochastic=False,
+                mode=3,
+                stochastic=False,
             )
             total = ind.sum()
             assert total > 0, f"Population went extinct at generation {_}"
@@ -101,7 +109,8 @@ class TestWFTickUnit:
             female_only=cfg.female_only_by_sex_chrom,
             male_only=cfg.male_only_by_sex_chrom,
             has_sex_chromosomes=cfg.has_sex_chromosomes,
-            mode=3, stochastic=False,
+            mode=3,
+            stochastic=False,
         )
         ref_total = ref.sum()
 
@@ -124,7 +133,8 @@ class TestWFTickUnit:
                 female_only=cfg.female_only_by_sex_chrom,
                 male_only=cfg.male_only_by_sex_chrom,
                 has_sex_chromosomes=cfg.has_sex_chromosomes,
-                mode=1, stochastic=True,
+                mode=1,
+                stochastic=True,
             )
             totals[i] = result.sum()
         mean_total = totals.mean()
@@ -159,7 +169,8 @@ class TestWFTickUnit:
             female_only=cfg.female_only_by_sex_chrom,
             male_only=cfg.male_only_by_sex_chrom,
             has_sex_chromosomes=cfg.has_sex_chromosomes,
-            mode=3, stochastic=False,
+            mode=3,
+            stochastic=False,
         )
         ref_total = ref.sum()
 
@@ -181,7 +192,8 @@ class TestWFTickUnit:
                 female_only=cfg.female_only_by_sex_chrom,
                 male_only=cfg.male_only_by_sex_chrom,
                 has_sex_chromosomes=cfg.has_sex_chromosomes,
-                mode=2, stochastic=True,
+                mode=2,
+                stochastic=True,
             )
             totals[i] = result.sum()
         mean_total = totals.mean()
@@ -196,13 +208,19 @@ class TestWFEndToEnd:
     @staticmethod
     def _build_neutral_pop():
         sp = nt.Species.from_dict("wfe2e", {"c1": {"l1": ["A", "a"]}})
-        return nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False,
-        ).initial_state(
-            individual_count={"female": {"A|A": 50}, "male": {"a|a": 50}},
-        ).competition(
-            juvenile_growth_mode=0,  # NO_COMPETITION — avoids density scaling
-        ).build()
+        return (
+            nt.DiscreteGenerationPopulation.setup(
+                species=sp,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={"female": {"A|A": 50}, "male": {"a|a": 50}},
+            )
+            .competition(
+                juvenile_growth_mode=0,  # NO_COMPETITION — avoids density scaling
+            )
+            .build()
+        )
 
     @staticmethod
     def _run_wf_loop(cfg, init_ind, n_ticks):
@@ -225,7 +243,8 @@ class TestWFEndToEnd:
                 female_only=cfg.female_only_by_sex_chrom,
                 male_only=cfg.male_only_by_sex_chrom,
                 has_sex_chromosomes=cfg.has_sex_chromosomes,
-                mode=3, stochastic=False,
+                mode=3,
+                stochastic=False,
                 mating_rate_f=cfg.age_based_mating_rates[0, 1],
                 mating_rate_m=cfg.age_based_mating_rates[1, 1],
                 reproduction_rate=cfg.age_based_reproduction_rates[1],
@@ -253,14 +272,15 @@ class TestWFEndToEnd:
 
             # WF aging puts offspring at age 1; standard aging puts them
             # at age 1 too.  Total per tick should match.
-            assert np.allclose(
-                std_flat, wf_flat, rtol=1e-12
-            ), f"Tick {tick}: WF vs standard mismatch\nstd={std_flat}\nwf={wf_flat}"
+            assert np.allclose(std_flat, wf_flat, rtol=1e-12), (
+                f"Tick {tick}: WF vs standard mismatch\nstd={std_flat}\nwf={wf_flat}"
+            )
 
     def test_with_homing_drive_deterministic(self):
         """WF deterministic with HomingDrive matches standard deterministic."""
         sp = nt.Species.from_dict(
-            "wfe2e_drive", {"c1": {"l1": ["WT", "Dr", "R2"]}},
+            "wfe2e_drive",
+            {"c1": {"l1": ["WT", "Dr", "R2"]}},
             gamete_labels=["default", "cas9_deposited"],
         )
         drive = nt.HomingDrive(
@@ -273,13 +293,23 @@ class TestWFEndToEnd:
             embryo_resistance_formation_rate=0.0,
             cas9_deposition_glab="cas9_deposited",
         )
-        pop = nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False,
-        ).initial_state(
-            individual_count={"female": {"WT|WT": 450, "WT|Dr": 50}, "male": {"WT|WT": 500}},
-        ).competition(
-            juvenile_growth_mode=0,  # NO_COMPETITION
-        ).presets(drive).build()
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(
+                species=sp,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 450, "WT|Dr": 50},
+                    "male": {"WT|WT": 500},
+                },
+            )
+            .competition(
+                juvenile_growth_mode=0,  # NO_COMPETITION
+            )
+            .presets(drive)
+            .build()
+        )
 
         cfg = pop.config
         init = cfg.initial_individual_count.copy()
@@ -294,9 +324,9 @@ class TestWFEndToEnd:
         for tick in range(5):
             std_flat = h_std[tick, 1:]
             wf_flat = wf_history[tick].ravel()
-            assert np.allclose(
-                std_flat, wf_flat, rtol=1e-12
-            ), f"Tick {tick} drive: WF vs standard mismatch"
+            assert np.allclose(std_flat, wf_flat, rtol=1e-12), (
+                f"Tick {tick} drive: WF vs standard mismatch"
+            )
 
     def test_wf_compiled_path_with_hooks(self):
         """I12: WF compiled path executes with hooks — compilation + run.
@@ -314,23 +344,38 @@ class TestWFEndToEnd:
             return [nt.Op.scale(genotypes="*", ages=1, factor=0.5, when="tick == 2")]
 
         # Reference: no hooks
-        pop_ref = nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False,
-        ).initial_state(
-            individual_count={"female": {"A|A": 50}, "male": {"a|a": 50}},
-        ).competition(juvenile_growth_mode=0).build()
-        object.__setattr__(pop_ref, "_config",
-            pop_ref.config._replace(extreme_speed_mode=3))
+        pop_ref = (
+            nt.DiscreteGenerationPopulation.setup(
+                species=sp,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={"female": {"A|A": 50}, "male": {"a|a": 50}},
+            )
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
+        object.__setattr__(
+            pop_ref, "_config", pop_ref.config._replace(extreme_speed_mode=3)
+        )
         pop_ref.run(4)
 
         # With hook
-        pop_hook = nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False,
-        ).initial_state(
-            individual_count={"female": {"A|A": 50}, "male": {"a|a": 50}},
-        ).competition(juvenile_growth_mode=0).hooks(scale_hook).build()
-        object.__setattr__(pop_hook, "_config",
-            pop_hook.config._replace(extreme_speed_mode=3))
+        pop_hook = (
+            nt.DiscreteGenerationPopulation.setup(
+                species=sp,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={"female": {"A|A": 50}, "male": {"a|a": 50}},
+            )
+            .competition(juvenile_growth_mode=0)
+            .hooks(scale_hook)
+            .build()
+        )
+        object.__setattr__(
+            pop_hook, "_config", pop_hook.config._replace(extreme_speed_mode=3)
+        )
         pop_hook.run(4)
         h_hook = pop_hook.history._to_numpy()
 
@@ -369,7 +414,8 @@ class TestWFEndToEnd:
                 female_only=cfg.female_only_by_sex_chrom,
                 male_only=cfg.male_only_by_sex_chrom,
                 has_sex_chromosomes=cfg.has_sex_chromosomes,
-                mode=99, stochastic=False,
+                mode=99,
+                stochastic=False,
             )
 
 
@@ -380,13 +426,21 @@ class TestRegressionFixes:
         """C1: FIXED mode should scale down when expected > K."""
         # Build a config with FIXED competition and small K.
         sp = nt.Species.from_dict("c1_test", {"c1": {"l1": ["A", "a"]}})
-        pop = nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False,
-        ).initial_state(
-            individual_count={"female": {"A|A": 100}, "male": {"a|a": 100}},
-        ).competition(
-            juvenile_growth_mode=nt.FIXED, carrying_capacity=10.0,
-        ).reproduction(eggs_per_female=100.0).build()
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(
+                species=sp,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={"female": {"A|A": 100}, "male": {"a|a": 100}},
+            )
+            .competition(
+                juvenile_growth_mode=nt.FIXED,
+                carrying_capacity=10.0,
+            )
+            .reproduction(eggs_per_female=100.0)
+            .build()
+        )
 
         cfg = pop.config
         ind = cfg.initial_individual_count.copy()
@@ -405,7 +459,8 @@ class TestRegressionFixes:
             female_only=cfg.female_only_by_sex_chrom,
             male_only=cfg.male_only_by_sex_chrom,
             has_sex_chromosomes=cfg.has_sex_chromosomes,
-            mode=1, stochastic=False,
+            mode=1,
+            stochastic=False,
             carrying_capacity=float(cfg.carrying_capacity),
             juvenile_growth_mode=int(cfg.juvenile_growth_mode),
             low_density_growth_rate=float(cfg.low_density_growth_rate),
@@ -423,14 +478,19 @@ class TestRegressionFixes:
     def test_wf_history_starts_at_tick_zero(self):
         """C8: WF Python fallback should record initial state at tick 0."""
         sp = nt.Species.from_dict("hist_test", {"c1": {"l1": ["A", "a"]}})
-        pop = nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False,
-        ).initial_state(
-            individual_count={"female": {"A|A": 50}, "male": {"a|a": 50}},
-        ).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(
+                species=sp,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={"female": {"A|A": 50}, "male": {"a|a": 50}},
+            )
+            .competition(juvenile_growth_mode=nt.NO_COMPETITION)
+            .build()
+        )
 
-        object.__setattr__(pop, "_config",
-            pop.config._replace(extreme_speed_mode=1))
+        object.__setattr__(pop, "_config", pop.config._replace(extreme_speed_mode=1))
 
         pop.run(3)
         h = pop.history._to_numpy()
@@ -440,25 +500,33 @@ class TestRegressionFixes:
         assert h.shape[0] == 4, f"Expected 4 history entries, got {h.shape[0]}"
 
 
-
 class TestWFNonUniformSelection:
     """WF with non-uniform sexual_selection matches standard path."""
 
     def test_non_uniform_sexual_selection_deterministic(self):
         sp = nt.Species.from_dict("wfselsel", {"c1": {"l1": ["A", "a"]}})
-        cfg = nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False,
-        ).initial_state(
-            individual_count={"female": {"A|A": 100, "A|a": 100},
-                              "male":   {"A|A": 100, "a|a": 100}},
-        ).competition(juvenile_growth_mode=0).build()
+        cfg = (
+            nt.DiscreteGenerationPopulation.setup(
+                species=sp,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": 100, "A|a": 100},
+                    "male": {"A|A": 100, "a|a": 100},
+                },
+            )
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
 
-        non_uniform_ss = np.array([[1.0, 1.0, 2.0],
-                                    [1.0, 1.0, 1.0],
-                                    [1.0, 1.0, 1.0]], dtype=np.float64)
+        non_uniform_ss = np.array(
+            [[1.0, 1.0, 2.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]], dtype=np.float64
+        )
         cfg_raw = cfg.config
-        cfg_wf = cfg_raw._replace(sexual_selection_fitness=non_uniform_ss,
-                                  extreme_speed_mode=3)
+        cfg_wf = cfg_raw._replace(
+            sexual_selection_fitness=non_uniform_ss, extreme_speed_mode=3
+        )
 
         ind_wf = cfg_wf.initial_individual_count.copy()
         for _ in range(5):
@@ -477,17 +545,32 @@ class TestWFNonUniformSelection:
                 female_only=cfg_wf.female_only_by_sex_chrom,
                 male_only=cfg_wf.male_only_by_sex_chrom,
                 has_sex_chromosomes=cfg_wf.has_sex_chromosomes,
-                mode=3, stochastic=False,
+                mode=3,
+                stochastic=False,
             )
 
-        pop_std = nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False, backend="python",
-        ).initial_state(
-            individual_count={"female": {"A|A": 100, "A|a": 100},
-                              "male":   {"A|A": 100, "a|a": 100}},
-        ).competition(juvenile_growth_mode=0).build()
-        object.__setattr__(pop_std, "_config",
-            pop_std.config._replace(sexual_selection_fitness=non_uniform_ss))
+        pop_std = (
+            nt.DiscreteGenerationPopulation.setup(
+                species=sp,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={
+                    "female": {"A|A": 100, "A|a": 100},
+                    "male": {"A|A": 100, "a|a": 100},
+                },
+            )
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
+        object.__setattr__(
+            pop_std,
+            "_config",
+            pop_std.config._replace(sexual_selection_fitness=non_uniform_ss),
+        )
+        # The session owns the genetics tensors (plan S2): the draft write
+        # only reaches the engine through the documented full-refresh path.
+        pop_std.refresh_rust_backend()
         pop_std.run(5)
         ind_std = pop_std.state.individual_count
 
@@ -502,11 +585,17 @@ class TestCompressConfig:
         from natal.frontend.data import compress_config
 
         sp = nt.Species.from_dict("cc1", {"c1": {"l1": ["A", "a"]}})
-        pop = nt.DiscreteGenerationPopulation.setup(
-            species=sp, stochastic=False,
-        ).initial_state(
-            individual_count={"female": {"A|A": 100}, "male": {"a|a": 100}},
-        ).competition(juvenile_growth_mode=0).build()
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(
+                species=sp,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={"female": {"A|A": 100}, "male": {"a|a": 100}},
+            )
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
         cfg = pop.config
         orig_n = cfg.n_ztypes
 
@@ -523,11 +612,17 @@ class TestCompressConfig:
         from natal.frontend.data import compress_config
 
         sp = nt.Species.from_dict("cc2", {"c1": {"l1": ["A", "a"]}})
-        pop = Configurator.for_age_structured(sp).setup(
-            stochastic=False,
-        ).initial_state(
-            individual_count={"female": {"A|A": 100}, "male": {"a|a": 100}},
-        ).competition(juvenile_growth_mode=0).build()
+        pop = (
+            Configurator.for_age_structured(sp)
+            .setup(
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={"female": {"A|A": 100}, "male": {"a|a": 100}},
+            )
+            .competition(juvenile_growth_mode=0)
+            .build()
+        )
         cfg = pop.config
 
         mask = np.array([0, 1, -1], dtype=np.int32)

@@ -30,17 +30,6 @@ from natal.frontend.hooks.tick_context import TickContext
 from natal.frontend.spatial.population import SpatialPopulation
 
 
-@contextmanager
-def python_reference():
-    """No-op stand-in for the retired compiled-backend disable guard.
-
-    The only non-Rust execution vehicle is the pure-Python reference
-    dispatch; the guard is kept so test bodies that previously forced the
-    Python path stay readable.
-    """
-    yield
-
-
 def _make_species(prefix: str = "SpatialRunSpecies") -> Species:
     """Build a two-allele single-locus species."""
     return Species.from_dict(
@@ -53,14 +42,10 @@ def _make_species(prefix: str = "SpatialRunSpecies") -> Species:
     )
 
 
-def _make_population_config(
-    species: Species, name: str = "config_template"
-) -> object:
+def _make_population_config(species: Species, name: str = "config_template") -> object:
     """Build a quiescent age-structured draft (state changes only via hooks)."""
     return (
-        nt.AgeStructuredPopulation.setup(
-            species=species, name=name, stochastic=False
-        )
+        nt.AgeStructuredPopulation.setup(species=species, name=name, stochastic=False)
         .age_structure(n_ages=4, new_adult_age=1)
         .initial_state(
             individual_count={
@@ -211,7 +196,8 @@ class _RunDiscreteDemePopulation:
         self._state = DiscretePopulationState(
             n_tick=0,
             individual_count=np.zeros(  # restored
-                (2, config.n_ages, 1), dtype=np.float64  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+                (2, config.n_ages, 1),
+                dtype=np.float64,  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
             ),
         )
 
@@ -279,8 +265,7 @@ def test_spatial_population_run_tick_updates_all_demes():
 
     sp = SpatialPopulation([d0, d1], migration_rate=0.0)
 
-    with python_reference():
-        sp.run_tick()
+    sp.run_tick()
 
     assert sp.tick == 1
     assert d0.tick == 1 and d1.tick == 1
@@ -295,15 +280,12 @@ def test_spatial_population_run_stop_marks_finish():
     species = _make_species("spatial_run_stop")
     shared_config = _make_population_config(species)
 
-    d0 = _RunDemePopulation(
-        species, "d0", shared_config, stop_after_run_tick=True
-    )
+    d0 = _RunDemePopulation(species, "d0", shared_config, stop_after_run_tick=True)
     d1 = _RunDemePopulation(species, "d1", shared_config)
 
     sp = SpatialPopulation([d0, d1], migration_rate=0.0)
 
-    with python_reference():
-        sp.run(n_steps=5, record_every=1)
+    sp.run(n_steps=5, record_every=1)
 
     # The stopped tick does not advance; d1 never runs its tick.
     assert sp.tick == 0
@@ -339,8 +321,7 @@ def test_spatial_stop_path_finish_hooks_see_own_deme_ids() -> None:
     demes[1].register_hooks(stop_on_deme_one)
 
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    with python_reference():
-        spatial.run(n_steps=5)
+    spatial.run(n_steps=5)
 
     # Deme 1 stops first: its lifecycle fires its own finish (id 1), then
     # the container's mark-all pass fires every deme in list order with
@@ -374,8 +355,7 @@ def test_spatial_population_stochastic_discrete_migration_preserves_integer_coun
         adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
         migration_rate=0.5,
     )
-    with python_reference():
-        sp.run_tick()
+    sp.run_tick()
 
     total_counts = [float(deme.state.individual_count.sum()) for deme in sp.demes]
     assert np.isclose(sum(total_counts), 5.0)
@@ -409,18 +389,13 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
         adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
         migration_rate=0.5,
     )
-    with python_reference():
-        sp.run_tick()
+    sp.run_tick()
 
     total_females = sum(
         float(deme.state.individual_count[0].sum()) for deme in sp.demes
     )
-    total_males = sum(
-        float(deme.state.individual_count[1].sum()) for deme in sp.demes
-    )
-    total_sperm = sum(
-        float(deme.state.sperm_storage.sum()) for deme in sp.demes
-    )
+    total_males = sum(float(deme.state.individual_count[1].sum()) for deme in sp.demes)
+    total_sperm = sum(float(deme.state.sperm_storage.sum()) for deme in sp.demes)
     assert np.isclose(total_females, 5.0)
     assert np.isclose(total_males, 4.0)
     assert np.isclose(total_sperm, 3.0)
@@ -432,9 +407,7 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
         assert np.allclose(
             deme.state.individual_count, np.round(deme.state.individual_count)
         )
-        assert np.allclose(
-            deme.state.sperm_storage, np.round(deme.state.sperm_storage)
-        )
+        assert np.allclose(deme.state.sperm_storage, np.round(deme.state.sperm_storage))
 
 
 # ---------------------------------------------------------------------------
@@ -516,8 +489,7 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
     d1.register_hooks(d1_hook)
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
-    with python_reference():
-        spatial.run_tick()
+    spatial.run_tick()
 
     assert calls == ["d0", "d1"]
     assert float(spatial.deme(0).state.individual_count.sum()) == 22.0
@@ -544,8 +516,7 @@ def test_spatial_reference_run_hooks_see_live_deme_ids() -> None:
     for deme in demes:
         deme.register_hooks(record_deme)
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    with python_reference():
-        spatial.run(n_steps=2)
+    spatial.run(n_steps=2)
 
     # Each of the 3 demes fires its first-event hook once per tick.
     assert sorted(seen) == [0, 0, 1, 1, 2, 2]
@@ -571,8 +542,7 @@ def test_spatial_reference_deme_selector_targets_one_deme() -> None:
     for deme in demes:
         deme.register_hooks(only_deme_one)
     spatial = SpatialPopulation(demes, migration_rate=0.0)
-    with python_reference():
-        spatial.run(n_steps=1)
+    spatial.run(n_steps=1)
 
     assert hits == [1]
 
@@ -591,8 +561,7 @@ def test_spatial_compiled_local_hooks_still_take_effect() -> None:
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
     spatial.register_hooks(stop_immediately, deme=0)
-    with python_reference():
-        spatial.run_tick()
+    spatial.run_tick()
 
     assert d0._finished and d1._finished
     with pytest.raises(RuntimeError):
@@ -605,7 +574,9 @@ def test_spatial_compiled_local_hooks_still_take_effect() -> None:
 
 
 def _build_quiescent_age_pop(
-    species: nt.Species, n_demes: int, name: str = "quiescent",
+    species: nt.Species,
+    n_demes: int,
+    name: str = "quiescent",
 ) -> SpatialPopulation:
     """Build a homogeneous quiescent age-structured population."""
     return (
@@ -638,7 +609,9 @@ def _build_quiescent_age_pop(
 
 
 def _build_discrete_pop(
-    species: nt.Species, n_demes: int, name: str = "discrete",
+    species: nt.Species,
+    n_demes: int,
+    name: str = "discrete",
 ) -> SpatialPopulation:
     """Build a homogeneous discrete-generation population via builder."""
     return (
@@ -782,13 +755,16 @@ def test_compact_plan_different_order_not_merged() -> None:
     assert 0 in selectors and 1 in selectors
     assert len(compact) == 4
 
-    with python_reference():
-        sp.run_tick()
+    sp.run_tick()
 
     total0 = float(sp.deme(0).state.individual_count.sum())
     total1 = float(sp.deme(1).state.individual_count.sum())
-    assert total0 == 301.0, f"deme[0] mul2→add1: female 100×2+1=201, +100 male = 301, got {total0}"
-    assert total1 == 302.0, f"deme[1] add1→mul2: female (100+1)×2=202, +100 male = 302, got {total1}"
+    assert total0 == 301.0, (
+        f"deme[0] mul2→add1: female 100×2+1=201, +100 male = 301, got {total0}"
+    )
+    assert total1 == 302.0, (
+        f"deme[1] add1→mul2: female (100+1)×2=202, +100 male = 302, got {total1}"
+    )
 
 
 def test_compact_plan_empty_hook_sequence_skipped() -> None:
@@ -878,8 +854,7 @@ def test_set_hook_shared_storage_subset_cow_execution() -> None:
 
     sp.register_hooks(add_one, deme=target)
 
-    with python_reference():
-        sp.run_tick()
+    sp.run_tick()
 
     for i in range(n_demes):
         total = float(sp.deme(i).state.individual_count.sum())
@@ -900,9 +875,8 @@ def test_set_hook_subset_callback_hook_no_leak() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    with python_reference():
-        sp.register_hooks(py_hook, deme=target)
-        sp.run_tick()
+    sp.register_hooks(py_hook, deme=target)
+    sp.run_tick()
 
     for i in range(n_demes):
         total = float(sp.deme(i).state.individual_count.sum())
@@ -921,13 +895,10 @@ def test_set_hook_empty_selector_noop() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    totals_before = [
-        float(sp.deme(i).state.individual_count.sum()) for i in range(3)
-    ]
+    totals_before = [float(sp.deme(i).state.individual_count.sum()) for i in range(3)]
     sp.register_hooks(add_one, deme=[])
 
-    with python_reference():
-        sp.run_tick()
+    sp.run_tick()
 
     for i in range(3):
         assert float(sp.deme(i).state.individual_count.sum()) == totals_before[i]
@@ -983,8 +954,7 @@ def test_compact_plan_run_tick_deterministic_state() -> None:
 
     sp.register_hooks(add_one)
 
-    with python_reference():
-        sp.run_tick()
+    sp.run_tick()
 
     for i in range(3):
         total = float(sp.deme(i).state.individual_count.sum())
@@ -1017,8 +987,7 @@ def test_compact_plan_csr_then_callback_ordering() -> None:
     sp.register_hooks(mul2_csr)
     sp.register_hooks(add1)
 
-    with python_reference():
-        sp.run_tick()
+    sp.run_tick()
 
     # CSR runs first: female[age=1] 100×2=200, then callback +1 → 201.
     # Survival keeps age 1 (rate 1.0); aging moves the result into age 2.
@@ -1063,8 +1032,7 @@ def test_builder_set_hook_subset_cow_combined() -> None:
 
     sp.register_hooks(add_one, deme=target)
 
-    with python_reference():
-        sp.run_tick()
+    sp.run_tick()
 
     for i in range(n_demes):
         total = float(sp.deme(i).state.individual_count.sum())
@@ -1075,7 +1043,7 @@ def test_builder_set_hook_subset_cow_combined() -> None:
 # -----------------------------------------------------------------------
 # 100-deme subprocess regression
 # -----------------------------------------------------------------------
-_ONE_HUNDRED_DEMES_TEST_CODE = '''
+_ONE_HUNDRED_DEMES_TEST_CODE = """
 import numpy as np
 import natal as nt
 
@@ -1155,14 +1123,16 @@ for _run_i in range(3):
         assert abs(float(final_total) - initial_total) < 1e-9, (
             f"run {_run_i} deme[{d}] total changed: {final_total} != {initial_total}"
         )
-'''
+"""
 
 
 def test_homogeneous_100_deme_subprocess_no_crash() -> None:
     """100-deme homogeneous population with a custom hook runs cleanly."""
     result = subprocess.run(
         [sys.executable, "-c", _ONE_HUNDRED_DEMES_TEST_CODE],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     assert result.returncode == 0, (
         f"subprocess returned {result.returncode}\n"
@@ -1183,7 +1153,10 @@ def test_spatial_builder_custom_slots_reach_all_demes() -> None:
         SpatialPopulation.builder(species, n_demes=3)
         .setup(stochastic=False)
         .initial_state(
-            individual_count={"female": {"WT|WT": [100.0, 0.0]}, "male": {"WT|WT": [100.0, 0.0]}}
+            individual_count={
+                "female": {"WT|WT": [100.0, 0.0]},
+                "male": {"WT|WT": [100.0, 0.0]},
+            }
         )
         .reproduction(eggs_per_female=0.0)
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
@@ -1198,7 +1171,10 @@ def test_spatial_builder_custom_slots_reach_all_demes() -> None:
         SpatialPopulation.builder(species, n_demes=4)
         .setup(stochastic=False)
         .initial_state(
-            individual_count={"female": {"WT|WT": [100.0, 0.0]}, "male": {"WT|WT": [100.0, 0.0]}}
+            individual_count={
+                "female": {"WT|WT": [100.0, 0.0]},
+                "male": {"WT|WT": [100.0, 0.0]},
+            }
         )
         .reproduction(eggs_per_female=0.0)
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)

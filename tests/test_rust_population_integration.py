@@ -7,16 +7,10 @@ import pytest
 
 import natal as nt
 from natal.frontend.configurator import Configurator
-from natal.backends.rust.rust_backend import rust_backend_available
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.entry.declarative import Op
 from natal.frontend.patterns import IndividualSelector
 from natal.frontend.population.age_structured import AgeStructuredPopulation
-
-pytestmark = pytest.mark.skipif(
-    not rust_backend_available(),
-    reason="natal._engine_rs is not built; run `maturin develop` first",
-)
 
 
 @pytest.fixture(scope="module")
@@ -106,6 +100,7 @@ def test_run_tick_uses_rust_backend_when_enabled(species: Species) -> None:
 
 def test_observation_mode_history_matches_reference(species: Species) -> None:
     """Kernel-side observation rows must match the reference history."""
+
     def build_observed(name: str):
         return (
             Configurator.from_species(species)
@@ -127,53 +122,19 @@ def test_observation_mode_history_matches_reference(species: Species) -> None:
     reference.run(5, record_every=1, clear_history_on_start=True)
     rust_pop.run(5, record_every=1, clear_history_on_start=True)
 
-    assert np.array_equal(rust_pop.state.individual_count, reference.state.individual_count)
+    assert np.array_equal(
+        rust_pop.state.individual_count, reference.state.individual_count
+    )
     assert np.array_equal(rust_pop.state.sperm_storage, reference.state.sperm_storage)
     assert np.array_equal(rust_pop.history._rows, reference.history._rows)
 
 
-def test_setup_backend_auto_and_rust(species: Species) -> None:
-    """Build-time backend selection must enable or disable Rust."""
-    auto_pop = (
-        Configurator.from_species(species)
-        .age_structure(4, 2)
-        .setup(stochastic=False, name="auto_pop", backend="auto")
-        .build()
-    )
-    rust_pop = (
-        Configurator.from_species(species)
-        .age_structure(4, 2)
-        .setup(stochastic=False, name="rust_pop", backend="rust")
-        .build()
-    )
-    python_pop = (
-        Configurator.from_species(species)
-        .age_structure(4, 2)
-        .setup(stochastic=False, name="python_pop", backend="python")
-        .build()
-    )
-    assert auto_pop.using_rust_backend is True
-    assert rust_pop.using_rust_backend is True
-    assert python_pop.using_rust_backend is False
-
-
-def test_setup_backend_numba_is_rejected(species: Species) -> None:
-    """The retired compiled-backend selector raises with a migration hint."""
-    with pytest.raises(ValueError, match="backend='numba' was removed"):
-        (
-            Configurator.from_species(species)
-            .age_structure(4, 2)
-            .setup(stochastic=False, name="numba_pop", backend="numba")
-            .build()
-        )
-
-
-def test_auto_backend_falls_back_with_custom_hooks(species: Species) -> None:
-    """backend=auto enables Rust; callbacks no longer force a fallback."""
+def test_setup_custom_hooks_run_on_rust_from_build(species: Species) -> None:
+    """A build-time Python callback hook runs inside the Rust lifecycle."""
     pop = (
         Configurator.from_species(species)
         .age_structure(4, 2)
-        .setup(stochastic=False, name="auto_custom", backend="auto")
+        .setup(stochastic=False, name="auto_custom")
         .initial_state(individual_count={"female": {"A|A": 20}, "male": {"A|A": 20}})
         .hooks(_custom_noop_hook)
         .build()
@@ -181,21 +142,6 @@ def test_auto_backend_falls_back_with_custom_hooks(species: Species) -> None:
     assert pop.using_rust_backend is True
     pop.run(2)
     assert pop.tick == 2
-
-
-def test_backend_python_forces_python_fallback(species: Species) -> None:
-    """backend=python must bypass the Rust path entirely."""
-    pop = (
-        Configurator.from_species(species)
-        .age_structure(4, 2)
-        .setup(stochastic=False, name="python_pop", backend="python")
-        .initial_state(individual_count={"female": {"A|A": 20}, "male": {"A|A": 20}})
-        .build()
-    )
-    assert pop.using_rust_backend is False
-    assert pop._python_backend is True
-    pop.run(3, record_every=1)
-    assert pop.tick == 3
 
 
 def test_runtime_config_update_rebuilds_rust_backend(species: Species) -> None:
@@ -207,7 +153,9 @@ def test_runtime_config_update_rebuilds_rust_backend(species: Species) -> None:
     reference.run(5, record_every=1, clear_history_on_start=True)
     rust_pop.run(5, record_every=1, clear_history_on_start=True)
     assert rust_pop.using_rust_backend is True
-    assert np.array_equal(rust_pop.state.individual_count, reference.state.individual_count)
+    assert np.array_equal(
+        rust_pop.state.individual_count, reference.state.individual_count
+    )
     assert np.array_equal(rust_pop.state.sperm_storage, reference.state.sperm_storage)
 
 
