@@ -445,8 +445,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self._rust_needs_rebuild = False
             self.refresh_rust_backend()
 
-    def _flush_ecology_after_run(self) -> None:
-        """Sync the draft's runtime ecology into the session after a run.
+    def _flush_runtime_fields_after_run(self) -> None:
+        """Sync the draft's runtime fields (ecology AND genetics) back into the session after a run.
 
         In-run writes (hook callbacks, deferred pushes) land in the draft
         only while the session owns its borrow; this boundary flush
@@ -504,7 +504,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             if self._rust_deferred_writes:
                 # Run-boundary ecology flush: in-run writes landed in the
                 # draft; the next run starts from the user-visible values.
-                self._flush_ecology_after_run()
+                self._flush_runtime_fields_after_run()
         finally:
             self._rust_run_active = False
             # A failed run wrote nothing to the session (validation is

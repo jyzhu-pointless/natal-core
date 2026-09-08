@@ -24,9 +24,10 @@
 | 遗传预设 | GeneticPreset | 预定义的遗传修饰规则组合（如基因驱动 HomingDrive） |
 | 修饰器 | Modifier | 改变配子或合子生成频率的规则（GameteModifier / ZygoteModifier） |
 | 适应度 | Fitness | 基因型的生存/繁殖优势（viability、fecundity、sexual_selection、zygote_viability） |
-| 种群配置 | PopulationConfig | 引擎的静态配置（不可变 NamedTuple），包含所有生态和遗传参数 |
-| 种群状态 | PopulationState | 引擎的可变状态（数组容器），记录当前个体分布 |
-| 配置器 | Configurator | 构建和修改 PopulationConfig 的链式 API |
+| 模型草稿 | ModelDraft | 构建期声明草稿（不可变结构），编译为 Rust 会话的 Blueprint/Params/遗传表 |
+| 种群状态 | PopulationState | 状态快照（数组容器）；Rust 会话拥有权威运行状态，读取返回独立拷贝 |
+| 配置器 | Configurator | 用户链式 DSL；将声明编译为会话输入并支持运行时更新 |
+| Rust 会话 | EngineSession / SpatialEngineSession 变体 | 唯一运行时权威：拥有计数、tick、生态、遗传、随机流、历史与检查点 |
 | 索引注册表 | IndexRegistry | 将基因型/单倍型映射为引擎使用的整数索引 |
 | Hook | Hook | 模拟过程中的事件干预点（first / early / late / finish） |
 | 种群 | Population | 具体的种群模型实例（年龄结构型 / 离散代型 / 空间型） |
@@ -169,7 +170,7 @@ BasePopulation 从 1743 行拆分为一组 mixin + 532 行核心 ABC：
 | 文件 | 行数 | 理由 |
 |---|---|---|
 | `configurator/_base.py` | 1,164 | Configurator 是完整 DSL 类，内聚性高 |
-| `configurator/_factory.py` | 783 | PopulationConfigBuilder 是装配类 |
+| `configurator/_base.py` | （见上） | Configurator 是完整 DSL 类，内聚性高 |
 | `genetics/entities/genotype.py` | 649 | 基因型构造 + 重组逻辑，单一职责 |
 | `patterns/parser.py` | 613 | GenotypePatternParser 是递归下降解析器 |
 | `frontend/modifiers/gamete_conversion.py` | 675 | 配子转换规则集，内聚性高（从 presets/ 迁入） |
