@@ -29,6 +29,7 @@ from typing import (
 from natal.frontend.hooks.types import (
     EVENT_ID_MAP,
     RESULT_CONTINUE,
+    RPN_LITERAL,
     CompiledHookDescriptor,
     DemeSelector,
     HookOp,
@@ -155,7 +156,10 @@ class HookManagerMixin:
                     )
                 self._register_op_group(
                     [op for op in raw if isinstance(op, HookOp)],
-                    event, priority, deme, name,
+                    event,
+                    priority,
+                    deme,
+                    name,
                 )
             elif callable(item):
                 self._register_callable_item(item, event, priority, deme)
@@ -177,9 +181,7 @@ class HookManagerMixin:
         """Register one declarative descriptor from a group of ops."""
         from natal.frontend.hooks.entry.declarative import compile_declarative_hook
 
-        resolved_event = next(
-            (op.event for op in ops if op.event is not None), event
-        )
+        resolved_event = next((op.event for op in ops if op.event is not None), event)
         if resolved_event is None:
             # Documented default (2_hooks.md, plan §〇): declarative ops
             # registered without an event fire at "early".  An explicit
@@ -336,7 +338,9 @@ class HookManagerMixin:
 
     # ── Introspection ─────────────────────────────────────────────────
 
-    def get_compiled_hooks(self, event: Optional[str] = None) -> List[CompiledHookDescriptor]:
+    def get_compiled_hooks(
+        self, event: Optional[str] = None
+    ) -> List[CompiledHookDescriptor]:
         """Get compiled hook descriptors, optionally filtered by event.
 
         Args:
@@ -415,9 +419,7 @@ class HookManagerMixin:
 
     def _refresh_run_program(self) -> None:
         """Rebuild the CSR hook plan inside the run program."""
-        self._run_program = self._run_program._replace(
-            hooks=self._build_hook_program()
-        )
+        self._run_program = self._run_program._replace(hooks=self._build_hook_program())
 
     def _build_hook_program(self) -> HookProgram:
         """Pack all declarative descriptors into a CSR ``HookProgram``.
@@ -497,7 +499,9 @@ class HookManagerMixin:
                 zidx_offset_base = len(all_zidx_data)
                 for i in range(plan.n_ops):
                     all_zidx_offsets.append(
-                        zidx_offset_base + plan.zidx_offsets[i + 1] - plan.zidx_offsets[0]
+                        zidx_offset_base
+                        + plan.zidx_offsets[i + 1]
+                        - plan.zidx_offsets[0]
                     )
                 all_zidx_data.extend(plan.zidx_data.tolist())
 
@@ -514,7 +518,9 @@ class HookManagerMixin:
                 cond_offset_base = len(all_cond_types)
                 for i in range(plan.n_ops):
                     all_cond_offsets.append(
-                        cond_offset_base + plan.condition_offsets[i + 1] - plan.condition_offsets[0]
+                        cond_offset_base
+                        + plan.condition_offsets[i + 1]
+                        - plan.condition_offsets[0]
                     )
                 all_cond_types.extend(plan.condition_types.tolist())
                 all_cond_params.extend(plan.condition_params.tolist())
@@ -531,7 +537,16 @@ class HookManagerMixin:
                         rpn_offset_base + plan.rpn_offsets[i + 1] - plan.rpn_offsets[0]
                     )
                 all_rpn_kinds.extend(plan.rpn_kinds.tolist())
-                all_rpn_payload.extend(plan.rpn_payload.tolist())
+                # Literal payloads index the program-wide shared pool:
+                # rebase each plan's local indices onto the current pool
+                # length, or later plans read earlier plans' literals.
+                literal_base = len(all_sp_literals)
+                kinds = plan.rpn_kinds.tolist()
+                payload = plan.rpn_payload.tolist()
+                all_rpn_payload.extend(
+                    p + literal_base if k == RPN_LITERAL else p
+                    for k, p in zip(kinds, payload)
+                )
                 all_sp_literals.extend(plan.sp_literals.tolist())
                 all_convert_source_z.extend(plan.convert_source_z.tolist())
                 all_convert_target_z.extend(plan.convert_target_z.tolist())

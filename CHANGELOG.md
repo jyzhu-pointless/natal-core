@@ -56,6 +56,11 @@
 - **Spatial update internals**: replace the private `_SpatialUpdate` facade and
   method-name batching table with typed Configurator dispatch and explicit
   `batch_setting()` values.
+- **Hook program literal pool rebasing**: declarative `set_param` value
+  expressions carry per-hook RPN literal indices; concatenating hooks into
+  one program (panmictic and spatial builders) now rebases those indices
+  onto the shared pool, so a second literal-bearing hook no longer
+  evaluates an earlier hook's literal.
 - **Bounded recording memory (plan S4)**: plain populations now wire their
   `max_history` bound (default 5000 rows) into History; `record_history(max_rows=None)`
   applies the population default instead of unbounded growth, and evicted

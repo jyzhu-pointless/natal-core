@@ -2268,8 +2268,21 @@ class SpatialPopulation:
                     all_rpn_offsets.append(
                         rpn_offset_base + plan.rpn_offsets[i + 1] - plan.rpn_offsets[0]
                     )
-                all_rpn_kinds.extend(plan.rpn_kinds.tolist())
-                all_rpn_payload.extend(plan.rpn_payload.tolist())
+                # Literal payloads are indices into the program-wide shared
+                # pool: rebase each hook's local indices onto the current
+                # pool length before appending, or a later set_param op
+                # would silently read an earlier hook's literal (the
+                # panmictic compiler rebases the same way).
+                literal_base = len(all_sp_literals)
+                is_literal = plan.rpn_kinds.tolist()
+                payload = plan.rpn_payload.tolist()
+                from natal.frontend.hooks.entry.declarative import RPN_LITERAL
+
+                all_rpn_payload.extend(
+                    p + literal_base if k == RPN_LITERAL else p
+                    for k, p in zip(is_literal, payload)
+                )
+                all_rpn_kinds.extend(is_literal)
                 all_sp_literals.extend(plan.sp_literals.tolist())
                 all_convert_source_z.extend(plan.convert_source_z.tolist())
                 all_convert_target_z.extend(plan.convert_target_z.tolist())

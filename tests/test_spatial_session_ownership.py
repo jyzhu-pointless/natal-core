@@ -1020,3 +1020,39 @@ def test_plain_record_snapshot_pairs_checkpoint_eviction() -> None:
     with pytest.raises(ValueError):
         population.restore_checkpoint(0)
     assert population.tick == 3
+
+
+def test_spatial_program_rebases_set_param_literals() -> None:
+    """Two declarative set_param hooks with literals each read their OWN
+    literal: the second hook must not consume the first hook's pool slot
+    (spatial program concatenation rebases RPN literal indices)."""
+
+    @nt.hook(event="first")
+    def double_eggs() -> list:
+        return [nt.Op.set_param("eggs_per_female", "4.0 * 2", every=1)]
+
+    @nt.hook(event="late")
+    def halve_k() -> list:
+        return [nt.Op.set_param("carrying_capacity", "K * 0.5", every=1)]
+
+    population = (
+        nt.SpatialPopulation.builder(
+            _species("own_rpnsp"), n_demes=2, pop_type="discrete_generation"
+        )
+        .setup(name="own_rpn", stochastic=False)
+        .initial_state(
+            individual_count=nt.batch_setting(
+                [{"female": {"WT|WT": 100.0}, "male": {"WT|WT": 100.0}}] * 2
+            )
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2.0, sex_ratio=0.5)
+        .competition(carrying_capacity=1e12, low_density_growth_rate=2.0)
+        .migration(adjacency=np.eye(2), migration_rate=0.0)
+        .hooks(double_eggs, halve_k)
+        .build()
+    )
+    population.enable_rust_backend(seed=99)
+    population.run(1, record_every=0)
+    assert population.demes[0].params.eggs_per_female == 8.0
+    assert population.demes[0].params.carrying_capacity == 5e11
