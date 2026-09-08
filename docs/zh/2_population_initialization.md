@@ -71,7 +71,6 @@ NATAL Core 提供两种主要的种群类型：
 | `stochastic` | `bool` | 是否采用随机采样 | `True` | reproduction / survival 等采样阶段 | `True` 表示随机，`False` 表示确定性；调参阶段建议先使用 `False` |
 | `continuous_sampling` | `bool` | 采样策略选择 | `False` | 概率采样细节 | 控制采样方式，大多数场景保持默认即可 |
 | `fixed_egg_count` | `bool` | 产卵数是否固定 | `False` | reproduction | `True` 表示固定产卵数，`False` 更接近随机产卵过程 |
-| `backend` | `str` | 生命周期后端选择 | `"auto"` | 每 tick 生命周期 | `"auto"`（默认）扩展可用时选 Rust，否则回退参考实现；`"rust"` 强制 Rust；`"python"` 强制纯 Python 参考实现 |
 | `species` | `Species` | 物种对象 | 必填 | 全流程 | 定义种群的遗传结构，是配置的核心参数 |
 
 ### `age_structure(...)` – 年龄结构
@@ -189,7 +188,7 @@ NATAL Core 提供两种主要的种群类型：
 | `beverton_holt` | 3 | `r / (x·(r-1) + 1) · s` | 双曲（凹）曲线；旧别名 `"concave"` 与整数常量 `CONCAVE` 均已移除（使用它们会得到带迁移提示的 `ValueError` / `AttributeError`） |
 | `ricker` | 4 | `r^(1-x) · s` | 指数过度补偿；`r > e` 时出现振荡 |
 
-三条验收底线：① 平衡点 x=1 时所有曲线收敛到 `s`（g(1)=s）；② 低密度 x→0 时 g(0)=r·s（三条曲线在同一平衡点共享数值）；③ 确定性模拟下两后端（rust / python）产生逐位一致的曲线缩放。
+三条验收底线：① 平衡点 x=1 时所有曲线收敛到 `s`（g(1)=s）；② 低密度 x→0 时 g(0)=r·s（三条曲线在同一平衡点共享数值）；③ 确定性模拟下曲线缩放逐位可复现。
 | `low_density_growth_rate` | `float` | 低密度下的内禀增长率。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；取值过大容易导致种群振荡。 |
 | `age_1_carrying_capacity` | `Optional[int]` | age=1 阶段的种群承载容量。 | `None` | 幼体密度调节 | 如果显式指定，会优先使用该值（优先级最高）。 |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | 与 `age_1_carrying_capacity` 功能相同的遗留参数名（已弃用）。 | `None` | 幼体密度调节 | 推荐使用 `age_1_carrying_capacity`，两者同时设置时以 `age_1_carrying_capacity` 为准。 |

@@ -118,10 +118,10 @@ nt.Op.set_param("carrying_capacity", "K * 0.95", every=10)
 
 Vector and genetics-tensor parameters raise `ValueError` -- use `pop.update()` / `pop.params.tensor_write()` for those.
 
-**Semantics across backends**:
+**Write semantics**:
 
-- On the reference (Python) and Rust paths the write flushes at the event boundary through the same channel as `pop.params.<name> = ...` (route dispatch, Rust dirty bridge, and the parameter snapshot log) and is visible to the later stages of the same tick.
-- On the Rust `run()` path the write evolves inside the session-owned ecology columns with the same event granularity and the same jsonc bounds (a non-finite or out-of-bounds value such as `"K / 0"` raises `ValueError` mid-run); when `run()` returns, the audited transitions are appended to `params_log` under their own commit ticks (HB-2 fix) and the final values are synchronized into the draft.
+- Out of a run, the write flushes through the same channel as `pop.params.<name> = ...` (route dispatch, session refresh, and the parameter snapshot log).
+- Inside a `run()`, the write evolves within the session-owned ecology columns with the same event granularity and the same jsonc bounds (a non-finite or out-of-bounds value such as `"K / 0"` raises `ValueError` mid-run); when `run()` returns, the audited transitions are appended to `params_log` under their own commit ticks (HB-2 fix) and the final values are synchronized into the draft.
 
 ### `Op.convert`: one-to-one probabilistic conversion
 

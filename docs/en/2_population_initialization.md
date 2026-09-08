@@ -180,7 +180,7 @@ Competition parameters take effect during the survival phase of the population.
 | `beverton_holt` | 3 | `r / (x·(r-1) + 1) · s` | hyperbolic (concave) curve; the legacy aliases `"concave"` and the integer constant `CONCAVE` have both been removed (using them raises a `ValueError` / `AttributeError` with a migration hint) |
 | `ricker` | 4 | `r^(1-x) · s` | exponential overcompensation; oscillates for `r > e` |
 
-Three acceptance bottom lines: (1) at the equilibrium point x=1 all curves converge to `s` (g(1)=s); (2) at low density x->0, g(0)=r·s (the curves share values at the joint equilibrium point); (3) deterministic simulations produce bitwise-identical curve scaling on both backends (rust / python).
+Three acceptance bottom lines: (1) at the equilibrium point x=1 all curves converge to `s` (g(1)=s); (2) at low density x->0, g(0)=r·s (the curves share values at the joint equilibrium point); (3) deterministic simulations produce bitwise-reproducible curve scaling.
 | `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
 | `age_1_carrying_capacity` | `Optional[int]` | Carrying capacity at the age=1 stage | `None` | Juvenile density regulation | If explicitly specified, takes highest priority |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | Legacy parameter name (deprecated) with same function as `age_1_carrying_capacity` | `None` | Juvenile density regulation | `age_1_carrying_capacity` recommended; when both are set, `age_1_carrying_capacity` takes precedence |
@@ -388,7 +388,7 @@ Key differences between the discrete generation model and the age-structured mod
 
 ### `setup(...)`
 
-Parameters are consistent with the age-structured model: `name`, `stochastic`, `continuous_sampling`, `fixed_egg_count`, `species`, plus `backend` (`"auto"` / `"rust"` / `"python"`, default `"auto"`). `species` is required to define the genetic structure of the population.
+Parameters are consistent with the age-structured model: `name`, `stochastic`, `continuous_sampling`, `fixed_egg_count`, and `species` (required, defines the genetic structure of the population).
 
 ### `initial_state(...)`
 

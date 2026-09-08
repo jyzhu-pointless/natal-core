@@ -153,7 +153,7 @@ from natal.frontend.hooks.tick_context import TickContext
 def stochastic_culling_hook(pop: TickContext) -> int:
     if pop.tick > 50:
         # pop.rng 是本次调用独立的确定性流：同一 (槽位, tick, deme, hook 索引)
-        # 在参考后端与 Rust 后端给出相同的抽取序列
+        # 给出确定的抽取序列
         survival_prob = 0.9
         n_current = pop.state.individual_count[:, :, 0]
         pop.state.individual_count[:, :, 0] = pop.rng.binomial(
@@ -164,21 +164,15 @@ def stochastic_culling_hook(pop: TickContext) -> int:
 
 随机流由 `种群槽位 ^ (tick * 1_000_003) ^ ((deme_id + 7) * 6_559) ^ ((hook_index + 1) * 31)`
 派生。**可复现性承诺**：针对同一 `setup(stochastic=True, seed=...)`、同一 hook 组合，
-参考后端与 Rust 后端以及跨进程的确定性模拟产生 bit-reproducible 的结果；
+引擎产生的确定性轨迹以及种子驱动的随机抽样跨进程 bit 级可复现；
 任何自定义全局随机（`np.random.seed(...)` 这类）都不在承诺范围内。
 
 ## 执行路径
 
-Hook 的物理执行路径由种群选择的后端决定（详见 [后端选择与性能](4_backend_selection.md)）：
-
-- **参考（Python）后端**：声明式 Op 编译为 CSR 计划，由 Python 解释器逐事件执行；
-  回调 Hook 直接调用。
-- **Rust（原生扩展）后端**：CSR 计划与启动器在 Rust 会话内执行；单参数回调跨桥进入
-  会话（每个调用获得独立的上下文封装）。
-- 两条路径执行相同的事件顺序与相同确定性算术；`stochastic=False` 时轨迹逐位一致。
-
-`backend="numba"` 已移除——选择该值会抛带迁移提示的 `ValueError`，请改用
-`"rust"` 或 `"python"`。
+Rust 原生引擎是唯一的执行后端。声明式 Op 编译为 CSR 计划，在引擎会话内执行；
+单参数 Python 回调跨桥进入会话（每个调用获得独立的上下文封装）。
+带外入口——`trigger_event` 与 finish 事件——通过 Python 侧解释器执行同一份
+CSR 计划。
 
 ## 混合使用不同类型的 Hook
 
@@ -228,8 +222,8 @@ pop = (
 | Selector-based Hook | 高（索引烘焙） | 高 | 中 | 需要基于特定目标执行逻辑的场景 |
 | 回调 Hook | 中（Python 回调） | 高 | 中 | 计算密集型、需要读写参数/自定义逻辑的场景 |
 
-运行在 Rust 后端时，声明式 Op 完全在会话内执行，是性能最优路径；回调 Hook 每次
-触发跨一次 Python↔Rust 边界。
+声明式 Op 完全在引擎会话内执行，是性能最优路径；回调 Hook 每次触发跨一次
+Python↔Rust 边界。
 
 ## 运行时修改参数
 
@@ -247,10 +241,10 @@ def heatwave(pop: TickContext) -> int:
     return 0
 ```
 
-语义（三后端统一）：
+语义（各入口统一）：
 
 - 写入经过 jsonc 边界校验，超出 `parameters.jsonc` 中声明的 `bounds` 抛 `ValueError`；
-- 同 tick 后续阶段立即生效（参考路径直接写 draft；Rust 路径直接改会话生态列）；
+- 同 tick 后续阶段立即生效（tick 内写落入会话生态列；带外 `trigger_event` 写直接落 draft）；
 - 每条实际变化追加到 `pop.params_log`，格式 `(tick, name, old, new)`；
 - 向量/张量参数用 `pop.params.tensor_write(name, values)`。
 
@@ -260,19 +254,19 @@ def heatwave(pop: TickContext) -> int:
 
 Hook 内如需构建链式更新，可用 `pop.update()` 返回的 Configurator（与构建链同语法）。
 
-## 三后端一致性条款（slice ④ 语义决定）
+## 切片④ 一致性条款（slice ④ 语义决定）
 
 - **late 事件中的 `stop()`**：在事件边界立即停止，当前 tick 的其余阶段不再执行，
   且 tick 不递增。
 - **`stop()` 之后**：继续 `run()` 前必须先 `reset()`；否则 `run()` 抛错。
-- **Hook 异常**：参考后端原始抛出的异常类型原样上抛；Rust 后端把跨桥异常包装为
-  `RuntimeError`，消息中内嵌原始错误文本（普通模型桥保留原异常在 `__cause__`，
-  空间桥仅在消息中内嵌），因此跨后端异常类型**不对称**是有意行为。
+- **Hook 异常**：回调抛出的异常跨桥回到 Python 时包装为 `RuntimeError`，
+  消息中内嵌原始错误文本（普通模型桥保留原异常在 `__cause__`，空间桥仅在
+  消息中内嵌）；带外调用（`trigger_event`、finish 事件）原样上抛原始异常。
 - **空间 `ctx.update()` 下一 tick 生效**：空间 run 内 hook 的参数写先落入 deme
   draft，并在该 tick 返回时拉入会话列，因此从**下一个 tick** 开始生效（与普通
-  Rust 后端的延迟写语义一致）。同一 tick 内声明式 `Op.set_param` 与 `ctx.update()`
+  模型 hook 的延迟写语义一致）。同一 tick 内声明式 `Op.set_param` 与 `ctx.update()`
   写同一参数时，运行时按后写者为准（Python 回调在该事件的声明式钩子之后触发）。
-- **Rust 的 hook 内参数写与 `run()` 合流**（HB-2 修复后）：会话内写发生在会话
+- **hook 内参数写与 `run()` 合流**（HB-2 修复后）：会话内写发生在会话
   生态列中；`run()` 返回时审计日志按各自提交 tick 追加到 `params_log`，最终值
   同步回 draft，无需脏桥回推。
 
@@ -282,4 +276,3 @@ Hook 内如需构建链式更新，可用 `pop.update()` 返回的 Configurator�
 - [运行时参数修改](3_runtime_modification.md)
 - [Modifier 机制](3_modifiers.md) - 遗传修饰器机制
 - [模拟内核深度解析](4_simulation_engine.md) - 模拟内核的工作原理
-- [后端选择与性能](4_backend_selection.md) - 后端选择

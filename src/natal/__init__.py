@@ -5,11 +5,8 @@ Genetic Simulation Utilities
 Core components for genetic simulation: structures, entities, and population models.
 """
 
-import ast
 import importlib
-import pkgutil
-from pathlib import Path
-from typing import Any, Dict, List, cast
+from typing import Any, Dict
 
 __version__ = "0.2.0b"
 
@@ -30,135 +27,160 @@ _lazy_map: Dict[str, str] = {}
 _lazy_packages: set[str] = set()
 
 
-def _extract_module_exports(module_file: Path) -> list[str]:
-    """Return literal ``__all__`` entries from a module source file.
-
-    This uses static source parsing instead of importing the module so the package
-    can support true lazy loading. Importing the package only reads source text and
-    builds the export table; it does not execute child-module top-level code.
-
-    This requires each child module's ``__all__`` to be a literal value that
-    ``ast.literal_eval`` can resolve, for Examples:
-
-        __all__ = ["Sex", "Age"]
-
-    If ``__all__`` is built dynamically at runtime, this function returns an empty
-    list and that module will not participate in package-level lazy exports.
-    """
-    try:
-        # Read source text and parse an AST only; this never executes module code.
-        source = module_file.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(module_file))
-    except (OSError, SyntaxError):
-        # Ignore unreadable files or modules with syntax errors so one broken file
-        # does not prevent the package itself from importing.
-        return []
-
-    # Only inspect top-level statements. The top-level __all__ assignment defines
-    # the public symbols this package can expose lazily.
-    for node in tree.body:
-        value_node = None
-        if isinstance(node, ast.Assign):
-            if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
-                value_node = node.value
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id == "__all__":
-                value_node = node.value
-
-        if value_node is None:
-            continue
-
-        try:
-            # ast.literal_eval only resolves safe literal structures and will not
-            # execute expressions.
-            exports = ast.literal_eval(value_node)
-        except Exception:
-            return []
-
-        if isinstance(exports, list):
-            list_exports = cast(List[object], exports)
-            if all(isinstance(item, str) for item in list_exports):
-                return [cast(str, item) for item in list_exports]
-        if isinstance(exports, tuple):
-            tuple_exports = cast(tuple[object, ...], exports)
-            if all(isinstance(item, str) for item in tuple_exports):
-                return [cast(str, item) for item in tuple_exports]
-        return []
-
-    return []
 
 
-def _scan_unit(module_name: str, allow_legacy_key: bool) -> list[str]:
-    """Extract the literal ``__all__`` of one unit and register its exports.
+def _scan_unit(module_name: str, names: list[str], allow_legacy_key: bool) -> None:
+    """Register one unit's explicitly declared exports in the lazy index.
 
     Args:
         module_name: Dotted module name of the unit (e.g. ``frontend.hooks``).
+        names: The unit's exported names, from ``_PUBLIC_EXPORTS``.
         allow_legacy_key: Whether the legacy short package key (e.g. ``hooks``)
             is registered alongside the exported names.  ``contracts`` keeps its
             own key because the package path did not change; ``frontend`` and
             ``backends`` subpackages keep their pre-Phase-0 keys so that
             ``natal.<legacy-key>`` attribute access keeps resolving.
-
-    Returns:
-        The unit's own exported names (may be empty).
     """
-    module_file = package_dir.joinpath(*module_name.split("."), "__init__.py")
-    if not module_file.is_file():
-        return []
-    exports = _extract_module_exports(module_file)
     if allow_legacy_key:
         short = module_name.rsplit(".", 1)[-1]
         _lazy_map.setdefault(short, module_name)
-        if exports:
+        if names:
             _lazy_packages.add(short)
-    for name in exports:
+    for name in names:
         _lazy_map.setdefault(name, module_name)
-    return exports
 
 
-# Scan the package tree and build the export-name -> module-name index.
+# Explicit public export list (plan S6 must-not-exist item 8).
 #
-# This only scans and parses files. It does not import modules, so importing natal
-# remains lightweight.  Only real entity packages participate: the direct
-# children of ``frontend``, the direct children of ``backends``, and
-# ``contracts`` itself.  A unit joins the public lazy-export index when its
-# ``__init__.py`` declares a non-empty literal ``__all__``; an empty (or
-# missing) ``__all__`` marks the package as private/structural (e.g.
-# ``frontend`` itself and ``backends``).
-package_dir = Path(__file__).resolve().parent
+# Every public top-level name of ``natal`` is declared here, once, per
+# owning unit.  Adding a name to a module's ``__all__`` does NOT publish
+# it at the top level: the name becomes public only when it is added to
+# this mapping (an intentional act).  The consistency test in
+# ``tests/test_phase0_shims.py`` pins this list against the modules'
+# literal ``__all__`` so neither side can drift silently; the editor
+# stub ``__init__.pyi`` is generated from this list by
+# ``scripts/generate_init_pyi.py``.
+#
+# Lazy loading is unchanged: importing ``natal`` reads this literal and
+# never executes child-module code.
+_PUBLIC_EXPORTS: dict[str, list[str]] = {
+    "contracts": [
+        "CONTRACTS_VERSION", "Blueprint", "CustomValue", "Materialized", "Params",
+        "SimState", "format_type_name", "gtype_names_from_registry", "materialize",
+        "ztype_names_from_registry",
+    ],
+    "frontend.configurator": [
+        "Configurator", "CoreConfigWriter", "ConfigWriter", "DraftWriter",
+        "HookConfigWriter", "PopulationConfigBuilder", "ROUTES", "ROUTES_BY_METHOD",
+        "RouteEntry", "dispatch", "set_param",
+    ],
+    "frontend.data": [
+        "ModelDefinition", "ModelDraft", "NO_COMPETITION", "FIXED", "LOGISTIC",
+        "LINEAR", "BEVERTON_HOLT", "PopulationState", "DiscretePopulationState",
+        "extract_gamete_frequencies", "extract_gamete_frequencies_by_glab",
+        "extract_zygote_frequencies", "build_population_config",
+        "build_discrete_engine_config", "build_custom_slots", "initialize_zygote_map",
+        "initialize_gamete_map", "compress_hl", "decompress_hl", "compress_config",
+        "to_plain_population_state", "to_plain_discrete_population_state",
+        "from_plain_population_state", "from_plain_discrete_population_state",
+        "parse_flattened_state", "parse_flattened_discrete_state",
+        "PlainPopulationState", "PlainDiscretePopulationState",
+    ],
+    "frontend.fitness": ["apply_preset_fitness_patch", "write_fitness_field"],
+    "frontend.genetics": [
+        "SexChromosomeType", "Species", "SpeciesConfigBlueprint", "Chromosome",
+        "Linkage", "RecombinationMap", "Locus", "Gene", "Allele", "Haplotype",
+        "HaploidGenotype", "HaploidGenome", "Genotype", "Genome", "DiploidGenome",
+        "DiploidGenotype", "GenomeTemplate", "Karyotype",
+        "create_haplotype_from_allele_names", "create_chromosome_from_allele_names",
+        "compute_recombinant_haplotypes", "compute_recombinant_haplotypes_with_alleles",
+        "build_compression_mask",
+    ],
+    "frontend.hooks": [
+        "OpType", "DemeSelector", "deme_selector_matches", "HookOp", "Op",
+        "CompiledHookPlan", "CompiledHookDescriptor", "HookProgram", "RunProgram",
+        "empty_hook_program", "HookExecutor", "execute_csr_event_arrays",
+        "execute_csr_event_program_with_state", "execute_csr_event_program",
+        "execute_single_csr_hook", "build_hook_program", "noop_hook",
+        "CompiledEventHooks", "hook", "compile_declarative_hook",
+        "compile_selector_callback", "TickContext", "TickMetrics", "BlueprintView",
+        "HookRunner", "COND_ALWAYS", "COND_TICK_EQ", "COND_TICK_MOD", "ECO_PARAM_NAMES",
+        "COND_TICK_GE", "COND_TICK_GT", "COND_TICK_LE", "COND_TICK_LT", "COND_OP_AND",
+        "COND_OP_OR", "COND_OP_NOT", "EVENT_FIRST", "EVENT_EARLY", "EVENT_LATE",
+        "EVENT_FINISH", "EVENT_NAMES", "EVENT_ID_MAP", "NUM_EVENTS", "RESULT_CONTINUE",
+        "RESULT_SKIP", "RESULT_STOP", "parse_condition", "eval_csr_condition_program",
+    ],
+    "frontend.modifiers": [
+        "build_modifier_wrappers", "evaluate_genotype_filter",
+        "GameteAlleleConversionRule", "GameteConversionRuleSet",
+        "GameteGlabConversionRule", "GameteGtypeConversionRule",
+        "GameteHaploidGenomeConversionRule", "GameteModifier", "GenotypeFilter",
+        "GlabSelector", "wrap_gamete_modifier", "wrap_zygote_modifier",
+        "ZygoteAlleleConversionRule", "ZygoteConversionRuleSet",
+        "ZygoteGenotypeConversionRule", "ZygoteGlabRedirectRule", "ZygoteModifier",
+        "ZygoteZtypeConversionRule",
+    ],
+    "frontend.output": [
+        "History", "HistorySchema", "Observation", "ObservationMetadata",
+        "ObservationResult", "PopulationLayout", "SpatialHistoryLayout", "apply_rule",
+        "build_identity_observation", "discrete_population_state_to_dict",
+        "discrete_population_state_to_json", "population_history_to_readable_dict",
+        "population_history_to_readable_json",
+        "population_observation_history_to_readable_dict",
+        "population_observation_history_to_readable_json", "population_state_to_dict",
+        "population_state_to_json", "population_to_readable_dict",
+        "population_to_readable_json", "spatial_population_history_to_readable_dict",
+        "spatial_population_history_to_readable_json",
+        "spatial_population_observation_history_to_readable_dict",
+        "spatial_population_observation_history_to_readable_json",
+        "spatial_population_to_observation_dict",
+        "spatial_population_to_observation_json", "spatial_population_to_readable_dict",
+        "spatial_population_to_readable_json",
+    ],
+    "frontend.patterns": [
+        "GameteTypePattern", "GenotypePatternParser", "GenotypeSelector",
+        "IndividualSelector", "LabPattern", "PatternParseError", "ZygoteTypePattern",
+        "resolve_zygote_type",
+    ],
+    "frontend.population": [
+        "BasePopulation", "AgeStructuredPopulation", "DiscreteGenerationPopulation",
+    ],
+    "frontend.presets": [
+        "GeneticPreset", "HomingDrive", "ToxinAntidoteDrive", "CytoplasmicPreset",
+        "Wolbachia", "TransgenicBackground", "apply_preset_fitness_patch",
+        "PresetFitnessPatch", "count_allele_copies", "GameteAlleleConversionRule",
+        "GameteConversionRuleSet", "GameteGlabConversionRule",
+        "GameteGtypeConversionRule", "GameteHaploidGenomeConversionRule",
+        "ZygoteAlleleConversionRule", "ZygoteConversionRuleSet",
+        "ZygoteGenotypeConversionRule", "ZygoteGlabRedirectRule",
+        "ZygoteZtypeConversionRule",
+    ],
+    "frontend.registry": ["IndexRegistry"],
+    "frontend.spatial": [
+        "BatchSetting", "GridTopology", "HexGrid", "MigrationCSR",
+        "SpatialConfigurator", "SpatialPopulation", "SquareGrid", "batch_setting",
+        "build_adjacency_matrix", "build_gaussian_kernel",
+    ],
+    "frontend.ui": [
+        "Dashboard", "PopulationDashboard", "SpatialDashboard", "get_allele_color",
+        "launch", "launch_population", "launch_spatial", "render_cell_svg",
+    ],
+    "frontend.utils": [
+        "Sex", "Age", "GameteLabel", "resolve_sex_label", "validate_name",
+        "ALL_PARAMETERS", "PARAM_IDS", "PARAMETERS_BY_DOMAIN", "ParamDescriptor",
+    ],
+}
 
-# Every first-level package of the real tree, sorted for deterministic
-# first-wins semantics on repeated names (keeps e.g. ``apply_preset_fitness_patch``
-# owned by ``frontend.fitness``, alphabetically before ``frontend.presets``).
-scan_units: list[str] = []
-for root in ("contracts", "frontend", "backends"):
-    root_init = package_dir / root / "__init__.py"
-    if not root_init.is_file():
-        continue
-    if root == "contracts" or not _extract_module_exports(root_init):
-        # ``contracts`` is itself an export owner; ``frontend``/``backends`` are
-        # structural, so their only role is hosting the subpackages below.
-        scan_units.append(root)
-    for _, submodule_name, is_package in sorted(
-        pkgutil.iter_modules([str(package_dir / root)]),
-        key=lambda item: item[1],
-    ):
-        if is_package:
-            scan_units.append(f"{root}.{submodule_name}")
-
-for unit in sorted(set(scan_units)):
-    # Skip empty-``__all__`` units: their submodule aliases would be registered
-    # anyway for package-key access, but exporting nothing keeps their names out
-    # of the attribute namespace.
-    if unit != "contracts" and not _extract_module_exports(package_dir.joinpath(*unit.split("."), "__init__.py")):
-        continue
-    _scan_unit(unit, allow_legacy_key=True)
+# Build the lazy index from the explicit list (deterministic first-wins
+# semantics on repeated names; units are listed alphabetically).
+for _unit, _names in _PUBLIC_EXPORTS.items():
+    _scan_unit(_unit, _names, allow_legacy_key=True)
 
 # Public export list.
 #
 # This keeps from natal import * aligned with the package's public API and also
 # helps dir(natal) and some tooling discover these names.
-__all__ = list(_lazy_map)  # type: ignore  # TODO
+__all__ = list(_lazy_map)  # type: ignore[reportUnsupportedDunderAll]  # derived from the explicit list above
 
 
 def __getattr__(name: str) -> Any:

@@ -479,9 +479,6 @@ class Genotype:
         """
         Compute all recombinant haplotypes for a heterozygous chromosome.
 
-        Uses a high-level decorator to define the platform-accelerated
-        and pure Python implementations based on problem size.
-
         This method is only called when _should_use_recombination() returns True,
         i.e., when the chromosome has >1 locus and non-zero recombination rates.
 

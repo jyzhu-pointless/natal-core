@@ -117,10 +117,10 @@ nt.Op.set_param("carrying_capacity", "K * 0.95", every=10)
 
 向量/张量参数会抛 `ValueError` —— 请改用 `pop.update()` / `pop.params.tensor_write()`。
 
-**三后端语义**：
+**写入语义**：
 
-- 参考（Python）路径与 Rust 路径都在**事件边界**按同一计划写入，通过 `pop.params.<name> = ...` 相同的通道（路由分派、Rust 脏桥、参数快照日志），同一个 tick 后续阶段立即可见。
-- Rust `run()` 路径中，写入在会话拥有的生态列内部演化（事件粒度相同、jsonc 边界校验相同；非有限值或越界值如 `"K / 0"` 会在运行中抛 `ValueError`）。`run()` 返回时，审计过的变化按各自提交 tick 追加到 `params_log`（HB-2 修复），最终值同步回 draft。
+- 运行外，写入通过 `pop.params.<name> = ...` 相同的通道（路由分派、会话刷新、参数快照日志）生效。
+- `run()` 运行中，写入在会话拥有的生态列内部演化（事件粒度相同、jsonc 边界校验相同；非有限值或越界值如 `"K / 0"` 会在运行中抛 `ValueError`）。`run()` 返回时，审计过的变化按各自提交 tick 追加到 `params_log`（HB-2 修复），最终值同步回 draft。
 
 ### `Op.convert`：一对一概率转换
 

@@ -92,7 +92,6 @@ def build_spatial_population() -> SpatialPopulation:
 
 def main() -> None:
     """Launch the spatial UI demo."""
-    # Spatial demos run the pure-Python per-deme dispatch.
     spatial = build_spatial_population()
     launch(spatial, port=8080, title="Spatial UI Demo")
 

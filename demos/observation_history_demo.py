@@ -10,8 +10,6 @@ import json
 import natal as nt
 from natal.frontend.patterns import IndividualSelector
 
-# The pure-Python reference is the default execution vehicle.
-
 species = nt.Species.from_dict(
     name="ObservationHistoryDemoSpecies",
     structure={"chr1": {"loc": ["WT", "Dr"]}},
@@ -19,7 +17,7 @@ species = nt.Species.from_dict(
 
 population = (
     nt.DiscreteGenerationPopulation
-    .setup(species=species, name="ObservationHistoryDemo", stochastic=False, backend="python")
+    .setup(species=species, name="ObservationHistoryDemo", stochastic=False)
     .initial_state(
         individual_count={
             "female": {

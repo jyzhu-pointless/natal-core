@@ -254,7 +254,7 @@ pop = (nt.AgeStructuredPopulation
 )
 ```
 
-> **Tip**: For advanced users requiring high performance or complex logic, single-parameter callback hooks or selector hooks are available; both backends execute the same event semantics. See [Hook System](2_hooks.md) for details.
+> **Tip**: For advanced users requiring high performance or complex logic, single-parameter callback hooks or selector hooks are available; they execute the same event semantics as declarative hooks. See [Hook System](2_hooks.md) for details.
 
 ---
 
@@ -338,7 +338,7 @@ Although the high-level code is intuitive and readable, a series of complex oper
 2. **Mapping Matrix Generation**: Based on genetic presets and the genetic mapping `modifiers`, two key matrices are generated:
    - `Genotype → Gamete`: Specifies which gametes each genotype produces
    - `Gamete → Zygote`: Specifies which genotypes gamete combinations produce
-3. **Configuration Compilation**: All parameters are compiled into a `ModelDraft` NamedTuple consumed by the selected backend (Rust native extension or pure-Python reference)
+3. **Configuration Compilation**: All parameters are compiled into a `ModelDraft` NamedTuple consumed by the native Rust engine
 4. **Hooks Compilation**: User-defined Hooks are compiled into execution plans, to be called at the appropriate times
 5. **State Initialization**: A `PopulationState` NamedTuple (containing numpy arrays) is created based on the initial distribution
 
@@ -347,7 +347,6 @@ This process is transparent to the user, but understanding it is important. See:
 - [PopulationState & ModelDraft](4_population_state_config.md)
 - [Modifiers System](3_modifiers.md) and [Genetic Presets System](2_genetic_presets.md)
 - [Hooks System](2_hooks.md)
-- [Backend Selection and Performance](4_backend_selection.md)
 
 ---
 
@@ -455,7 +454,6 @@ Now that you have mastered the basics! Next, you can:
 2. **Understand Genetic Architecture**: [Genetic Structures and Entities](2_genetics.md) - Gain in-depth knowledge of Species, Chromosome, and other concepts
 3. **Master Advanced Features**: [Hook System](2_hooks.md) - Learn how to inject custom simulation logic
 4. **Need Custom Genetic Rules**: [Modifier Mechanism](3_modifiers.md) - Write manual gamete/zygote modifiers
-5. **Performance Optimization**: [Backend Selection and Performance](4_backend_selection.md) - Improve simulation performance
 
 ---
 

@@ -68,24 +68,18 @@ def measure_tick_loop(pop, n_steps: int) -> float:
 
 
 def benchmark(stochastic: bool) -> None:
-    reference = build(stochastic, "python_reference")
-    rust_pop = build(stochastic, "rust").enable_rust_backend(seed=1)
-    measure_run(reference, 2)
-    measure_run(rust_pop, 2)
+    pop = build(stochastic, "run")
+    measure_run(pop, 2)
 
     timings = {
-        "python run(n)": [],
-        "rust run(n)": [],
-        "python run_tick loop": [],
-        "rust run_tick loop": [],
+        "engine run(n)": [],
+        "engine run_tick loop": [],
     }
     for _ in range(REPEATS):
-        timings["python run(n)"].append(measure_run(reference, N_TICKS))
-        timings["rust run(n)"].append(measure_run(rust_pop, N_TICKS))
-        timings["python run_tick loop"].append(measure_tick_loop(reference, N_TICKS))
-        timings["rust run_tick loop"].append(measure_tick_loop(rust_pop, N_TICKS))
+        timings["engine run(n)"].append(measure_run(pop, N_TICKS))
+        timings["engine run_tick loop"].append(measure_tick_loop(pop, N_TICKS))
 
-    print(f"\n=== stochastic={stochastic} (n_ztypes={reference.config.n_ztypes}) ===")
+    print(f"\n=== stochastic={stochastic} (n_ztypes={pop.config.n_ztypes}) ===")
     print(f"{'path':22s} {'total_ms':>10s} {'per_tick_ms':>12s}")
     for label, values in timings.items():
         total_ms = statistics.median(values) * 1000.0

@@ -571,11 +571,12 @@ def benchmark_natal(
     sigma: float = 1.0,
     migration_rate: float = 0.05,
 ) -> tuple[BenchmarkRecord, ...]:
-    """Benchmark NATAL's compact local-kernel execution path.
+    """Benchmark the retired MGDrivE1-compatible NATAL spatial path.
 
-    The first one-day call warms Numba compilation and is excluded from timing.
-    Every timed replicate starts from the same equilibrium state. Stochastic
-    execution uses Numba's runtime-managed random state.
+    The lifecycle stage retired with the pure-Python reference engine
+    (plan S6), so any replicate that reaches the engine raises
+    ``ModuleNotFoundError``; the scenario plumbing ahead of it still
+    works and is contract-tested.
 
     Args:
         stochastic: Whether to sample demographic and migration events.

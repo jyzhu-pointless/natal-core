@@ -497,7 +497,7 @@ print(observed_history.values.shape)
 
 1. 检查每个 deme 是否已经 `is_finished`。
 2. 把所有 deme 的 state 拼成统一数组，构建 config bank。
-3. 运行空间生命周期：各 deme 生命周期按 deme 粒度并行执行 → 统一迁移（同一 Rust 会话或 Python 参考路径内）。
+3. 运行空间生命周期：各 deme 生命周期按 deme 粒度并行执行 → 统一迁移，全部在同一引擎会话内。
 4. 将更新后的 state 写回每个 deme。
 
 如果一个 deme 先触发终止条件（如种群灭绝），整个 `SpatialPopulation` 也会停止推进。详细执行流程见 [空间生命周期包装器](spatial_lifecycle_wrapper.md)。

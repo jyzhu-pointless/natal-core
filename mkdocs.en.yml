@@ -111,11 +111,10 @@ nav:
   - Internal Implementation:
     - 4_index_registry.md
     - 4_simulation_engine.md
-    - 4_backend_selection.md
     - 4_population_state_config.md
   - Appendix:
     - Allele Conversion Rules: allele_conversion_rules.md
-    - Execution Backends: caching_and_codegen.md
+    - Execution Engine: caching_and_codegen.md
     - Genotype Filter: genotype_filter.md
     - Migration: migration_builder_to_configurator.md
     - Migration Kernel Implementation: migration_kernel_impl.md
@@ -140,9 +139,7 @@ nav:
     - patterns: api/patterns.md
     - presets: api/presets.md
     - modifiers: api/modifiers.md
-    - algorithms: api/algorithms.md
     - hooks: api/hooks.md
-    - simulation_engine: api/simulation_engine.md
     - spatial: api/spatial.md
     - fitness: api/fitness.md
     - registry: api/registry.md

@@ -30,6 +30,20 @@
   `natal.frontend.*`, `natal.backends.*`, `natal.contracts`, or the top-level
   lazy API (`nt.Op`, `nt.Species`, ...).
 
+### Removed
+
+- **Backend-selection documentation and tooling**: `docs/{en,zh}/4_backend_selection.md`
+  and the API pages for the reference simulators are gone; guides now describe
+  the single native engine. `demos/bench_backends.py` is deleted, the three
+  `benchmarks/rust_backend_*.py` scripts measure the engine's own `run(n)`
+  vs `run_tick()` paths, and the demos no longer pass the removed
+  `backend=` selector. The MGDrivE1 cross-engine benchmark family keeps its
+  validation/statistics plumbing but its engine entry points now document
+  that they raise on invocation (the reference engine retired).
+- **Directory auto-discovery of top-level exports**: `natal`'s public API is
+  an explicit `_PUBLIC_EXPORTS` list; a module export reaches the top level
+  only by being added to that list. `__init__.pyi` is generated from it.
+
 ### New Features
 
 - **Composable individual selectors**: add immutable `IndividualSelector`

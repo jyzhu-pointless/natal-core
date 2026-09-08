@@ -291,7 +291,7 @@ Within the NATAL framework, `IndexRegistry` is used for:
 
 ### 3. Hook System
 
-- Hooks use precomputed indices (selectors are resolved at registration) for efficient operation on both backends.
+- Hooks use precomputed indices (selectors are resolved at registration) for efficient engine-side operation.
 - Avoids accessing dynamic registries at compile time.
 - Avoids hardcoded indices through the selector pattern.
 

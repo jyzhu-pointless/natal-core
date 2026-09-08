@@ -3,7 +3,7 @@
 本文描述 `SpatialPopulation` 的运行时执行架构（slice-5 数据面落地后的形态）。
 此前基于 njit codegen 的 spatial wrapper 管线（`compile_spatial_lifecycle_wrapper`、
 `NUMBA_ENABLED`、`numba`/`prange` 导入、`natal.numba` 工具层）已全部移除——
-后端只剩 Rust 原生扩展与纯 Python 参考实现两条路径，二者共享同一套 hook 计划
+Rust 原生扩展是唯一的执行引擎，所有路径共享同一套 hook 计划
 与迁移数据面。
 
 ## 执行模型
@@ -45,7 +45,7 @@
 ## Hook 执行
 
 - 声明式 hook 编译为 CSR 计划，在每条路径上按事件边界执行；
-- 回调 hook（`TickContext`）在参考路径直接调用，在 Rust 路径跨桥执行；
+- 回调 hook（`TickContext`）跨桥进入引擎会话执行；带外入口（`trigger_event`、finish 事件）直接调用；
 - deme 级 `priority` 只在 deme 内部生效，跨 deme 无全局顺序；
 - `@hook(..., deme=[0, 2])` 按 deme 选择器限定目标 deme（默认 `"*"` 全部）。
 

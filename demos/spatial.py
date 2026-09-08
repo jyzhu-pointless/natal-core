@@ -70,7 +70,6 @@ def summarize_readable(spatial: SpatialPopulation) -> None:
 
 
 def main() -> None:
-    # Spatial demos run the pure-Python per-deme dispatch.
 
     species = nt.Species.from_dict(
         name="SpatialDemoSpecies",

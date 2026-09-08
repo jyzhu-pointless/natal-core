@@ -69,18 +69,17 @@ src/natal/
 │   ├── output/                # History/Observation/record/translation
 │   └── ui/                    # Dashboard/可视化（依赖 matplotlib 等，可选导入）
 │
-├── backends/                  # 🔌 执行后端
-│   ├── reference/             # 纯 Python 参考实现（age/discrete/spatial simulator + migration + lifecycle + sampling）
-│   └── rust/                  # Rust 原生扩展适配（rust_backend.py：会话桥 + 检查点/错误转换）
+├── backends/                  # 🔌 引擎适配层
+│   └── rust/                  # Rust 原生扩展适配（rust_backend.py：会话桥 + 检查点/错误转换；唯一执行引擎）
 │
 ├── contracts/                 # 前后端契约（blueprint/params/state/materialize 等）
 │
 └── py.typed
 ```
 
-> 注意：`natal.frontend.spatial.migration` 中的 migration CSR 折叠、
-> `natal.backends.reference.*` 的每后端实现与 `natal.contracts` 的契约层
-> 共同构成 slice-5 数据面；`natal.engine` / `natal.numba` 等旧路径已不存在。
+> 注意：`natal.frontend.spatial.migration` 中的 migration CSR 折叠与
+> `natal.contracts` 的契约层共同构成 slice-5 数据面；
+> `natal.backends.reference` / `natal.engine` / `natal.numba` 等旧路径已不存在。
 
 ## 依赖方向
 
@@ -100,7 +99,7 @@ hooks → engine → population
 4. **`fitness/` 已激活**：fitness 逻辑已从 presets 和 configurator 提取到独立的 `fitness/` 子包，使用 `FitnessPopulationView` Protocol 作为统一接口，`_patch.py` 为唯一写入层，`_writer.py` 为 DSL 解析层。
 5. **`modifiers/` 独立**：修饰器是连接 presets 和引擎的独立抽象层。
 6. **500 行单模块上限**：每个 `.py` 文件不超过 500 行，超限需拆分。
-7. **执行后端只有两条**：`backends.reference`（纯 Python）与 `backends.rust`（原生扩展）；`auto` 选择器在扩展可用时优先 Rust，否则回退 reference。
+7. **执行引擎只有一个**：`backends.rust`（原生扩展 `natal._engine_rs`）；引擎会话拥有运行状态，`backends.reference` 与 `auto` 选择器已删除。
 8. **旧 Builder 已废弃**：`population_builder.py` 中的 Builder 类已删除，统一使用 Configurator API。
 9. **旧模块导入路径已全部更新**：`genetic_structures`、`genetic_entities`、`genetic_patterns`、`population_config`、`population_state` 等旧路径不再存在。
 

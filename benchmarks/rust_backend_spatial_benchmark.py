@@ -1,4 +1,4 @@
-"""Benchmark the Rust spatial backend against the Numba spatial kernel.
+"""Benchmark the native spatial engine session.
 
 Measures both the in-kernel ``run(n)`` path and repeated ``run_tick()`` calls
 for a moderately sized spatial population with deterministic and stochastic
@@ -107,41 +107,27 @@ def measure_tick_loop(pop: SpatialPopulation, n_steps: int) -> float:
 
 
 def benchmark(stochastic: bool) -> None:
-    """Warm up and compare Numba vs Rust spatial backends."""
+    """Warm up, then measure the engine's batch and per-tick spatial paths."""
     species = build_species(f"spatial_bench_{stochastic}")
-    reference = build_spatial(species, stochastic, "python_reference")
-    rust_pop = build_spatial(species, stochastic, "rust").enable_rust_backend(seed=1)
+    pop = build_spatial(species, stochastic, "run")
 
-    # Warm up both code paths.
-    measure_run(reference, 2)
-    measure_run(rust_pop, 2)
+    measure_run(pop, 2)
 
     timings: dict[str, list[float]] = {
-        "python run(n)": [],
-        "rust run(n)": [],
-        "python run_tick loop": [],
-        "rust run_tick loop": [],
+        "engine run(n)": [],
+        "engine run_tick loop": [],
     }
 
     for _ in range(REPEATS):
-        timings["python run(n)"].append(measure_run(reference, N_TICKS))
-        timings["rust run(n)"].append(measure_run(rust_pop, N_TICKS))
-        timings["python run_tick loop"].append(measure_tick_loop(reference, N_TICKS))
-        timings["rust run_tick loop"].append(measure_tick_loop(rust_pop, N_TICKS))
+        timings["engine run(n)"].append(measure_run(pop, N_TICKS))
+        timings["engine run_tick loop"].append(measure_tick_loop(pop, N_TICKS))
 
     print(f"\n=== stochastic={stochastic} (n_demes={N_DEMES}, n_ticks={N_TICKS}) ===")
-    print(f"{'path':24s} {'total_ms':>10s} {'per_tick_ms':>12s} {'speedup':>8s}")
+    print(f"{'path':24s} {'total_ms':>10s} {'per_tick_ms':>12s}")
     for label, values in timings.items():
         total_ms = statistics.median(values) * 1000.0
         per_tick = total_ms / N_TICKS
-        speedup = ""
-        if label.startswith("rust"):
-            base_label = "python" + label[len("rust"):]
-            base_values = timings.get(base_label)
-            if base_values:
-                base_ms = statistics.median(base_values) * 1000.0
-                speedup = f"{base_ms / total_ms:.2f}x"
-        print(f"{label:24s} {total_ms:10.1f} {per_tick:12.3f} {speedup:>8s}")
+        print(f"{label:24s} {total_ms:10.1f} {per_tick:12.3f}")
 
 
 def main() -> None:

@@ -30,11 +30,6 @@ This section provides module-level API references, organized by the package's 17
 - [ModelDraft](population_config.md)
 - [PopulationState](population_state.md)
 
-## Engine
-
-- [Simulation Engine](simulation_engine.md)
-- [Algorithms](algorithms.md)
-
 ## Hooks
 
 - [hooks Module](hooks.md)

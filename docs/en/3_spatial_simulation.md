@@ -500,7 +500,7 @@ The internal execution order of each `run_tick()`:
 
 1. Check whether each deme has `is_finished`.
 2. Concatenate all demes' state into a unified array, build a config bank.
-3. Run the spatial lifecycle: each deme's lifecycle executes in parallel at the deme granularity -> unified migration (within one Rust session or the Python reference path).
+3. Run the spatial lifecycle: each deme's lifecycle executes in parallel at the deme granularity -> unified migration, all inside one engine session.
 4. Write the updated state back to each deme.
 
 If a deme triggers a termination condition first (e.g., population extinction), the entire `SpatialPopulation` stops advancing. For detailed execution flow, see [Spatial Lifecycle Wrapper](spatial_lifecycle_wrapper.md).

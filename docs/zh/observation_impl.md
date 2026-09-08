@@ -172,9 +172,9 @@ Spatial execution kernel
             → 提交固定形状的投影行
 ```
 
-Python fallback 在相同的稳定 tick 边界调用 `_record_snapshot()`。raw mode 提交完整空间状态；observation mode 调用同一个 `Observation.apply()`。因此两个后端共享相同的 Observation 语义和 History schema，只是 raw batch 的产生位置不同。
+带外记录在相同的稳定 tick 边界调用 `_record_snapshot()`。raw mode 提交完整空间状态；observation mode 调用同一个 `Observation.apply()`。因此引擎内批次与带外快照共享相同的 Observation 语义和 History schema，只是 raw batch 的产生位置不同。
 
-空间 wrapper 传 raw batch 的原因是保持 engine transport 规则且固定：生命周期内核不需要理解 group、deme selection 或 aggregate 规则。Observation 的所有语义集中在 canonical `Observation` 和空间容器边界，避免 engine、Python fallback 与事后投影各自实现一套规则。
+空间 wrapper 传 raw batch 的原因是保持 engine transport 规则且固定：生命周期内核不需要理解 group、deme selection 或 aggregate 规则。Observation 的所有语义集中在 canonical `Observation` 和空间容器边界，避免 engine 与事后投影各自实现一套规则。
 
 ## 已删除的 compact 空间布局
 
@@ -198,7 +198,7 @@ Python fallback 在相同的稳定 tick 边界调用 `_record_snapshot()`。raw 
 4. `collapse_age=True` 与未折叠结果沿 age 轴求和逐元素相等。
 5. raw History 保留所有 deme、ZType 及适用的 sperm storage。
 6. raw History 的事后投影与同 tick 的 `Observation.apply()` 逐元素相等。
-7. 内核路径与 Python fallback 在确定性模拟中产生相同 ticks 和相同 payload。
+7. 引擎内批次与带外快照在确定性模拟中产生相同 ticks 和相同 payload。
 8. 未选择的 deme 不依赖 sentinel 表示，真实零计数不会与选择状态混淆。
 
 断言应比较明确的轴和逐坐标值；只比较总和或排序后的扁平数组无法发现轴交换和 deme 顺序错误。

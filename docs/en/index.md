@@ -12,7 +12,7 @@
 
 ![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
-**NATAL Core** is a high-performance forward-time population genetics simulation engine with configurable species lifecycles. Rather than tracking individuals one by one, it adopts a **numerical aggregation** approach: individuals are grouped by age, sex, and genotype, their dynamics computed mathematically, and randomness introduced through probability distributions — avoiding the overhead of per-individual iteration. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and a Rust-native accelerated computation core (with an always-available pure-Python reference implementation). NATAL Core is especially suited for **modeling gene drive systems in insect populations**, but its flexible architecture also makes it applicable to a wide range of population genetics scenarios.
+**NATAL Core** is a high-performance forward-time population genetics simulation engine with configurable species lifecycles. Rather than tracking individuals one by one, it adopts a **numerical aggregation** approach: individuals are grouped by age, sex, and genotype, their dynamics computed mathematically, and randomness introduced through probability distributions — avoiding the overhead of per-individual iteration. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and a Rust-native computation core as its only execution engine. NATAL Core is especially suited for **modeling gene drive systems in insect populations**, but its flexible architecture also makes it applicable to a wide range of population genetics scenarios.
 
 NATAL Core is part of the NATAL project. The full project also includes **NATAL Inferencer**, a toolkit for inferring population genetics model parameters based on NATAL Core.
 
@@ -174,7 +174,6 @@ It is recommended to start with Part 1 to get up to speed, then use Part 2 as a 
 14. [IndexRegistry Indexing Mechanism](4_index_registry.md)
 15. [PopulationState and ModelDraft](4_population_state_config.md)
 16. [the Simulation Engine in Depth](4_simulation_engine.md)
-17. [Backend Selection and Performance](4_backend_selection.md)
 18. [Observation History Recording Implementation](observation_impl.md)
 
 ## API Documentation

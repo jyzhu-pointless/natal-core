@@ -12,7 +12,7 @@
 
 ![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
-**NATAL Core** 是一个高性能的前向时间群体遗传学模拟引擎，支持可配置的物种生命周期。不同于逐个体模拟，它采用**数值聚合（numerical aggregation）**方法：将个体按年龄、性别、基因型等特征分组计算种群动态，通过概率分布赋予随机性，避免了逐个体遍历的开销。它支持年龄结构化和离散世代种群、精子储存、遗传预设、hook 干预，以及 Rust 原生加速的计算核心（纯 Python 参考实现始终可用）。尤其适用于**昆虫种群基因驱动（gene drive）建模**，灵活的架构也适用于更广泛的群体遗传学场景。
+**NATAL Core** 是一个高性能的前向时间群体遗传学模拟引擎，支持可配置的物种生命周期。不同于逐个体模拟，它采用**数值聚合（numerical aggregation）**方法：将个体按年龄、性别、基因型等特征分组计算种群动态，通过概率分布赋予随机性，避免了逐个体遍历的开销。它支持年龄结构化和离散世代种群、精子储存、遗传预设、hook 干预，以及作为唯一执行引擎的 Rust 原生计算核心。尤其适用于**昆虫种群基因驱动（gene drive）建模**，灵活的架构也适用于更广泛的群体遗传学场景。
 
 NATAL Core 是 NATAL 项目的一部分。完整项目还包括 **NATAL Inferencer**，这是一个基于 NATAL Core 的群体遗传学模型参数推断工具包。
 
@@ -174,7 +174,6 @@ launch(pop)
 14. [IndexRegistry 索引机制](4_index_registry.md)
 15. [PopulationState 与 ModelDraft](4_population_state_config.md)
 16. [模拟内核深度解析](4_simulation_engine.md)
-17. [后端选择与性能](4_backend_selection.md)
 18. [Observation 历史记录实现解析](observation_impl.md)
 
 

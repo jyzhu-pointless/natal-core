@@ -1,14 +1,11 @@
-# Execution Backends
+# Execution Engine
 
-The `natal` engine ships one implementation per backend family under
-`natal.backends`:
+The `natal.backends` package holds one adapter:
 
-- `reference` — the pure-Python golden implementation (always available).
 - `rust` — the adapter for the native `natal._engine_rs` extension (built
-  with maturin; `rust_backend_available()` probes it).
+  with maturin; `rust_backend_available()` probes it). It is the only
+  execution engine.
 
-There is no source-code generation layer anymore: the reference kernels are
-plain NumPy functions and the Rust engine is a precompiled native module.
-Deterministic semantics are asserted against the reference by the test
-suite, and the per-deme Python dispatch is the only non-Rust execution
-vehicle for spatial models.
+There is no source-code generation layer anymore: the engine is a
+precompiled native module. Deterministic semantics are locked by the test
+suite against hand-derived expectations and frozen golden values.

@@ -3,9 +3,9 @@
 This document describes the runtime execution architecture of `SpatialPopulation`
 (after the slice-5 data plane landed). The former njit codegen spatial wrapper
 pipeline (`compile_spatial_lifecycle_wrapper`, `NUMBA_ENABLED`, `numba`/`prange`
-imports, the `natal.numba` utility layer) has been fully removed. Only two
-execution paths remain -- the Rust native extension and the pure-Python
-reference -- and both share the same hook plans and the same migration data
+imports, the `natal.numba` utility layer) and the pure-Python reference engine
+have been fully removed. The Rust native extension is the only execution
+engine; every path shares the same hook plans and the same migration data
 plane.
 
 ## Execution Model
@@ -20,14 +20,11 @@ per-deme lifecycle (per-deme granularity: first hook -> reproduction -> early
 unified migration (runtime rate column x frozen folded CSR)
 ```
 
-- **Reference (Python) backend**: `_python_dispatch_tick_inner()` calls
-  `run_structured_tick` / `run_discrete_tick` per deme (each deme is an
-  independent `BasePopulation` instance whose hook plan executes inside its own
-  lifecycle), then stacks all deme states into `(n_demes, ...)` arrays and calls
-  `run_spatial_migration` for the unified migration.
-- **Rust backend**: both the per-deme lifecycle and the migration kernels run
-  inside the session; deme `d` derives its random stream from `seed ^ d`
-  (see `enable_rust_backend(seed=...)`).
+- **Engine session**: the container's tick driver calls
+  per-deme lifecycle inside the one session-owned spatial kernel; deme `d`
+  derives its random stream from `seed ^ d` (see
+  `enable_rust_backend(seed=...)`), and the migration stage runs inside the
+  same session on the same per-deme streams.
 
 ## Migration Data Plane (slice-5)
 
@@ -56,10 +53,11 @@ CSR triple (`indptr` / `dest_idx` / `weights`); at runtime it is just
 
 ## Hook Execution
 
-- Declarative hooks compile into CSR plans executed at event boundaries on
-  either path;
-- Callback hooks (`TickContext`) are invoked directly on the reference path and
-  bridged across the boundary on the Rust path;
+- Declarative hooks compile into CSR plans executed at event boundaries
+  inside the engine session;
+- Callback hooks (`TickContext`) are bridged across the boundary inside the
+  session; out-of-band surfaces (`trigger_event`, finish events) invoke them
+  directly;
 - Per-deme `priority` only applies within a deme; no global order across demes;
 - `@hook(..., deme=[0, 2])` pins a hook to specific demes (default `"*"`).
 

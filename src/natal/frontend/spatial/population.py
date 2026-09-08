@@ -746,7 +746,7 @@ class SpatialPopulation:
             migration_kernel: Optional odd-shaped 2D kernel used for topology-
                 aware migration. When provided, ``topology`` is required and
                 migration runs in kernel mode.
-            migration_strategy: Backend selection policy. ``"auto"`` keeps
+            migration_strategy: Migration mode policy. ``"auto"`` keeps
                 existing behavior (kernel when ``migration_kernel`` is set,
                 otherwise adjacency). ``"hybrid"`` is accepted as a forward-
                 compatible alias of ``"auto"`` for now.

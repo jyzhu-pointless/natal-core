@@ -490,3 +490,71 @@ def test_no_numba_package_remaining() -> None:
     assert not any(p.name == "numba" and p.is_dir() for p in pkg_dir.rglob("*")), (
         "remaining numba package directory under src/natal"
     )
+
+
+def test_public_export_list_matches_module_all() -> None:
+    """The explicit top-level export list cannot drift from module ``__all__``.
+
+    Two directions (plan S6, must-not-exist item 8): every unit listed in
+    ``natal._PUBLIC_EXPORTS`` must still declare exactly those names in its
+    literal ``__all__`` (no stale entries), and no unlisted unit with a
+    non-empty ``__all__`` may exist (a new module export must be added to
+    the explicit list — an intentional act — before it becomes public).
+    """
+    import ast
+
+    import natal
+
+    def extract_all(init: Path) -> list[str]:
+        """Return the literal ``__all__`` names of one package ``__init__``."""
+        tree = ast.parse(init.read_text(encoding="utf-8"))
+        for node in tree.body:
+            value: ast.expr | None = None
+            if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets
+            ):
+                value = node.value
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "__all__":
+                value = node.value
+            if value is None:
+                continue
+            names = ast.literal_eval(value)
+            assert isinstance(names, (list, tuple)), "non-literal __all__"
+            return [str(name) for name in names]
+        return []
+
+    package_dir = Path(natal.__file__).resolve().parent
+    listed: dict[str, list[str]] = {
+        unit: list(names) for unit, names in natal._PUBLIC_EXPORTS.items()  # noqa: SLF001 — the pinned surface under test
+    }
+
+    for unit, names in sorted(listed.items()):
+        init = package_dir.joinpath(*unit.split("."), "__init__.py")
+        assert init.is_file(), f"listed unit {unit} has no __init__.py"
+        actual = extract_all(init)
+        assert actual == names, (
+            f"{unit}.__all__ drifted from _PUBLIC_EXPORTS: "
+            f"module={actual} list={names}"
+        )
+
+    # No unlisted export-owning unit: scan the tree the way the retired
+    # auto-discovery did and require every hit to be listed.
+    discovered: set[str] = set()
+    for root in ("contracts", "frontend", "backends"):
+        root_init = package_dir / root / "__init__.py"
+        if not root_init.is_file():
+            continue
+        if root == "contracts" or extract_all(root_init):
+            discovered.add(root)
+        for entry in sorted((package_dir / root).iterdir()):
+            if entry.is_dir() and (entry / "__init__.py").is_file() and not entry.name.startswith("_"):
+                discovered.add(f"{root}.{entry.name}")
+    for unit in sorted(discovered):
+        init = package_dir.joinpath(*unit.split("."), "__init__.py")
+        if unit != "contracts" and not extract_all(init):
+            continue  # private/structural unit (empty __all__)
+        assert unit in listed, (
+            f"{unit} declares exports but is not in _PUBLIC_EXPORTS — "
+            "add it there to publish its names"
+        )
+    assert set(listed) <= discovered, "listed unit no longer exists on disk"

@@ -155,17 +155,15 @@ def stochastic_culling_hook(pop: TickContext) -> int:
     return 0
 ```
 
-The stream is derived from `population slot ^ (tick * 1_000_003) ^ ((deme_id + 7) * 6_559) ^ ((hook_index + 1) * 31)`. **Reproducibility scope**: for the same `setup(stochastic=True, seed=...)` and the same hook combination, the reference and Rust backends produce bit-reproducible deterministic (`stochastic=False`) trajectories as well as identical random draws from seed-driven streams; any global custom randomness (`np.random.seed(...)` etc.) is outside the promise.
+The stream is derived from `population slot ^ (tick * 1_000_003) ^ ((deme_id + 7) * 6_559) ^ ((hook_index + 1) * 31)`. **Reproducibility scope**: for the same `setup(stochastic=True, seed=...)` and the same hook combination, the engine produces bit-reproducible deterministic (`stochastic=False`) trajectories and identical random draws from seed-driven streams across processes; any global custom randomness (`np.random.seed(...)` etc.) is outside the promise.
 
 ## Execution Paths
 
-The physical execution path of hooks is decided by the backend selected for the population (see [Backend Selection and Performance](4_backend_selection.md)):
-
-- **Reference (Python) backend**: declarative Ops compile into a CSR plan interpreted in Python per event; callback hooks are invoked directly.
-- **Rust (native extension) backend**: the CSR plan and dispatcher run inside the Rust session; single-parameter callbacks are bridged into the session (each invocation gets its own context wrapper).
-- Both paths run the same event order and the same deterministic arithmetic; `stochastic=False` trajectories are bitwise identical.
-
-`backend="numba"` has been removed -- selecting it raises a `ValueError` with a migration hint; use `"rust"` or `"python"` instead.
+The native Rust engine is the only execution backend. Declarative Ops
+compile into a CSR plan that runs inside the engine session; single-parameter
+Python callbacks are bridged into the session (each invocation gets its own
+context wrapper). Out-of-band surfaces -- `trigger_event` and finish events --
+run the same CSR plan through the Python-side interpreter.
 
 ## Mixing Hook Types
 
@@ -205,7 +203,7 @@ pop = (
 )
 ```
 
-The execution order of same-priority hooks is unspecified; priority semantics are consistent across backends.
+The execution order of same-priority hooks is unspecified; priority semantics are consistent across entry points.
 
 ## Performance Comparison
 
@@ -233,10 +231,10 @@ def heatwave(pop: TickContext) -> int:
     return 0
 ```
 
-Semantics (uniform across backends):
+Semantics (uniform across entry points):
 
 - Writes are jsonc-bounds-validated; values outside the `parameters.jsonc` `bounds` raise `ValueError`;
-- Visible to later stages of the same tick (reference path writes the draft directly; Rust path writes the session ecology columns directly);
+- Visible to later stages of the same tick (in-tick writes land in the session ecology columns; out-of-band `trigger_event` writes land in the draft directly);
 - Every actual change appends to `pop.params_log` as `(tick, name, old, new)`;
 - Vector/tensor parameters use `pop.params.tensor_write(name, values)`.
 
@@ -248,8 +246,8 @@ For chain-style updates inside a hook, use the Configurator returned by `pop.upd
 
 - **`stop()` in the late event**: halts immediately at the event boundary; the rest of the current tick does not execute and the tick does not advance.
 - **After `stop()`**: `run()` must be preceded by `reset()`; otherwise `run()` raises.
-- **Hook exceptions**: the reference backend re-raises the original type; the Rust backends wrap the bridged error as `RuntimeError` whose message embeds the original error text (plain-model bridges keep the original exception in `__cause__`; the spatial bridge embeds it in the message only), so the backend asymmetry of exception types is intentional.
-- **Spatial `ctx.update()` defers to the next tick**: inside a spatial run, a hook's parameter write lands in the deme draft and is pulled into the session columns when the tick returns, so it binds from the FOLLOWING tick (the same deferred-write semantics as the plain Rust backend). A parameter written by both a declarative `Op.set_param` and `ctx.update()` in the same tick follows last-writer-wins in the runtime (the Python callback fires after the declarative hooks of that event).
+- **Hook exceptions**: a raised callback crosses the bridge back to Python wrapped as `RuntimeError` whose message embeds the original error text (plain-model bridges keep the original exception in `__cause__`; the spatial bridge embeds it in the message only); out-of-band invocation (`trigger_event`, finish events) propagates the original exception unchanged.
+- **Spatial `ctx.update()` defers to the next tick**: inside a spatial run, a hook's parameter write lands in the deme draft and is pulled into the session columns when the tick returns, so it binds from the FOLLOWING tick (the same deferred-write semantics as plain-model hooks). A parameter written by both a declarative `Op.set_param` and `ctx.update()` in the same tick follows last-writer-wins in the runtime (the Python callback fires after the declarative hooks of that event).
 - **Rust hook-side parameter writes merge after `run()`** (post-HB-2 fix): session-side writes evolve inside the session ecology columns; when `run()` returns, the audited transitions are appended to `params_log` under their own commit ticks and the final values are synchronized into the draft -- no dirty-bridge push-back needed.
 
 ## Related Sections
@@ -258,4 +256,3 @@ For chain-style updates inside a hook, use the Configurator returned by `pop.upd
 - [Runtime Parameter Modification](3_runtime_modification.md)
 - [Modifier Mechanism](3_modifiers.md)
 - [Simulation Engine Deep Dive](4_simulation_engine.md)
-- [Backend Selection and Performance](4_backend_selection.md)

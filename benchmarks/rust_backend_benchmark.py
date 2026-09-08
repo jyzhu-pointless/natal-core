@@ -1,4 +1,7 @@
-"""Compare the Rust and Numba age-structured lifecycle backends.
+"""Benchmark the native age-structured lifecycle engine.
+
+Measures the batch ``run(n)`` kernel against repeated ``run_tick()``
+calls on a moderately sized 4-locus population.
 
 Run with the release extension installed, e.g.:
 
@@ -24,7 +27,7 @@ REPEATS = 3
 def build(stochastic: bool, name: str):
     """Build a moderately sized 4-locus population."""
     species = nt.Species.from_dict(
-        name=f"rust_bench_{stochastic}_{name}",
+        name=f"engine_bench_{stochastic}_{name}",
         structure={
             "chr1": {
                 "l1": ["A", "B"],
@@ -79,24 +82,18 @@ def measure_tick_loop(pop, n_steps: int) -> float:
 
 
 def benchmark(stochastic: bool) -> None:
-    """Warm up, then measure both backends and report medians."""
-    reference = build(stochastic, "python_reference")
-    rust_pop = build(stochastic, "rust").enable_rust_backend(seed=1)
+    """Warm up, then measure both run shapes and report medians."""
+    pop = build(stochastic, "run")
 
-    measure_run(reference, 2)
-    measure_run(rust_pop, 2)
+    measure_run(pop, 2)
 
     timings: dict[str, list[float]] = {
-        "python run(n)": [],
-        "rust run(n)": [],
-        "python run_tick loop": [],
-        "rust run_tick loop": [],
+        "engine run(n)": [],
+        "engine run_tick loop": [],
     }
     for _ in range(REPEATS):
-        timings["python run(n)"].append(measure_run(reference, N_TICKS))
-        timings["rust run(n)"].append(measure_run(rust_pop, N_TICKS))
-        timings["python run_tick loop"].append(measure_tick_loop(reference, N_TICKS))
-        timings["rust run_tick loop"].append(measure_tick_loop(rust_pop, N_TICKS))
+        timings["engine run(n)"].append(measure_run(pop, N_TICKS))
+        timings["engine run_tick loop"].append(measure_tick_loop(pop, N_TICKS))
 
     print(f"\n=== stochastic={stochastic} ===")
     print(f"{'path':22s} {'total_ms':>10s} {'per_tick_ms':>12s}")
@@ -104,8 +101,8 @@ def benchmark(stochastic: bool) -> None:
         total_ms = statistics.median(values) * 1000.0
         print(f"{label:22s} {total_ms:10.1f} {total_ms / N_TICKS:12.3f}")
 
-    nonzero_sperm = int(np.count_nonzero(reference.state.sperm_storage > 1e-12))
-    nonzero_sperm_total = int(reference.state.sperm_storage.size)
+    nonzero_sperm = int(np.count_nonzero(pop.state.sperm_storage > 1e-12))
+    nonzero_sperm_total = int(pop.state.sperm_storage.size)
     print(
         f"note: deterministic vs stochastic workloads differ; "
         f"compare only within the same mode. "

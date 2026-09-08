@@ -99,19 +99,12 @@ def build_hex_spatial_population() -> SpatialPopulation:
 def main() -> None:
     """Build + run the hex-grid spatial demo and report timing."""
     spatial = build_hex_spatial_population()
-    from natal.backends.rust.rust_backend import rust_backend_available
-
-    if rust_backend_available():
-        spatial.enable_rust_backend(seed=7)
-        backend = "rust"
-    else:
-        backend = "reference"
-    print(f"start (backend: {backend})")
+    print("start (native engine session)")
     start = time.perf_counter()
     spatial.run(3, record_every=0)
     elapsed = time.perf_counter() - start
     print("done")
-    print(f"run(3) elapsed: {elapsed:.3f}s (backend: {backend})")
+    print(f"run(3) elapsed: {elapsed:.3f}s")
 
 
 if __name__ == "__main__":

@@ -27,8 +27,8 @@ pop.run_tick()
 ```text
 population.run(...) / population.run_tick()
   → 获取已编译的事件 hooks
-  → 绑定 codegen runner
-  → 依次调用阶段内核（reproduction/survival/aging）
+  → 在原生引擎会话内执行
+  → 依次执行阶段内核（reproduction/survival/aging）
   → 更新 state 与 history
 ```
 
@@ -119,33 +119,21 @@ pop.run_tick()
 - `True`：按固定期望卵数产卵。
 - `False`：按 Poisson 机制产卵（在随机模式下体现为随机卵数）。
 
-## 4. `simulator` 模块的职责
+## 4. 引擎实现布局
 
-`src/natal/engine/age_structured_simulator.py` 主要提供年龄结构模型的”阶段级内核函数”。
-`src/natal/engine/discrete_generation_simulator.py` 提供离散世代模型的对应函数。包括：
+Rust 原生扩展 `natal._engine_rs` 是唯一的执行引擎。它在引擎会话内拥有
+运行状态（泛交配模型每种群一个会话；空间容器一个堆叠会话），并实现
+两类模型的阶段内核：
 
-- 年龄结构模型：`run_reproduction`、`run_survival`、`run_aging`
-- 离散世代模型：`run_discrete_reproduction`、`run_discrete_survival`、`run_discrete_aging`
+- 年龄结构模型：reproduction、survival、aging（长期精子存储）。
+- 离散世代模型：两年龄段紧凑生命周期，精子仅当 tick 有效。
 
-此外，该模块还提供状态/配置导入导出的轻量包装函数，便于与上层对象方法配合使用。
+### 4.1 Spatial migration 布局
 
-### 4.1 Spatial migration 后端模块布局
-
-Spatial migration 相关内核现已按后端拆分到目录模块
-`src/natal/engine/migration/` 下：
-
-- `adjacency.py`：邻接行后端（dense/sparse row 路由）。
-- `kernel.py`：拓扑 + migration-kernel 后端。
-- `__init__.py`：包级后端入口重导出。
-
-兼容入口 `src/natal/engine/spatial_migrator.py`
-保持旧 API 不变，并按后端模式分发：
-
-- `migration_mode == 0` -> adjacency 后端（`adjacency.py`）
-- `migration_mode == 1` -> kernel-topology 后端（`kernel.py`）
-
-这样可以在不改变用户侧入口（如 `run_spatial_migration(...)`）的前提下，
-把 migration 内部实现做成可维护的模块化结构。
+迁移在空间引擎会话内、各 deme 生命周期之后作为 CSR 阶段执行。前端在
+构建期把所有迁移声明（拓扑、邻接矩阵或迁移核）折叠为一份冻结 CSR 加
+速率列（`src/natal/frontend/spatial/migration.py`）；会话每个 tick 用
+速率列乘以该 CSR。
 
 ## 5. 与 `state`/`config` 的关系
 
@@ -189,26 +177,25 @@ pop.import_state(state_flat)
 
 ### 7.1 随机流（RNG）与 bit-reproducible 承诺范围
 
-- 每个种群的随机流由 `setup(stochastic=True, seed=...)` 派生；Rust 会话内
-  使用 `SessionRng`（`enable_rust_backend(seed=...)`、`reseed(seed)` 重置）。
-- 空间模型中 deme `d` 使用 `seed ^ d`（Rust 端）派生独立流，因此同一基种子下
+- 每个种群的随机流由 `setup(stochastic=True, seed=...)` 派生；引擎会话内
+  使用 `SessionRng`（构建时 `enable_rust_backend(seed=...)`、`reseed(seed)` 重置）。
+- 空间模型中 deme `d` 使用 `seed ^ d` 派生独立流，因此同一基种子下
   各 deme 互不影响、确定性一致。
 - Hook 内的随机流 `pop.rng` 由 `槽位 ^ (tick*1_000_003) ^ ((deme_id+7)*6_559) ^
   ((hook_index+1)*31)` 派生，每次调用独立。
 - **承诺范围**：同一输入（构建参数 + seed + hook 组合）下，确定性
-  （`stochastic=False`）轨迹在参考与 Rust 后端之间逐位一致；随机轨迹在固定
-  seed 下跨后端、跨进程可复现。不承诺跨版本位级稳定（未来算法修复可能改变
-  数值）。
+  （`stochastic=False`）轨迹逐位可复现；随机轨迹在固定 seed 下跨进程可复现。
+  不承诺跨版本位级稳定（未来算法修复可能改变数值）。
 
 ### 7.2 检查点（checkpoint）
 
-`snapshot_checkpoint()`（后端会话层）捕获**内存检查点**，内容为
+`snapshot_checkpoint()`（引擎会话层）捕获**内存检查点**，内容为
 `(tick, 状态数组, RNG words, 生态列)`——即 state + 随机状态 + 生态参数，
 **遗传节（genetics tables）不参与回滚**。`restore_checkpoint(tick)`（种群层）
 从原始历史恢复：
 
 - 恢复后 tick 与状态一致（`state.n_tick` 同步），历史清空；
-- Rust 会话通过 `restore_from_checkpoint(tick)` 就地回滚会话拥有的状态、RNG 与生态，并返回恢复后的生态参数（population 层将其同时写回草稿）；
+- 引擎会话通过 `restore_from_checkpoint(tick)` 就地回滚会话拥有的状态、RNG 与生态，并返回恢复后的生态参数（population 层将其同时写回草稿）；
 - 参数快照 `params_log` 是 hook 内参数修改的审计轨迹，与检查点独立
   （检查点不包含 params_log；如需审计历史请另行保存）。
 
@@ -264,6 +251,5 @@ pop.import_state(state_flat)
 ## 相关章节
 
 - [PopulationState 与 ModelDraft](4_population_state_config.md)
-- [后端选择与性能](4_backend_selection.md)
 - [Modifier 机制](3_modifiers.md)
 - [Hook 系统](2_hooks.md)

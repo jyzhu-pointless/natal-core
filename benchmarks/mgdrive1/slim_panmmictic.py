@@ -376,7 +376,12 @@ def benchmark_natal_panmmictic(
     n_days: int,
     seed: int = 20260807,
 ) -> tuple[PanmicticRecord, ...]:
-    """Run NATAL's matching stochastic single-patch lifecycle.
+    """Run the retired MGDrivE1-compatible NATAL lifecycle (panmictic).
+
+    The lifecycle stage retired with the pure-Python reference engine
+    (plan S6), so any run that reaches the engine raises
+    ``ModuleNotFoundError``; the argument validation and record plumbing
+    ahead of it still work and are contract-tested.
 
     Args:
         repeats: Number of independent timed replicates.

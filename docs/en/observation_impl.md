@@ -172,9 +172,9 @@ Spatial execution kernel
             → commit the fixed-shape projected row
 ```
 
-The Python fallback calls `_record_snapshot()` at the same stable tick boundaries. Raw mode commits complete spatial state, while observation mode calls the same `Observation.apply()`. Both backends therefore share the same Observation semantics and History schema; only the place where the raw batch is produced differs.
+Out-of-band recording calls `_record_snapshot()` at the same stable tick boundaries. Raw mode commits complete spatial state, while observation mode calls the same `Observation.apply()`. In-engine batches and out-of-band snapshots therefore share the same Observation semantics and History schema; only the place where the raw batch is produced differs.
 
-The spatial wrapper transports raw batches to keep engine transport regular and fixed. The lifecycle kernel does not need to understand groups, deme selection, or aggregate rules. All Observation semantics remain concentrated in the canonical `Observation` and the spatial container boundary, rather than being reimplemented by the engine, Python fallback, and post-hoc projection paths.
+The spatial wrapper transports raw batches to keep engine transport regular and fixed. The lifecycle kernel does not need to understand groups, deme selection, or aggregate rules. All Observation semantics remain concentrated in the canonical `Observation` and the spatial container boundary, rather than being reimplemented by the engine or the post-hoc projection path.
 
 ## Removed Compact Spatial Layout
 
@@ -198,7 +198,7 @@ Changes to Observation or History recording should verify at least these numeric
 4. `collapse_age=True` is element-wise equal to the uncollapsed result summed along age.
 5. Raw History retains every deme, ZType, and applicable sperm-storage value.
 6. Post-hoc projection of raw History is element-wise equal to `Observation.apply()` at the same tick.
-7. The kernel path and the Python fallback produce identical ticks and payloads in deterministic simulations.
+7. In-engine batches and out-of-band snapshots produce identical ticks and payloads in deterministic simulations.
 8. Unselected demes require no sentinel representation, and real zero counts are not confused with selection state.
 
 Assertions must compare explicit axes and coordinate values. Comparing only totals or sorted flattened arrays cannot detect axis swaps or incorrect deme ordering.

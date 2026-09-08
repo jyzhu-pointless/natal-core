@@ -3,8 +3,6 @@
 import natal as nt
 from natal.frontend.patterns import IndividualSelector
 
-# The pure-Python reference is the default execution vehicle.
-
 species = nt.Species.from_dict(
     name="Drosophila melanogaster",
     structure={"chr1": {"marker": ["WT", "Dr", "R2", "R1"]}},
@@ -43,7 +41,6 @@ def release_drive_males() -> list[nt.HookOp]:
 # Age 0 is produced during the current tick; age 1 combines larvae and pupae.
 population = (
     nt.AgeStructuredPopulation.setup(
-        backend="python",
         species=species,
         name="Weekly fruit fly",
         stochastic=True,

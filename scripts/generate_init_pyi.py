@@ -1,78 +1,35 @@
 #!/usr/bin/env python3
-"""Generate src/natal/__init__.pyi from module-level __all__ declarations."""
+"""Generate src/natal/__init__.pyi from the explicit public export list.
+
+The list lives in ``src/natal/__init__.py`` as ``_PUBLIC_EXPORTS`` (plan S6,
+must-not-exist item 8); the consistency test in ``tests/test_phase0_shims.py``
+pins it against the modules' literal ``__all__``.  Importing ``natal`` is
+lazy-safe (no child-module execution), so the generator reads the list at
+runtime instead of re-scanning the tree."""
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
-from typing import Any, Sequence, cast
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT_DIR / "src" / "natal"
 OUTPUT_FILE = PACKAGE_DIR / "__init__.pyi"
 
 
-def extract_module_exports(module_file: Path) -> list[str]:
-    """Return literal __all__ entries from a module source file."""
-    try:
-        source = module_file.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(module_file))
-    except (OSError, SyntaxError):
-        return []
-
-    for node in tree.body:
-        value_node = None
-        if isinstance(node, ast.Assign):
-            if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
-                value_node = node.value
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id == "__all__":
-                value_node = node.value
-
-        if value_node is None:
-            continue
-
-        try:
-            exports = ast.literal_eval(value_node)
-            exports = cast(Sequence[Any], exports)
-        except Exception:
-            return []
-
-        if isinstance(exports, (list, tuple)) and all(isinstance(item, str) for item in exports):
-            return list(exports)
-        return []
-
-    return []
-
-
 def iter_public_modules(package_dir: Path) -> list[tuple[str, list[str]]]:
-    """Collect public exports for each real first-level package.
+    """Read the explicit public export list from the installed package.
 
-    The legacy top-level forwarding shims were removed when the Phase-0
-    reorganization completed; the public tree now consists of the
-    ``frontend.*`` and ``backends.*`` subpackages plus ``contracts``
-    itself.  Dotted owner names (e.g. ``frontend.hooks``) map to the
-    real package paths so the generated stub imports resolve.
+    Dotted owner names (e.g. ``frontend.hooks``) map to the real package
+    paths so the generated stub imports resolve.
     """
-    module_exports: list[tuple[str, list[str]]] = []
+    import sys
 
-    def collect(init_file: Path, dotted: str) -> None:
-        exports = extract_module_exports(init_file)
-        if exports:
-            module_exports.append((dotted, exports))
+    sys.path.insert(0, str(ROOT_DIR / "src"))
+    import natal  # noqa: PLC0415 — the explicit list IS the source of truth
 
-    collect(package_dir / "contracts" / "__init__.py", "contracts")
-
-    for root in ("frontend", "backends"):
-        root_init = package_dir / root / "__init__.py"
-        if not root_init.is_file():
-            continue
-        for init_file in sorted((package_dir / root).glob("*/__init__.py")):
-            if init_file.parent.name.startswith("_"):
-                continue
-            collect(init_file, f"{root}.{init_file.parent.name}")
-
-    return sorted(module_exports, key=lambda pair: pair[0])
+    return sorted(
+        (unit, list(names)) for unit, names in natal._PUBLIC_EXPORTS.items()  # noqa: SLF001 — generated from the pinned list
+    )
 
 
 # Names whose canonical package-level re-export is deferred through a PEP 562

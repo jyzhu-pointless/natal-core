@@ -27,8 +27,8 @@ Internally, the execution path can be summarized as:
 ```text
 population.run(...) / population.run_tick()
   → Retrieve compiled event hooks
-  → Bind codegen runner
-  → Sequentially invoke stage engine (reproduction/survival/aging)
+  → Run inside the native engine session
+  → Sequentially execute stage kernels (reproduction/survival/aging)
   → Update state and history
 ```
 
@@ -119,30 +119,23 @@ Additionally, the reproduction stage is affected by `fixed_egg_count`:
 - `True`: Eggs are produced at a fixed expected count.
 - `False`: Eggs are produced via a Poisson mechanism (resulting in random egg counts in stochastic mode).
 
-## 4. Responsibilities of the `simulation_engine` Module
+## 4. Engine Implementation Layout
 
-`src/natal/engine/age_structured_simulator.py` primarily provides "stage-level kernel functions" for the age-structured model.
-`src/natal/engine/discrete_generation_simulator.py` provides the corresponding functions for the discrete-generation model. These include:
+The native Rust extension `natal._engine_rs` is the only execution
+engine. It owns the run state inside engine sessions (per-population for
+panmictic models, one stacked session for spatial containers) and
+implements the stage kernels for both model families:
 
-- Age-structured model: `run_reproduction`, `run_survival`, `run_aging`
-- Discrete-generation model: `run_discrete_reproduction`, `run_discrete_survival`, `run_discrete_aging`
+- Age-structured model: reproduction, survival, aging (long-term sperm storage).
+- Discrete-generation model: the compact two-age lifecycle with per-tick sperm.
 
-Additionally, this module provides lightweight wrapper functions for state/config import/export, facilitating integration with higher-level object methods.
+### 4.1 Spatial Migration Layout
 
-### 4.1 Spatial Migration Backend Module Layout
-
-Spatial migration engine are now split into directory modules under `src/natal/engine/migration/`:
-
-- `adjacency.py`: Adjacency backend (dense/sparse row routing).
-- `kernel.py`: Topology + migration-kernel backend.
-- `__init__.py`: Package-level backend entry re-export.
-
-The compatibility entry point `src/natal/engine/spatial_migration_engine.py` maintains the old API and dispatches according to backend mode:
-
-- `migration_mode == 0` → adjacency backend (`adjacency.py`)
-- `migration_mode == 1` → kernel-topology backend (`kernel.py`)
-
-This allows the internal migration implementation to be organized into a maintainable modular structure without changing the user-facing entry point (e.g., `run_spatial_migration(...)`).
+Migration runs inside the spatial engine session as the CSR stage after
+the per-deme lifecycle. The frontend folds every migration declaration
+(topology, adjacency matrix, or migration kernel) into one frozen CSR
+plus a rate column at build time (`src/natal/frontend/spatial/migration.py`);
+the session multiplies the rate column by that CSR each tick.
 
 ## 5. Relationship with `state`/`config`
 
@@ -188,19 +181,18 @@ Typical scenarios:
 ### 7.1 Random Streams (RNG) and the Bit-Reproducible Promise
 
 - Each population's random stream derives from `setup(stochastic=True, seed=...)`;
-  Rust sessions use a `SessionRng` (`enable_rust_backend(seed=...)`,
-  `reseed(seed)` resets it).
-- In spatial models deme `d` derives its stream from `seed ^ d` (Rust side), so
-  demes do not interfere with each other under the same base seed.
+  engine sessions use a `SessionRng` (`enable_rust_backend(seed=...)` at
+  construction, `reseed(seed)` resets it).
+- In spatial models deme `d` derives its stream from `seed ^ d`, so demes do
+  not interfere with each other under the same base seed.
 - Inside hooks `pop.rng` derives from
   `slot ^ (tick*1_000_003) ^ ((deme_id+7)*6_559) ^ ((hook_index+1)*31)`,
   independent per invocation.
 - **Promise scope**: with identical inputs (build parameters + seed + hook
   combination), deterministic (`stochastic=False`) trajectories are bitwise
-  identical between the reference and Rust backends; stochastic trajectories
-  reproduce across backends and processes under a fixed seed. Version-to-version
-  bit-level stability is *not* promised (future algorithm fixes may change
-  numerics).
+  reproducible, and stochastic trajectories reproduce across processes under
+  a fixed seed. Version-to-version bit-level stability is *not* promised
+  (future algorithm fixes may change numerics).
 
 ### 7.2 Checkpoints
 
@@ -271,6 +263,5 @@ In practical modeling, you typically only need to use the population API consist
 ## Related Sections
 
 - [PopulationState and ModelDraft](4_population_state_config.md)
-- [Backend Selection and Performance](4_backend_selection.md)
 - [Modifier Mechanism](3_modifiers.md)
 - [Hook System](2_hooks.md)
