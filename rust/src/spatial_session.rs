@@ -31,6 +31,24 @@ fn map_lifecycle_error(err: String) -> PyErr {
 /// takes control parameters only; lifecycle then migration consume the
 /// same per-deme streams inside one call.  Python reads state back
 /// through snapshots.
+/// One restorable spatial boundary: the full owned runtime (state, sperm,
+/// every per-deme RNG stream, and the ecology columns) plus its tick.
+/// Captured at record-aligned ticks by the Python adapter; restoring
+/// replaces the whole runtime atomically so `restore -> run` replays the
+/// original stochastic trajectory.
+pub struct SpatialTickCheckpoint {
+    /// Tick the checkpoint was captured at.
+    pub tick: i64,
+    /// Flattened stacked individual counts.
+    pub ind: Vec<f64>,
+    /// Flattened stacked sperm storage.
+    pub sperm: Vec<f64>,
+    /// One 4-word Xoshiro256++ state per deme, in deme order.
+    pub rng_words: Vec<[u64; 4]>,
+    /// The complete ecology column set at capture time.
+    pub ecology: Params,
+}
+
 #[pyclass(name = "HeterogeneousSpatialEngineSession")]
 pub struct HeterogeneousSpatialEngineSession {
     blueprint: Blueprint,
@@ -43,6 +61,8 @@ pub struct HeterogeneousSpatialEngineSession {
     state_ind: Vec<f64>,
     state_sperm: Vec<f64>,
     state_tick: i64,
+    /// Record-aligned restorable boundaries (plan S4 CheckpointStore).
+    checkpoints: Vec<SpatialTickCheckpoint>,
     /// Discrete-generation demes tick the discrete lifecycle and carry no
     /// sperm plane (``state_sperm`` is a session-maintained zero sink the
     /// lifecycle never reads; migration's virgin bookkeeping sees zeros).
@@ -161,6 +181,7 @@ impl HeterogeneousSpatialEngineSession {
             discrete,
             stay_after_send,
             eco_journal: Vec::new(),
+            checkpoints: Vec::new(),
         })
     }
 
@@ -482,6 +503,153 @@ impl HeterogeneousSpatialEngineSession {
         }
         self.state_tick += 1;
         Ok(self.state_tick)
+    }
+
+    /// Capture one restorable boundary from the owned runtime.
+    ///
+    /// Called by the Python adapter at record-aligned ticks (raw history
+    /// mode).  Storing clones the full state, every per-deme RNG stream,
+    /// and the ecology columns; nothing is moved, so the current run is
+    /// unaffected.
+    fn capture_checkpoint(&mut self) -> i64 {
+        self.checkpoints.push(SpatialTickCheckpoint {
+            tick: self.state_tick,
+            ind: self.state_ind.clone(),
+            sperm: self.state_sperm.clone(),
+            rng_words: self.rngs.iter().map(|rng| rng.state_words()).collect(),
+            ecology: self.ecology.clone(),
+        });
+        self.state_tick
+    }
+
+    /// Restore the newest checkpoint at or before *tick*.
+    ///
+    /// Atomically replaces the owned state, all per-deme RNG streams, and
+    /// the ecology columns from the checkpoint, rewinds the tick, and
+    /// truncates stored checkpoints newer than the restored boundary.
+    /// Nothing is changed when no checkpoint covers *tick*.
+    ///
+    /// ## Parameters
+    /// - `tick`: Target tick; the newest checkpoint with
+    ///   ``checkpoint.tick <= tick`` is restored.
+    ///
+    /// ## Returns
+    /// The restored tick, or ``None`` when no checkpoint covers *tick*
+    /// (the caller falls back to its own restore path); on ``None`` the
+    /// runtime is untouched.
+    fn restore_from_checkpoint(&mut self, tick: i64) -> Option<i64> {
+        let index = self
+            .checkpoints
+            .iter()
+            .rposition(|checkpoint| checkpoint.tick <= tick)?;
+        let checkpoint = &self.checkpoints[index];
+        self.state_ind = checkpoint.ind.clone();
+        self.state_sperm = checkpoint.sperm.clone();
+        self.state_tick = checkpoint.tick;
+        self.rngs = checkpoint
+            .rng_words
+            .iter()
+            .map(|words| SessionRng::from_state_words(*words))
+            .collect();
+        self.ecology = checkpoint.ecology.clone();
+        // Future checkpoints are invalid once the timeline rewinds.
+        self.checkpoints.truncate(index + 1);
+        Some(self.state_tick)
+    }
+
+    /// Truncate checkpoints newer than *retain_until_tick*.
+    fn truncate_checkpoints(&mut self, retain_until_tick: i64) {
+        self.checkpoints
+            .retain(|checkpoint| checkpoint.tick <= retain_until_tick);
+    }
+
+    /// Clear all checkpoints (history cleared).
+    fn clear_checkpoints(&mut self) {
+        self.checkpoints.clear();
+    }
+
+    /// Export the current ecology columns for Python-side rollback.
+    ///
+    /// ## Returns
+    /// A mapping of ecology column name to a flat copy of the column
+    /// (scalar columns length ``n_demes``, vector columns ``n_demes``
+    /// times their per-deme extent, ``growth_mode`` int64, plus the
+    /// ``migration_rate`` column).
+    fn ecology_columns_snapshot(&self, py: Python<'_>) -> PyResult<Vec<(String, Py<PyAny>)>> {
+        use numpy::PyArray1 as PyArr;
+        fn push_f64(
+            columns: &mut Vec<(String, Py<PyAny>)>,
+            name: &str,
+            values: &[f64],
+            py: Python<'_>,
+        ) {
+            let array = PyArr::from_slice(py, values);
+            columns.push((
+                name.to_string(),
+                array.into_pyobject(py).unwrap().unbind().into_any(),
+            ));
+        }
+        let mut columns: Vec<(String, Py<PyAny>)> = Vec::new();
+        push_f64(
+            &mut columns,
+            "carrying_capacity",
+            &self.ecology.carrying_capacity,
+            py,
+        );
+        push_f64(
+            &mut columns,
+            "eggs_per_female",
+            &self.ecology.eggs_per_female,
+            py,
+        );
+        push_f64(&mut columns, "sex_ratio", &self.ecology.sex_ratio, py);
+        push_f64(
+            &mut columns,
+            "sperm_displacement_rate",
+            &self.ecology.sperm_displacement_rate,
+            py,
+        );
+        push_f64(
+            &mut columns,
+            "low_density_growth_rate",
+            &self.ecology.low_density_growth_rate,
+            py,
+        );
+        let growth: Vec<i64> = self.ecology.growth_mode.clone();
+        columns.push((
+            "growth_mode".to_string(),
+            PyArr::from_slice(py, &growth)
+                .into_pyobject(py)
+                .unwrap()
+                .unbind()
+                .into_any(),
+        ));
+        push_f64(
+            &mut columns,
+            "external_expected_eggs",
+            &self.ecology.external_expected_eggs,
+            py,
+        );
+        for (name, values) in [
+            ("survival_rates", &self.ecology.survival_rates),
+            ("mating_rates", &self.ecology.mating_rates),
+            ("reproduction_rates", &self.ecology.reproduction_rates),
+            ("fertility", &self.ecology.fertility),
+            ("competition_weights", &self.ecology.competition_weights),
+            (
+                "equilibrium_distribution",
+                &self.ecology.equilibrium_distribution,
+            ),
+        ] {
+            push_f64(&mut columns, name, values, py);
+        }
+        push_f64(
+            &mut columns,
+            "migration_rate",
+            &self.ecology.migration_rate,
+            py,
+        );
+        Ok(columns)
     }
 
     /// Snapshot the session-owned state for Python reads.

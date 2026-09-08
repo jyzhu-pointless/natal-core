@@ -801,3 +801,161 @@ def test_python_vector_write_reaches_every_sharing_deme() -> None:
         assert not np.array_equal(
             stacked_hooked[deme_index], stacked_twin[deme_index]
         ), f"deme {deme_index} kept the stale survival column"
+
+
+# ── S4a: spatial session CheckpointStore ─────────────────────────────────────
+
+
+def _build_stochastic_spatial(name: str, seed: int) -> SpatialPopulation:
+    """Build a stochastic 4-deme age-structured spatial population."""
+    return (
+        nt.SpatialPopulation.builder(
+            _species(f"{name}sp"), n_demes=4, pop_type="age_structured"
+        )
+        .setup(name=name, stochastic=True)
+        .age_structure(n_ages=3, new_adult_age=1)
+        .initial_state(
+            individual_count=nt.batch_setting(
+                [
+                    {
+                        "female": {"WT|WT": [0.0, 100.0, 0.0]},
+                        "male": {"WT|WT": [0.0, 100.0, 0.0]},
+                    },
+                ]
+                * 4
+            )
+        )
+        .reproduction(
+            female_age_based_mating_rate=[0.0, 1.0, 0.0],
+            male_age_based_mating_rate=[0.0, 1.0, 0.0],
+            eggs_per_female=4.0,
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.0],
+            male_age_based_survival=[1.0, 0.9, 0.0],
+        )
+        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        .migration(adjacency=_ring_adjacency(4), migration_rate=0.25)
+        .build()
+    ).enable_rust_backend(seed=seed)
+
+
+def test_spatial_stochastic_restore_replays_bitwise() -> None:
+    """Full checkpoint restore (state + RNG bank + ecology) replays the
+    original stochastic trajectory bitwise: restore(1) then run(3) equals
+    the uninterrupted run(4)."""
+    whole = _build_stochastic_spatial("own_ckpt_whole", 90)
+    whole.run(4, record_every=1)
+    final_whole = _stacked(whole)
+
+    restored = _build_stochastic_spatial("own_ckpt_restored", 90)
+    restored.run(4, record_every=1)
+    restored.restore_checkpoint(1)
+    restored.run(3, record_every=1)
+    final_restored = _stacked(restored)
+
+    np.testing.assert_array_equal(final_whole, final_restored)
+
+
+def test_spatial_restore_rolls_back_ecology_and_revives() -> None:
+    """Restore rolls the ecology columns back and revives the runnable
+    state after a declarative hook changed K mid-run."""
+    @nt.hook(event="late")
+    def halve_k() -> list:
+        return [nt.Op.set_param("carrying_capacity", "K * 0.5")]
+
+    population = (
+        nt.SpatialPopulation.builder(
+            _species("own_ckpt_ecosp"), n_demes=2, pop_type="age_structured"
+        )
+        .setup(name="own_ckpt_eco", stochastic=False)
+        .age_structure(n_ages=3, new_adult_age=1)
+        .initial_state(
+            individual_count=nt.batch_setting(
+                [
+                    {
+                        "female": {"WT|WT": [0.0, 100.0, 0.0]},
+                        "male": {"WT|WT": [0.0, 100.0, 0.0]},
+                    },
+                ]
+                * 2
+            )
+        )
+        .reproduction(
+            female_age_based_mating_rate=[0.0, 1.0, 0.0],
+            male_age_based_mating_rate=[0.0, 1.0, 0.0],
+            eggs_per_female=4.0,
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.0],
+            male_age_based_survival=[1.0, 0.9, 0.0],
+        )
+        .competition(carrying_capacity=80000.0, low_density_growth_rate=2.0)
+        .migration(adjacency=_ring_adjacency(2), migration_rate=0.0)
+        .hooks(halve_k)
+        .build()
+    ).enable_rust_backend(seed=91)
+    population.run(2, record_every=1)
+    assert population.demes[0].params.carrying_capacity == 20000.0
+
+    population.restore_checkpoint(0)
+    assert population.demes[0].params.carrying_capacity == 80000.0
+    assert population.demes[1].params.carrying_capacity == 80000.0
+    # Restoring a runnable boundary revives the runnable state (plan 9).
+    population.run(1, record_every=0)
+
+
+def test_spatial_clear_history_drops_the_checkpoints() -> None:
+    """clear_history also drops the session checkpoints: a cleared tick no
+    longer restores."""
+    population = _build_stochastic_spatial("own_ckpt_clear", 92)
+    population.run(3, record_every=1)
+    population.clear_history()
+    with pytest.raises(ValueError, match="No history available"):
+        population.restore_checkpoint(1)
+
+
+def test_restore_ignores_out_of_run_param_writes() -> None:
+    """A param write BETWEEN runs must not poison the restored boundary:
+    restore(2) after a runtime migration_rate write continues from the
+    checkpoint's ecology (the clean twin), not the written one."""
+    written = _build_stochastic_spatial("own_ckpt_written", 93)
+    written.run(2, record_every=1)
+    written.params.tensor_write("migration_rate", 0.5)
+    written.run(1, record_every=1)
+    written.restore_checkpoint(2)
+    written.run(2, record_every=1)
+
+    clean = _build_stochastic_spatial("own_ckpt_clean", 93)
+    clean.run(2, record_every=1)
+    clean.run(2, record_every=1)
+    np.testing.assert_array_equal(_stacked(written), _stacked(clean))
+    # The restored migration rate is the checkpoint's (the build's 0.25
+    # ring), not the 0.5 written between the runs.
+    np.testing.assert_array_equal(
+        written.params.migration_rate, clean.params.migration_rate
+    )
+    assert float(written.params.migration_rate.max()) == 0.25
+
+
+def test_spatial_restore_rolls_back_vector_columns() -> None:
+    """Vector ecology columns (survival_rates) roll back on restore: the
+    container column AND the public params read return the checkpoint
+    values, not a stale pre-restore write."""
+    population = _build_stochastic_spatial("own_ckpt_vec", 94)
+    population.run(2, record_every=1)
+    original = np.asarray(population.params.survival_rates).copy()
+
+    modified = original.copy()
+    modified[:, 1] = 0.05
+    population.params.tensor_write("survival_rates", modified)
+    population.run(1, record_every=1)
+    population.restore_checkpoint(2)
+
+    np.testing.assert_array_equal(
+        np.asarray(population.params.survival_rates), original
+    )
+    for deme_id, deme in enumerate(population.demes):
+        np.testing.assert_array_equal(
+            np.asarray(deme.params.survival_rates), original[deme_id]
+        )

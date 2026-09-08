@@ -59,6 +59,9 @@ from natal.frontend.spatial.topology import (
 )
 
 if TYPE_CHECKING:
+    from natal.backends.rust.rust_backend import (
+        RustHeterogeneousSpatialLifecycleBackend,
+    )
     from natal.frontend.output.history import History
     from natal.frontend.output.observation import Observation, ObservationResult
     from natal.frontend.spatial.configurator import SpatialConfigurator
@@ -424,7 +427,9 @@ def _minimal_contract(
 
 
 # Contract ecology field names carried as (n_demes, ...) columns.
-def _eco_field_values(draft: ModelDraft) -> dict[str, float | int | bool | bytes | None]:
+def _eco_field_values(
+    draft: ModelDraft,
+) -> dict[str, float | int | bool | bytes | None]:
     """Snapshot the draft's runtime ecology fields by contract name.
 
     Used to detect whether a Python hook wrote params through its
@@ -1517,10 +1522,13 @@ class SpatialPopulation:
         )
 
     def clear_history(self) -> None:
-        """Clear all recorded history."""
+        """Clear all recorded history and the session checkpoints."""
         history_obj = getattr(self, "_history_obj", None)
         if history_obj is not None:
             history_obj.clear()
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is not None:
+            backend.clear_checkpoints()  # pyright: ignore[reportAttributeAccessIssue]  # session backend surface
 
     def _process_kernel_history(
         self,
@@ -1594,7 +1602,20 @@ class SpatialPopulation:
                 payload.
         """
         ind_all, sperm_all = self._stack_deme_state_arrays()
+        backend = getattr(self, "_rust_spatial_backend", None)
         history_obj = self.history
+        # Record-aligned boundaries are restorable: capture the full
+        # runtime checkpoint (state + RNG + ecology) next to the history
+        # row (plan S4 CheckpointStore).  Capture ONLY when this call will
+        # actually store a new row — a run-start boundary re-record
+        # (allow_existing on an already-recorded tick) must NOT push a
+        # second checkpoint carrying whatever ecology changed since.
+        will_store = self._tick not in history_obj.ticks
+        capture = (
+            backend is not None
+            and history_obj.schema.mode == "raw"
+            and will_store
+        )
         if history_obj.schema.mode == "observation":
             values = self.observation.apply(ind_all)
             flat = np.empty(history_obj.schema.row_size, dtype=np.float64)
@@ -1620,6 +1641,10 @@ class SpatialPopulation:
             if self._tick in history_obj.ticks:
                 raise ValueError(f"History already contains tick {self._tick}.")
             history_obj._append(batch)  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
+        if capture and backend is not None:
+            # Stored AFTER the row is committed: a rejected snapshot must
+            # not leave a checkpoint behind.
+            backend.capture_checkpoint()
 
     def record_snapshot(self) -> None:
         """Record the current stable state across all demes into history.
@@ -1639,13 +1664,26 @@ class SpatialPopulation:
         self._record_snapshot(allow_existing=False)
 
     def restore_checkpoint(self, tick: int) -> None:
-        """Restore spatial population state from a raw-history record.
+        """Restore the spatial population to a recorded boundary.
 
-        Only valid for raw-mode history.  Restores individual counts and
-        sperm storage for all demes.  All records after *tick* are removed.
+        With the Rust backend live this is a FULL restore (plan S4
+        CheckpointStore): counts, sperm, every per-deme RNG stream, and the
+        ecology columns return to the checkpoint, so `restore -> run`
+        replays the original trajectory.  Without it the legacy history-row
+        path restores counts only (stochastic trajectories are not
+        reproducible without the RNG state).
+
+        Demes return to the runnable state and all records after *tick*
+        are removed.
+
+        With the Rust backend, restoring to a tick whose own checkpoint was
+        evicted or never captured restores the newest checkpoint at or
+        before it; without any covering checkpoint the legacy history-row
+        path applies (counts only).
 
         Args:
-            tick: Exact tick to restore.
+            tick: Tick to restore (the newest restorable boundary at or
+                before it is used).
 
         Raises:
             ValueError: If mode is not ``"raw"`` or tick is not found.
@@ -1659,6 +1697,112 @@ class SpatialPopulation:
                 "history.  Record raw history to enable checkpoint "
                 "restoration."
             )
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is not None and self._restore_from_rust_checkpoint(backend, tick):
+            history_obj.truncate(retain_until_tick=tick)
+            return
+        self._restore_from_history_rows(history_obj, tick)
+
+    def _restore_from_rust_checkpoint(
+        self, backend: RustHeterogeneousSpatialLifecycleBackend, tick: int
+    ) -> bool:
+        """Restore the full runtime from the session checkpoint store.
+
+        Args:
+            backend: The live spatial backend.
+            tick: Target tick.
+
+        Returns:
+            ``True`` when a checkpoint covered *tick* (the runtime, the
+            ecology columns, the deme drafts, and the caches are rewound);
+            ``False`` when no checkpoint covers *tick* (untouched).
+        """
+        restored_tick = backend.restore_from_checkpoint(int(tick))
+        if restored_tick is None:
+            return False
+        # Roll the Python-side mirrors back to the checkpoint: container
+        # columns first, then the per-deme drafts that project them.  The
+        # snapshot columns are flat while the container columns carry their
+        # logical (n_demes, ...) shape — roll by size and refuse unknown
+        # shapes loudly rather than silently leaving a stale column.
+        columns = backend.ecology_columns_snapshot()
+        for name, column in columns.items():
+            if name == "migration_rate":
+                continue  # dedicated live contract array, rolled below
+            local = self._ecology_columns.get(name)
+            if local is None:
+                continue  # not a materialized container column
+            target = np.asarray(local)
+            flat = np.asarray(column, dtype=np.float64)
+            if target.size != flat.size:
+                raise ValueError(
+                    f"checkpoint rollback: ecology column {name!r} size "
+                    f"{flat.size} does not fit the container column size "
+                    f"{target.size}"
+                )
+            local[...] = flat.reshape(target.shape)
+        rate = np.asarray(columns["migration_rate"], dtype=np.float64)
+        if self._params.migration_rate.size == rate.size:
+            self._params.migration_rate[...] = rate.reshape(
+                self._params.migration_rate.shape
+            )
+        else:
+            raise ValueError(
+                "checkpoint rollback: migration_rate size "
+                f"{rate.size} does not fit the contract array "
+                f"{self._params.migration_rate.size}"
+            )
+        n_demes = len(self._demes)
+        for deme_id, deme in enumerate(self._demes):
+            self._rollback_deme_draft(deme, columns, deme_id, restored_tick)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+            deme._finished = False  # type: ignore[attr-defined]  # restore revives the runnable state
+        # The session state was rewound: refresh the deme caches from it.
+        self._rust_states_dirty = True
+        self._ensure_rust_states_fresh()
+        assert self._tick == restored_tick  # noqa: S101 — the refresh installs the restored tick
+        assert n_demes == len(self._demes)  # noqa: S101 — deme set is fixed at build
+        return True
+
+    def _rollback_deme_draft(
+        self,
+        deme: BasePopulation[Any],
+        columns: dict[str, NDArray[Any]],
+        deme_id: int,
+        tick: int,
+    ) -> None:
+        """Write the checkpoint ecology values back into one deme draft."""
+        n_demes = len(self._demes)
+        draft = deme.config
+        updates: dict[str, object] = {}
+        for draft_field, column_name in _ECO_DRAFT_TO_COLUMN:
+            column = np.asarray(columns[column_name])
+            if column.ndim == 1 and column.size == n_demes:
+                updates[draft_field] = float(column[deme_id])
+                continue
+            per_deme = column.reshape(n_demes, -1)[deme_id]
+            # Reshape back to the draft field's logical extent.
+            current = cast(
+                "NDArray[np.float64]", np.asarray(getattr(draft, draft_field))
+            )
+            if current.size == per_deme.size:
+                updates[draft_field] = per_deme.reshape(current.shape)
+        new_draft = draft
+        for field, value in updates.items():
+            current_value = cast(
+                "NDArray[np.float64] | float | None",
+                getattr(new_draft, field, None),
+            )
+            if isinstance(current_value, np.ndarray) and isinstance(value, np.ndarray):
+                new_draft = new_draft._replace(
+                    **{field: value.reshape(current_value.shape)}
+                )
+            else:
+                new_draft = new_draft._replace(**{field: value})
+        deme.set_config(new_draft)
+        deme.tick = int(tick)
+
+    def _restore_from_history_rows(self, history_obj: History, tick: int) -> None:
+        """Legacy counts-only restore from the raw history rows."""
         restored_tick, ic, ss = history_obj.restore_state(tick)
         # A spatial raw history always restores a
         # (n_demes, n_sexes, n_ages, n_ztypes) 4-D block
@@ -2771,7 +2915,9 @@ class SpatialPopulation:
             self._register_spatial_rust_callbacks(self._rust_spatial_backend)
         return self
 
-    def _register_spatial_rust_callbacks(self, backend: object) -> None:
+    def _register_spatial_rust_callbacks(
+        self, backend: RustHeterogeneousSpatialLifecycleBackend
+    ) -> None:
         """Bridge the demes' Python callbacks into the spatial session.
 
         One aggregated adapter per in-tick event routes each Rust fire to
@@ -2829,7 +2975,9 @@ class SpatialPopulation:
                 # blind pull would clobber same-tick declarative set_param
                 # commits with the stale pre-tick draft.
                 after = _eco_field_values(deme.config)
-                changed = {name for name, value in after.items() if before.get(name) != value}
+                changed = {
+                    name for name, value in after.items() if before.get(name) != value
+                }
                 if changed:
                     # Homogeneous clones share one config object, and vector
                     # writes mutate that object in place: by the time a
@@ -2853,7 +3001,9 @@ class SpatialPopulation:
         if any(bridges):
             # One registration for all events: set_python_callbacks
             # replaces the whole per-event vector.
-            backend.set_python_callbacks(*bridges)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+            backend.set_python_callbacks(  # pyright: ignore[reportAttributeAccessIssue]
+                *cast("list[list[Callable[..., int]]]", bridges)
+            )
 
     def disable_rust_backend(self) -> SpatialPopulation:
         """Disable the Rust spatial backend.

@@ -998,6 +998,58 @@ class RustHeterogeneousSpatialLifecycleBackend:
             )
         )
 
+    def capture_checkpoint(self) -> int:
+        """Capture one restorable boundary from the owned runtime.
+
+        Clones the stacked state, every per-deme RNG stream, and the
+        ecology columns; the running trajectory is unaffected.
+
+        Returns:
+            The tick the checkpoint was captured at.
+        """
+        return int(_session_call(self._session.capture_checkpoint))
+
+    def restore_from_checkpoint(self, tick: int) -> int | None:
+        """Restore the newest checkpoint at or before *tick*.
+
+        Atomically replaces the owned state, all per-deme RNG streams,
+        and the ecology columns, rewinds the tick, and truncates stored
+        checkpoints newer than the restored boundary.
+
+        Args:
+            tick: Target tick.
+
+        Returns:
+            The restored tick, or ``None`` when no checkpoint covers it
+            (the runtime is untouched in that case).
+        """
+        restored = _session_call(lambda: self._session.restore_from_checkpoint(int(tick)))
+        return None if restored is None else int(restored)
+
+    def truncate_checkpoints(self, retain_until_tick: int) -> None:
+        """Drop checkpoints newer than *retain_until_tick*.
+
+        Args:
+            retain_until_tick: Keep checkpoints at or before this tick.
+        """
+        _session_call(lambda: self._session.truncate_checkpoints(int(retain_until_tick)))
+
+    def clear_checkpoints(self) -> None:
+        """Drop all stored checkpoints (history cleared)."""
+        _session_call(self._session.clear_checkpoints)
+
+    def ecology_columns_snapshot(self) -> dict[str, NDArray[np.float64] | NDArray[np.int64]]:
+        """Export the current ecology columns for Python-side rollback.
+
+        Returns:
+            A mapping of column name to a flat copy (``growth_mode``
+            int64, everything else float64, ``migration_rate`` included).
+        """
+        columns: dict[str, NDArray[np.float64] | NDArray[np.int64]] = {}
+        for name, values in self._session.ecology_columns_snapshot():
+            columns[name] = np.asarray(values)
+        return columns
+
     def set_migration_rate(self, values: NDArray[np.float64]) -> None:
         """Replace the live migration-rate column used by the session.
 

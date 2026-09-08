@@ -56,6 +56,13 @@
 - **Spatial update internals**: replace the private `_SpatialUpdate` facade and
   method-name batching table with typed Configurator dispatch and explicit
   `batch_setting()` values.
+- **Spatial full checkpoint restore (plan S4 CheckpointStore)**: the spatial
+  session now stores restorable boundaries (stacked state, every per-deme RNG
+  stream, and the ecology columns) at record-aligned raw-history ticks;
+  `restore_checkpoint` rewinds state, randomness, and ecology so
+  `restore -> run` replays the original stochastic trajectory bitwise, and
+  restores the runnable state after a stop.  Demes whose drafts project the
+  rolled-back ecology read the checkpoint values.
 - **Python callbacks on the spatial Rust path**: deme hooks (``@nt.hook``)
   now run inside the spatial session's ticks — stable deme-order execution,
   private per-fire array copies, graceful stop, and ``ctx.update()`` param
