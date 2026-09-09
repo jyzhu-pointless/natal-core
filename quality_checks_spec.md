@@ -82,6 +82,12 @@ If origin cannot be determined, investigate. A demonstrated in-scope defect requ
 
 ## Review Evidence and Verdicts
 
+The main agent supplies basic tests and self-validation. The independent evaluator checks existing coverage and may add or strengthen tests during review; no separate tester stage is required. Preserve the implementation/review boundary in AGENTS.md: the evaluator edits tests and reports defects, while the main agent repairs product code.
+
+For a behavior-testable blocker, prefer handing off an executed failing regression test with the confirmed requirement, test location, reproduction command, expected outcome, and observed failure. Confirm that it fails for the claimed behavior rather than a broken fixture or missing dependency. Other blockers may use static diagnostics or concrete evidence; do not force every finding into a test. Unexecuted tests are proposed checks, not reproduced failures.
+
+Resolve essential contract ambiguity before treating a disputed expectation as a repair target. The main agent may challenge an incorrect test with evidence for evaluator correction but must not weaken, skip, or remove valid tests to make results pass. After repair, the evaluator independently reruns the repair targets and affected checks; final gate timing still follows the validation section. Issue a verdict against the final implementation and tests, including tests added during review.
+
 Record four things: current requirements and evidence; issues introduced or affected by the change; confirmed unrelated baseline issues; and required checks that could not be completed.
 
 Each requirement/check is `PASS`, `FAIL`, `NOT CHECKED`, or `N/A` with a reason where needed. Baseline failures retain their failing command result and link to the baseline evidence.

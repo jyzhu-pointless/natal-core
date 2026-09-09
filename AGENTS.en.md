@@ -32,17 +32,21 @@ State the classification and a short reason in the initial work update. Classifi
 |---|---|---|
 | Documentation and formatting | Prose, comments, or layout only; no runtime or example code changes | Check accuracy, bilingual consistency, links, and relevant formatting; no full code gates |
 | Local code change | Clear impact, with none of the high-risk concerns below | Targeted tests and full gates before delivery; the main agent may complete it |
-| High-risk change | Scientific formulas, random distributions, state restoration, mutable data sharing, public API contracts, Python/Rust data exchange, or unclear code impact | Delegate a tester, obtain independent evaluator review, and run final full gates |
+| High-risk change | Scientific formulas, random distributions, state restoration, mutable data sharing, public API contracts, Python/Rust data exchange, or unclear code impact | Obtain independent evaluator review with necessary test strengthening and run final full gates |
 
 Text-only rule or skill changes use documentation checks; add independent scenario exercises when they materially change agent decisions. Classify executable project API or model example changes by code risk and run affected examples. Standalone syntax or style illustrations in specifications that do not call project code, describe project APIs, or express scientific models use document checks and validation of the snippets themselves, without full project gates. A small formula change remains high-risk.
 
 ## Validation Timing and Roles
 
-Use this order: implementation and targeted validation → necessary test strengthening → documentation and stub synchronization → final validation and any required independent review. Tests may precede or accompany implementation.
+Use this order: main-agent implementation and basic tests → documentation and stub synchronization → any required independent review and test strengthening → if defects exist, hand them to the main agent for repair and evaluator revalidation → final validation. Tests may precede or accompany implementation.
 
-- **tester**: Delegation is required for high-risk code changes. Find missing scenarios, verify existing coverage, and strengthen tests where needed. Cite adequate existing tests rather than add tests to satisfy a quota. Use `numerical-verification` for numerical tests and `adversarial-review` for contract attacks when relevant.
+- **Main agent**: Implement, provide basic tests and self-validation, and repair product code in response to review. Do not delegate all basic verification to the evaluator. Supply complete, reviewable changes and existing validation evidence.
 - **docs**: Public API changes require synchronized `docs/zh/`, `docs/en/`, and related examples before final review. Delegate according to workload; the main agent may do the work.
-- **evaluator**: Independently review final code, tests, stubs, and documentation and independently run final full gates for high-risk code changes. Delegate local changes when requested or when review uncertainty warrants it. Use `adversarial-review`; load `numerical-verification` only for numerical checks. Do not automatically load or launch the global `code-review` workflow.
+- **evaluator**: Delegation is required for high-risk code changes. Independently check requirements, code, tests, stubs, and documentation; verify existing coverage, directly generate or strengthen necessary tests, and independently run final full gates. Cite adequate existing tests rather than add tests to satisfy a quota. Delegate local changes when requested or when review uncertainty warrants it. Use `adversarial-review` and load `numerical-verification` for numerical tests as needed. Do not automatically load or launch the global `code-review` workflow.
+
+The evaluator may modify tests but must not directly repair the product implementation. For blockers reproducible by behavior tests, prefer an actually executed, failing regression test as the repair target, with its requirement, test location, command, expected result, and actual result. For other findings, provide static checks, a minimal reproducer, or concrete evidence. Do not claim an unexecuted test reproduced a failure.
+
+Tests must follow confirmed requirements or contracts. Clarify essential ambiguity rather than turn personal preferences into mandatory assertions. The main agent must not weaken assertions, skip, or delete valid tests to manufacture success. If a test itself is wrong, provide reasons and evidence for the evaluator to verify and correct it. After the main agent repairs and self-tests, the evaluator independently rechecks the repair targets and affected checks before issuing a verdict.
 
 These names describe responsibilities implemented with the environment's subagent tools and available concurrency. Without delegation capability, mark high-risk work as “independent review incomplete”; self-review cannot substitute for approval.
 
