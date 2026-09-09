@@ -37,8 +37,8 @@ from natal.frontend.hooks import (
     CompiledHookDescriptor,
     DemeSelector,
     HookProgram,
-    OpType,
 )
+from natal.frontend.hooks._compile import build_hook_program
 from natal.frontend.population.base import BasePopulation
 from natal.frontend.spatial.migration import (
     MigrationCSR,
@@ -844,11 +844,12 @@ class SpatialPopulation:
                         f"{len(normalized_kernel_bank)}"
                     )
 
-        # Spatial hooks are local-to-deme by design, so container-level hooks
-        # must always be rebuilt from all demes.
+        # Spatial hooks are local-to-deme by design: the aggregate program
+        # is compiled once from the demes' build-time injected hook plans
+        # (shared sequences deduplicated, per-deme applicability preserved).
         self._hooks = self._compile_spatial_hooks_from_demes()
-        # Session structure staleness flag: set by hook
-        # registration and consumed by the next rust run boundary.
+        # Session structure staleness flag: set by execution-flag changes
+        # and consumed by the next rust run boundary.
         self._rust_needs_rebuild = False
 
         migration_mode = resolve_migration_mode(
@@ -1666,148 +1667,13 @@ class SpatialPopulation:
 
     @property
     def hooks(self) -> HookProgram:
-        """Return the aggregate native hook program for all demes."""
+        """Return the aggregate native hook program for all demes.
+
+        The program is compiled once from the demes' build-time injected
+        hook plans (shared sequences deduplicated, per-deme applicability
+        encoded in the selectors) and never changes afterwards.
+        """
         return self._hooks
-
-    def register_hooks(
-        self,
-        *items: object,
-        event: Optional[str] = None,
-        priority: int = 0,
-        deme: DemeSelector = "*",
-        name: Optional[str] = None,
-    ) -> None:
-        """Register hooks on the demes selected by *deme* — the single entry.
-
-        Mirrors :meth:`natal.frontend.population.base.BasePopulation.
-        register_hooks` at the container level: the deme selector chooses
-        target demes, then registration is forwarded to each target with
-        panmictic selector semantics (the compiler-level selector fields
-        are transport-only metadata).
-
-        When multiple demes share the same hook storage (as happens with
-        homogeneous clones), the hook is registered **once** on a
-        representative and all other targeted owners see the change
-        through shared storage.  This avoids accidental duplicate
-        descriptors.
-
-        Args:
-            *items: Hook registrations (``Op`` objects, ``@hook``-
-                decorated functions, single-parameter callables).
-            event: Default event for items that do not carry one.
-            priority: Execution priority — lower values run first.
-            deme: Deme selector (``"*"`` = all demes).
-            name: Optional name for grouped op registrations.
-        """
-        # Determine which demes are targeted by the selector.
-        target_ids = [
-            i for i in range(self.n_demes) if self._selector_matches_deme(deme, i)
-        ]
-
-        if not target_ids:
-            return
-
-        # Group targeted demes by the identity of their hook storage.
-        # Demes that share the same ``compiled_hook_descriptors`` list (via
-        # clone sharing) should only have the hook compiled and appended
-        # once.
-        storage_groups = self._group_demes_by_hook_storage(target_ids)
-
-        for storage_key, group_ids in storage_groups.items():
-            # Find ALL demes (targeted + non-targeted) sharing this storage.
-            all_owners = self._demes_sharing_storage(storage_key)
-
-            if set(all_owners).issubset(set(target_ids)):
-                # All owners are targeted — register once on a
-                # representative; other owners see the change through the
-                # shared list.
-                self._demes[group_ids[0]].register_hooks(
-                    *items, event=event, priority=priority, deme="*", name=name
-                )
-            else:
-                # Only a subset of owners are targeted — copy-on-write so
-                # the non-targeted owners keep their existing hook storage
-                # intact.
-                self._copy_hook_storage_for_demes(group_ids)
-                self._demes[group_ids[0]].register_hooks(
-                    *items, event=event, priority=priority, deme="*", name=name
-                )
-
-        # Invalidate the hook executor on all targeted demes so they pick
-        # up the recompiled aggregate hooks.
-        for deme_id in target_ids:
-            self._demes[deme_id].invalidate_hook_dispatch()
-
-        # Rebuild aggregate hooks once after all per-deme mutations.
-        self._refresh_spatial_hooks()
-
-    def _group_demes_by_hook_storage(
-        self,
-        deme_ids: list[int],
-    ) -> dict[int, list[int]]:
-        """Group deme indices by the identity of their hook storage.
-
-        Demes that share the same ``compiled_hook_descriptors`` list object
-        (typically clones sharing template storage) are placed in the same
-        group.
-
-        Args:
-            deme_ids: Indices of demes to group.
-
-        Returns:
-            A dict mapping ``id(compiled_hook_descriptors)`` to the list of
-            deme indices sharing that storage.
-        """
-        groups: dict[int, list[int]] = {}
-        for deme_id in deme_ids:
-            deme = self._demes[deme_id]
-            key = id(deme.compiled_hook_descriptors)
-            groups.setdefault(key, []).append(deme_id)
-        return groups
-
-    def _demes_sharing_storage(
-        self,
-        storage_key: int,
-    ) -> list[int]:
-        """Return all deme indices that share the given hook storage identity.
-
-        Args:
-            storage_key: The ``id(compiled_hook_descriptors)`` of a shared
-                descriptor list.
-
-        Returns:
-            List of deme indices across the entire population whose storage
-            matches *storage_key*.
-        """
-        owners: list[int] = []
-        for deme_id in range(self.n_demes):
-            deme = self._demes[deme_id]
-            if id(deme.compiled_hook_descriptors) == storage_key:
-                owners.append(deme_id)
-        return owners
-
-    def _copy_hook_storage_for_demes(
-        self,
-        deme_ids: list[int],
-    ) -> None:
-        """Copy-on-write hook storage for a subset of demes.
-
-        Creates a copy of ``compiled_hook_descriptors`` from the first deme
-        in *deme_ids* so they no longer share storage with non-targeted
-        peers; future mutations on targeted demes do not leak to
-        untargeted owners.
-
-        Args:
-            deme_ids: Indices of demes to receive the new private storage.
-                All listed demes will point to the same new copies.
-        """
-        ref = self._demes[deme_ids[0]]
-
-        compiled_copy = list(ref.compiled_hook_descriptors)
-
-        for deme_id in deme_ids:
-            deme = self._demes[deme_id]
-            object.__setattr__(deme, "compiled_hook_descriptors", compiled_copy)
 
     @staticmethod
     def _selector_matches_deme(selector: DemeSelector, deme_id: int) -> bool:
@@ -1835,7 +1701,7 @@ class SpatialPopulation:
 
         Each inner list contains the actual descriptor objects (not copies)
         for hooks whose ``deme_selector`` matches the owning deme. Descriptors
-        are kept in their original registration order (sorted by priority).
+        are kept in their original declaration order (sorted by priority).
 
         Returns:
             List of length ``n_demes``, one sequence per deme.
@@ -1958,247 +1824,20 @@ class SpatialPopulation:
                 compiled_hooks.append(replace(desc, deme_selector=int(deme_id)))
         return compiled_hooks
 
-    @staticmethod
-    def _build_hook_program(
-        compiled_hooks: list[CompiledHookDescriptor],
-    ) -> HookProgram:
-        """Build one CSR ``HookProgram`` from aggregate compiled descriptors.
-
-        Args:
-            compiled_hooks: Flattened descriptor list that already encodes final
-                per-hook ``deme_selector`` routing.
-
-        Returns:
-            HookProgram: Plain-data CSR payload consumed by hook execution
-            kernels and the native callback bridge.
-
-        Note:
-            This function packs all declarative operation arrays into contiguous
-            buffers to keep downstream execution loops vectorizable and
-            allocation-free during runtime dispatch.
-        """
-        from natal.frontend.hooks import EVENT_NAMES
-
-        events = EVENT_NAMES
-        n_events = len(events)
-
-        hook_offsets: list[int] = [0]
-        hook_list_by_event: list[list[CompiledHookDescriptor]] = []
-        callback_slots: list[int] = []
-        for event_name in events:
-            hooks = [h for h in compiled_hooks if h.event == event_name]
-            hook_list_by_event.append(hooks)
-            hook_offsets.append(hook_offsets[-1] + len(hooks))
-            # Number the event's callback slots globally in compact order
-            # (groups concatenated); the callback bridges are registered in
-            # this same order, so slot j addresses bridge j regardless of
-            # which compact group the slot came from.
-            next_callback_index = 0
-            for hook in hooks:
-                if hook.callback is not None:
-                    callback_slots.append(next_callback_index)
-                    next_callback_index += 1
-                else:
-                    callback_slots.append(-1)
-        n_hooks = hook_offsets[-1]
-        all_op_types: list[int] = []
-        all_zidx_offsets: list[int] = [0]
-        all_zidx_data: list[int] = []
-        all_age_offsets: list[int] = [0]
-        all_age_data: list[int] = []
-        all_sex_masks: list[bool] = []
-        all_params: list[float] = []
-        all_cond_offsets: list[int] = [0]
-        all_cond_types: list[int] = []
-        all_cond_params: list[int] = []
-        # OP_SET_PARAM / OP_CONVERT flattened data area (rebasing per
-        # plan so offsets stay global).
-        all_sp_param_ids: list[int] = []
-        all_sp_every: list[int] = []
-        all_sp_start: list[int] = []
-        all_rpn_offsets: list[int] = [0]
-        all_rpn_kinds: list[int] = []
-        all_rpn_payload: list[int] = []
-        all_sp_literals: list[float] = []
-        all_convert_source_z: list[int] = []
-        all_convert_target_z: list[int] = []
-        has_set_param = False
-        all_deme_sel_types: list[int] = []
-        all_deme_sel_offsets: list[int] = [0]
-        all_deme_sel_data: list[int] = []
-        n_ops_list: list[int] = []
-        op_offsets: list[int] = [0]
-
-        for hooks in hook_list_by_event:
-            for hook in hooks:
-                plan = hook.plan
-                if plan is None or plan.n_ops == 0:
-                    # Keep offset arrays aligned even for hooks without
-                    # declarative operations (e.g. pure python descriptors):
-                    # the deme selector must still be packed, or the Rust
-                    # matcher indexes an empty array for this hook slot.
-                    n_ops_list.append(0)
-                    op_offsets.append(op_offsets[-1])
-                    sel = hook.deme_selector
-                    if sel == "*":
-                        all_deme_sel_types.append(0)
-                    elif isinstance(sel, int):
-                        all_deme_sel_types.append(1)
-                        all_deme_sel_data.append(int(sel))
-                    elif isinstance(sel, range):
-                        all_deme_sel_types.append(2)
-                        all_deme_sel_data.append(int(sel.start))
-                        all_deme_sel_data.append(int(sel.stop))
-                    else:
-                        all_deme_sel_types.append(3)
-                        all_deme_sel_data.extend([int(x) for x in sel])
-                    all_deme_sel_offsets.append(len(all_deme_sel_data))
-                    continue
-
-                n_ops_list.append(plan.n_ops)
-                all_op_types.extend(plan.op_types.tolist())
-                has_set_param = has_set_param or bool(
-                    (plan.op_types == int(OpType.SET_PARAM)).any()
-                )
-
-                # Offsets are rebased to flattened buffers as each hook's plan
-                # payload is appended.
-                zidx_offset_base = len(all_zidx_data)
-                for i in range(plan.n_ops):
-                    all_zidx_offsets.append(
-                        zidx_offset_base
-                        + plan.zidx_offsets[i + 1]
-                        - plan.zidx_offsets[0]
-                    )
-                all_zidx_data.extend(plan.zidx_data.tolist())
-
-                age_offset_base = len(all_age_data)
-                for i in range(plan.n_ops):
-                    all_age_offsets.append(
-                        age_offset_base + plan.age_offsets[i + 1] - plan.age_offsets[0]
-                    )
-                all_age_data.extend(plan.age_data.tolist())
-
-                all_sex_masks.extend(plan.sex_masks.flatten().tolist())
-                all_params.extend(plan.params.tolist())
-
-                cond_offset_base = len(all_cond_types)
-                for i in range(plan.n_ops):
-                    all_cond_offsets.append(
-                        cond_offset_base
-                        + plan.condition_offsets[i + 1]
-                        - plan.condition_offsets[0]
-                    )
-                all_cond_types.extend(plan.condition_types.tolist())
-                all_cond_params.extend(plan.condition_params.tolist())
-
-                # set_param / convert payload columns and rebased RPN
-                # token stream (mirrors the panmictic builder).
-                all_sp_param_ids.extend(plan.sp_param_ids.tolist())
-                all_sp_every.extend(plan.sp_every.tolist())
-                all_sp_start.extend(plan.sp_start.tolist())
-                rpn_offset_base = len(all_rpn_kinds)
-                for i in range(plan.n_ops):
-                    all_rpn_offsets.append(
-                        rpn_offset_base + plan.rpn_offsets[i + 1] - plan.rpn_offsets[0]
-                    )
-                # Literal payloads are indices into the program-wide shared
-                # pool: rebase each hook's local indices onto the current
-                # pool length before appending, or a later set_param op
-                # would silently read an earlier hook's literal (the
-                # panmictic compiler rebases the same way).
-                literal_base = len(all_sp_literals)
-                is_literal = plan.rpn_kinds.tolist()
-                payload = plan.rpn_payload.tolist()
-                from natal.frontend.hooks.entry.declarative import RPN_LITERAL
-
-                all_rpn_payload.extend(
-                    p + literal_base if k == RPN_LITERAL else p
-                    for k, p in zip(is_literal, payload)
-                )
-                all_rpn_kinds.extend(is_literal)
-                all_sp_literals.extend(plan.sp_literals.tolist())
-                all_convert_source_z.extend(plan.convert_source_z.tolist())
-                all_convert_target_z.extend(plan.convert_target_z.tolist())
-                op_offsets.append(len(all_op_types))
-
-                # Persist the selector in compact integer encoding for native
-                # hook execution.
-                sel = hook.deme_selector
-                if sel == "*":
-                    all_deme_sel_types.append(0)
-                elif isinstance(sel, int):
-                    all_deme_sel_types.append(1)
-                    all_deme_sel_data.append(int(sel))
-                elif isinstance(sel, range):
-                    all_deme_sel_types.append(2)
-                    all_deme_sel_data.append(int(sel.start))
-                    all_deme_sel_data.append(int(sel.stop))
-                else:
-                    all_deme_sel_types.append(3)
-                    all_deme_sel_data.extend([int(x) for x in sel])
-                all_deme_sel_offsets.append(len(all_deme_sel_data))
-
-        return HookProgram(
-            n_events=np.int32(n_events),
-            n_hooks=np.int32(n_hooks),
-            hook_offsets=np.array(hook_offsets, dtype=np.int32),
-            n_ops_list=np.array(n_ops_list, dtype=np.int32),
-            op_offsets=np.array(op_offsets, dtype=np.int32),
-            op_types_data=np.array(all_op_types, dtype=np.int32),
-            zidx_offsets_data=np.array(all_zidx_offsets, dtype=np.int32),
-            zidx_data=np.array(all_zidx_data, dtype=np.int32),
-            age_offsets_data=np.array(all_age_offsets, dtype=np.int32),
-            age_data=np.array(all_age_data, dtype=np.int32),
-            sex_masks_data=np.array(all_sex_masks, dtype=np.bool_),
-            params_data=np.array(all_params, dtype=np.float64),
-            condition_offsets_data=np.array(all_cond_offsets, dtype=np.int32),
-            condition_types_data=np.array(all_cond_types, dtype=np.int32),
-            condition_params_data=np.array(all_cond_params, dtype=np.int32),
-            sp_param_ids=np.array(all_sp_param_ids, dtype=np.int32),
-            sp_every=np.array(all_sp_every, dtype=np.int32),
-            sp_start=np.array(all_sp_start, dtype=np.int32),
-            rpn_offsets=np.array(all_rpn_offsets, dtype=np.int32),
-            rpn_kinds=np.array(all_rpn_kinds, dtype=np.int32),
-            rpn_payload=np.array(all_rpn_payload, dtype=np.int32),
-            sp_literals=np.array(all_sp_literals, dtype=np.float64),
-            convert_source_z=np.array(all_convert_source_z, dtype=np.int32),
-            convert_target_z=np.array(all_convert_target_z, dtype=np.int32),
-            has_set_param=has_set_param,
-            deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
-            deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
-            deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
-            python_callback_slots=np.array(callback_slots, dtype=np.int32),
-        )
-
     def _compile_spatial_hooks_from_demes(self) -> HookProgram:
-        """Compile one aggregate hook bundle from current per-deme hooks.
+        """Compile one aggregate hook bundle from the demes' injected plans.
 
         Uses the **compact** execution plan so that demes sharing identical
         hook sequences produce a single wildcard descriptor instead of one
         per-deme descriptor.  The aggregate bundle carries the CSR registry
-        handed to the Rust session at enable/rebuild time.
+        handed to the Rust session at enable time; the plan is fixed after
+        the build flow installs it (there is no post-build registration).
 
         Returns:
             HookProgram consumed by the native engine session.
-
-        Implementation detail:
-            This function is the single rebuild entrypoint used by
-            initialization and ``register_hooks(...)`` so all hook mutation
-            paths stay behaviorally consistent.
         """
         compiled_hooks = self._collect_compact_spatial_hooks()
-        registry = self._build_hook_program(compiled_hooks)
-        return registry
-
-    def _refresh_spatial_hooks(self) -> None:
-        """Rebuild the aggregate compiled hooks (single rebuild entrypoint)."""
-        self._hooks = self._compile_spatial_hooks_from_demes()
-        # Hook structure is session state: the changed descriptors
-        # must reach the HookProgram and the callback bridges, so the live
-        # session rebuilds before the next run — the container-level twin
-        # of the panmictic ``_rust_needs_rebuild`` semantics.
-        self._rust_needs_rebuild = True
+        return build_hook_program(compiled_hooks, order_by_priority=False)
 
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """Trigger an event and execute all registered hooks for a specific deme.
@@ -2635,8 +2274,9 @@ class SpatialPopulation:
         # Columns and the variant bank own their buffers. Release the full
         # per-deme snapshots before allocating the stacked handoff state.
         del deme_drafts
-        compiled_hooks = self._collect_compact_spatial_hooks()
-        hook_program = self._build_hook_program(compiled_hooks)
+        # The aggregate plan was compiled once at construction from the
+        # demes' build-time injected hook descriptors.
+        hook_program = self._hooks
         # One-time build handoff: the session owns the stacked state and
         # the per-deme RNG streams from here on.
         ind_all, sperm_all = self._stack_deme_state_arrays()
@@ -2705,7 +2345,7 @@ class SpatialPopulation:
             for event_id in (EVENT_FIRST, EVENT_EARLY, EVENT_LATE, EVENT_FINISH)
         }
         # One bridge per callback slot of the compact program, in the same
-        # order ``_build_hook_program`` numbers them.  Per-deme selectors may
+        # order the packer numbers them.  Per-deme selectors may
         # filter differently, so a slot's compact position is translated to
         # each deme's own runner index by callback identity — never by
         # positional coincidence.
@@ -2742,7 +2382,12 @@ class SpatialPopulation:
         backend.set_python_callbacks(*bridges)  # pyright: ignore[reportAttributeAccessIssue]  # native spatial session callback surface
 
     def _rebuild_stale_spatial_session(self) -> None:
-        """Install changed programs without replacing native state or RNG streams."""
+        """Install changed execution flags without replacing native state or RNG streams.
+
+        The hook plan is fixed since construction, so a dirty rebuild only
+        re-installs the same program and callback bridges (execution-flag
+        changes are carried by the config side of the program handoff).
+        """
         dirty = bool(getattr(self, "_rust_needs_rebuild", False)) or any(
             getattr(deme, "_rust_needs_rebuild", False) for deme in self._demes
         )
@@ -2752,8 +2397,7 @@ class SpatialPopulation:
         if backend is None:
             self._initialize_session(seed=int(self._rust_spatial_seed or 0))
             return
-        compiled = self._collect_compact_spatial_hooks()
-        backend.configure_program(self._build_hook_program(compiled))
+        backend.configure_program(self._hooks)
         self._register_spatial_rust_callbacks(backend)
         self._rust_needs_rebuild = False
         for deme in self._demes:

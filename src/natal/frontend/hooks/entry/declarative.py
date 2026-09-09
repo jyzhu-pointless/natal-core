@@ -13,7 +13,7 @@ The resulting plan is pure data and is executed by the native Rust engine.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -40,14 +40,12 @@ from natal.frontend.hooks.types import (
     CompiledHookDescriptor,
     CompiledHookPlan,
     DemeSelector,
+    HookLayout,
     HookOp,
     OpType,
 )
 from natal.frontend.patterns import resolve_zygote_type as _resolve_zygote_type
 from natal.frontend.registry.index import IndexRegistry
-
-if TYPE_CHECKING:
-    from natal.frontend.population.base import BasePopulation
 
 # Fast membership view of the fixed set_param target/operand table.
 _ECO_PARAM_SET = frozenset(ECO_PARAM_NAMES)
@@ -980,7 +978,7 @@ def _compile_convert_endpoint(
 
 def compile_declarative_hook(
     ops: List[HookOp],
-    pop: BasePopulation[Any],
+    pop: HookLayout,
     event: str,
     priority: int = 0,
     deme_selector: DemeSelector = "*",
@@ -991,6 +989,16 @@ def compile_declarative_hook(
     The compiler packs all per-op fields into parallel arrays. Offsets arrays
     (``*_offsets``) define CSR spans for variable-length selector/condition
     data and avoid Python object usage in runtime engine.
+
+    Args:
+        ops: Declarative operations to compile.
+        pop: Layout provider (a built population or the builder's
+            build-time context); only its ``index_registry``, ``species``,
+            and ``config.n_ages`` are read.
+        event: Event this hook fires at.
+        priority: Execution priority — lower values run first.
+        deme_selector: Deme selector carried on the descriptor.
+        name: Human-readable descriptor name.
     """
     # Get population configuration and registry for resolving genotype/age indices
     index_registry = pop.index_registry

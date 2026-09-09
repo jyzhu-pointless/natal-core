@@ -52,6 +52,7 @@ from natal.frontend.configurator._params import (
 from natal.frontend.data import ModelDraft
 from natal.frontend.genetics import Species
 from natal.frontend.genetics.structures._helpers import build_compression_mask
+from natal.frontend.hooks.types import DemeSelector
 from natal.frontend.patterns import IndividualSelector
 from natal.frontend.population.age_structured import AgeStructuredPopulation
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
@@ -584,6 +585,9 @@ class SpatialConfigurator:
             self._template: Configurator = Configurator.from_species(
                 species, discrete=True
             )
+        # Demes build through this template: declared deme selectors must
+        # survive compilation so the container plan can pin per-deme hooks.
+        self._template._spatial_template = True  # pyright: ignore[reportPrivateUsage]  # owning container configures its template
 
         # Accumulated batch settings: param_name -> BatchSetting.
         self._batch_settings: Dict[
@@ -1395,17 +1399,50 @@ class SpatialConfigurator:
         """
         return self._detect_and_delegate("custom", dict(kwargs))
 
-    def hooks(self, *hook_items: _HookItem) -> SpatialConfigurator:
-        """Register lifecycle hooks.
+    def hooks(
+        self,
+        *hook_items: _HookItem,
+        event: Optional[str] = None,
+        priority: int = 0,
+        deme: DemeSelector = "*",
+        name: Optional[str] = None,
+    ) -> SpatialConfigurator:
+        """Declare lifecycle hooks for every deme's build chain.
+
+        Declaration keywords mirror the panmictic ``Configurator.hooks``:
+        ``deme`` metadata rides on the compiled descriptors (demes outside
+        the selector never fire the hook), not on the container.
 
         Args:
             *hook_items: Functions decorated with ``@hook`` or hook mappings.
+            event: Default event for items that do not carry one.
+            priority: Execution priority — lower values run first.
+            deme: Deme selector for the compiled descriptors.
+            name: Optional name for grouped op declarations.
 
         Returns:
             Self for chaining.
         """
-        self._declaration_log.append(("hooks", {"hook_items": hook_items}))
-        self._call_template("hooks", *hook_items)
+        self._declaration_log.append(
+            (
+                "hooks",
+                {
+                    "hook_items": hook_items,
+                    "event": event,
+                    "priority": priority,
+                    "deme": deme,
+                    "name": name,
+                },
+            )
+        )
+        self._call_template(
+            "hooks",
+            *hook_items,
+            event=event,
+            priority=priority,
+            deme=deme,
+            name=name,
+        )
         return self
 
     def modifiers(
@@ -1766,6 +1803,7 @@ class SpatialConfigurator:
             raise ValueError("Spatial compilation requires normalized spatial inputs")
         compiler = cls(definition.species, controls.n_demes, controls.topology, pop_type=controls.pop_type)
         template = Configurator(definition.draft, species=definition.species)
+        template._spatial_template = True  # pyright: ignore[reportPrivateUsage]  # detached spatial group template keeps per-deme selectors.
         template._registry = definition.registry  # pyright: ignore[reportPrivateUsage]  # initialize one isolated compiler candidate.
         template._presets = list(definition.presets)  # pyright: ignore[reportPrivateUsage]
         template._manual_gamete = cast("GameteList", list(definition.manual_gamete))  # pyright: ignore[reportPrivateUsage]
@@ -2239,6 +2277,7 @@ class SpatialConfigurator:
             template_cfg = Configurator.for_age_structured(self._species)
         else:
             template_cfg = Configurator.for_discrete(self._species)
+        template_cfg._spatial_template = True  # pyright: ignore[reportPrivateUsage]  # group template replays spatial hook declarations.
 
         for method_name, kwargs in self._declaration_log:
             method = getattr(template_cfg, method_name, None)
@@ -2292,7 +2331,14 @@ class SpatialConfigurator:
                     resolved.pop("hook_items", ()), name="hook_items"
                 )
                 filtered = {k: v for k, v in resolved.items() if v is not None}
-                method(*hook_items, **filtered)
+                # Replay through the undecorated hook declaration: deme
+                # selectors journaled by the spatial chain are already
+                # final and must not be panmictic-normalized again.
+                inner = getattr(method, "__wrapped__", None)
+                if inner is not None:
+                    inner(template_cfg, *hook_items, **filtered)
+                else:
+                    method(*hook_items, **filtered)
             else:
                 filtered = {k: v for k, v in resolved.items() if v is not None}
                 method(**filtered)

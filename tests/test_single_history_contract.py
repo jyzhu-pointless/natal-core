@@ -85,6 +85,7 @@ def _build_population(
     name: str,
     *,
     install_noop_hook: bool = False,
+    hook_calls: list | None = None,
 ) -> NonSpatialPopulation:
     """Build one deterministic population for the requested engine path.
 
@@ -93,6 +94,8 @@ def _build_population(
         mode: ``"raw"`` or ``"observation"``.
         name: Base identifier for species and population.
         install_noop_hook: Whether to install a no-op callback hook.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the build chain.
 
     Returns:
         A built non-spatial population with history recording.
@@ -167,6 +170,8 @@ def _build_population(
         )
     if install_noop_hook:
         configurator.hooks(_noop_history_hook)
+    for items, kwargs in hook_calls or []:
+        configurator = configurator.hooks(*items, **kwargs)
     population = configurator.record_history(mode=mode).build()
     if model == "wright_fisher":
         object.__setattr__(
@@ -665,8 +670,12 @@ def test_compiled_stop_at_tick_zero_keeps_only_initial_boundary(
     Args:
         model: ``"age"``, ``"discrete"``, or ``"wright_fisher"``.
     """
-    population = _build_population(model, "raw", f"compiled_stop_{model}")
-    population.register_hooks(_stop_on_initial_population, event="first")
+    population = _build_population(
+        model,
+        "raw",
+        f"compiled_stop_{model}",
+        hook_calls=[((_stop_on_initial_population(),), {"event": "first"})],
+    )
     initial_count = population.state.individual_count.copy()
     initial_sperm = population.state.sperm_storage.copy() if model == "age" else None
     population.run(3, record_every=1)

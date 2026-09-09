@@ -53,6 +53,7 @@ def _build(
     name: str,
     *,
     hooks: list[object] | None = None,
+    hook_calls: list | None = None,
     alleles: tuple[str, ...] = ("WT", "Dr"),
     carrying_capacity: float | None = None,
 ) -> nt.DiscreteGenerationPopulation:
@@ -87,6 +88,8 @@ def _build(
         builder = builder.competition(carrying_capacity=carrying_capacity)
     if hooks:
         builder = builder.hooks(*hooks)
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
     return builder.build()
 
 
@@ -454,18 +457,15 @@ def test_params_log_snapshot_semantics_and_quiet_run() -> None:
 
 def test_params_log_hook_write_tick_attribution() -> None:
     """A hook write lands as exactly one row stamped with the hook tick."""
-    pop = _build(
-        "s4x_hooklog",
-        carrying_capacity=100_000.0,
-    )
-    pop.run(n_steps=2)  # now at tick 2
-
     @nt.hook(event="first")
     def writer(pop: TickContext) -> int:
-        pop.params.carrying_capacity = 555.0
+        if pop.tick >= 2:  # declared at build; gated to fire from tick 2 on
+            pop.params.carrying_capacity = 555.0
         return 0
 
-    pop.update().hooks(writer)
+    pop = _build("s4x_hooklog", carrying_capacity=100_000.0, hooks=[writer])
+    pop.run(n_steps=2)  # now at tick 2 (no fire before the gate)
+    assert pop.params_log == ()
     pop.run(n_steps=1)
 
     assert pop.params_log == ((2, "carrying_capacity", 100_000.0, 555.0),)
@@ -498,7 +498,7 @@ def test_removed_hook_surface_inaccessible() -> None:
         _ = pop
         return 0
 
-    pop.update().hooks(probe)
+    pop = _build("s4x_neg_probe", hooks=[probe])
     desc = pop.get_compiled_hooks("first")[0]
     for attr in ("njit_fn", "py_wrapper", "static_arrays"):
         assert not hasattr(desc, attr), f"descriptor.{attr} must not exist"
@@ -512,18 +512,18 @@ def test_removed_hook_surface_inaccessible() -> None:
         importlib.import_module("natal.frontend.hooks.compile.codegen")
 
 
-def test_rejected_registration_leaves_population_untouched() -> None:
-    """A TypeError from a bad signature registers nothing and run() works."""
-    pop = _build("s4x_reject_state")
-
+def test_rejected_declaration_leaves_population_unbuildable() -> None:
+    """A TypeError from a bad signature rejects the whole build."""
     def legacy(state: object, config: object, deme_id: object) -> int:
         _ = (state, config, deme_id)
         return 0
 
     with pytest.raises(TypeError, match="exactly one parameter"):
-        pop.update().hooks(legacy, event="first")
+        _build("s4x_reject_state", hook_calls=[((legacy,), {"event": "first"})])
 
-    assert pop.get_compiled_hooks() == []  # nothing registered
+    # A clean build of the same shape stays usable.
+    pop = _build("s4x_reject_state_clean")
+    assert pop.get_compiled_hooks() == []  # nothing declared
     assert pop.params_log == ()
     pop.run(n_steps=1)  # the population stays usable
     assert pop.tick == 1
@@ -543,13 +543,16 @@ def test_op_identity_dedup_across_build_and_runtime() -> None:
     """
     op = Op.add(genotypes="WT|WT", ages=0, sex="male", delta=7.0)
     op.event = "first"
-    pop = _build("s4x_dedup", hooks=[op])  # build-time registration
-
-    pop.update().hooks(op, event="first")  # runtime re-registrations
-    pop.update().hooks(op)
-
     distinct = Op.add(genotypes="Dr|Dr", ages=0, sex="both", delta=5.0)
-    pop.update().hooks(distinct, event="first")
+
+    pop = _build(
+        "s4x_dedup",
+        hooks=[op],  # build-time declaration
+        hook_calls=[
+            ((op,), {"event": "first"}),  # duplicate declaration: deduped
+            ((distinct,), {"event": "first"}),
+        ],
+    )
     assert len(pop.get_compiled_hooks("first")) == 2  # 1 deduped + 1 distinct
 
     # Both ops apply exactly (observed mid-tick, before survival noise):
@@ -572,13 +575,17 @@ def test_op_group_set_then_add_stacks_exactly() -> None:
     path (``current * (target / current)``); the reference expression is
     the bit-exact definition of that arithmetic.
     """
-    pop = _build("s4x_stack")
-    pop.update().hooks(
-        [
-            Op.set_count(genotypes="WT|WT", ages=0, sex="both", value=30.0),
-            Op.add(genotypes="WT|WT", ages=0, sex="both", delta=12.0),
+    pop = _build(
+        "s4x_stack",
+        hook_calls=[
+            (
+                ([
+                    Op.set_count(genotypes="WT|WT", ages=0, sex="both", value=30.0),
+                    Op.add(genotypes="WT|WT", ages=0, sex="both", delta=12.0),
+                ],),
+                {"event": "first"},
+            )
         ],
-        event="first",
     )
     assert len(pop.get_compiled_hooks("first")) == 1  # one group descriptor
 
@@ -600,8 +607,8 @@ def test_op_group_set_then_add_stacks_exactly() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_hooks_entry_bitwise_equals_build_time() -> None:
-    """Registering the same hook set at runtime reproduces the build path."""
+def test_build_hooks_entry_matches_inline_hook_items() -> None:
+    """Declaring the same hook set via .hooks() or hook items agrees bit-for-bit."""
 
     def make_tweak() -> Callable[[TickContext], int]:
         @nt.hook(event="early")
@@ -613,20 +620,23 @@ def test_runtime_hooks_entry_bitwise_equals_build_time() -> None:
 
     op_build = Op.set_count(genotypes="Dr|Dr", ages=0, sex="male", value=11.0)
     op_build.event = "first"
+    op_inline = Op.set_count(genotypes="Dr|Dr", ages=0, sex="male", value=11.0)
+    op_inline.event = "first"
+
     pa = _build(
         "s4x_rt_a",
         hooks=[make_tweak(), op_build],
     )
-    pb = _build("s4x_rt_b")
-    op_runtime = Op.set_count(genotypes="Dr|Dr", ages=0, sex="male", value=11.0)
-    pb.update().hooks(make_tweak())
-    pb.update().hooks(op_runtime, event="first")
+    pb = _build(
+        "s4x_rt_b",
+        hook_calls=[((make_tweak(), op_inline), {"event": "first"})],
+    )
 
     pa.run(n_steps=3)
     pb.run(n_steps=3)
 
     assert np.array_equal(pa.state.individual_count, pb.state.individual_count), (
-        "runtime registration must be bitwise-equivalent to build time"
+        "both declaration spellings must be bitwise-equivalent"
     )
 
 
@@ -725,36 +735,39 @@ def test_hook_rng_does_not_touch_numpy_global_stream() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_registration_rejects_invalid_items() -> None:
+def test_declaration_rejects_invalid_items() -> None:
     """Non-Op list entries and unsupported item types raise TypeError."""
-    pop = _build("s4x_bad_items")
-
     with pytest.raises(TypeError, match="only HookOp"):
-        pop.update().hooks(["not-an-op"], event="first")
+        _build("s4x_bad_items_a", hook_calls=[((["not-an-op"],), {"event": "first"})])
 
     with pytest.raises(TypeError, match="Unsupported hook item"):
-        pop.update().hooks(42, event="first")
+        _build("s4x_bad_items_b", hook_calls=[((42,), {"event": "first"})])
 
+    pop = _build("s4x_bad_items_clean")
     assert pop.get_compiled_hooks() == []
 
 
 def test_declarative_op_without_event_defaults_to_early() -> None:
-    """A bare Op with no event registers at the documented ``early`` default."""
-    pop = _build("s4x_op_no_event")
-
-    pop.update().hooks(Op.set_count(genotypes="WT|WT", ages=0, value=1.0))
+    """A bare Op with no event declares at the documented ``early`` default."""
+    pop = _build(
+        "s4x_op_no_event",
+        hook_calls=[((Op.set_count(genotypes="WT|WT", ages=0, value=1.0),), {})],
+    )
     descs = pop.get_compiled_hooks()
     assert len(descs) == 1
     assert descs[0].event == "early"
 
 
-def test_registration_event_overrides_op_early_default() -> None:
-    """An explicit registration-level event wins over the early default."""
-    pop = _build("s4x_op_event_override")
-
-    pop.update().hooks(
-        Op.set_param("carrying_capacity", "K * 0.95", every=10),
-        event="late",
+def test_declaration_event_overrides_op_early_default() -> None:
+    """An explicit declaration-level event wins over the early default."""
+    pop = _build(
+        "s4x_op_event_override",
+        hook_calls=[
+            (
+                (Op.set_param("carrying_capacity", "K * 0.95", every=10),),
+                {"event": "late"},
+            )
+        ],
     )
     descs = pop.get_compiled_hooks()
     assert len(descs) == 1
@@ -763,39 +776,39 @@ def test_registration_event_overrides_op_early_default() -> None:
 
 def test_meta_object_without_register_rejected() -> None:
     """An object carrying hook meta must expose register()."""
-    pop = _build("s4x_meta_no_register")
-
     class FakeDecorated:
         meta = {"event": "first"}
 
         def __call__(self) -> int:  # pragma: no cover - must not be reached
-            raise AssertionError("registration must reject before calling")
+            raise AssertionError("declaration must reject before calling")
 
     with pytest.raises(TypeError, match="expose register"):
-        pop.update().hooks(FakeDecorated())
+        _build("s4x_meta_no_register", hook_calls=[((FakeDecorated(),), {})])
 
 
 def test_plain_callable_without_event_rejected() -> None:
     """A plain single-parameter callable needs an explicit event."""
-    pop = _build("s4x_plain_no_event")
-
     def cb(pop: TickContext) -> int:
         _ = pop
         return 0
 
     with pytest.raises(ValueError, match="No event specified"):
-        pop.update().hooks(cb)
+        _build("s4x_plain_no_event", hook_calls=[((cb,), {})])
 
 
 def test_op_group_dedup_by_tuple_identity() -> None:
-    """Registering the same op list twice yields one group descriptor."""
-    pop = _build("s4x_group_dedup")
+    """Declaring the same op list twice yields one group descriptor."""
     group = [
         Op.set_count(genotypes="WT|WT", ages=0, sex="both", value=5.0),
         Op.add(genotypes="Dr|Dr", ages=0, sex="both", delta=1.0),
     ]
-    pop.update().hooks(group, event="first")
-    pop.update().hooks(list(group), event="first")  # same op objects, new list
+    pop = _build(
+        "s4x_group_dedup",
+        hook_calls=[
+            ((group,), {"event": "first"}),
+            ((list(group),), {"event": "first"}),  # same op objects, new list
+        ],
+    )
 
     assert len(pop.get_compiled_hooks("first")) == 1
 
@@ -820,8 +833,7 @@ def test_has_python_hooks_alias_agrees() -> None:
         _ = pop
         return 0
 
-    pop = _build("s4x_alias_cb")
-    pop.update().hooks(cb)
+    pop = _build("s4x_alias_cb", hooks=[cb])
     assert pop.has_python_callbacks() is True
     assert pop.has_python_hooks() is True
 
@@ -848,12 +860,11 @@ def test_deme_selector_serialization_and_panmictic_filter() -> None:
 
         return cb
 
-    pop = _build("s4x_deme_sel")
-    before = pop.state.individual_count.copy()
     selectors: list[object] = [2, range(0, 2), [1, 3]]
+    descriptors: list["nt.hooks.CompiledHookDescriptor"] = []
     for idx, sel in enumerate(selectors):
         cb = make_cb(f"t{idx}")
-        pop.register_compiled_hook(
+        descriptors.append(
             nt.hooks.CompiledHookDescriptor(
                 name=f"sel_{idx}",
                 event="first",
@@ -863,8 +874,21 @@ def test_deme_selector_serialization_and_panmictic_filter() -> None:
             )
         )
 
+    # Inject through the same internal channel clones travel through.
+    species = nt.Species.from_dict(
+        name="s4x_deme_sel_inject", structure={"chr1": {"loc": ["WT", "Dr"]}}
+    )
+    template = _build("s4x_deme_sel")
+    pop = type(template)(
+        species=template.species,
+        population_config=template.config,
+        name="s4x_deme_sel",
+        hook_descriptors=descriptors,
+    )
+    before = pop.state.individual_count.copy()
+
     # All three selector shapes landed in the CSR program (types 1/2/3).
-    types = pop._run_program.hooks.deme_selector_types.tolist()
+    types = pop._hook_program.deme_selector_types.tolist()
     assert sorted(t for t in types if t != 0) == [1, 2, 3]
 
     # Deme 5 matches no selector: no marker applied.

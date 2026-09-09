@@ -57,7 +57,6 @@ def test_samplers_support_limits_and_invalid_arguments(model: Literal["age", "di
 @pytest.mark.parametrize("model", ["age", "discrete"])
 def test_prior_callback_commit_survives_later_failure(model: Literal["age", "discrete"]) -> None:
     """Each callback commits independently, including genetic/custom candidates."""
-    pop = _population(f"EarlierCallback_{model}", model, stochastic=False)
     def commit(ctx: TickContext) -> int:
         ctx.params.tensor_write("viability_fitness", np.full_like(ctx.params.viability_fitness.array, .5))
         ctx.update().custom(marker=31)
@@ -66,8 +65,12 @@ def test_prior_callback_commit_survives_later_failure(model: Literal["age", "dis
         ctx.params.tensor_write("viability_fitness", np.full_like(ctx.params.viability_fitness.array, .2))
         ctx.update().custom(marker=99)
         raise ValueError("later callback")
-    pop.register_hooks(commit, event="first")
-    pop.register_hooks(fail, event="first")
+    pop = _population(
+        f"EarlierCallback_{model}",
+        model,
+        stochastic=False,
+        hook_calls=[((commit,), {"event": "first"}), ((fail,), {"event": "first"})],
+    )
     with pytest.raises(ValueError, match="later callback"):
         pop.run(1)
     np.testing.assert_array_equal(pop.params.viability_fitness.array, .5)
@@ -176,13 +179,16 @@ def test_direct_age_constructor_tuple_sperm_and_lazy_session() -> None:
 @pytest.mark.parametrize("model", ["age", "discrete"])
 def test_reentrant_run_rejected_without_partial_callback_commit(model: Literal["age", "discrete"]) -> None:
     """A callback cannot borrow its own running native session through run()."""
-    pop = _population(f"Reentrant_{model}", model)
+    holder: dict[str, object] = {}
     def callback(ctx: TickContext) -> int:
         with pytest.raises(RuntimeError):
-            pop.run(1)
+            holder["pop"].run(1)
         ctx.update().custom(reentrant_rejected=True)
         return 0
-    pop.register_hooks(callback, event="first")
+    pop = _population(
+        f"Reentrant_{model}", model, hook_calls=[((callback,), {"event": "first"})]
+    )
+    holder["pop"] = pop
     pop.run(1)
     assert pop.tick == 1
     assert pop.config.custom["reentrant_rejected"] is True
@@ -210,8 +216,17 @@ def test_spatial_range_selector_matches_exact_demes() -> None:
     """A range selector updates only its selected native ecology columns."""
     from natal.frontend.hooks import Op
     from tests.test_spatial_session_ownership import _build
-    pop = _build("RangeSelector", 9, n_demes=3, stochastic=False, rate=0)
-    pop.register_hooks([Op.set_param("carrying_capacity", 321.0)], event="first", deme=range(1, 3))
+    deme_op = Op.set_param("carrying_capacity", 321.0)
+    deme_op.event = "first"
+    deme_op.every = 1
+    pop = _build(
+        "RangeSelector",
+        9,
+        n_demes=3,
+        stochastic=False,
+        rate=0,
+        hook_calls=[((deme_op,), {"deme": range(1, 3)})],
+    )
     pop.run(1, record_every=0)
     np.testing.assert_array_equal(pop.params.carrying_capacity, [100000, 321, 321])
 
@@ -247,14 +262,18 @@ def test_spatial_custom_values_restore_each_deme_independently() -> None:
 @pytest.mark.parametrize("model", ["age", "discrete"])
 def test_external_parameter_handle_cannot_bypass_callback_transaction(model: Literal["age", "discrete"]) -> None:
     """A preexisting population writer cannot mutate the borrowed native owner."""
-    pop = _population(f"ExternalParameterGuard_{model}", model)
-    external = pop.params
+    holder = {}
     def callback(ctx: TickContext) -> int:
         with pytest.raises(RuntimeError, match="External parameter writes"):
-            external.carrying_capacity = 99.0
+            holder["external"].carrying_capacity = 99.0
         assert ctx.params.carrying_capacity == 100000.0
         return 0
-    pop.register_hooks(callback, event="first")
+    pop = _population(
+        f"ExternalParameterGuard_{model}",
+        model,
+        hook_calls=[((callback,), {"event": "first"})],
+    )
+    holder["external"] = pop.params
     pop.run(1)
     assert pop.params.carrying_capacity == 100000.0
 
@@ -262,13 +281,21 @@ def test_external_parameter_handle_cannot_bypass_callback_transaction(model: Lit
 def test_spatial_reentrant_and_failed_run_guards() -> None:
     """Nested runs fail before borrowing state; callback errors require recovery."""
     from tests.test_spatial_session_ownership import _build
-    pop = _build("SpatialExecutionGuards", 11, n_demes=2, stochastic=False, rate=0)
+    holder = {}
     def callback(ctx: TickContext) -> int:
         with pytest.raises(RuntimeError, match="Nested run"):
-            pop.run(1)
+            holder["pop"].run(1)
         ctx.update().custom(uncommitted=True)
         raise ValueError("spatial callback failure")
-    pop.register_hooks(callback, event="first")
+    pop = _build(
+        "SpatialExecutionGuards",
+        11,
+        n_demes=2,
+        stochastic=False,
+        rate=0,
+        hook_calls=[((callback,), {"event": "first"})],
+    )
+    holder["pop"] = pop
     with pytest.raises(ValueError, match="spatial callback failure"):
         pop.run(1)
     with pytest.raises(RuntimeError, match="failed"):
@@ -337,13 +364,19 @@ def test_native_tick_cannot_resume_stopped_session(model: Literal["age", "discre
 def test_native_spatial_explicit_callback_commits_and_preserves_original_error() -> None:
     """Manual events use transactions and native failure status without a run."""
     from tests.test_spatial_session_ownership import _build
-    pop = _build("SpatialManualTransaction", 17, n_demes=2, stochastic=False, rate=0)
-    before = pop.demes[1].state.individual_count.copy()
     def commit(ctx: TickContext) -> int:
         ctx.state.individual_count[0, 1, 0] += 7
         ctx.params.tensor_write("viability_fitness", np.full_like(ctx.params.viability_fitness.array, .4))
         return 0
-    pop.register_hooks(commit, event="first")
+    pop = _build(
+        "SpatialManualTransaction",
+        17,
+        n_demes=2,
+        stochastic=False,
+        rate=0,
+        hook_calls=[((commit,), {"event": "first"})],
+    )
+    before = pop.demes[1].state.individual_count.copy()
     pop.trigger_event("first", deme_id=1)
     after = before.copy()
     after[0, 1, 0] += 7
@@ -501,14 +534,18 @@ def test_unbound_native_batch_checkpoints_replay_state_rng_and_ecology(model: st
 @pytest.mark.parametrize("event,phase", [("early", 2), ("late", 4)])
 def test_discrete_later_callback_failure_preserves_committed_boundary(event: str, phase: int) -> None:
     """A failing early/late callback retains the preceding stage, never its writes."""
-    pop = _population(f"LaterFailure_{event}", "discrete", stochastic=False)
     before: list[np.ndarray] = []
     def fail(ctx: TickContext) -> int:
         before.append(ctx.state.individual_count.copy())
         ctx.state.individual_count[:] = 0
         ctx.params.carrying_capacity = 31
         raise LookupError("later event failure")
-    pop.register_hooks(fail, event=event)
+    pop = _population(
+        f"LaterFailure_{event}",
+        "discrete",
+        stochastic=False,
+        hook_calls=[((fail,), {"event": event})],
+    )
     with pytest.raises(LookupError, match="later event failure"):
         pop.run(1)
     native = pop._rust_lifecycle_backend._session
@@ -521,7 +558,6 @@ def test_discrete_later_callback_failure_preserves_committed_boundary(event: str
 def test_callbacks_materialize_parameters_only_when_requested(access: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """State, counters and persistent RNG need no Python parameter projection."""
     import natal.backends.rust.rust_backend as backend_module
-    pop = _population(f"LazyParameter_{access}", "discrete", stochastic=False)
     original_snapshot = backend_module.config_snapshot_from_session
     projected: list[int] = []
     def snapshot(session: object, draft: object) -> object:
@@ -539,7 +575,12 @@ def test_callbacks_materialize_parameters_only_when_requested(access: str, monke
         elif access == "metrics":
             assert ctx.metrics.total == 200.
         return 0
-    pop.register_hooks(callback, event="first")
+    pop = _population(
+        f"LazyParameter_{access}",
+        "discrete",
+        stochastic=False,
+        hook_calls=[((callback,), {"event": "first"})],
+    )
     pop.run(1)
     assert visits == [0]
     assert projected == []
@@ -759,13 +800,15 @@ def test_import_rejected_by_native_does_not_publish_python_candidate(model: str,
 def test_discrete_spatial_callback_genetics_commit_survives_following_ticks() -> None:
     """An early callback's zero viability kills only its isolated deme's recruits."""
     from tests.test_spatial_update import _build_two_allele_discrete
-    pop = _build_two_allele_discrete("SpatialDiscreteCandidate")
-    control = _build_two_allele_discrete("SpatialDiscreteCandidateControl")
     def remove_recruits(ctx: TickContext) -> int:
         if ctx.tick == 0:
             ctx.params.tensor_write("viability_fitness", np.zeros_like(ctx.params.viability_fitness.array))
         return 0
-    pop.register_hooks(remove_recruits, event="early", deme=1)
+    pop = _build_two_allele_discrete(
+        "SpatialDiscreteCandidate",
+        hook_calls=[((remove_recruits,), {"event": "early", "deme": 1})],
+    )
+    control = _build_two_allele_discrete("SpatialDiscreteCandidateControl")
     for _ in range(2):
         pop.run(1)
         control.run(1)

@@ -88,11 +88,22 @@ def _build_age_structured(
     *,
     carrying_capacity: float = 800.0,
     sperm: Optional[dict] = None,
+    hook_calls: Optional[List] = None,
 ) -> AgeStructuredPopulation:
-    """Build a deterministic age-structured population with sperm storage."""
+    """Build a deterministic age-structured population with sperm storage.
+
+    Args:
+        species: Genetic architecture.
+        name: Population name.
+        carrying_capacity: Declared capacity.
+        sperm: Initial sperm buckets.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the build chain (hook plans compile once at
+            ``build()``).
+    """
     if sperm is None:
         sperm = {"A|A": {"A|A": 3, "A|a": 3}}
-    return (
+    chain = (
         Configurator.from_species(species)
         .age_structure(3, 1)
         .setup(stochastic=False, name=name)
@@ -104,8 +115,10 @@ def _build_age_structured(
             sperm_storage=sperm,
         )
         .competition(juvenile_growth_mode=1, carrying_capacity=carrying_capacity)
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        chain = chain.hooks(*items, **kwargs)
+    return chain.build()
 
 
 def _mirror_convert_row(
@@ -184,12 +197,12 @@ def test_rpn_unary_minus_rejected(expr: str) -> None:
     simulation rejects with ``ValueError`` before anything is registered.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, f"unary{abs(hash(expr)) % 10000}")
     with pytest.raises(ValueError):
-        pop.register_hooks(
-            [Op.set_param("carrying_capacity", expr)], event="early"
+        _build_age_structured(
+            species,
+            f"unary{abs(hash(expr)) % 10000}",
+            hook_calls=[(([Op.set_param("carrying_capacity", expr)],), {"event": "early"})],
         )
-    assert len(pop.compiled_hook_descriptors) == 0
 
 
 @pytest.mark.parametrize(
@@ -199,12 +212,12 @@ def test_rpn_unary_minus_rejected(expr: str) -> None:
 def test_rpn_parenthesis_errors_rejected(expr: str) -> None:
     """Unbalanced or empty parentheses fail at compile with no registration."""
     species = _fresh_species()
-    pop = _build_age_structured(species, f"paren{abs(hash(expr)) % 10000}")
     with pytest.raises(ValueError):
-        pop.register_hooks(
-            [Op.set_param("carrying_capacity", expr)], event="early"
+        _build_age_structured(
+            species,
+            f"paren{abs(hash(expr)) % 10000}",
+            hook_calls=[(([Op.set_param("carrying_capacity", expr)],), {"event": "early"})],
         )
-    assert len(pop.compiled_hook_descriptors) == 0
 
 
 @pytest.mark.parametrize(
@@ -214,22 +227,23 @@ def test_rpn_parenthesis_errors_rejected(expr: str) -> None:
 def test_rpn_juxtaposition_and_operator_runs_rejected(expr: str) -> None:
     """Two operands or two operators in a row yield depth != 1 → ValueError."""
     species = _fresh_species()
-    pop = _build_age_structured(species, f"juxt{abs(hash(expr)) % 10000}")
     with pytest.raises(ValueError):
-        pop.register_hooks(
-            [Op.set_param("carrying_capacity", expr)], event="early"
+        _build_age_structured(
+            species,
+            f"juxt{abs(hash(expr)) % 10000}",
+            hook_calls=[(([Op.set_param("carrying_capacity", expr)],), {"event": "early"})],
         )
-    assert len(pop.compiled_hook_descriptors) == 0
 
 
 @pytest.mark.parametrize("expr", ["", "   "])
 def test_rpn_blank_expression_rejected(expr: str) -> None:
     """Empty (or whitespace-only) expressions never reach the runtime."""
     species = _fresh_species()
-    pop = _build_age_structured(species, "blank")
     with pytest.raises(ValueError, match="empty"):
-        pop.register_hooks(
-            [Op.set_param("carrying_capacity", expr)], event="early"
+        _build_age_structured(
+            species,
+            "blank",
+            hook_calls=[(([Op.set_param("carrying_capacity", expr)],), {"event": "early"})],
         )
 
 
@@ -249,10 +263,11 @@ def test_rpn_tensor_and_vector_operands_rejected(expr: str, message: str) -> Non
     RPN stack machine has 0-d scalar slots only.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, f"operand{abs(hash(expr)) % 10000}")
     with pytest.raises(ValueError, match=message):
-        pop.register_hooks(
-            [Op.set_param("carrying_capacity", expr)], event="early"
+        _build_age_structured(
+            species,
+            f"operand{abs(hash(expr)) % 10000}",
+            hook_calls=[(([Op.set_param("carrying_capacity", expr)],), {"event": "early"})],
         )
 
 
@@ -263,22 +278,23 @@ def test_rpn_unknown_identifier_in_long_expression_rejected() -> None:
     the bogus identifier wherever it appears, and nothing is registered.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "longbad")
     long_expr = "K" + " + 1" * 199 + " + bogus"
     with pytest.raises(ValueError, match="bogus"):
-        pop.register_hooks(
-            [Op.set_param("carrying_capacity", long_expr)], event="early"
+        _build_age_structured(
+            species,
+            "longbad",
+            hook_calls=[(([Op.set_param("carrying_capacity", long_expr)],), {"event": "early"})],
         )
-    assert len(pop.compiled_hook_descriptors) == 0
 
 
 def test_rpn_long_operator_run_rejected() -> None:
     """A 200-operator run cannot produce a depth-1 program → ValueError."""
     species = _fresh_species()
-    pop = _build_age_structured(species, "longops")
     with pytest.raises(ValueError):
-        pop.register_hooks(
-            [Op.set_param("carrying_capacity", "K" + " +" * 200)], event="early"
+        _build_age_structured(
+            species,
+            "longops",
+            hook_calls=[(([Op.set_param("carrying_capacity", "K" + " +" * 200)],), {"event": "early"})],
         )
 
 
@@ -291,30 +307,43 @@ def test_rpn_division_by_zero_literals_compile(expr: str) -> None:
     branch and locked separately at the kernel level.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, f"div0c{abs(hash(expr)) % 10000}")
-    pop.register_hooks([Op.set_param("carrying_capacity", expr)], event="early")
+    pop = _build_age_structured(
+        species,
+        f"div0c{abs(hash(expr)) % 10000}",
+        hook_calls=[(([Op.set_param("carrying_capacity", expr)],), {"event": "early"})],
+    )
     assert len(pop.compiled_hook_descriptors) == 1
 
 
-def test_failed_op_group_registration_is_atomic() -> None:
-    """One bad op rejects the whole group — zero descriptors, zero writes."""
+def test_failed_op_group_declaration_is_atomic() -> None:
+    """One bad op rejects the whole group — the build fails as a whole.
+
+    Build-time compilation is atomic per group: a malformed op raises out
+    of ``build()``, so no partially compiled plan is ever installed.  A
+    control build without the bad group compiles, runs, and stays
+    untouched.
+    """
     species = _fresh_species()
-    pop = _build_age_structured(species, "atomic")
     with pytest.raises(ValueError):
-        pop.register_hooks(
-            [
-                Op.set_param("carrying_capacity", "K * 0.5"),
-                Op.set_param("carrying_capacity", "K + +"),
-                Op.convert("A|A", "A|a", probability=0.25),
+        _build_age_structured(
+            species,
+            "atomic",
+            hook_calls=[
+                (
+                    ([
+                        Op.set_param("carrying_capacity", "K * 0.5"),
+                        Op.set_param("carrying_capacity", "K + +"),
+                        Op.convert("A|A", "A|a", probability=0.25),
+                    ],),
+                    {"event": "early"},
+                )
             ],
-            event="early",
         )
-    assert len(pop.compiled_hook_descriptors) == 0
-    assert pop._run_program.hooks.n_hooks == 0  # noqa: SLF001 — contract lock
-    # The population stays runnable and untouched.
-    pop.run(1, record_every=0)
-    assert pop.params.carrying_capacity == 800.0
-    assert pop.params_log == ()
+    # A clean build stays runnable and untouched.
+    control = _build_age_structured(_fresh_species(), "atomic_control")
+    control.run(1, record_every=0)
+    assert control.params.carrying_capacity == 800.0
+    assert control.params_log == ()
 
 
 # ---------------------------------------------------------------------------
@@ -354,11 +383,11 @@ def test_rpn_expression_matrix_bitwise_vs_python(
     eggs, ratio = values
     species = _fresh_species()
     pop = _build_age_structured(
-        species, f"matrix{abs(hash(expr + str(values))) % 10000}"
+        species, f"matrix{abs(hash(expr + str(values))) % 10000}",
+        hook_calls=[([Op.set_param("carrying_capacity", expr)], {"event": "early"})],
     )
     pop.params.eggs_per_female = eggs
     pop.params.sex_ratio = ratio
-    pop.register_hooks([Op.set_param("carrying_capacity", expr)], event="early")
     pop.trigger_event("early")
     assert pop.params.carrying_capacity == mirror(eggs, ratio)
 
@@ -374,9 +403,10 @@ def test_rpn_inf_result_crashes_at_write_channel_bounds() -> None:
     channel for bounded parameters.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "infcrash")
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", "K / 0")], event="early"
+    pop = _build_age_structured(
+        species,
+        "infcrash",
+        hook_calls=[(([Op.set_param("carrying_capacity", "K / 0")],), {"event": "early"})],
     )
     with pytest.raises(ValueError, match="carrying_capacity"):
         pop.run(1, record_every=0)
@@ -390,9 +420,10 @@ def test_rpn_long_expressions_compile_and_evaluate_bitwise() -> None:
     loop performing the same operations in the same order.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "longok")
     expr = "K" + " + 1" * 400
-    pop.register_hooks([Op.set_param("eggs_per_female", expr)], event="early")
+    pop = _build_age_structured(species, "longok",
+        hook_calls=[(([Op.set_param("eggs_per_female", expr)],), {"event": "early"})],
+    )
     pop.trigger_event("early")
     expected = 800.0
     for _ in range(400):
@@ -400,10 +431,9 @@ def test_rpn_long_expressions_compile_and_evaluate_bitwise() -> None:
     assert pop.params.eggs_per_female == expected
 
     species = _fresh_species()
-    pop = _build_age_structured(species, "deepparen")
     expr = "(" * 60 + "K * 0.5" + ")" * 60
-    pop.register_hooks(
-        [Op.set_param("eggs_per_female", expr)], event="early"
+    pop = _build_age_structured(species, "deepparen",
+        hook_calls=[(([Op.set_param("eggs_per_female", expr)],), {"event": "early"})],
     )
     pop.trigger_event("early")
     assert pop.params.eggs_per_female == 800.0 * 0.5
@@ -417,9 +447,8 @@ def test_rpn_chained_self_reference_every_tick_bitwise() -> None:
     the per-fire evaluation order.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "compound")
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", "K * 0.9", every=1)], event="early"
+    pop = _build_age_structured(species, "compound",
+        hook_calls=[([Op.set_param("carrying_capacity", "K * 0.9", every=1)], {"event": "early"})],
     )
     k_manual = 800.0
     for tick in range(12):
@@ -437,13 +466,11 @@ def test_rpn_cross_param_chain_within_one_tick() -> None:
     regression lock in Section X covers separately).
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "crossparam")
-    pop.register_hooks(
-        [
+    pop = _build_age_structured(species, "crossparam",
+        hook_calls=[([
             Op.set_param("eggs_per_female", "eggs_per_female * 2.0"),
             Op.set_param("carrying_capacity", "eggs_per_female * sex_ratio"),
-        ],
-        event="early",
+        ], {"event": "early"})],
     )
     pop.trigger_event("early")
     # eggs doubled first (100 -> 200), then K = 200 * 0.5 in the same tick.
@@ -454,18 +481,15 @@ def test_rpn_cross_param_chain_within_one_tick() -> None:
 def test_set_param_alias_target_and_operand() -> None:
     """Aliases (``K``, ``expected_eggs_per_female``) resolve on both sides."""
     species = _fresh_species()
-    pop = _build_age_structured(species, "alias1")
-    pop.register_hooks(
-        [Op.set_param("K", "K * 2.0")], event="early"
+    pop = _build_age_structured(species, "alias1",
+        hook_calls=[([Op.set_param("K", "K * 2.0")], {"event": "early"})],
     )
     pop.trigger_event("early")
     assert pop.params.carrying_capacity == 1600.0
 
     species = _fresh_species()
-    pop = _build_age_structured(species, "alias2")
-    pop.register_hooks(
-        [Op.set_param("eggs_per_female", "expected_eggs_per_female + 5.0")],
-        event="early",
+    pop = _build_age_structured(species, "alias2",
+        hook_calls=[([Op.set_param("eggs_per_female", "expected_eggs_per_female + 5.0")], {"event": "early"})],
     )
     pop.trigger_event("early")
     assert pop.params.eggs_per_female == 105.0
@@ -479,10 +503,8 @@ def test_set_param_alias_target_and_operand() -> None:
 def test_schedule_start3_every5_fires_exactly_at_3_8_13() -> None:
     """``tick >= start and (tick - start) % every == 0`` → fires 3, 8, 13."""
     species = _fresh_species()
-    pop = _build_age_structured(species, "sched35813")
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", "K * 0.5", every=5, start=3)],
-        event="early",
+    pop = _build_age_structured(species, "sched35813",
+        hook_calls=[([Op.set_param("carrying_capacity", "K * 0.5", every=5, start=3)], {"event": "early"})],
     )
     pop.run(15, record_every=0)
 
@@ -499,14 +521,12 @@ def test_schedule_start3_every5_fires_exactly_at_3_8_13() -> None:
 def test_schedule_when_clause_ands_with_schedule() -> None:
     """The ``when`` RPN gates firing on top of the every/start schedule."""
     species = _fresh_species()
-    pop = _build_age_structured(species, "whenand")
-    pop.register_hooks(
-        [
+    pop = _build_age_structured(species, "whenand",
+        hook_calls=[([
             Op.set_param(
                 "carrying_capacity", "K * 0.5", every=1, when="tick < 3"
             )
-        ],
-        event="early",
+        ], {"event": "early"})],
     )
     k_manual = 800.0
     for tick in range(6):
@@ -526,13 +546,11 @@ def test_same_plan_two_set_param_ops_last_declaration_wins() -> None:
     literal-bearing follower expressions).
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "lastwins")
-    pop.register_hooks(
-        [
+    pop = _build_age_structured(species, "lastwins",
+        hook_calls=[([
             Op.set_param("carrying_capacity", 111.0),
             Op.set_param("carrying_capacity", "eggs_per_female"),
-        ],
-        event="early",
+        ], {"event": "early"})],
     )
     pop.trigger_event("early")
     assert pop.params.carrying_capacity == 100.0  # eggs default, not 111.0
@@ -550,15 +568,10 @@ def test_set_param_priority_chain_across_descriptors_sees_earlier_write() -> Non
     final event commit. Intermediate scratch writes are coalesced in the log.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "prioconstfirst")
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", 999.0)], event="early", priority=0, name="w"
-    )
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", "K * 0.5")],
-        event="early",
-        priority=1,
-        name="m",
+    pop = _build_age_structured(species, "prioconstfirst",
+        hook_calls=[([Op.set_param("carrying_capacity", 999.0)], {"event": "early", "priority": 0, "name": "w"}),
+        ([Op.set_param("carrying_capacity", "K * 0.5")], {"event": "early", "priority": 1, "name": "m"}),
+    ],
     )
     pop.trigger_event("early")
     assert pop.params_log == (
@@ -567,15 +580,13 @@ def test_set_param_priority_chain_across_descriptors_sees_earlier_write() -> Non
     assert pop.params.carrying_capacity == 999.0 * 0.5
 
     species = _fresh_species()
-    pop = _build_age_structured(species, "priomultfirst")
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", 999.0)], event="early", priority=1, name="w"
-    )
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", "K * 0.5")],
-        event="early",
-        priority=0,
-        name="m",
+    pop = _build_age_structured(
+        species,
+        "priomultfirst",
+        hook_calls=[
+            (([Op.set_param("carrying_capacity", 999.0)],), {"event": "early", "priority": 1, "name": "w"}),
+            (([Op.set_param("carrying_capacity", "K * 0.5")],), {"event": "early", "priority": 0, "name": "m"}),
+        ],
     )
     pop.trigger_event("early")
     assert pop.params_log == (
@@ -591,10 +602,8 @@ def test_set_param_first_event_boundary_schedule() -> None:
     schedule check is event-boundary agnostic, not early-specific.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "firstevent")
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", "K * 0.5", every=2, event="first")],
-        event="first",
+    pop = _build_age_structured(species, "firstevent",
+        hook_calls=[([Op.set_param("carrying_capacity", "K * 0.5", every=2, event="first")], {"event": "first"})],
     )
     pop.run(6, record_every=0)
     k = 800.0
@@ -650,15 +659,13 @@ def test_convert_nontrivial_three_bucket_matrix_deterministic_exact() -> None:
         species,
         "threebucket",
         sperm={"A|A": {"A|A": 12.0, "A|a": 8.0, "a|a": 4.0}},
+        hook_calls=[([Op.convert("A|A", "A|a", probability=0.25)], {"event": "early"})],
     )
     # 40 females per adult row: virgins = 40 - 24 = 16 per row.
     _overwrite_adult_rows(pop, female_aa=40.0, male_aa=20.0, zero_female_aax=False)
 
     ind_before = pop.state.individual_count.copy()
     sperm_before = pop.state.sperm_storage.copy()
-    pop.register_hooks(
-        [Op.convert("A|A", "A|a", probability=0.25)], event="early"
-    )
     pop.trigger_event("early")
     ind = pop.state.individual_count
     sperm = pop.state.sperm_storage
@@ -698,16 +705,12 @@ def test_convert_three_way_split_chain_exact() -> None:
         species,
         "threeway",
         sperm={"A|A": {"A|A": 12.0, "A|a": 8.0, "a|a": 4.0}},
-    )
-    _overwrite_adult_rows(pop, female_aa=40.0, male_aa=20.0, zero_female_aax=False)
-
-    pop.register_hooks(
-        [
+        hook_calls=[([
             Op.convert("A|A", "A|a", probability=0.3),
             Op.convert("A|A", "a|a", probability=0.5),
-        ],
-        event="early",
+        ], {"event": "early"})],
     )
+    _overwrite_adult_rows(pop, female_aa=40.0, male_aa=20.0, zero_female_aax=False)
     pop.trigger_event("early")
     ind = pop.state.individual_count
     sperm = pop.state.sperm_storage
@@ -752,16 +755,12 @@ def test_convert_relay_chain_declaration_order_visible() -> None:
         species,
         "relay",
         sperm={"A|A": {"A|A": 6.0, "A|a": 4.0, "a|a": 2.0}},
-    )
-    _overwrite_adult_rows(pop, female_aa=40.0, male_aa=20.0, zero_female_aax=True)
-
-    pop.register_hooks(
-        [
+        hook_calls=[([
             Op.convert("A|A", "A|a", probability=0.5),
             Op.convert("A|a", "a|a", probability=0.5),
-        ],
-        event="early",
+        ], {"event": "early"})],
     )
+    _overwrite_adult_rows(pop, female_aa=40.0, male_aa=20.0, zero_female_aax=True)
     pop.trigger_event("early")
     ind = pop.state.individual_count
     sperm = pop.state.sperm_storage
@@ -787,15 +786,12 @@ def test_convert_relay_chain_declaration_order_visible() -> None:
         species,
         "relayrev",
         sperm={"A|A": {"A|A": 6.0, "A|a": 4.0, "a|a": 2.0}},
-    )
-    _overwrite_adult_rows(pop2, female_aa=40.0, male_aa=20.0, zero_female_aax=True)
-    pop2.register_hooks(
-        [
+        hook_calls=[([
             Op.convert("A|a", "a|a", probability=0.5),
             Op.convert("A|A", "A|a", probability=0.5),
-        ],
-        event="early",
+        ], {"event": "early"})],
     )
+    _overwrite_adult_rows(pop2, female_aa=40.0, male_aa=20.0, zero_female_aax=True)
     pop2.trigger_event("early")
     ind2 = pop2.state.individual_count
     for age in range(1, 3):
@@ -810,20 +806,18 @@ def test_convert_relay_chain_declaration_order_visible() -> None:
 def test_convert_probability_boundaries_zero_and_one() -> None:
     """p=0 leaves the state bit-identical; p=1 empties the source row."""
     species = _fresh_species()
-    pop = _build_age_structured(species, "pzero")
+    pop = _build_age_structured(species, "pzero",
+        hook_calls=[([Op.convert("A|A", "A|a", probability=0.0)], {"event": "early"})],
+    )
     before = pop.state.individual_count.copy()
     sperm_before = pop.state.sperm_storage.copy()
-    pop.register_hooks(
-        [Op.convert("A|A", "A|a", probability=0.0)], event="early"
-    )
     pop.trigger_event("early")
     np.testing.assert_array_equal(pop.state.individual_count, before)
     np.testing.assert_array_equal(pop.state.sperm_storage, sperm_before)
 
     species = _fresh_species()
-    pop = _build_age_structured(species, "pone")
-    pop.register_hooks(
-        [Op.convert("A|A", "A|a", probability=1.0)], event="early"
+    pop = _build_age_structured(species, "pone",
+        hook_calls=[([Op.convert("A|A", "A|a", probability=1.0)], {"event": "early"})],
     )
     pop.trigger_event("early")
     ind = pop.state.individual_count
@@ -856,26 +850,31 @@ def test_convert_probability_boundaries_zero_and_one() -> None:
 def test_convert_zero_match_target_raises() -> None:
     """A target pattern matching no ZType fails at compile time."""
     species = _fresh_species()
-    pop = _build_age_structured(species, "zero_dst")
     with pytest.raises(ValueError, match="target pattern"):
-        pop.register_hooks(
-            [Op.convert("A|A", "Z|Z", probability=0.5)], event="early"
+        _build_age_structured(
+            species,
+            "zero_dst",
+            hook_calls=[(([Op.convert("A|A", "Z|Z", probability=0.5)],), {"event": "early"})],
         )
 
 
-def test_convert_group_registration_atomic_on_bad_op() -> None:
-    """A bad convert in a group rejects the whole registration."""
+def test_convert_group_declaration_atomic_on_bad_op() -> None:
+    """A bad convert in a group rejects the whole declaration (build fails)."""
     species = _fresh_species()
-    pop = _build_age_structured(species, "atomic_conv")
     with pytest.raises(ValueError):
-        pop.register_hooks(
-            [
-                Op.convert("A|A", "A|a", probability=0.25),
-                Op.convert("Z|Z", "A|a", probability=0.25),
+        _build_age_structured(
+            species,
+            "atomic_conv",
+            hook_calls=[
+                (
+                    ([
+                        Op.convert("A|A", "A|a", probability=0.25),
+                        Op.convert("Z|Z", "A|a", probability=0.25),
+                    ],),
+                    {"event": "early"},
+                )
             ],
-            event="early",
         )
-    assert len(pop.compiled_hook_descriptors) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -894,9 +893,8 @@ def test_start1_every2_when_schedule_persists_across_run_calls() -> None:
     every tick.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "addparity_rust")
-    pop.register_hooks(
-        [
+    pop = _build_age_structured(species, "addparity_rust",
+        hook_calls=[([
             Op.set_param(
                 "carrying_capacity",
                 "K * 0.9",
@@ -906,9 +904,7 @@ def test_start1_every2_when_schedule_persists_across_run_calls() -> None:
             ),
             Op.convert("A|A", "A|a", probability=0.25),
             Op.kill(genotypes="A|a", prob=0.1),
-        ],
-        event="early",
-        name="addparity_program",
+        ], {"event": "early", "name": "addparity_program"})],
     )
     pop._initialize_session(seed=11)
     session = pop._rust_lifecycle_backend._session  # noqa: SLF001 — bridge
@@ -931,9 +927,8 @@ def test_start1_every2_when_schedule_persists_across_run_calls() -> None:
 def test_params_log_exact_rows_every2_chained_values() -> None:
     """``every=2`` produces rows exactly on fire ticks with chained values."""
     species = _fresh_species()
-    pop = _build_age_structured(species, "logevery2")
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", "K * 0.9", every=2)], event="early"
+    pop = _build_age_structured(species, "logevery2",
+        hook_calls=[([Op.set_param("carrying_capacity", "K * 0.9", every=2)], {"event": "early"})],
     )
     pop.run(8, record_every=0)
     k = 800.0
@@ -954,9 +949,8 @@ def test_params_log_snapshot_is_an_owned_copy() -> None:
     through a previously returned tuple.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "logown")
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", "K * 0.5", every=1)], event="early"
+    pop = _build_age_structured(species, "logown",
+        hook_calls=[([Op.set_param("carrying_capacity", "K * 0.5", every=1)], {"event": "early"})],
     )
     pop.run(1, record_every=0)
     snapshot = pop.params_log
@@ -976,9 +970,8 @@ def test_schedule_persists_across_run_call_boundaries() -> None:
     value chain — no reset at run boundaries.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "runbounds")
-    pop.register_hooks(
-        [Op.set_param("carrying_capacity", "K * 0.5", every=2)], event="early"
+    pop = _build_age_structured(species, "runbounds",
+        hook_calls=[([Op.set_param("carrying_capacity", "K * 0.5", every=2)], {"event": "early"})],
     )
     pop.run(3, record_every=0)
     pop.run(3, record_every=0)
@@ -1003,17 +996,23 @@ def test_spatial_set_param_selector_writes_only_selected_deme_columns() -> None:
     """
     species = _fresh_species()
 
-    def build_deme(name: str) -> AgeStructuredPopulation:
-        return _build_age_structured(species, name, carrying_capacity=500.0)
+    def build_deme(name: str, *, hooked: bool = False) -> AgeStructuredPopulation:
+        return _build_age_structured(
+            species,
+            name,
+            carrying_capacity=500.0,
+            hook_calls=(
+                [(([Op.set_param("carrying_capacity", 321.0, every=1)],), {"event": "early"})]
+                if hooked
+                else None
+            ),
+        )
 
-    demes = [build_deme(f"addsp_d{d}") for d in range(3)]
+    # Former deme=[0, 2] selector: the write is now declared on the
+    # selected demes' own builds.
+    demes = [build_deme(f"addsp_d{d}", hooked=d in (0, 2)) for d in range(3)]
     spatial = SpatialPopulation(demes, migration_rate=0.0)
     spatial._initialize_session(seed=0)
-    spatial.register_hooks(
-        [Op.set_param("carrying_capacity", 321.0, every=1)],
-        event="early",
-        deme=[0, 2],
-    )
     spatial.run(1, record_every=0)
     assert demes[0].params.carrying_capacity == 321.0
     assert demes[2].params.carrying_capacity == 321.0
@@ -1034,14 +1033,15 @@ def test_spatial_convert_applies_per_deme_independently() -> None:
     species = _fresh_species()
 
     def build_deme(name: str) -> AgeStructuredPopulation:
-        return _build_age_structured(species, name)
+        return _build_age_structured(
+            species,
+            name,
+            hook_calls=[(([Op.convert("A|A", "A|a", probability=0.25)],), {"event": "early"})],
+        )
 
     demes = [build_deme(f"addconv_d{d}") for d in range(3)]
     spatial = SpatialPopulation(demes, migration_rate=0.0)
     spatial._initialize_session(seed=0)
-    spatial.register_hooks(
-        [Op.convert("A|A", "A|a", probability=0.25)], event="early"
-    )
 
     p = 0.25
     for deme_id, deme in enumerate(demes):
@@ -1087,13 +1087,11 @@ def test_second_set_param_literal_reads_its_own_literal() -> None:
     777.0 — never the first expression's 6.0.
     """
     species = _fresh_species()
-    pop = _build_age_structured(species, "poolbug")
-    pop.register_hooks(
-        [
+    pop = _build_age_structured(species, "poolbug",
+        hook_calls=[([
             Op.set_param("eggs_per_female", 6.0),
             Op.set_param("carrying_capacity", 777.0),
-        ],
-        event="early",
+        ], {"event": "early"})],
     )
     pop.trigger_event("early")
     assert pop.params.eggs_per_female == 6.0
@@ -1318,7 +1316,9 @@ def test_native_convert_stochastic_buckets_conserve_rows_and_sperm_columns() -> 
     probability = 0.25
     n_trials = 200
     for trial in range(n_trials):
-        pop = _build_age_structured(species, f"native_bucket_{trial}")
+        pop = _build_age_structured(species, f"native_bucket_{trial}",
+        hook_calls=[([Op.convert("A|A", "A|a", probability=0.25)], {"event": "early"})],
+    )
         pop._config = pop.config._replace(stochastic=True)
         state = pop._live_state()
         counts = np.zeros_like(state.individual_count)
@@ -1327,7 +1327,6 @@ def test_native_convert_stochastic_buckets_conserve_rows_and_sperm_columns() -> 
         counts[1, 1, 0] = n_male
         sperm[1, 0, :] = buckets
         pop.import_state(state._replace(individual_count=counts, sperm_storage=sperm))
-        pop.register_hooks([Op.convert("A|A", "A|a", probability=0.25)], event="early")
         pop._initialize_session(seed=trial)
         pop.trigger_event("early")
         result = pop.state

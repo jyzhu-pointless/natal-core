@@ -3,10 +3,11 @@
 
 The retired ``mode`` parameter (expand / aggregate / auto) and the njit-era
 ``py_wrapper`` / ``njit_fn`` payloads no longer exist.  The remaining
-contract: symbolic selector specs are resolved once at registration into
-int32 index arrays; the user callback receives the resolved values as
-keyword arguments after the TickContext (single-index selectors collapse to
-plain ints, multi-index selectors pass as int32 arrays).
+contract: symbolic selector specs are resolved once at build-time
+compilation into int32 index arrays; the user callback receives the
+resolved values as keyword arguments after the TickContext (single-index
+selectors collapse to plain ints, multi-index selectors pass as int32
+arrays).
 """
 
 from __future__ import annotations
@@ -25,12 +26,20 @@ from natal.frontend.hooks.types import CompiledHookDescriptor
 # ============================================================================
 
 
-def _build_pop(name: str) -> nt.DiscreteGenerationPopulation:
-    """Build a quiescent discrete population (state changes only via hooks)."""
+def _build_pop(
+    name: str, hook_calls: list | None = None
+) -> nt.DiscreteGenerationPopulation:
+    """Build a quiescent discrete population (state changes only via hooks).
+
+    Args:
+        name: Population name.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the build chain.
+    """
     species = nt.Species.from_dict(
         name=f"Selector_{name}", structure={"chr1": {"loc": ["A", "a"]}}
     )
-    return (
+    chain = (
         nt.DiscreteGenerationPopulation.setup(
             species=species, name=name, stochastic=False
         )
@@ -42,8 +51,10 @@ def _build_pop(name: str) -> nt.DiscreteGenerationPopulation:
         )
         .reproduction(eggs_per_female=0.0)
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        chain = chain.hooks(*items, **kwargs)
+    return chain.build()
 
 
 # ============================================================================
@@ -72,6 +83,7 @@ def test_retired_py_wrapper_payload_is_absent() -> None:
     desc: CompiledHookDescriptor = fn.register(pop)
     assert not hasattr(desc, "py_wrapper")
     assert not hasattr(desc, "njit_fn")
+    _ = pop
 
 
 # ============================================================================
@@ -80,18 +92,17 @@ def test_retired_py_wrapper_payload_is_absent() -> None:
 
 
 def test_selector_callback_registers() -> None:
-    """``@hook(selectors=...)`` registers a callback-carrying descriptor."""
-    pop = _build_pop("sel_register")
-
+    """``@hook(selectors=...)`` declares a callback-carrying descriptor."""
     @nt.hook(event="early", selectors={"target": "A|A"})
     def fn(pop: TickContext, target: int) -> int:
         _ = pop, target
         return 0
 
-    desc = fn.register(pop)
+    pop = _build_pop("sel_register", [((fn,), {})])
+    assert len(pop.get_compiled_hooks("early")) == 1
+    desc = pop.get_compiled_hooks("early")[0]
     assert desc.event == "early"
     assert callable(desc.callback)
-    assert len(pop.get_compiled_hooks("early")) == 1
 
 
 def test_compile_selector_callback_direct() -> None:
@@ -188,8 +199,7 @@ class TestSelectorExecution:
             pop.state.individual_count[0, 0, target] = 0.0
             return 0
 
-        pop = _build_pop("sel_exec_int")
-        fn.register(pop)
+        pop = _build_pop("sel_exec_int", [((fn,), {})])
         pop.run(n_steps=1)
 
         assert seen["target"] == 0
@@ -209,8 +219,7 @@ class TestSelectorExecution:
             pop.state.individual_count[:, :, list(group)] = 0.0
             return 0
 
-        pop = _build_pop("sel_exec_multi")
-        fn.register(pop)
+        pop = _build_pop("sel_exec_multi", [((fn,), {})])
         pop.run(n_steps=1)
 
         assert seen["group"].dtype == np.int32
@@ -222,7 +231,6 @@ class TestSelectorExecution:
     def test_deme_id_is_forwarded(self) -> None:
         """The TickContext handed to the callback carries the deme id."""
         seen: list[int] = []
-        pop = _build_pop("sel_deme_id")
 
         @nt.hook(event="first", selectors={"target": "A|A"})
         def fn(pop: TickContext, target: int) -> int:
@@ -230,7 +238,7 @@ class TestSelectorExecution:
             seen.append(pop.deme_id)
             return 0
 
-        fn.register(pop)
+        pop = _build_pop("sel_deme_id", [((fn,), {})])
         # Explicit event triggering forwards the requested deme id; the
         # panmictic default inside per-deme lifecycles is 0.
         pop.trigger_event("first", deme_id=5)

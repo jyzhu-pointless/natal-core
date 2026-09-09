@@ -15,12 +15,14 @@ HistoryModel = Literal["discrete", "age", "spatial"]
 HistoryPopulation = nt.DiscreteGenerationPopulation | nt.AgeStructuredPopulation | nt.SpatialPopulation
 
 
-def _history_population(name: str, model: HistoryModel) -> HistoryPopulation:
+def _history_population(
+    name: str, model: HistoryModel, hook_calls: list | None = None
+) -> HistoryPopulation:
     """Build raw-history populations with deterministic, neutral genetics."""
     if model != "spatial":
-        return _population(name, model, stochastic=False)
+        return _population(name, model, stochastic=False, hook_calls=hook_calls)
     species = nt.Species.from_dict(name=name, structure={"chr1": {"loc": ["WT", "Dr"]}})
-    return (
+    builder = (
         nt.SpatialPopulation.builder(species, n_demes=2, pop_type="discrete_generation")
         .setup(stochastic=False)
         .initial_state(individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
@@ -28,8 +30,10 @@ def _history_population(name: str, model: HistoryModel) -> HistoryPopulation:
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
         .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
         .record_history(mode="raw")
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    return builder.build()
 
 
 def _state(pop: HistoryPopulation) -> NDArray[np.float64]:
@@ -272,17 +276,16 @@ def test_stopped_snapshot_retains_phase_and_does_not_unlock_execution(model: His
     """A partial early-phase boundary must not masquerade as a Ready tick."""
     from natal.frontend.hooks.tick_context import TickContext
 
-    pop = _history_population(f"ReviewStoppedBoundary_{model}", model)
-
     def stop(ctx: TickContext) -> int:
         """Stop before any lifecycle phase changes the biological state."""
         ctx.stop()
         return 0
 
-    if isinstance(pop, nt.SpatialPopulation):
-        pop.demes[0].update().hooks(stop, event="early")
-    else:
-        pop.update().hooks(stop, event="early")
+    pop = _history_population(
+        f"ReviewStoppedBoundary_{model}",
+        model,
+        hook_calls=[((stop,), {"event": "early"})],
+    )
     pop.run(1, record_every=0)
     pop.clear_history()
     pop.record_snapshot()

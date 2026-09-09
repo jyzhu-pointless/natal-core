@@ -53,9 +53,9 @@ def _species(name: str) -> nt.Species:
     )
 
 
-def _build_age(name: str) -> AgeStructuredPopulation:
+def _build_age(name: str, hook_calls: list | None = None) -> AgeStructuredPopulation:
     """Return a deterministic age-structured population (fractional counts)."""
-    return (
+    builder = (
         nt.AgeStructuredPopulation.setup(species=_species(name), stochastic=False)
         .age_structure(n_ages=3, new_adult_age=1)
         .initial_state(
@@ -70,13 +70,17 @@ def _build_age(name: str) -> AgeStructuredPopulation:
         )
         .reproduction(eggs_per_female=6, sex_ratio=0.5)
         .competition(juvenile_growth_mode=1, carrying_capacity=800.0)
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    return builder.build()
 
 
-def _build_discrete(name: str) -> DiscreteGenerationPopulation:
+def _build_discrete(
+    name: str, hook_calls: list | None = None
+) -> DiscreteGenerationPopulation:
     """Return a deterministic discrete-generation population."""
-    return (
+    builder = (
         nt.DiscreteGenerationPopulation.setup(
             species=_species(name), stochastic=False
         )
@@ -84,8 +88,10 @@ def _build_discrete(name: str) -> DiscreteGenerationPopulation:
         .survival(female_age0_survival=0.9, male_age0_survival=0.8)
         .reproduction(eggs_per_female=5, sex_ratio=0.5)
         .competition(carrying_capacity=400.0, low_density_growth_rate=2.0)
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    return builder.build()
 
 
 def _assert_params_equal_config(pop: AnyPopulation) -> None:
@@ -232,11 +238,12 @@ def test_in_hook_reads_return_event_candidate(
     projection, and through the committed config after the run — any
     divergence means the fast path bypasses staged transaction values.
     """
-    pop = builder("QLWInHookReads")
+    holder: dict[str, object] = {}
     observed: dict[str, Any] = {}
 
     def hook(ctx: TickContext) -> int:
         """Read parameters around a pending event write."""
+        pop = holder["pop"]
         observed["before"] = ctx.params.carrying_capacity
         observed["before_tensor"] = np.array(ctx.params.survival_rates, copy=True)
         ctx.update().competition(carrying_capacity=650.0)
@@ -255,7 +262,8 @@ def test_in_hook_reads_return_event_candidate(
         observed["flag"] = ctx.params.stochastic
         return 0
 
-    pop.register_hooks(hook, event="early")
+    pop = builder("QLWInHookReads", hook_calls=[((hook,), {"event": "early"})])
+    holder["pop"] = pop
     before_config = pop.config.carrying_capacity
     before_cell = float(pop.config.age_based_survival_rates[0, 0])
     pop.run(1, record_every=0)
@@ -686,7 +694,7 @@ def test_bare_params_read_in_callback_matches_config_projection(builder: AnyBuil
     earlier callback in the same run (the draft-sync invariant the
     fallback relies on).
     """
-    pop = builder("QLWHeldViewInHook")
+    holder: dict[str, object] = {}
     observed: list[tuple[float, float]] = []
 
     def first_hook(ctx: TickContext) -> int:
@@ -696,11 +704,15 @@ def test_bare_params_read_in_callback_matches_config_projection(builder: AnyBuil
     def held_view_hook(ctx: TickContext) -> int:
         # Bare view (no ctx binding), read before anything prepares the
         # callback's candidate projection.
+        pop = holder["pop"]
         observed.append((pop.params.carrying_capacity, pop.config.carrying_capacity))
         return 0
 
-    pop.register_hooks(first_hook, event="first")
-    pop.register_hooks(held_view_hook, event="first")
+    pop = builder(
+        "QLWHeldViewInHook",
+        hook_calls=[((first_hook,), {"event": "first"}), ((held_view_hook,), {"event": "first"})],
+    )
+    holder["pop"] = pop
     pop.run(1, record_every=0)
     assert observed == [(650.0, 650.0)]
     assert pop.params.carrying_capacity == 650.0

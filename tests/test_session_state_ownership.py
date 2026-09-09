@@ -48,15 +48,22 @@ def _build_discrete(name: str, *, stochastic: bool = False) -> nt.DiscreteGenera
     )
 
 
-def _build_age(name: str, *, stochastic: bool = False) -> nt.AgeStructuredPopulation:
+def _build_age(
+    name: str,
+    *,
+    stochastic: bool = False,
+    hook_calls: list | None = None,
+) -> nt.AgeStructuredPopulation:
     """Return a deterministic age-structured population.
 
     Args:
         name: Unique population label.
         stochastic: Whether stochastic sampling is enabled (the only axis
             where the session RNG stream matters).
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the build chain.
     """
-    return (
+    builder = (
         nt.AgeStructuredPopulation.setup(
             species=_species(name), stochastic=stochastic
         )
@@ -73,8 +80,10 @@ def _build_age(name: str, *, stochastic: bool = False) -> nt.AgeStructuredPopula
         )
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
         .competition(carrying_capacity=1000.0)
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    return builder.build()
 
 
 class TestNegativeContracts:
@@ -378,8 +387,7 @@ class TestManualHookFlush:
             pop.state.individual_count[0, 1, 0] = 23.0
             return 0
 
-        test = _build_age("FlushTest")
-        test.update().hooks(mark)
+        test = _build_age("FlushTest", hook_calls=[((mark,), {"event": "finish"})])
         test._initialize_session(seed=0)
         # The manual event runs the callback and must flush its write.
         assert test.trigger_event("finish") == 0
@@ -597,16 +605,14 @@ class TestDirtyBridgeNegativeContracts:
             DraftWriter(pop.config, dirty_sink=set())  # pyright: ignore[reportCallIssue]  # negative contract probe
 
     def test_needs_rebuild_flag_round_trip(self) -> None:
-        """Program writes mark dispatch replacement; the session is preserved."""
+        """A structural (blueprint flag) write marks replacement; the session is preserved."""
         pop = _build_discrete("NegRebuild")
         pop._initialize_session(seed=3)
         backend_before = pop._rust_lifecycle_backend  # pyright: ignore[reportPrivateUsage]
 
-        @nt.hook(event="first")
-        def noop(ctx: nt.TickContext) -> int:
-            return 0
-
-        pop.register_hooks(noop, event="first")
+        # Boolean rows are frozen Blueprint flags: writing one schedules a
+        # session rebuild (the surviving structural-mark channel).
+        pop.params.fixed_egg_count = bool(pop.config.fixed_egg_count)  # pyright: ignore[reportAttributeAccessIssue]
         assert pop._rust_needs_rebuild is True  # pyright: ignore[reportPrivateUsage]
 
         pop.run(1)
@@ -897,21 +903,26 @@ class TestInRunCustomSlotWrite:
 class TestStructuralProgramUpdate:
     """Program updates preserve the session and its random stream."""
 
-    def test_hook_registration_preserves_the_rng_stream(self) -> None:
+    def test_noop_hook_leaves_the_rng_stream_untouched(self) -> None:
         """A no-op hook changes dispatch without changing future draws.
 
-        The Rust-only plan requires program replacement on the existing
-        session: neither counts, sperm, tick, nor RNG may be reinitialized.
+        Declaring a callback must not perturb the trajectory: the hooked
+        population matches the hook-free control bitwise across runs, and
+        the session object never changes across the run boundary.
         """
-        pop = _build_age("RebuildChain", stochastic=True)
+        pop = _build_age("RebuildChain", stochastic=True, hook_calls=[(( _noop_hook,), {"event": "early"})])
+        control = _build_age("RebuildChainCtl", stochastic=True)
         pop._initialize_session(seed=13)
+        control._initialize_session(seed=13)
         pop.run(1)
+        control.run(1)
         backend_before = pop._rust_lifecycle_backend  # noqa: SLF001
-        pop.register_hooks(_noop_hook, event="early")
         pop.run(1)
+        control.run(1)
         assert pop._rust_lifecycle_backend is backend_before  # noqa: SLF001
         assert pop._rust_needs_rebuild is False  # noqa: SLF001
         assert pop.tick == 2
+        np.testing.assert_array_equal(pop.export_state(), control.export_state())
 
         atomic = _build_age("RebuildAtomic", stochastic=True)
         atomic._initialize_session(seed=13)
@@ -997,7 +1008,8 @@ class TestReconfigureRollbackFlagIntegrity:
         pop = _drive_pop("RecRollPending", drive, stochastic=True)
         pop._initialize_session(seed=29)
         pop.run(1)
-        pop.register_hooks(_noop_hook, event="early")
+        # Boolean rows are Blueprint flags: a write schedules a rebuild.
+        pop.params.fixed_egg_count = bool(pop.config.fixed_egg_count)  # pyright: ignore[reportAttributeAccessIssue]
         assert pop._rust_needs_rebuild is True  # noqa: SLF001
         backend_before = pop._rust_lifecycle_backend  # noqa: SLF001
 
@@ -1183,10 +1195,10 @@ class TestInRunGeneticsWrites:
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=6, sex_ratio=0.5)
             .competition(carrying_capacity=100.0, low_density_growth_rate=2.0)
+            .hooks(apply_viability, event="early")
             .build()
         )
         pop._initialize_session(seed=11)
-        pop.register_hooks(apply_viability, event="early")
         pop.run(1)
 
         backend = pop._rust_lifecycle_backend  # pyright: ignore[reportPrivateUsage]
@@ -1218,10 +1230,10 @@ class TestInRunGeneticsWrites:
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=6, sex_ratio=0.5)
             .competition(carrying_capacity=100.0, low_density_growth_rate=2.0)
+            .hooks(apply_zygote, event="early")
             .build()
         )
         pop._initialize_session(seed=11)
-        pop.register_hooks(apply_zygote, event="early")
         pop.run(1)
 
         backend = pop._rust_lifecycle_backend  # pyright: ignore[reportPrivateUsage]

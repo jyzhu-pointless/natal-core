@@ -1,7 +1,7 @@
 """Tests for base_population.py core methods.
 
 Covers:
-- _finalize_hooks() — deferred hook compilation
+- build-time hook declaration (the deferred-registration mechanism is gone)
 - _clone() — population cloning
 - refresh_modifier_maps() — modifier map refresh
 """
@@ -47,25 +47,23 @@ def _build_pop(
 
 
 class TestFinalizeHooks:
-    """Tests for ``_finalize_hooks()`` — deferred compilation of @hook functions.
+    """Tests for build-time hook declaration.
 
-    Hook items passed at build time are queued in ``_pending_hook_items``
-    and registered later by ``_finalize_hooks()``.
-
-    ``DiscreteGenerationPopulation.__init__`` calls ``_finalize_hooks()``
-    automatically, so these tests verify the post-finalization state.
+    The ``_pending_hook_items`` / ``_finalize_hooks()`` deferral mechanism
+    is deleted: declared hooks compile once at ``build()`` and no
+    post-construction registration channel exists.
     """
 
     def test_pending_hooks_compiled(self, simple_species: nt.Species) -> None:
-        """Hook items queued at build time are registered after finalize."""
+        """Hooks declared in the build chain compile into the plan."""
         @nt.hook(event="early")
         def my_hook(pop):
             return 0
 
         pop = _build_pop(simple_species, "test_pending", hooks=[my_hook])
 
-        # The deferred item list must be drained after _finalize_hooks()
-        assert len(pop._pending_hook_items) == 0
+        # There is no deferred queue left on the population.
+        assert not hasattr(pop, "_pending_hook_items")
 
         # The hook should be in compiled hooks
         compiled = pop.get_compiled_hooks()

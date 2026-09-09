@@ -52,6 +52,7 @@ def _build(
     n_demes: int = 4,
     rate: float = 0.25,
     late_ops: tuple = (),
+    hook_calls: list | None = None,
 ) -> SpatialPopulation:
     """Build an age-structured spatial population and enable Rust."""
     builder = (
@@ -85,6 +86,8 @@ def _build(
     )
     if late_ops:
         builder = builder.hooks(*late_ops)
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
     population = builder.build()
     population._initialize_session(seed=seed)
     return population
@@ -111,13 +114,14 @@ def test_persistent_deme_streams_advance_across_ticks() -> None:
     a.run(1)
     final_a = _stacked(a)
 
-    b = _build("own_r1b", seed=42)
     def restore_counts(ctx: nt.TickContext) -> int:
         state = imported[ctx.deme_id]
         ctx.state.individual_count[:] = state["individual_count"]
         ctx.state.sperm_storage[:] = state["sperm_storage"]
         return 0
-    b.register_hooks(restore_counts, event="first")
+    b = _build(
+        "own_r1b", seed=42, hook_calls=[((restore_counts,), {"event": "first"})]
+    )
     b.run(1)
     final_b = _stacked(b)
 
@@ -156,13 +160,19 @@ def test_scoped_state_transaction_continues_from_committed_counts() -> None:
     With zero migration and no surviving individuals or stored sperm,
     subsequent reproduction cannot resurrect the extinguished deme.
     """
-    target = _build("own_imp_target", seed=45, stochastic=False, n_demes=3, rate=0.0)
-    target.run(1, record_every=0)
     def extinguish(ctx: nt.TickContext) -> int:
         ctx.state.individual_count[:] = 0
         ctx.state.sperm_storage[:] = 0
         return 0
-    target.register_hooks(extinguish, event="first", deme=1)
+    target = _build(
+        "own_imp_target",
+        seed=45,
+        stochastic=False,
+        n_demes=3,
+        rate=0.0,
+        hook_calls=[((extinguish,), {"event": "first", "deme": 1})],
+    )
+    target.run(1, record_every=0)
     target.trigger_event("first", deme_id=1)
     target.run(2, record_every=0)
     np.testing.assert_array_equal(

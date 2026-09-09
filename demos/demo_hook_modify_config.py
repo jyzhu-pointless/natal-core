@@ -10,21 +10,8 @@ from natal.frontend.hooks.tick_context import TickContext
 
 sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT"]}})
 
-pop = (
-    nt.DiscreteGenerationPopulation
-    .setup(species=sp, name="demo", stochastic=False)
-    .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
-    .reproduction(eggs_per_female=50, sex_ratio=0.5)
-    .competition(carrying_capacity=10000, low_density_growth_rate=6.0,
-                 juvenile_growth_mode="beverton_holt")
-    .build()
-)
-
-# 跑 5 ticks 到平衡
-pop.run(5)
-
-
-# hook 内改 K：tick=7 时一次性把 K 减半（用闭包标志保证只触发一次）
+# hook 内改 K：tick=7 时一次性把 K 减半（用闭包标志保证只触发一次）。
+# Hook 在构建链中声明：计划在 build() 时一次性编译注入，构建后不再注册。
 _fired = {"done": False}
 
 
@@ -36,7 +23,19 @@ def halve_carrying_capacity(pop: TickContext) -> int:
     return 0
 
 
-pop.update().hooks(halve_carrying_capacity)
+pop = (
+    nt.DiscreteGenerationPopulation
+    .setup(species=sp, name="demo", stochastic=False)
+    .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
+    .reproduction(eggs_per_female=50, sex_ratio=0.5)
+    .competition(carrying_capacity=10000, low_density_growth_rate=6.0,
+                 juvenile_growth_mode="beverton_holt")
+    .hooks(halve_carrying_capacity)
+    .build()
+)
+
+# 跑 5 ticks 到平衡
+pop.run(5)
 
 # 再跑 10 ticks 观察：hook 每次触发都会检查并收紧 K
 print(f"{'tick':>4}  {'total':>10}  {'K':>10}")

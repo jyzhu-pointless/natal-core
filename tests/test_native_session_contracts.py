@@ -54,8 +54,11 @@ def test_native_session_invalid_event_flags_and_projection_preserve_state(model:
 @pytest.mark.parametrize("event", ["first", "finish"])
 def test_explicit_native_event_records_parameter_provenance(model: Model, event: str) -> None:
     """Explicit events commit ecology and identify the responsible event in Rust."""
-    pop = _population(f"NativeEventLog_{model}_{event}", model)
-    pop.register_hooks([Op.set_param("carrying_capacity", 321.0)], event=event)
+    pop = _population(
+        f"NativeEventLog_{model}_{event}",
+        model,
+        hook_calls=[(([Op.set_param("carrying_capacity", 321.0)],), {"event": event})],
+    )
     before = pop.export_state().copy()
     assert pop.trigger_event(event) == 0
     assert pop.params.carrying_capacity == 321.0

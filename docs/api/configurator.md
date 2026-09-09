@@ -232,9 +232,10 @@ nested `{"female": {...}, "male": {...}}` for sex-specific values.
 ```python
 cfg.hooks(my_hook)
 ```
-Register event hooks. On a build-time chain the registration is stored and
-compiled when `build()` runs; on a runtime chain (`pop.update().hooks(...)`) it
-takes effect immediately.
+Declare event hooks. Declarations are stored on the chain and compiled once
+against the final registry when `build()` runs; the compiled plan is injected
+into the Population at construction. There is no post-construction
+registration: `pop.update().hooks(...)` raises `RuntimeError`.
 
 ### `build(name=None, hook_items=None)`
 ```python
@@ -242,8 +243,8 @@ pop = cfg.build(name="MyPop")
 ```
 Create the Population object: finalize declarations, apply optional index
 compression, and freeze the observation and history layout. `hook_items`
-accepts the same item shapes as `hooks()` and registers them together with
-any hooks already stored by `hooks()`.
+is declaration sugar: the items feed the same build-time compilation as
+`hooks()` calls.
 
 ### `apply()`
 ```python
@@ -276,17 +277,21 @@ receives one `TickContext`; its updates commit with the callback's candidate
 state when the callback completes successfully.
 
 ```python
-@nt.hook(event="early")
-def my_hook(ctx: nt.TickContext) -> int:
-    ctx.update().competition(carrying_capacity=5000)
-    ctx.update().custom(temperature=40.0)
-    return 0
-
-pop.update().hooks(my_hook)
+# Declared in the build chain (compiled once at build()).
+pop = (
+    nt.AgeStructuredPopulation.setup(species=species, stochastic=False)
+    # ... other declarations ...
+    .hooks(my_hook)
+    .build()
+)
 pop.run(1)
 assert pop.params.carrying_capacity == 5000
 assert pop.config.custom["temperature"] == 40.0
 ```
+
+The callback is declared before `build()`; only its execution happens at
+runtime. `pop.update().hooks(...)` does not exist — hook plans are fixed
+after construction.
 
 ### Spatial Population
 
@@ -329,7 +334,14 @@ A parameter operation needs no Python callback. This fragment continues the
 Quick Start population and keeps the declarative `Op` format:
 
 ```python
-pop.update().hooks(nt.Op.set_param("carrying_capacity", "K * 0.5", event="early"))
+# Declared in the build chain (compiled once at build()).
+builder = (
+    nt.AgeStructuredPopulation.setup(species=species, stochastic=False)
+    # ... other declarations ...
+)
+pop = builder.hooks(
+    nt.Op.set_param("carrying_capacity", "K * 0.5", event="early")
+).build()
 ```
 
 For Python callback logic, use `ctx.params` or `ctx.update()` as shown above.

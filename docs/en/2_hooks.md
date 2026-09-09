@@ -62,19 +62,19 @@ This approach is highly readable, easy to maintain, and makes it easier for team
 
 ## Three Hook Authoring Shapes
 
-`@nt.hook` detects the shape from the function signature (at registration time):
+`@nt.hook` detects the shape from the function signature (at build-time compilation):
 
 | Shape | Signature | Notes |
 |-------|-----------|-------|
-| Declarative | No parameters, returns `List[HookOp]` | Called once at registration; the return value is compiled into a CSR plan |
+| Declarative | No parameters, returns `List[HookOp]` | Called once at build time; the return value is compiled into a CSR plan |
 | Callback | Single parameter `def hook(pop: TickContext) -> int` | Called once per tick; reads and writes state and parameters through `TickContext` |
-| Selector callback | Single parameter + `selectors={...}` keyword args | Selector values are resolved at registration and injected on each call |
+| Selector callback | Single parameter + `selectors={...}` keyword args | Selector values are resolved at build time and injected on each call |
 
 The legacy `(state, config, deme_id)` three-parameter signature is explicitly rejected (`TypeError` -- it is a leftover of the njit era with no migration channel). Callbacks return `0` (or `RESULT_CONTINUE`) to continue; a non-zero value (or `RESULT_STOP`) stops the simulation.
 
 All four lifecycle events (`first`, `early`, `late`, and `finish`) execute in the native Rust session. The former Python CSR executor, samplers, and low-level execution exports are removed; only compiled `HookProgram` data and Python callback bridges remain.
 
-`.hooks()` is the single registration entry point: call it in the build chain, or via `pop.update().hooks(...)` after construction.
+`.hooks()` is the single declaration entry point, and it exists only in the build chain: hook plans are compiled once against the final registry when `build()` runs and injected into the population. There is no post-construction registration — `pop.update().hooks(...)` is not supported and raises `RuntimeError`. To change runtime behavior, declare the hook at build (optionally gated by a `when` condition or a tick check inside the callback) and trigger the same events manually where needed.
 
 ## `Op` Operations
 
@@ -223,7 +223,7 @@ The native Rust engine is the only execution backend, so hooks have a single exe
 
 - Declarative `Op`s compile into a CSR program (contiguous arrays + offset table) executed in event order inside the Rust session.
 - Single-parameter callbacks (`TickContext`) cross the Python<->Rust boundary at event boundaries; each invocation gets its own context wrapper, and its writes join that invocation's event transaction — committed on success, discarded on failure.
-- Within one event, declarative ops and Python callbacks interleave in one cross-type `priority` order (lower values first; ties keep registration order). The two kinds share a single comparable scale: whichever hook — callback or declarative — has the smaller `priority` always runs first, and later hooks see earlier writes.
+- Within one event, declarative ops and Python callbacks interleave in one cross-type `priority` order (lower values first; ties keep declaration order). The two kinds share a single comparable scale: whichever hook — callback or declarative — has the smaller `priority` always runs first, and later hooks see earlier writes.
 
 Hooks are "Op is a hook": `Op` objects constitute the hook program, and a declarative `@hook` function is just the compiler entry point returning the Op list. There is no `initialize` event -- express initialization logic with the first tick of the `first` event (`when="tick == 1"`) or with the `finish` event.
 

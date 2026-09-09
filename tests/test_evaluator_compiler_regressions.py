@@ -287,15 +287,19 @@ def test_failed_hook_reconfiguration_preserves_preset_object_and_future_compiles
     """Native rollback must include the sanctioned preset declaration and provenance."""
     species = nt.Species.from_dict(name="EvaluatorPresetRollback", structure={"chr": {"loc": ["WT", "Dr"]}})
     preset = nt.HomingDrive(name="drive", drive_allele="Dr", target_allele="WT", drive_conversion_rate=0.2)
-    pop = Configurator.for_discrete(species).presets(preset).build()
-    expected = pop.config.zygotes_to_gametes_map.copy()
-    original_rate = preset.drive_conversion_rate
 
     def fail_after_reconfigure(ctx: TickContext) -> int:
         ctx.update().reconfigure_preset(preset, drive_conversion_rate=0.9)
         raise ValueError("reject the entire callback")
 
-    pop.register_hooks(fail_after_reconfigure, event="first")
+    pop = (
+        Configurator.for_discrete(species)
+        .presets(preset)
+        .hooks(fail_after_reconfigure, event="first")
+        .build()
+    )
+    expected = pop.config.zygotes_to_gametes_map.copy()
+    original_rate = preset.drive_conversion_rate
     with pytest.raises(ValueError, match="reject the entire callback"):
         pop.run(1)
     np.testing.assert_array_equal(pop.config.zygotes_to_gametes_map, expected)
@@ -310,11 +314,10 @@ def test_repeated_hook_reconfiguration_rolls_back_only_current_callback(prior_su
     """Rollback walks repeated changes backward and preserves earlier event commits."""
     species = nt.Species.from_dict(name=f"EvaluatorPresetRepeated_{prior_success}", structure={"chr": {"loc": ["WT", "Dr"]}})
     preset = nt.HomingDrive(name="drive", drive_allele="Dr", target_allele="WT", drive_conversion_rate=0.2)
-    pop = Configurator.for_discrete(species).presets(preset).build()
-    expected_maps = [pop.config.zygotes_to_gametes_map.copy()]
-    expected_rate = [preset.drive_conversion_rate]
+    holder: dict[str, object] = {}
 
     def succeed(ctx: TickContext) -> int:
+        pop = holder["pop"]
         ctx.update().reconfigure_preset(preset, drive_conversion_rate=0.4)
         expected_maps[0] = pop.config.zygotes_to_gametes_map.copy()
         expected_rate[0] = preset.drive_conversion_rate
@@ -325,9 +328,13 @@ def test_repeated_hook_reconfiguration_rolls_back_only_current_callback(prior_su
         ctx.update().reconfigure_preset(preset, drive_conversion_rate=0.9)
         raise ValueError("rollback repeated edits")
 
+    builder = Configurator.for_discrete(species).presets(preset)
     if prior_success:
-        pop.register_hooks(succeed, event="first")
-    pop.register_hooks(fail, event="first")
+        builder = builder.hooks(succeed, event="first")
+    pop = builder.hooks(fail, event="first").build()
+    holder["pop"] = pop
+    expected_maps = [pop.config.zygotes_to_gametes_map.copy()]
+    expected_rate = [preset.drive_conversion_rate]
     with pytest.raises(ValueError, match="rollback repeated edits"):
         pop.run(1)
     assert preset.drive_conversion_rate == expected_rate[0]

@@ -34,8 +34,19 @@ def _population(
     *,
     stochastic: bool = True,
     callback: Callable[[TickContext], int] | None = None,
+    hook_calls: list | None = None,
 ) -> Population:
-    """Build a neutral population with raw history and typed custom values."""
+    """Build a neutral population with raw history and typed custom values.
+
+    Args:
+        name: Species/population name seed.
+        model: ``"discrete"`` or ``"age"``.
+        stochastic: Declared stochastic flag.
+        callback: Optional single callback declared on ``first``.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the build chain (hook plans compile once at
+            ``build()``).
+    """
     species = nt.Species.from_dict(
         name=name, structure={"chr1": {"loc": ["WT", "Dr"]}}
     )
@@ -60,6 +71,8 @@ def _population(
     )
     if callback is not None:
         builder = builder.hooks(callback, event="first")
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
     return builder.build()
 
 

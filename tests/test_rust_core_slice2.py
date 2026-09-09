@@ -94,9 +94,10 @@ def _build_age_population(
     *,
     stochastic: bool = False,
     k: float = 400.0,
+    hook_calls: list | None = None,
 ) -> AgeStructuredPopulation:
     """Build a fully calibrated age-structured population (5 ages, 2 ztypes)."""
-    return (
+    builder = (
         Configurator.from_species(species)
         .age_structure(5, 2)
         .setup(stochastic=stochastic, name=name)
@@ -111,8 +112,10 @@ def _build_age_population(
         )
         .reproduction(eggs_per_female=40, sex_ratio=0.5)
         .survival(female_age_based_survival=0.6, male_age_based_survival=0.55)
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    return builder.build()
 
 
 def _build_age_draft(
@@ -704,27 +707,33 @@ def test_custom_slot_write_commits_to_draft_and_survives_run(
     assert dict(pop.config.custom) == {"slice2_probe": 1.5}
 
 
-def test_hook_program_replacement_preserves_backend(age_species: Species) -> None:
-    """A hook program is installed into the existing session.
+def test_hook_program_installation_preserves_backend(age_species: Species) -> None:
+    """A hook plan declared at build is installed into the one session.
 
-    The numeric result must match registering the same operation before
-    session initialization, not merely clear a pending update flag.
+    The session object never changes across the run boundary and the
+    numeric result matches a control built with the same declaration.
     """
-    pop = _build_age_population(age_species, "slice2_hooks_rebuild")
-    pop._initialize_session(seed=0)
+    def build(name: str) -> tuple[object, object]:
+        pop = _build_age_population(
+            age_species,
+            name,
+            hook_calls=[
+                (
+                    ([Op.scale(genotypes="*", ages="*", sex="both", factor=0.9)],),
+                    {"event": "early", "name": "slice2_early_control"},
+                )
+            ],
+        )
+        return pop, pop._initialize_session(seed=0)
+
+    pop, _ = build("slice2_hooks_rebuild")
     backend_before = pop._rust_lifecycle_backend
     assert backend_before is not None
-
-    ops = [Op.scale(genotypes="*", ages="*", sex="both", factor=0.9)]
-    pop.register_hooks(ops, event="early", name="slice2_early_control")
-    assert pop._rust_needs_rebuild is True
 
     pop.run(1, record_every=0)
     assert pop._rust_needs_rebuild is False
     assert pop._rust_lifecycle_backend is backend_before
-    control = _build_age_population(age_species, "slice2_hooks_control")
-    control.register_hooks([Op.scale(genotypes="*", ages="*", sex="both", factor=0.9)], event="early")
-    control._initialize_session(seed=0)
+    control, _ = build("slice2_hooks_control")
     control.run(1, record_every=0)
     np.testing.assert_array_equal(pop.export_state(), control.export_state())
 

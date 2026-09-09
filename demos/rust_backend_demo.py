@@ -1,9 +1,10 @@
 """Run a real AgeStructuredPopulation through the Rust lifecycle backend.
 
-The demo builds one deterministic population, registers a declarative CSR
-hook, enables the engine session, and runs 10 recorded ticks.  Between
-ticks the trajectory stays a deterministic function of the seed, so the
-final state and the recorded history are printed as the run summary.
+The demo builds one deterministic population with a declarative CSR hook
+declared in the build chain (hook plans are compiled once at ``build()``),
+enables the engine session, and runs 10 recorded ticks.  Between ticks the
+trajectory stays a deterministic function of the seed, so the final state
+and the recorded history are printed as the run summary.
 """
 
 from __future__ import annotations
@@ -30,6 +31,15 @@ sp = nt.Species.from_dict(
     gamete_labels=["default"],
 )
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2. 在构建链中声明一个 CSR declarative hook
+# ═══════════════════════════════════════════════════════════════════════════════
+
+control_ops = [
+    nt.Op.scale(genotypes="*", ages="*", sex="both", factor=0.98),
+    nt.Op.add(genotypes="A|A", ages=1, sex="female", delta=5.0, when="tick >= 2"),
+]
+
 pop = (
     nt.AgeStructuredPopulation.setup(sp, stochastic=False, name="rust_demo_pop")
     .initial_state(
@@ -49,18 +59,9 @@ pop = (
     )
     .survival(female_age_based_survival=0.9, male_age_based_survival=0.9)
     .competition(juvenile_growth_mode=1, carrying_capacity=500)
+    .hooks(control_ops, event="early", name="demo_control")
     .build()
 )
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 2. 注册一个 CSR declarative hook
-# ═══════════════════════════════════════════════════════════════════════════════
-
-control_ops = [
-    nt.Op.scale(genotypes="*", ages="*", sex="both", factor=0.98),
-    nt.Op.add(genotypes="A|A", ages=1, sex="female", delta=5.0, when="tick >= 2"),
-]
-pop.register_hooks(control_ops, event="early", name="demo_control")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. 启用引擎会话并运行

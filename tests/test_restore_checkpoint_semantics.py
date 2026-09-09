@@ -32,6 +32,7 @@ def _build_discrete(
     stochastic: bool = False,
     init: int = 10,
     growth_mode: int | None = None,
+    hook_calls: list | None = None,
     carrying_capacity: float = 100000.0,
 ) -> nt.DiscreteGenerationPopulation:
     """Return a discrete population with raw recording.
@@ -43,8 +44,10 @@ def _build_discrete(
         growth_mode: Optional ``juvenile_growth_mode`` override; ``None``
             keeps the build default.
         carrying_capacity: Density-regulation capacity K.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the build chain.
     """
-    return (
+    builder = (
         nt.DiscreteGenerationPopulation.setup(
             species=_species(name), stochastic=stochastic
         )
@@ -59,12 +62,18 @@ def _build_discrete(
             low_density_growth_rate=2.0,
         )
         .record_history(mode="raw")
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    return builder.build()
 
 
 def _build_age(
-    name: str, *, stochastic: bool = False, seed: int | None = None
+    name: str,
+    *,
+    stochastic: bool = False,
+    seed: int | None = None,
+    hook_calls: list | None = None,
 ) -> nt.AgeStructuredPopulation:
     """Return an age-structured population with sperm storage.
 
@@ -73,8 +82,10 @@ def _build_age(
         stochastic: Whether stochastic sampling drives the ticks.
         seed: Optional explicit Rust RNG seed (rebuilds the session);
             ``None`` keeps the build-time default seed.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the build chain.
     """
-    pop = (
+    builder = (
         nt.AgeStructuredPopulation.setup(species=_species(name), stochastic=stochastic)
         .age_structure(n_ages=3, new_adult_age=1)
         .initial_state(
@@ -91,8 +102,10 @@ def _build_age(
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
         .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
         .record_history(mode="raw")
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    pop = builder.build()
     if seed is not None:
         pop._initialize_session(seed=seed)
     return pop
@@ -534,10 +547,9 @@ class TestSetParamAuditPrecedence:
 
     def test_age_checkpoint_beats_absorbed_journal(self) -> None:
         """A mid-run set_param edit is undone on the value face."""
-        pop = _build_age("R3JournalA")
-        pop.register_hooks(
-            [Op.set_param("carrying_capacity", 111.0, when="tick >= 1")],
-            event="early",
+        pop = _build_age(
+            "R3JournalA",
+            hook_calls=[(([Op.set_param("carrying_capacity", 111.0, when="tick >= 1")],), {"event": "early"})],
         )
         pop.run(3, record_every=1)
         assert pop.params.carrying_capacity == 111.0
@@ -552,10 +564,9 @@ class TestSetParamAuditPrecedence:
         # The rerun replays the control exactly: the same hook re-fires
         # from the restored stream, so journal absorption left no residue.
         pop.run(3, record_every=1)
-        control = _build_age("R3JournalB")
-        control.register_hooks(
-            [Op.set_param("carrying_capacity", 111.0, when="tick >= 1")],
-            event="early",
+        control = _build_age(
+            "R3JournalB",
+            hook_calls=[(([Op.set_param("carrying_capacity", 111.0, when="tick >= 1")],), {"event": "early"})],
         )
         control.run(3, record_every=1)
         np.testing.assert_array_equal(
@@ -564,10 +575,9 @@ class TestSetParamAuditPrecedence:
 
     def test_discrete_checkpoint_beats_absorbed_journal(self) -> None:
         """The discrete journal channel shows the same precedence."""
-        pop = _build_discrete("R3JournalC")
-        pop.register_hooks(
-            [Op.set_param("eggs_per_female", 9.0, when="tick >= 1")],
-            event="early",
+        pop = _build_discrete(
+            "R3JournalC",
+            hook_calls=[(([Op.set_param("eggs_per_female", 9.0, when="tick >= 1")],), {"event": "early"})],
         )
         pop.run(3, record_every=1)
         assert pop.params.eggs_per_female == 9.0

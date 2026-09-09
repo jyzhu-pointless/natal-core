@@ -29,9 +29,14 @@ def _custom_noop_hook(pop: object) -> int:
     return 0
 
 
-def _build_population(species: Species, name: str, k: float = 80.0) -> AgeStructuredPopulation:
+def _build_population(
+    species: Species,
+    name: str,
+    k: float = 80.0,
+    hook_calls: list | None = None,
+) -> AgeStructuredPopulation:
     """Build an identical deterministic age-structured population."""
-    return (
+    builder = (
         Configurator.from_species(species)
         .age_structure(4, 2)
         .setup(stochastic=False, name=name)
@@ -51,8 +56,10 @@ def _build_population(species: Species, name: str, k: float = 80.0) -> AgeStruct
             female_adult_mating_rate=1.0,
             male_adult_mating_rate=1.0,
         )
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    return builder.build()
 
 
 def test_run_tick_routes_through_engine(species: Species) -> None:
@@ -66,10 +73,10 @@ def test_run_tick_routes_through_engine(species: Species) -> None:
     assert not np.array_equal(pop.state.individual_count, before)
 
 
-def test_declarative_hooks_registered_after_build_run_in_engine(
+def test_declarative_hooks_declared_at_build_run_in_engine(
     species: Species,
 ) -> None:
-    """CSR declarative hooks registered post-build run inside Rust.
+    """CSR declarative hooks declared at build run inside Rust.
 
     The scale hook halves every stage-1 count at the first event, so a
     run with the hook must land strictly below the hook-free baseline.
@@ -80,8 +87,11 @@ def test_declarative_hooks_registered_after_build_run_in_engine(
     ]
 
     baseline = _build_population(species, "hook_baseline")
-    hooked = _build_population(species, "hooked")
-    hooked.register_hooks(ops, event="early", name="early_control")
+    hooked = _build_population(
+        species,
+        "hooked",
+        hook_calls=[((ops,), {"event": "early", "name": "early_control"})],
+    )
     hooked._initialize_session(seed=7)
 
     baseline.run(4, record_every=1)

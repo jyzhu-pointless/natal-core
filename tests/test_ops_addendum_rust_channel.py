@@ -63,6 +63,7 @@ def _build_viable(
     name: str,
     *,
     carrying_capacity: float = 900.0,
+    hook_calls: Optional[List] = None,
 ) -> AgeStructuredPopulation:
     """Build a demography whose juvenile regulation actually binds.
 
@@ -73,8 +74,15 @@ def _build_viable(
     tick-granular (pre-HB-1) writes were observable: the cap value used
     by the same tick's density regulation differs between event-level and
     tick-level semantics.
+
+    Args:
+        species: Genetic architecture.
+        name: Population name.
+        carrying_capacity: Declared capacity.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the build chain.
     """
-    return (
+    chain = (
         Configurator.from_species(species)
         .age_structure(4, 1)
         .setup(stochastic=False, name=name)
@@ -88,8 +96,10 @@ def _build_viable(
         .reproduction(eggs_per_female=60.0, sex_ratio=0.5)
         .survival(female_age0_survival=0.5, male_age0_survival=0.5)
         .competition(juvenile_growth_mode=1, carrying_capacity=carrying_capacity)
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        chain = chain.hooks(*items, **kwargs)
+    return chain.build()
 
 
 def _build_spatial(
@@ -104,14 +114,19 @@ def _build_spatial(
     """
     species = _fresh_species()
     demes = [
-        _build_viable(species, f"hb1{d}", carrying_capacity=carrying_capacity)
+        _build_viable(
+            species,
+            f"hb1{d}",
+            carrying_capacity=carrying_capacity,
+            hook_calls=[
+                (
+                    ([Op.set_param("carrying_capacity", "K * 0.5", every=1, event=event)],),
+                    {"event": event},
+                )
+            ],
+        )
         for d in range(2)
     ]
-    for deme in demes:
-        deme.register_hooks(
-            [Op.set_param("carrying_capacity", "K * 0.5", every=1, event=event)],
-            event=event,
-        )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
     spatial._initialize_session(seed=0)
     return spatial, demes
@@ -192,14 +207,29 @@ def test_spatial_heterogeneous_columns_split_across_demes() -> None:
     """
     species = _fresh_species()
     demes = [
-        _build_viable(species, "het0", carrying_capacity=800.0),
-        _build_viable(species, "het1", carrying_capacity=400.0),
+        _build_viable(
+            species,
+            "het0",
+            carrying_capacity=800.0,
+            hook_calls=[
+                (
+                    ([Op.set_param("carrying_capacity", "K * 0.5", every=1, event="early")],),
+                    {"event": "early"},
+                )
+            ],
+        ),
+        _build_viable(
+            species,
+            "het1",
+            carrying_capacity=400.0,
+            hook_calls=[
+                (
+                    ([Op.set_param("carrying_capacity", "K * 0.5", every=1, event="early")],),
+                    {"event": "early"},
+                )
+            ],
+        ),
     ]
-    for deme in demes:
-        deme.register_hooks(
-            [Op.set_param("carrying_capacity", "K * 0.5", every=1, event="early")],
-            event="early",
-        )
     spatial = SpatialPopulation(demes, migration_rate=0.0)
     spatial._initialize_session(seed=0)
 
@@ -229,12 +259,19 @@ def test_rust_spatial_session_applies_event_writes_raw_rows() -> None:
     the stacked state and both deme columns.
     """
     species = _fresh_species()
-    demes = [_build_viable(species, f"hom{d}") for d in range(2)]
-    for deme in demes:
-        deme.register_hooks(
-            [Op.set_param("carrying_capacity", "K * 0.5", every=1, event="first")],
-            event="first",
+    demes = [
+        _build_viable(
+            species,
+            f"hom{d}",
+            hook_calls=[
+                (
+                    ([Op.set_param("carrying_capacity", "K * 0.5", every=1, event="first")],),
+                    {"event": "first"},
+                )
+            ],
         )
+        for d in range(2)
+    ]
     spatial = SpatialPopulation(demes, migration_rate=0.0)
     spatial._initialize_session(seed=0)
     spatial._initialize_session(seed=5)
@@ -279,9 +316,10 @@ def test_rust_run_merges_journal_into_draft_and_params_log() -> None:
     session + params_log audit" holds on the engine run path.
     """
     species_rs = _fresh_species()
-    pop_rs = _build_viable(species_rs, "mergers")
-    pop_rs.register_hooks(
-        [Op.set_param("carrying_capacity", "K * 0.9", every=1)], event="early"
+    pop_rs = _build_viable(
+        species_rs,
+        "mergers",
+        hook_calls=[(([Op.set_param("carrying_capacity", "K * 0.9", every=1)],), {"event": "early"})],
     )
     pop_rs._initialize_session(seed=11)
     pop_rs.run(3, record_every=0)
@@ -306,8 +344,11 @@ def test_rust_run_inf_expression_raises_value_error_with_param_name() -> None:
     the message names the parameter, bounds, value, and tick.
     """
     species = _fresh_species()
-    pop = _build_viable(species, "infrun")
-    pop.register_hooks([Op.set_param("carrying_capacity", "K / 0")], event="early")
+    pop = _build_viable(
+        species,
+        "infrun",
+        hook_calls=[(([Op.set_param("carrying_capacity", "K / 0")],), {"event": "early"})],
+    )
     pop._initialize_session(seed=13)
     with pytest.raises(ValueError, match="carrying_capacity") as excinfo:
         pop.run(3, record_every=0)
@@ -324,11 +365,10 @@ def test_rust_discrete_run_merges_journal_into_draft_and_params_log() -> None:
         species=species_rs, name="discmergers", stochastic=False
     ).initial_state(
         individual_count={"female": {"A|A": 40.0}, "male": {"A|A": 20.0}}
-    ).reproduction(eggs_per_female=4.0).build()
-    pop_rs.register_hooks(
+    ).reproduction(eggs_per_female=4.0).hooks(
         [Op.set_param("eggs_per_female", "eggs_per_female * 0.5", every=1)],
         event="early",
-    )
+    ).build()
     pop_rs._initialize_session(seed=19)
     pop_rs.run(3, record_every=0)
 
@@ -351,12 +391,19 @@ def test_spatial_drain_presentation_uses_deme_prefix() -> None:
     rows (asserted by the HB-1 tests above).
     """
     species = _fresh_species()
-    demes = [_build_viable(species, f"prefix{d}") for d in range(2)]
-    for deme in demes:
-        deme.register_hooks(
-            [Op.set_param("carrying_capacity", "K * 0.5", every=1, event="first")],
-            event="first",
+    demes = [
+        _build_viable(
+            species,
+            f"prefix{d}",
+            hook_calls=[
+                (
+                    ([Op.set_param("carrying_capacity", "K * 0.5", every=1, event="first")],),
+                    {"event": "first"},
+                )
+            ],
         )
+        for d in range(2)
+    ]
     spatial = SpatialPopulation(demes, migration_rate=0.0)
     spatial._initialize_session(seed=0)
     spatial._initialize_session(seed=29)
@@ -385,28 +432,34 @@ def test_set_param_none_and_bool_value_raise_type_error(bad_value: object) -> No
     the exception names the offending type; registration stays atomic.
     """
     species = _fresh_species()
-    pop = _build_viable(species, "badtype")
     with pytest.raises(TypeError, match="set_param value must be a string expression"):
-        pop.register_hooks(
-            [Op.set_param("carrying_capacity", bad_value)],  # type: ignore[arg-type]  # deliberately invalid input
-            event="early",
+        _build_viable(
+            species,
+            "badtype",
+            hook_calls=[
+                (
+                    ([Op.set_param("carrying_capacity", bad_value)],),  # type: ignore[arg-type]  # deliberately invalid input
+                    {"event": "early"},
+                )
+            ],
         )
-    assert len(pop.compiled_hook_descriptors) == 0
 
 
 @pytest.mark.parametrize("expr", ["K @ 2", "K $ 2", "K # 2"])
 def test_set_param_invalid_character_raises_value_error(expr: str) -> None:
     """Lexically invalid expressions are value errors with the position."""
     species = _fresh_species()
-    pop = _build_viable(species, f"badlex{abs(hash(expr)) % 10000}")
     with pytest.raises(ValueError, match="Unsupported set_param value syntax"):
-        pop.register_hooks([Op.set_param("carrying_capacity", expr)], event="early")
+        _build_viable(
+            species,
+            f"badlex{abs(hash(expr)) % 10000}",
+            hook_calls=[(([Op.set_param("carrying_capacity", expr)],), {"event": "early"})],
+        )
 
 
 def test_set_param_missing_param_name_stays_value_error() -> None:
     """A missing target name remains a value error (not a type error)."""
     species = _fresh_species()
-    pop = _build_viable(species, "noname")
     raw_op = HookOp(
         OpType.SET_PARAM,
         "*",
@@ -418,4 +471,8 @@ def test_set_param_missing_param_name_stays_value_error() -> None:
         value_expr=1.0,
     )
     with pytest.raises(ValueError, match="requires a parameter name"):
-        pop.register_hooks([raw_op], event="early")
+        _build_viable(
+            species,
+            "noname",
+            hook_calls=[(([raw_op],), {"event": "early"})],
+        )

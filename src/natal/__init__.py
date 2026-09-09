@@ -93,8 +93,8 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "build_compression_mask",
     ],
     "frontend.hooks": [
-        "OpType", "DemeSelector", "deme_selector_matches", "HookOp", "Op",
-        "CompiledHookPlan", "CompiledHookDescriptor", "HookProgram", "RunProgram",
+        "OpType", "DemeSelector", "deme_selector_matches", "HookLayout", "HookOp", "Op",
+        "CompiledHookPlan", "CompiledHookDescriptor", "HookProgram",
         "empty_hook_program", "hook", "compile_declarative_hook",
         "compile_selector_callback", "TickContext", "TickMetrics", "BlueprintView",
         "HookRunner", "COND_ALWAYS", "COND_TICK_EQ", "COND_TICK_MOD", "ECO_PARAM_NAMES",

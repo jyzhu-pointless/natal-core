@@ -14,18 +14,19 @@ ints pass through.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, TypeAlias, Union
+from typing import Any, Callable, Dict, List, TypeAlias, Union
 
 import numpy as np
 from numpy.typing import NDArray
 
 from natal.frontend.genetics import Genotype, Species
-from natal.frontend.hooks.types import CompiledHookDescriptor, DemeSelector
+from natal.frontend.hooks.types import (
+    CompiledHookDescriptor,
+    DemeSelector,
+    HookLayout,
+)
 from natal.frontend.patterns import resolve_zygote_type as _resolve_zygote_type
 from natal.frontend.registry.index import IndexRegistry
-
-if TYPE_CHECKING:
-    from natal.frontend.population.base import BasePopulation
 
 SelectorItem: TypeAlias = Union[int, str, "Genotype"]
 SelectorSpec: TypeAlias = Union[
@@ -97,7 +98,7 @@ def _runtime_selector_value(
 
 def compile_selector_callback(
     func: Callable[..., Any],
-    pop: BasePopulation[Any],
+    pop: HookLayout,
     event: str,
     selectors_spec: Dict[str, SelectorSpec],
     priority: int = 0,
@@ -112,7 +113,9 @@ def compile_selector_callback(
 
     Args:
         func: The decorated user function.
-        pop: The population to compile against.
+        pop: Layout provider (a built population or the builder's
+            build-time context); only its ``index_registry``, ``species``,
+            and ``config.n_ages`` are read.
         event: Resolved event name.
         selectors_spec: Symbolic selector specs.
         priority: Execution priority — lower values run first.

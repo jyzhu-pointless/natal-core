@@ -36,6 +36,7 @@ from natal.frontend.utils.types import Sex
 if TYPE_CHECKING:
     from natal.backends.rust.rust_backend import RustDiscreteLifecycleBackend
     from natal.frontend.configurator import Configurator
+    from natal.frontend.hooks import CompiledHookDescriptor
 
 __all__ = ["DiscreteGenerationPopulation"]
 
@@ -118,14 +119,14 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 ],
             ]
         ] = None,
-        hook_items: Optional[List[object]] = None,
+        hook_descriptors: Sequence[CompiledHookDescriptor] = (),
     ):
         """Initialize a discrete-generation population.
 
         Constructs the population from a species definition and a
         discrete-normalized ``ModelDraft``, sets up genotype registries
-        and the initial age-by-genotype distribution, and registers
-        hooks for event-driven intervention.
+        and the initial age-by-genotype distribution, and installs the
+        compiled hook plan injected by the builder.
 
         Args:
             species: Genetic architecture describing loci, alleles and
@@ -141,8 +142,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             index_registry: Optional shared registry for index compression.
             initial_individual_count: Optional per-sex, per-genotype
                 initial distribution that overrides the config default.
-            hook_items: Hook registrations (``Op`` objects, ``@hook``-
-                decorated functions, or single-parameter callables).
+            hook_descriptors: Compiled hook plan (declarative CSR
+                descriptors and Python callbacks) injected exactly once by
+                the builder; there is no post-construction registration.
 
         Raises:
             TypeError: If *population_config* is not a ``ModelDraft``.
@@ -153,7 +155,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         if name is None:
             name = "DiscreteGenerationPop"
 
-        super().__init__(species, name, hook_items=hook_items)
+        super().__init__(species, name, hook_descriptors=hook_descriptors)
 
         if index_registry is not None:
             self._index_registry = index_registry
@@ -193,10 +195,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._rust_run_active = False
         self._rust_lifecycle_backend: RustDiscreteLifecycleBackend | None = None
         self._rust_backend_seed: int | None = None
-        # Structural changes (hook registration, modifier maps, blueprint
-        # flags) rebuild the session before the next run; value changes go
-        # straight to the session through the writers and the run-boundary
-        # ecology flush.
+        # Structural changes (blueprint flags, modifier maps) rebuild the
+        # session before the next run; value changes go straight to the
+        # session through the writers and the run-boundary ecology flush.
         self._rust_needs_rebuild: bool = False
 
         # Keep a pristine copy so reset() can restore the starting state.
@@ -205,8 +206,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             None,
             None,
         )
-
-        self._finalize_hooks()
 
         # Build self-describing history schema (frozen at construction).
         self._init_history_schema(
@@ -343,12 +342,12 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         single-parameter Python callbacks are bridged through the
         session's ``python_callbacks`` channel (fired at event boundaries
         interleaved with the CSR slots by priority, state copies written back per call).
-        Call this after all hook registration and config updates.  The
+        Call this after config updates.  The
         current config is materialized into the contract pair once; the
         session owns its copies.  Later value changes flow through the
         dirty-set bridge: write paths mark contract fields and the next
         ``run()`` pulls exactly those fields into the live session — no
-        rebuild, no RNG reset.  Structural changes (hooks, blueprint
+        rebuild, no RNG reset.  Structural changes (blueprint
         flags) rebuild the session before the next run.
 
         Args:
@@ -371,8 +370,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 "natal._engine_rs is not available; build it with `maturin develop` "
                 "before enabling the Rust backend."
             )
-        hook_program = self._build_hook_program()
-        self._run_program = self._run_program._replace(hooks=hook_program)
+        hook_program = self._hook_program
         backend = RustDiscreteLifecycleBackend(
             # Materialization copies the first owned draft itself; only an
             # existing session needs a current native parameter snapshot.
@@ -397,17 +395,15 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         return self
 
     def _run_startup_sync(self) -> None:
-        """Install changed execution flags and hooks without replacing state or RNG."""
+        """Install changed execution flags without replacing state or RNG."""
         if not self._rust_needs_rebuild:
             return
         backend = self._rust_lifecycle_backend
         if backend is None:
             raise RuntimeError("The population session has not been initialized.")
         config = self.config
-        program = self._build_hook_program()
-        backend.configure_program(program, config)
+        backend.configure_program(self._hook_program, config)
         self._register_rust_callbacks(backend)
-        self._run_program = self._run_program._replace(hooks=program)
         self._rust_needs_rebuild = False
 
     def _run_rust_lifecycle(

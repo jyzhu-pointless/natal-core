@@ -62,19 +62,19 @@ pop.run(n_steps=200, record_every=10)
 
 ## 三种 Hook 编写形态
 
-`@nt.hook` 根据函数签名自动识别三种形态（在注册时判定）：
+`@nt.hook` 根据函数签名自动识别三种形态（在构建期编译时判定）：
 
 | 形态 | 函数签名 | 说明 |
 |------|----------|------|
-| 声明式（Declarative） | 无参数，返回 `List[HookOp]` | 注册时调用一次，返回值编译为 CSR 计划 |
+| 声明式（Declarative） | 无参数，返回 `List[HookOp]` | 构建期调用一次，返回值编译为 CSR 计划 |
 | 回调（Callback） | 单参数 `def hook(pop: TickContext) -> int` | 每个 tick 调用一次，通过 `TickContext` 读写状态与参数 |
-| 选择器回调（Selector） | 单参数 + `selectors={...}` 关键字参数 | 选择器值在注册时解析、调用时注入 |
+| 选择器回调（Selector） | 单参数 + `selectors={...}` 关键字参数 | 选择器值在构建期解析、调用时注入 |
 
 旧的 `(state, config, deme_id)` 三参数签名已被显式拒绝（`TypeError` —— 该签名是 njit 时代的遗物，没有迁移通道）。回调 Hook 返回值 `0`（或 `RESULT_CONTINUE`）继续模拟，非零值（或 `RESULT_STOP`）停止模拟。
 
 四个生命周期事件（`first`、`early`、`late` 和 `finish`）全部由 Rust native session 执行。旧的 Python CSR 执行器、采样器和低层执行导出已删除；当前只保留编译后的 `HookProgram` 数据和 Python 回调桥接。
 
-`.hooks()` 是注册 Hook 的唯一入口：构建链式 API 中可直接调用，构建完成后通过 `pop.update().hooks(...)` 注册。
+`.hooks()` 是声明 Hook 的唯一入口，且只存在于构建链式 API 中：Hook 计划在 `build()` 时基于最终 registry 一次性编译并注入种群。构建完成后不存在任何注册通道——`pop.update().hooks(...)` 不受支持并抛出 `RuntimeError`。如需在运行期改变行为，请在构建时声明 Hook（可用 `when` 条件或回调内的 tick 判断控制触发），并在需要时手动触发同一事件。
 
 ## `Op` 操作
 
@@ -222,7 +222,7 @@ Rust 原生引擎是唯一的执行后端，Hook 只有一条执行路径：
 
 - 声明式 `Op` 编译为 CSR 计划（连续数组 + 偏移表），在 Rust 会话内按事件顺序执行。
 - 单参数回调（`TickContext`）在事件边界跨 Python↔Rust 桥进入会话，每次调用获得独立的上下文封装；回调写入进入该次调用的事件事务，成功才提交、失败则丢弃本次候选。
-- 同一事件内，声明式操作与 Python 回调按 `priority` **跨类型统一排序**（数值小者先执行；同 priority 时按注册顺序）。两类 Hook 的 `priority` 互相可比：无论回调还是声明式操作，`priority` 更小者总是先执行，后面的 Hook 能看到前面 Hook 的写入。
+- 同一事件内，声明式操作与 Python 回调按 `priority` **跨类型统一排序**（数值小者先执行；同 priority 时按声明顺序）。两类 Hook 的 `priority` 互相可比：无论回调还是声明式操作，`priority` 更小者总是先执行，后面的 Hook 能看到前面 Hook 的写入。
 
 Hook 是"Op 即 hook"的声明式编译模型：`Op` 对象本身构成 hook 程序，`@hook` 声明式函数只是返回 Op 列表的编译器入口。`initialize` 事件不存在 —— 初始化阶段的逻辑请用 `first` 事件的首个 tick（`when="tick == 1"`）或 `finish` 事件表达。
 

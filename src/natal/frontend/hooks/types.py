@@ -17,6 +17,7 @@ from typing import (
     Literal,
     NamedTuple,
     Optional,
+    Protocol,
     Tuple,
     Union,
 )
@@ -24,7 +25,34 @@ from typing import (
 import numpy as np
 
 if TYPE_CHECKING:
-    from natal.frontend.output._recording import RecordingPlan
+    from natal.frontend.data import ModelDraft
+    from natal.frontend.genetics import Species
+    from natal.frontend.registry.index import IndexRegistry
+
+
+class HookLayout(Protocol):
+    """Read-only layout surface hook compilation resolves against.
+
+    Built populations satisfy this structurally (``index_registry`` and
+    ``species`` properties plus the ``config`` property), so a hook
+    compiles identically against a population and against the builder's
+    build-time :class:`~natal.frontend.hooks._compile.HookLayoutContext`.
+    """
+
+    @property
+    def index_registry(self) -> IndexRegistry:
+        """Final active-type registry the selectors resolve against."""
+        ...
+
+    @property
+    def species(self) -> Species:
+        """Genetic architecture used for pattern resolution."""
+        ...
+
+    @property
+    def config(self) -> ModelDraft:
+        """The active draft (read for layout facts such as ``n_ages``)."""
+        ...
 
 # Any callable that can serve as a Python callback hook body.
 HookCallable = Callable[..., Any]
@@ -349,21 +377,3 @@ def empty_hook_program(n_events: int = NUM_EVENTS) -> HookProgram:
         has_set_param=False,
         python_callback_slots=np.array([], dtype=np.int32),
     )
-
-
-class RunProgram(NamedTuple):
-    """Program-level plan bundle owned by a population.
-
-    Domain-B landing slot: the CSR hook program and the frozen recording
-    plan travel together as the population's *program*.  The density
-    program is still config-driven (no plan object exists yet), so it is
-    deliberately absent instead of being fabricated as a placeholder.
-
-    Attributes:
-        hooks: CSR declarative hook plan (empty when no Op hooks).
-        recording: The frozen :class:`RecordingPlan`, or ``None`` before
-            the Configurator installs it at the end of ``build()``.
-    """
-
-    hooks: HookProgram
-    recording: Optional[RecordingPlan] = None

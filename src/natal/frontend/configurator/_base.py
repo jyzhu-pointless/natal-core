@@ -88,6 +88,7 @@ if TYPE_CHECKING:
     from typing import Self
 
     from natal.frontend.data.definition import ModelDefinition
+    from natal.frontend.hooks import CompiledHookDescriptor
     from natal.frontend.hooks.tick_context import TickContext
     from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
     from natal.frontend.patterns import IndividualSelector
@@ -507,9 +508,14 @@ class Configurator:
         self._record_history_mode: Literal["raw", "observation"] = "raw"
         self._record_history_max_rows: int | None = None
 
-        # Stored .hooks() calls (build path); replayed onto the population
-        # after construction and before backend enable.
+        # Stored .hooks() calls (build path); compiled once against the
+        # final registry at build() and injected into the population.
         self._hook_calls: list[HookCall] = []
+
+        # Spatial templates keep declared deme selectors verbatim (the
+        # container-level plan pins hooks per deme); panmictic builders
+        # normalize non-wildcard selectors with a warning at compile time.
+        self._spatial_template: bool = False
 
         # Declaration journal (ModelDefinition needs the semantic
         # declaration ORDER).  Every public chaining call records
@@ -1579,34 +1585,41 @@ class Configurator:
         deme: DemeSelector = "*",
         name: str | None = None,
     ) -> Self:
-        """Register event hooks — the single entry, build and runtime.
+        """Declare event hooks — the single hook declaration entry.
 
         Accepted items: ``Op.*`` objects (or lists of them), functions
         decorated with ``@hook(event='...')``, and plain single-parameter
         callables (``def hook(pop) -> int``).
 
+        Declarations are compiled once against the final registry when
+        ``build()`` runs and injected into the population; there is no
+        post-construction hook registration.
+
         Args:
-            *hook_items: Hook registrations.
+            *hook_items: Hook declarations.
             event: Default event for items that do not carry one
                 (``"first"``, ``"early"``, ``"late"``, ``"finish"``).
             priority: Execution priority — lower values run first.
             deme: Deme selector for spatial populations.
-            name: Optional name for grouped op registrations.
+            name: Optional name for grouped op declarations.
 
         Returns:
             Self for chaining.
 
         Raises:
+            RuntimeError: When called on a runtime (update) Configurator;
+                hook plans are frozen at build time.
             TypeError: If an item has an unsupported shape (including the
                 removed ``(state, config, deme_id)`` signature).
             ValueError: If an event name is unknown or cannot be resolved.
         """
         if self._pop_ref is not None:
-            # Runtime: register immediately on the live population.
-            self._pop_ref.register_hooks(
-                *hook_items, event=event, priority=priority, deme=deme, name=name
+            raise RuntimeError(
+                "hooks() is only valid during the build phase. Hook plans "
+                "are compiled once at build() and cannot change after the "
+                "Population has been built; declare hooks before .build() "
+                "and trigger events at runtime."
             )
-            return self
         self._hook_calls.append(
             (
                 hook_items,
@@ -1945,6 +1958,75 @@ class Configurator:
         """
         return self
 
+    def _compile_hook_descriptors(
+        self, final_config: ModelDraft
+    ) -> tuple[CompiledHookDescriptor, ...]:
+        """Compile every stored ``.hooks()`` call against the final registry.
+
+        Runs once at the end of :meth:`build`, after compression has
+        settled the active-type registry, so selectors resolve to the
+        exact indices the executed model uses.  Identity dedupe mirrors
+        the historical registration idempotency: declaring the same
+        object (or op group) for the same event twice yields one hook.
+
+        Args:
+            final_config: The final (post-compression) draft; read for
+                layout facts such as ``n_ages``.
+
+        Returns:
+            The immutable descriptor sequence injected into the
+            population at construction.
+
+        Raises:
+            TypeError: If a declared item has an unsupported shape.
+            ValueError: If an event name is unknown or cannot be resolved.
+        """
+        from natal.frontend.hooks._compile import (
+            HookLayoutContext,
+            compile_hook_call,
+            same_hook_identity,
+        )
+        from natal.frontend.population.base import BasePopulation
+
+        if not self._hook_calls:
+            return ()
+        assert self._species is not None  # build() validated this already
+        assert self._registry is not None
+        layout = HookLayoutContext(
+            index_registry=self._registry, species=self._species, config=final_config
+        )
+        descriptors: list[CompiledHookDescriptor] = []
+        for items, kwargs in self._hook_calls:
+            deme = cast("DemeSelector", kwargs["deme"])
+            if deme != "*" and not self._spatial_template:
+                # Panmictic models are deme-less: non-wildcard selectors
+                # are ignored with a warning (the spatial template keeps
+                # them so the container-level plan can pin per-deme hooks).
+                import warnings
+
+                warnings.warn(
+                    "BasePopulation ignores non-'*' deme selectors. "
+                    "Apply deme selection through SpatialPopulation-level "
+                    "logic instead.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                kwargs = {**kwargs, "deme": "*"}
+            compiled = compile_hook_call(
+                layout,
+                *items,
+                event=cast("str | None", kwargs["event"]),
+                priority=cast("int", kwargs["priority"]),
+                deme=cast("DemeSelector", kwargs["deme"]),
+                name=cast("str | None", kwargs["name"]),
+                allowed_events=BasePopulation.ALLOWED_EVENTS,
+            )
+            for desc in compiled:
+                if any(same_hook_identity(existing, desc) for existing in descriptors):
+                    continue
+                descriptors.append(desc)
+        return tuple(descriptors)
+
     def build(
         self,
         name: str | None = None,
@@ -1969,9 +2051,9 @@ class Configurator:
         Args:
             name: Population name (falls back to ``.setup(name=...)``
                 or ``"Population"``).
-            hook_items: Additional hook registrations (same item shapes
-                as :meth:`hooks`), registered together with any stored
-                via :meth:`hooks`.
+            hook_items: Additional hook declarations (same item shapes
+                as :meth:`hooks`); declaration sugar that feeds the same
+                build-time compilation as :meth:`hooks` calls.
 
         Returns:
             ``AgeStructuredPopulation`` or ``DiscreteGenerationPopulation``,
@@ -2031,7 +2113,8 @@ class Configurator:
             gtype_names=gtype_names_from_registry(self._registry.index_to_gtype),
         )
 
-        # Compression runs on a COPY — self._config stays in G_orig space.
+        # Compression replaces self._config with the compressed copy; the
+        # registry is compressed in place so name lookups stay aligned.
         # Population receives the compressed config.  All user writes
         # (fitness, initial_state) already happened on the full-size
         # config; compression subslices the arrays naturally.
@@ -2078,6 +2161,13 @@ class Configurator:
         if name is None:
             name = getattr(self, "_name", "Population")
 
+        # Compile the declared hooks once against the FINAL registry (post
+        # compression): selectors resolve to the exact indices the executed
+        # model uses, and the packed plan is injected into the population at
+        # construction.  Identity dedupe mirrors the historical
+        # registration idempotency (same object, same event → one hook).
+        hook_descriptors = self._compile_hook_descriptors(final_config)
+
         if final_config.discrete_generation:
             from natal.frontend.population.discrete_generation import (
                 DiscreteGenerationPopulation,
@@ -2089,6 +2179,7 @@ class Configurator:
                     population_config=final_config,
                     index_registry=self._registry,
                     name=name,
+                    hook_descriptors=hook_descriptors,
                 )
             )
         else:
@@ -2101,6 +2192,7 @@ class Configurator:
                 population_config=final_config,
                 index_registry=self._registry,
                 name=name,
+                hook_descriptors=hook_descriptors,
             )
 
         # Freeze the declaration snapshot onto the population: the
@@ -2119,20 +2211,8 @@ class Configurator:
         pop._gamete_modifiers = list(self.gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
         pop._zygote_modifiers = list(self.zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
 
-        # Replay stored .hooks() calls (plus any passed inline) BEFORE the
-        # backend enable below: _initialize_session snapshots both the CSR
-        # program and the Python-callback bridges.
-        hook_calls: list[HookCall] = list(self._hook_calls)
-        for items, kwargs in hook_calls:
-            pop.register_hooks(  # pyright: ignore[reportPrivateUsage]
-                *items,
-                event=cast("str | None", kwargs["event"]),
-                priority=cast("int", kwargs["priority"]),
-                deme=cast("DemeSelector", kwargs["deme"]),
-                name=cast("str | None", kwargs["name"]),
-            )
-
-        # The Rust engine is the ONLY execution backend: every
+        # The compiled hook plan was injected at construction; the Rust
+        # engine is the ONLY execution backend: every
         # population builds its session here, and a missing extension is a
         # hard error — there is no silent fallback.
         from natal.backends.rust.rust_backend import rust_backend_available

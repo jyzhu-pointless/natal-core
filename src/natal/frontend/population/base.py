@@ -12,7 +12,7 @@ keeping internal state representations compatible with the NumPy-based engine.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import (
     TYPE_CHECKING,
     Generic,
@@ -35,7 +35,8 @@ from natal.frontend.data import (
     PopulationState,
 )
 from natal.frontend.genetics import Genotype, HaploidGenotype, Species
-from natal.frontend.hooks.types import RunProgram, empty_hook_program
+from natal.frontend.hooks._compile import build_hook_program
+from natal.frontend.hooks.types import HookProgram
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 from natal.frontend.population._mixins._output import OutputMixin
 from natal.frontend.registry.index import IndexRegistry
@@ -103,7 +104,7 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     The base class unifies common behavior for different population model
     implementations (for example, discrete-generation and age-structured
     models). It manages the species/genetic architecture,
-    indexing, hook registration, and modifier pipelines.
+    indexing, the frozen hook plan, and modifier pipelines.
 
     Attributes:
         ALLOWED_EVENTS (List[str]): Event names supported by the hook system.
@@ -114,10 +115,11 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         config (ModelDraft): Active static draft/config container.
         state (T_State): Active population state container.
         history (List[Tuple[int, np.ndarray]]): Recorded state snapshots by tick.
-        compiled_hook_descriptors (List[CompiledHookDescriptor]): Ordered list
-            of compiled hook descriptors (CSR plans and Python callbacks)
-            sorted by priority.  Homogeneous demes cloned from the
-            same template share this list object via identity.
+        compiled_hook_descriptors (tuple[CompiledHookDescriptor, ...]): Read-only
+            snapshot of the compiled hook descriptors (CSR plans and Python
+            callbacks) injected at build time, in declaration order.
+            Homogeneous demes cloned from the same template share the
+            underlying tuple via identity.
     """
 
     # Allowed hook events (subclasses may extend this list).
@@ -166,18 +168,18 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         self,
         species: Species,
         name: str = "Population",
-        hook_items: Optional[List[object]] = None,
+        hook_descriptors: Sequence[CompiledHookDescriptor] = (),
     ):
         """Initialize the base population.
 
         Args:
             species: Genetic architecture specifying chromosomes, loci, and alleles.
             name: Optional population name (default: "Population").
-            hook_items: Optional hook registrations (``Op`` objects,
-                ``@hook``-decorated functions, or single-parameter
-                callables).  Registration is deferred to
-                :meth:`_finalize_hooks` so the IndexRegistry is ready
-                when declarative ops compile.
+            hook_descriptors: Compiled hook plan (declarative CSR
+                descriptors and Python callbacks) injected exactly once by
+                the builder.  Populations never register hooks after
+                construction; the packed program is fixed for this
+                instance's lifetime.
 
         Note:
             Registry and genotypes are initialized lazily via Template Method.
@@ -194,10 +196,20 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         # DELAYED: Registry will be created via _initialize_registry()
         self._index_registry: Optional[IndexRegistry] = None
 
-        # Program-level plans (CSR hooks + frozen recording plan).
-        self._run_program: RunProgram = RunProgram(
-            hooks=empty_hook_program(), recording=None
+        # Compiled hook plan: immutable descriptor tuple plus the CSR
+        # program packed once at injection (callbacks interleaved with
+        # declarative slots in one stable priority order).  Clones share
+        # both via identity; nothing re-registers or reorders them.
+        self._hook_descriptors: tuple[CompiledHookDescriptor, ...] = tuple(
+            hook_descriptors
         )
+        self._hook_program: HookProgram = build_hook_program(
+            self._hook_descriptors, order_by_priority=True
+        )
+
+        # Frozen recording plan (installed by the builder at the end of
+        # build(); None on clones until they copy the template's plan).
+        self._recording_plan: Optional[RecordingPlan] = None
 
         # Self-describing History data model (frozen at build time).
         self._history_obj: Optional[History] = None
@@ -217,9 +229,6 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         # Derived modifier lists — rebuilt by refresh_modifiers().
         self._gamete_modifiers: list[tuple[int, str | None, GameteModifier]] = []
         self._zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
-
-        # Compiled hook descriptors (CSR plans | Python callbacks).
-        self.compiled_hook_descriptors: List[CompiledHookDescriptor] = []
 
         # Callback runner used to bridge Python callbacks into Rust sessions.
         self._hook_runner: Optional[HookRunner] = None
@@ -246,10 +255,6 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
 
         self._params_log = ParameterLog()
 
-        # Hooks queued for deferred registration after subclass
-        # initialization (declarative ops need the IndexRegistry).
-        self._pending_hook_items: List[object] = list(hook_items or [])
-
         # Rust dirty-set bridge: contract field names whose draft values
         # changed after the Rust session was built.  The next run() pulls
         # exactly these fields into the session (no rebuild, no RNG reset).
@@ -258,27 +263,17 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         # backends are concrete types); base-class consumers reach them via
         # getattr so the annotation stays unclaimed here.
 
-    def _finalize_hooks(self) -> None:
-        """Register deferred hook items after subclass initialization.
-
-        Called by subclasses after their __init__ completes.  Declarative
-        ops need the IndexRegistry, which may only be ready once the
-        subclass has finished its own setup.
-        """
-        pending = self._pending_hook_items
-        self._pending_hook_items = []
-        if pending:
-            self.register_hooks(*pending)
-
     @property
-    def _recording_plan(self) -> Optional[RecordingPlan]:
-        """The frozen recording plan (lives inside the run program)."""
-        return self._run_program.recording
+    def compiled_hook_descriptors(self) -> tuple[CompiledHookDescriptor, ...]:
+        """Read-only snapshot of the hook plan installed at build time.
 
-    @_recording_plan.setter
-    def _recording_plan(self, plan: Optional[RecordingPlan]) -> None:
-        """Install the frozen recording plan into the run program."""
-        self._run_program = self._run_program._replace(recording=plan)
+        The descriptor tuple is fixed at construction; there is no
+        post-construction registration.  Declarative arrays were packed
+        into the CSR program once at injection, so mutating the returned
+        descriptors (or the declaration objects they were compiled from)
+        cannot alter the installed plan.
+        """
+        return self._hook_descriptors
 
     def _clone(
         self,
@@ -326,8 +321,6 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         # --- runtime provenance (independent per clone) ---
         clone._reconfiguration_log = []
 
-        # --- per-clone bookkeeping (deferred hooks already finalized) ---
-        clone._pending_hook_items = []
         from natal._engine_rs import ParameterLog
 
         clone._params_log = ParameterLog()
@@ -341,15 +334,14 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         # until SpatialPopulation.__init__ restamps the whole list.
         clone._deme_id = int(self._deme_id)
 
-        # --- shared hooks (compiled, read-only during simulation) ---
-        clone.compiled_hook_descriptors = self.compiled_hook_descriptors
+        # --- shared hooks (compiled once at build, read-only afterwards) ---
+        # Clones share the descriptor tuple, the packed CSR program, and
+        # the callback runner by identity — no re-registration, no
+        # reordering, no re-execution of declarations.
+        clone._hook_descriptors = self._hook_descriptors
+        clone._hook_program = self._hook_program
         clone._hook_runner = self._hook_runner
-        # Clones start from an empty CSR program; registration populates it
-        # lazily via _refresh_run_program (the shared descriptor list is
-        # re-read every time the program is rebuilt).
-        clone._run_program = RunProgram(
-            hooks=self._run_program.hooks, recording=self._run_program.recording
-        )
+        clone._recording_plan = self._recording_plan
 
         # --- shared registry ---
         clone._index_registry = self._index_registry
@@ -413,7 +405,6 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
             if self._observation_mask is None
             else self._observation_mask.copy()
         )
-        clone._recording_plan = self._recording_plan
         source_history = self._history_obj
         if source_history is None:
             clone._history_obj = None

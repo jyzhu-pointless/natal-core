@@ -5,8 +5,9 @@ Migrated to the current architecture:
 
 - the retired compiled-backend disable guard is a no-op context manager
   (the reference Python dispatch is the only non-Rust execution path);
-- ``set_hook``/``hook_id``-based registration is replaced by
-  ``register_hooks`` (single-parameter callbacks, ``@hook`` decorators);
+- hook declarations live in the build chain (``.hooks(...)``); plans are
+  compiled once at ``build()`` — single-parameter callbacks and
+  ``@hook`` decorators carry event/priority/deme metadata;
 - the njit-era ``njit_fn``/``py_wrapper`` descriptor payloads are gone —
   custom hooks are single-parameter ``TickContext`` callbacks;
 - the 100-deme subprocess regression keeps the homogeneous-deme scale
@@ -315,10 +316,15 @@ def test_spatial_population_run_stop_marks_finish():
         finish_events.append(int(pop.deme_id))
         return 0
 
-    demes = [_build_test_deme(f"stop_mark_d{i}", species) for i in range(2)]
-    for deme in demes:
-        deme.register_hooks(record_finish)
-    demes[0].register_hooks(stop_on_deme_zero)
+    demes = [
+        _build_test_deme(
+            f"stop_mark_d{i}",
+            species,
+            hook_calls=[((record_finish,), {})]
+            + ([((stop_on_deme_zero,), {})] if i == 0 else []),
+        )
+        for i in range(2)
+    ]
 
     sp = SpatialPopulation(demes, migration_rate=0.0)
     sp._initialize_session(seed=0)
@@ -353,10 +359,15 @@ def test_spatial_stop_path_finish_hooks_see_own_deme_ids() -> None:
         finish_ids.append(int(pop.deme_id))
         return 0
 
-    demes = [_build_test_deme(f"stop_id_d{i}", species) for i in range(3)]
-    for deme in demes:
-        deme.register_hooks(record_finish)
-    demes[1].register_hooks(stop_on_deme_one)
+    demes = [
+        _build_test_deme(
+            f"stop_id_d{i}",
+            species,
+            hook_calls=[((record_finish,), {})]
+            + ([((stop_on_deme_one,), {})] if i == 1 else []),
+        )
+        for i in range(3)
+    ]
 
     spatial = SpatialPopulation(demes, migration_rate=0.0)
     spatial._initialize_session(seed=0)
@@ -470,9 +481,20 @@ def test_spatial_population_stochastic_age_migration_preserves_sperm_consistency
 # ---------------------------------------------------------------------------
 
 
-def _build_test_deme(name: str, species: nt.Species) -> nt.DiscreteGenerationPopulation:
-    """Build an independent quiescent discrete deme (own hook storage)."""
-    return (
+def _build_test_deme(
+    name: str,
+    species: nt.Species,
+    hook_calls: list | None = None,
+) -> nt.DiscreteGenerationPopulation:
+    """Build an independent quiescent discrete deme (own hook storage).
+
+    Args:
+        name: Population name.
+        species: Genetic architecture.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in this deme's build chain.
+    """
+    chain = (
         nt.DiscreteGenerationPopulation.setup(
             species=species, name=name, stochastic=False
         )
@@ -484,8 +506,10 @@ def _build_test_deme(name: str, species: nt.Species) -> nt.DiscreteGenerationPop
         )
         .reproduction(eggs_per_female=0.0)
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        chain = chain.hooks(*items, **kwargs)
+    return chain.build()
 
 
 def test_spatial_hook_priority_runs_in_run_tick_and_run() -> None:
@@ -507,12 +531,16 @@ def test_spatial_hook_priority_runs_in_run_tick_and_run() -> None:
         return 0
 
     sp = SpatialPopulation(
-        [_build_test_deme("prio_d0", _make_species("spatial_prio"))],
+        [
+            _build_test_deme(
+                "prio_d0",
+                _make_species("spatial_prio"),
+                hook_calls=[((first_a, first_b), {})],
+            )
+        ],
         migration_rate=0.0,
     )
     sp._initialize_session(seed=0)
-    sp.register_hooks(first_a)
-    sp.register_hooks(first_b)
 
     sp.run_tick()
     sp.run(n_steps=1)
@@ -539,10 +567,8 @@ def test_spatial_mixed_priority_is_local_per_deme() -> None:
         pop.state.individual_count[1, 0, 0] += 4.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    d0 = _build_test_deme("local_d0", species)
-    d1 = _build_test_deme("local_d1", species)
-    d0.register_hooks(d0_hook)
-    d1.register_hooks(d1_hook)
+    d0 = _build_test_deme("local_d0", species, hook_calls=[((d0_hook,), {})])
+    d1 = _build_test_deme("local_d1", species, hook_calls=[((d1_hook,), {})])
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
     spatial._initialize_session(seed=0)
@@ -569,9 +595,10 @@ def test_spatial_reference_run_hooks_see_live_deme_ids() -> None:
         seen.append(int(pop.deme_id))
         return 0
 
-    demes = [_build_test_deme(f"deme_id_d{i}", species) for i in range(3)]
-    for deme in demes:
-        deme.register_hooks(record_deme)
+    demes = [
+        _build_test_deme(f"deme_id_d{i}", species, hook_calls=[((record_deme,), {})])
+        for i in range(3)
+    ]
     spatial = SpatialPopulation(demes, migration_rate=0.0)
     spatial._initialize_session(seed=0)
     spatial.run(n_steps=2)
@@ -596,9 +623,10 @@ def test_spatial_reference_deme_selector_targets_one_deme() -> None:
         hits.append(int(pop.deme_id))
         return 0
 
-    demes = [_build_test_deme(f"sel_deme_d{i}", species) for i in range(3)]
-    for deme in demes:
-        deme.register_hooks(only_deme_one)
+    demes = [
+        _build_test_deme(f"sel_deme_d{i}", species, hook_calls=[((only_deme_one,), {})])
+        for i in range(3)
+    ]
     spatial = SpatialPopulation(demes, migration_rate=0.0)
     spatial._initialize_session(seed=0)
     spatial.run(n_steps=1)
@@ -609,7 +637,6 @@ def test_spatial_reference_deme_selector_targets_one_deme() -> None:
 def test_spatial_compiled_local_hooks_still_take_effect() -> None:
     """A local stop hook halts the first tick and blocks further runs."""
     species = _make_species("spatial_compiled_local_hook_effect")
-    d0 = _build_test_deme("csr_local_d0", species)
     d1 = _build_test_deme("csr_local_d1", species)
 
     @nt.hook(event="first", priority=0)
@@ -618,9 +645,9 @@ def test_spatial_compiled_local_hooks_still_take_effect() -> None:
         pop.stop()  # type: ignore[attr-defined]  # duck-typed double call: shapes verified by assertions below
         return 0
 
+    d0 = _build_test_deme("csr_local_d0", species, hook_calls=[((stop_immediately,), {})])
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
     spatial._initialize_session(seed=0)
-    spatial.register_hooks(stop_immediately, deme=0)
     spatial.run_tick()
 
     assert d0._finished and d1._finished
@@ -637,9 +664,18 @@ def _build_quiescent_age_pop(
     species: nt.Species,
     n_demes: int,
     name: str = "quiescent",
+    hook_calls: list | None = None,
 ) -> SpatialPopulation:
-    """Build a homogeneous quiescent age-structured population."""
-    return (
+    """Build a homogeneous quiescent age-structured population.
+
+    Args:
+        species: Genetic architecture.
+        n_demes: Deme count.
+        name: Population name.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the spatial build chain.
+    """
+    chain = (
         nt.SpatialPopulation.builder(
             species, n_demes=n_demes, pop_type="age_structured"
         )
@@ -664,17 +700,20 @@ def _build_quiescent_age_pop(
             juvenile_growth_mode="logistic",
             expected_num_new_adult_females=100,
         )
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        chain = chain.hooks(*items)
+    return chain.build()
 
 
 def _build_discrete_pop(
     species: nt.Species,
     n_demes: int,
     name: str = "discrete",
+    hook_calls: list | None = None,
 ) -> SpatialPopulation:
     """Build a homogeneous discrete-generation population via builder."""
-    return (
+    chain = (
         nt.SpatialPopulation.builder(
             species, n_demes=n_demes, pop_type="discrete_generation"
         )
@@ -691,8 +730,10 @@ def _build_discrete_pop(
             low_density_growth_rate=6.0,
             juvenile_growth_mode="beverton_holt",
         )
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        chain = chain.hooks(*items)
+    return chain.build()
 
 
 # -----------------------------------------------------------------------
@@ -708,16 +749,9 @@ def test_compact_plan_folds_identical_sequences_to_wildcard() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    d0 = _build_test_deme("cw_d0", species)
-    d0.register_hooks(my_hook)
-    d1 = _build_test_deme("cw_d1", species)
-    d2 = _build_test_deme("cw_d2", species)
-    # d1 and d2 reuse d0's compiled descriptor list (identical sequences).  # restored
-    d1.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    d2.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-
-    spatial = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
-    spatial._initialize_session(seed=0)
+    spatial = _build_quiescent_age_pop(
+        species, n_demes=3, name="compact_wildcard_build", hook_calls=[((my_hook,), {})]
+    )
 
     expanded = spatial._collect_effective_compiled_hooks()
     compact = spatial._collect_compact_spatial_hooks()
@@ -740,13 +774,9 @@ def test_compact_plan_preserves_expanded_view() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    d0 = _build_test_deme("cev_d0", species)
-    d0.register_hooks(my_hook)
-    d1 = _build_test_deme("cev_d1", species)  # restored
-    d1.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-
-    spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
-    spatial._initialize_session(seed=0)
+    spatial = _build_quiescent_age_pop(
+        species, n_demes=2, name="compact_expanded_view_build", hook_calls=[((my_hook,), {})]
+    )
 
     public = spatial.get_compiled_hooks()
     assert len(public) == 2
@@ -757,20 +787,18 @@ def test_compact_plan_subset_selector() -> None:
     """Descriptor with subset selector stays as tuple, not wildcard."""
     species = _make_species("compact_subset")
 
-    @nt.hook(event="first", priority=0)
-    def my_hook(pop: object) -> int:
+    @nt.hook(event="first", priority=0, deme=(0, 1))
+    def demes_0_1_hook(pop: object) -> int:
         """Bump age-1 females on every fire."""  # restored
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    d0 = _build_test_deme("cs_d0", species)
-    d0.register_hooks(my_hook)
-    d1 = _build_test_deme("cs_d1", species)  # restored
-    d1.compiled_hook_descriptors = d0.compiled_hook_descriptors  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    d2 = _build_test_deme("cs_d2", species)
-
-    spatial = SpatialPopulation([d0, d1, d2], migration_rate=0.0)
-    spatial._initialize_session(seed=0)
+    spatial = _build_quiescent_age_pop(
+        species,
+        n_demes=3,
+        name="compact_subset_build",
+        hook_calls=[((demes_0_1_hook,), {})],
+    )
 
     compact = spatial._collect_compact_spatial_hooks()
     assert len(compact) == 1
@@ -801,17 +829,43 @@ def test_compact_plan_different_order_not_merged() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    sp = _build_quiescent_age_pop(species, n_demes=2)
-    # Clear deme 0's compiled plan so only the two hooks below are installed.  # restored
-    sp.deme(0).compiled_hook_descriptors = []  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    sp.deme(0).register_hooks(mul2)
-    sp.deme(0).register_hooks(add1)
-    descs0 = list(sp.deme(0).compiled_hook_descriptors)
+    def build_ordered_deme(name: str, hooks_in_order: list) -> nt.DiscreteGenerationPopulation:
+        """Build a quiescent age deme with one ordered declaration pair."""
+        chain = (
+            nt.AgeStructuredPopulation.setup(species=species, name=name, stochastic=False)
+            .age_structure(n_ages=3, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 100.0, 0.0]},
+                    "male": {"WT|WT": [0.0, 100.0, 0.0]},
+                }
+            )
+            .survival(
+                female_age_based_survival=[1.0, 1.0, 0.0],
+                male_age_based_survival=[1.0, 1.0, 0.0],
+            )
+            .reproduction(
+                female_age_based_mating_rate=[0.0, 0.0, 0.0],
+                male_age_based_mating_rate=[0.0, 0.0, 0.0],
+                eggs_per_female=0.0,
+            )
+            .competition(
+                juvenile_growth_mode="logistic",
+                expected_num_new_adult_females=100,
+            )
+        )
+        for hook in hooks_in_order:
+            chain = chain.hooks(hook)
+        return chain.build()
 
-    # Deme 1 reuses the same descriptors in reversed order (non-commutative).  # restored
-    sp.deme(1).compiled_hook_descriptors = [descs0[1], descs0[0]]  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-
-    sp._refresh_spatial_hooks()
+    sp = SpatialPopulation(
+        [
+            build_ordered_deme("compact_order_d0", [mul2, add1]),
+            build_ordered_deme("compact_order_d1", [add1, mul2]),
+        ],
+        migration_rate=0.0,
+    )
+    sp._initialize_session(seed=0)
 
     compact = sp._collect_compact_spatial_hooks()
     selectors = {d.deme_selector for d in compact}
@@ -840,8 +894,7 @@ def test_compact_plan_empty_hook_sequence_skipped() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    d0 = _build_test_deme("ce_d0", species)
-    d0.register_hooks(my_hook)
+    d0 = _build_test_deme("ce_d0", species, hook_calls=[((my_hook,), {})])
     d1 = _build_test_deme("ce_d1", species)
 
     spatial = SpatialPopulation([d0, d1], migration_rate=0.0)
@@ -853,10 +906,14 @@ def test_compact_plan_empty_hook_sequence_skipped() -> None:
 
 
 # -----------------------------------------------------------------------
-# register_hooks shared-storage tests
+# Build-time declaration contracts (former shared-storage tests)
 # -----------------------------------------------------------------------
-def test_set_hook_shared_storage_registers_once() -> None:
-    """register_hooks on shared-storage demes appends one descriptor."""
+def test_set_hook_duplicate_declaration_compiles_once() -> None:
+    """Declaring the same hook object twice yields one descriptor.
+
+    Formerly the identity-idempotent registration dedupe; the same
+    (source, event) identity now dedupes at build-time compilation.
+    """
     species = _make_species("set_hook_shared")
 
     @nt.hook(event="first", priority=0)
@@ -865,58 +922,49 @@ def test_set_hook_shared_storage_registers_once() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    sp = _build_quiescent_age_pop(species, n_demes=3)
-    # Baseline: all demes currently share one descriptor list object.  # restored
-    count_before = len(sp.deme(0).compiled_hook_descriptors)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    sp.register_hooks(my_hook)  # restored
-    count_after = len(sp.deme(0).compiled_hook_descriptors)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    assert count_after == count_before + 1
+    sp = _build_quiescent_age_pop(
+        species,
+        n_demes=3,
+        name="set_hook_shared_build",
+        hook_calls=[((my_hook,), {}), ((my_hook,), {})],
+    )
+    assert len(sp.deme(0).compiled_hook_descriptors) == 1  # type: ignore[attr-defined]  # deme access surface
 
     compact = sp._collect_compact_spatial_hooks()
     assert len(compact) == 1
     assert compact[0].deme_selector == "*"
 
 
-def test_set_hook_shared_storage_subset_cow_structure() -> None:
-    """Subset registration copy-on-writes so non-targeted demes stay clean."""
+def test_container_register_hooks_is_deleted() -> None:
+    """Post-build registration no longer exists at the container level."""
     species = _make_species("set_hook_cow")
+    sp = _build_quiescent_age_pop(species, n_demes=3)
 
     @nt.hook(event="first", priority=0)
     def my_hook(pop: object) -> int:
-        """Bump age-1 females on every fire."""  # restored
-        pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+        """Would-be late registration body (never installed)."""
+        _ = pop
         return 0
 
-    sp = _build_quiescent_age_pop(species, n_demes=3)
-    # All demes share one list; registration on a subset triggers copy-on-write.  # restored
-    shared_id = id(sp.deme(0).compiled_hook_descriptors)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    count_before = len(sp.deme(0).compiled_hook_descriptors)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-
-    sp.register_hooks(my_hook, deme=0)
-    # Targeted deme 0 gets a fresh list; non-targeted demes keep the shared one.  # restored
-    assert id(sp.deme(0).compiled_hook_descriptors) != shared_id  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    assert len(sp.deme(0).compiled_hook_descriptors) == count_before + 1  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    # Non-targeted demes must still share the original list object.  # restored
-    assert id(sp.deme(1).compiled_hook_descriptors) == shared_id  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    assert len(sp.deme(1).compiled_hook_descriptors) == count_before  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    assert id(sp.deme(2).compiled_hook_descriptors) == shared_id  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    assert len(sp.deme(2).compiled_hook_descriptors) == count_before  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+    with pytest.raises(AttributeError):
+        sp.register_hooks(my_hook)  # type: ignore[attr-defined]  # negative contract: deleted surface
 
 
 def test_set_hook_shared_storage_subset_cow_execution() -> None:
-    """Subset registration: only targeted deme runs hook, others unchanged."""
+    """A deme-targeted declaration fires only on its selected deme."""
     species = _make_species("cow_exec")
     n_demes = 5
     target = 2
-    sp = _build_quiescent_age_pop(species, n_demes)
 
-    @nt.hook(event="first", priority=0)
+    @nt.hook(event="first", priority=0, deme=target)
     def add_one(pop: object) -> int:
         """Bump age-1 females on every fire."""  # restored
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    sp.register_hooks(add_one, deme=target)
+    sp = _build_quiescent_age_pop(
+        species, n_demes, name="cow_exec_build", hook_calls=[((add_one,), {})]
+    )
 
     sp.run_tick()
 
@@ -927,19 +975,20 @@ def test_set_hook_shared_storage_subset_cow_execution() -> None:
 
 
 def test_set_hook_subset_callback_hook_no_leak() -> None:
-    """Callback hook registered on a subset does not leak to other demes."""
+    """A deme-targeted callback never leaks to other demes."""
     species = _make_species("no_leak")
     n_demes = 5
     target = 2
-    sp = _build_quiescent_age_pop(species, n_demes)
 
-    @nt.hook(event="first", priority=0)
+    @nt.hook(event="first", priority=0, deme=target)
     def py_hook(pop: object) -> int:
         """Bump age-1 females on every fire."""  # restored
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    sp.register_hooks(py_hook, deme=target)
+    sp = _build_quiescent_age_pop(
+        species, n_demes, name="no_leak_build", hook_calls=[((py_hook,), {})]
+    )
     sp.run_tick()
 
     for i in range(n_demes):
@@ -949,30 +998,34 @@ def test_set_hook_subset_callback_hook_no_leak() -> None:
 
 
 def test_set_hook_empty_selector_noop() -> None:
-    """Empty selector (no matching demes) leaves all state unchanged."""
+    """An empty selector matches no deme, so the hook never fires."""
     species = _make_species("empty_sel")
-    sp = _build_quiescent_age_pop(species, n_demes=3)
 
-    @nt.hook(event="first", priority=0)
+    @nt.hook(event="first", priority=0, deme=())
     def add_one(pop: object) -> int:
         """Bump age-1 females on every fire."""  # restored
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    totals_before = [float(sp.deme(i).state.individual_count.sum()) for i in range(3)]
-    sp.register_hooks(add_one, deme=[])
-
+    sp = _build_quiescent_age_pop(
+        species, n_demes=3, name="empty_sel_build", hook_calls=[((add_one,), {})]
+    )
     sp.run_tick()
 
     for i in range(3):
-        assert float(sp.deme(i).state.individual_count.sum()) == totals_before[i]
+        assert float(sp.deme(i).state.individual_count.sum()) == 200.0
 
 
 def test_set_hook_cow_subsequent_mutation_no_leak() -> None:
-    """After COW subset registration, a later wildcard hook stays isolated."""
+    """Targeted plus wildcard declarations stay isolated per deme.
+
+    Formerly a copy-on-write storage isolation check; the same execution
+    contract is expressed with deme-targeted decorator metadata compiled
+    at build: hook_a fires on deme 0 only, hook_b on every deme.
+    """
     species = _make_species("cow_iso")
 
-    @nt.hook(event="first", priority=0)
+    @nt.hook(event="first", priority=0, deme=0)
     def hook_a(pop: object) -> int:
         """Bump age-1 females on every fire."""  # restored
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
@@ -984,22 +1037,19 @@ def test_set_hook_cow_subsequent_mutation_no_leak() -> None:
         pop.state.individual_count[1, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    sp = _build_quiescent_age_pop(species, n_demes=3)
-
-    # Subset registration on deme 0 triggers COW.
-    sp.register_hooks(hook_a, deme=0)  # restored
-    count_after_a = len(sp.deme(0).compiled_hook_descriptors)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    count_non_target = len(sp.deme(1).compiled_hook_descriptors)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-
-    # Register hook_b on all demes via wildcard selector.
-    sp.register_hooks(hook_b)  # restored
-    assert len(sp.deme(0).compiled_hook_descriptors) == count_after_a + 1  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    assert len(sp.deme(1).compiled_hook_descriptors) == count_non_target + 1  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    assert len(sp.deme(2).compiled_hook_descriptors) == count_non_target + 1  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    # Wildcard registration keeps deme 0's COW-isolated list separate.  # restored
-    assert id(sp.deme(0).compiled_hook_descriptors) != id(  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-        sp.deme(1).compiled_hook_descriptors  # type: ignore[attr-defined]  # duck-typed double call: shapes verified by assertions below
+    sp = _build_quiescent_age_pop(
+        species,
+        n_demes=3,
+        name="cow_iso_build",
+        hook_calls=[((hook_a, hook_b), {})],
     )
+
+    sp.run_tick()
+
+    for i in range(3):
+        total = float(sp.deme(i).state.individual_count.sum())
+        expected = 202.0 if i == 0 else 201.0
+        assert total == expected, f"deme[{i}]: {total} != {expected}"
 
 
 # -----------------------------------------------------------------------
@@ -1008,7 +1058,6 @@ def test_set_hook_cow_subsequent_mutation_no_leak() -> None:
 def test_compact_plan_run_tick_deterministic_state() -> None:
     """Quiescent model: hook +1 on age-1 female → total per deme = 200 + 1."""
     species = _make_species("compact_det")
-    sp = _build_quiescent_age_pop(species, n_demes=3)
 
     @nt.hook(event="first", priority=0)
     def add_one(pop: object) -> int:
@@ -1016,7 +1065,9 @@ def test_compact_plan_run_tick_deterministic_state() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    sp.register_hooks(add_one)
+    sp = _build_quiescent_age_pop(
+        species, n_demes=3, name="compact_det_build", hook_calls=[((add_one,), {})]
+    )
 
     sp.run_tick()
 
@@ -1047,9 +1098,12 @@ def test_compact_plan_csr_then_callback_ordering() -> None:
         """Scale age-1 females by two."""
         return [Op.scale(genotypes="WT|WT", ages=1, sex="female", factor=2.0)]
 
-    sp = _build_quiescent_age_pop(species, n_demes=2)
-    sp.register_hooks(mul2_csr)
-    sp.register_hooks(add1)
+    sp = _build_quiescent_age_pop(
+        species,
+        n_demes=2,
+        name="compact_mixed_exact_build",
+        hook_calls=[((mul2_csr,), {}), ((add1,), {})],
+    )
 
     sp.run_tick()
 
@@ -1085,9 +1139,12 @@ def test_compact_plan_deme_targeted_callback_keeps_wildcard_slots_aligned() -> N
         calls.append(("B", int(pop.deme_id)))
         return 0
 
-    sp = _build_quiescent_age_pop(species, n_demes=2)
-    sp.register_hooks(targeted)
-    sp.register_hooks(wildcard)
+    sp = _build_quiescent_age_pop(
+        species,
+        n_demes=2,
+        name="compact_targeted_shift_build",
+        hook_calls=[((targeted,), {}), ((wildcard,), {})],
+    )
 
     sp.run_tick()
 
@@ -1116,9 +1173,9 @@ def test_compact_plan_heterogeneous_groups_identity_mapped_bridges() -> None:
         calls.append(("AB", int(pop.deme_id)))
         return 0
 
-    @nt.hook(event="first", priority=1)
+    @nt.hook(event="first", priority=1, deme=2)
     def deme2_only(pop: TickContext) -> int:
-        """Registered through the container with deme=2 (storage split)."""
+        """Deme-2-targeted declaration (priority 1)."""
         calls.append(("C", int(pop.deme_id)))
         return 0
 
@@ -1128,11 +1185,12 @@ def test_compact_plan_heterogeneous_groups_identity_mapped_bridges() -> None:
         calls.append(("T1", int(pop.deme_id)))
         return 0
 
-    sp = _build_quiescent_age_pop(species, n_demes=3)
-    sp.register_hooks(everywhere)
-    sp.register_hooks(target_deme_one)
-    sp.register_hooks(deme2_only, event="first", deme=2)
-    assert len({id(d.compiled_hook_descriptors) for d in sp.demes}) == 2  # type: ignore[attr-defined]  # duck-typed doubles share the population surface
+    sp = _build_quiescent_age_pop(
+        species,
+        n_demes=3,
+        name="compact_hetero_bridges_build",
+        hook_calls=[((everywhere, target_deme_one, deme2_only), {})],
+    )
 
     sp.run_tick()
 
@@ -1151,11 +1209,6 @@ def test_builder_homogeneous_demes_share_compiled_hooks() -> None:
     """Builder-created homogeneous population: all demes share hook storage."""
     species = _make_species("builder_share")
     n_demes = 5
-    sp = _build_discrete_pop(species, n_demes)
-    # Pin the single shared list object before further registration.  # restored
-    ref_id = id(sp.deme(0).compiled_hook_descriptors)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
-    for i in range(1, n_demes):  # restored
-        assert id(sp.deme(i).compiled_hook_descriptors) == ref_id  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
 
     @nt.hook(event="first", priority=0)
     def add_one(pop: object) -> int:
@@ -1163,7 +1216,14 @@ def test_builder_homogeneous_demes_share_compiled_hooks() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    sp.register_hooks(add_one)
+    sp = _build_discrete_pop(
+        species, n_demes, hook_calls=[((add_one,), {})]
+    )
+    # Homogeneous clones share one descriptor tuple by identity.
+    ref = sp.deme(0).compiled_hook_descriptors  # type: ignore[attr-defined]  # deme access surface
+    for i in range(1, n_demes):
+        assert sp.deme(i).compiled_hook_descriptors is ref  # type: ignore[attr-defined]  # deme access surface
+
     compact = sp._collect_compact_spatial_hooks()
     assert len(compact) == 1
     assert compact[0].deme_selector == "*"
@@ -1174,15 +1234,15 @@ def test_builder_set_hook_subset_cow_combined() -> None:
     species = _make_species("builder_cow")
     n_demes = 5
     target = 2
-    sp = _build_quiescent_age_pop(species, n_demes)
-
-    @nt.hook(event="first", priority=0)
+    @nt.hook(event="first", priority=0, deme=target)
     def add_one(pop: object) -> int:
         """Bump age-1 females on every fire."""  # restored
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    sp.register_hooks(add_one, deme=target)
+    sp = _build_quiescent_age_pop(
+        species, n_demes, name="builder_cow_build", hook_calls=[((add_one,), {})]
+    )
 
     sp.run_tick()
 

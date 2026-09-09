@@ -33,6 +33,7 @@ from natal.frontend.utils.types import Sex
 if TYPE_CHECKING:
     from natal.backends.rust.rust_backend import RustLifecycleBackend
     from natal.frontend.configurator import Configurator
+    from natal.frontend.hooks import CompiledHookDescriptor
 
 __all__ = ["AgeStructuredPopulation"]
 
@@ -74,7 +75,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 ],
             ]
         ] = None,
-        hook_items: Optional[List[object]] = None,
+        hook_descriptors: Sequence[CompiledHookDescriptor] = (),
     ):
         """Initialize an age-structured population instance using a ModelDraft.
 
@@ -85,8 +86,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             initial_individual_count: Initial population distribution.
                 Format: {sex: {genotype: counts_by_age}}
             initial_sperm_storage: Initial sperm storage state (if supported).
-            hook_items: Hook registrations (``Op`` objects, ``@hook``-
-                decorated functions, or single-parameter callables).
+            hook_descriptors: Compiled hook plan (declarative CSR
+                descriptors and Python callbacks) injected exactly once by
+                the builder; there is no post-construction registration.
 
         Examples:
             >>> pop_config = build_population_config(species, ...)
@@ -100,7 +102,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         if name is None:
             name = "AgeStructuredPop"
 
-        super().__init__(species, name, hook_items=hook_items)
+        super().__init__(species, name, hook_descriptors=hook_descriptors)
 
         if index_registry is not None:
             self._index_registry = index_registry
@@ -130,10 +132,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._rust_run_active = False
         self._rust_lifecycle_backend: RustLifecycleBackend | None = None
         self._rust_backend_seed: int | None = None
-        # Structural changes (hook registration, modifier maps, blueprint
-        # flags) rebuild the session before the next run; value changes go
-        # straight to the session through the writers and the run-boundary
-        # ecology flush.
+        # Structural changes (blueprint flags, modifier maps) rebuild the
+        # session before the next run; value changes go straight to the
+        # session through the writers and the run-boundary ecology flush.
         self._rust_needs_rebuild: bool = False
 
         if initial_individual_count is not None:
@@ -151,7 +152,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         )
 
         self._initialize_registry()
-        self._finalize_hooks()
 
         # Build self-describing history schema (frozen at construction).
         self._init_history_schema(
@@ -775,7 +775,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         session owns its copies.  Value changes flow straight to the
         session through the writers (no rebuild, no RNG reset); in-run
         writes defer to the draft and the run boundary flushes them.
-        Structural changes (hooks, blueprint flags) rebuild the session
+        Structural changes (blueprint flags) rebuild the session
         before the next run.
 
         Args:
@@ -798,8 +798,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 "natal._engine_rs is not available; build it with `maturin develop` "
                 "before enabling the Rust backend."
             )
-        hook_program = self._build_hook_program()
-        self._run_program = self._run_program._replace(hooks=hook_program)
+        hook_program = self._hook_program
         backend = RustLifecycleBackend(
             # Materialization copies the first owned draft itself; only an
             # existing session needs a current native parameter snapshot.
@@ -824,17 +823,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         return self
 
     def _run_startup_sync(self) -> None:
-        """Install changed execution flags and hooks without replacing state or RNG."""
+        """Install changed execution flags without replacing state or RNG."""
         if not self._rust_needs_rebuild:
             return
         backend = self._rust_lifecycle_backend
         if backend is None:
             raise RuntimeError("The population session has not been initialized.")
         config = self.config
-        program = self._build_hook_program()
-        backend.configure_program(program, config)
+        backend.configure_program(self._hook_program, config)
         self._register_rust_callbacks(backend)
-        self._run_program = self._run_program._replace(hooks=program)
         self._rust_needs_rebuild = False
 
     def _run_rust_lifecycle(

@@ -239,11 +239,12 @@ class OutputMixin(ModifierPresetMixin):
             RuntimeError: If the population is already finished.
 
         Examples:
+            >>> builder = nt.DiscreteGenerationPopulation.setup(species, name="demo")
             >>> def check_extinction(pop):
             ...     if pop.get_total_count() == 0:
             ...         print("Population extinct, finishing simulation.")
             ...         pop.finish_simulation()
-            >>> pop.update().hooks(check_extinction, event='late')
+            >>> pop = builder.hooks(check_extinction, event='late').build()
         """
         self._require_standalone_owner("finish_simulation")
         if self._finished:

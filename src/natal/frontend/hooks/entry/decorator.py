@@ -3,7 +3,7 @@
 The hook contract recognizes three authoring shapes:
 
 1. **Declarative** — function takes no parameters and returns
-   ``List[HookOp]``; compiled to a CSR plan at registration.
+   ``List[HookOp]``; compiled to a CSR plan at build time.
 2. **Callback** — function takes exactly one parameter (the
    :class:`~natal.frontend.hooks.tick_context.TickContext`); a Python
    callable fired at event boundaries on every backend.
@@ -17,20 +17,16 @@ with a :class:`TypeError` that guides authors to the new form.
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol, cast
+from typing import Any, Callable, Dict, List, Optional, Protocol, cast
 
-from natal.frontend.hooks.entry.declarative import compile_declarative_hook
-from natal.frontend.hooks.entry.selector import compile_selector_callback
 from natal.frontend.hooks.types import (
     CompiledHookDescriptor,
     DemeSelector,
+    HookLayout,
 )
 
-from .declarative import HookOp
-
-if TYPE_CHECKING:
-    from natal.frontend.population.base import BasePopulation
-
+from .declarative import HookOp, compile_declarative_hook
+from .selector import compile_selector_callback
 
 # ---------------------------------------------------------------------------
 # Protocol for decorated functions
@@ -92,7 +88,8 @@ def hook(
 ) -> Callable[[Callable[..., Any]], DecoratedHookFn]:
     """Decorator for all supported hook authoring shapes.
 
-    **Shape detection** (evaluated at ``.register()`` time):
+    **Shape detection** (evaluated at compile time, when the declaring
+    builder or population provides the layout):
 
     * ``selectors=`` is set → **Selector callback** (selector values
       injected as keyword arguments after the context).
@@ -153,22 +150,27 @@ def hook(
         hook_func.deme_selector = deme
 
         def register(
-            pop: BasePopulation[Any],
+            layout: HookLayout,
             event_override: Optional[str] = None,
             deme_selector_override: Optional[DemeSelector] = None,
         ) -> CompiledHookDescriptor:
-            """Compile this hook against *pop* and return a descriptor.
+            """Compile this hook against *layout* and return a descriptor.
+
+            Compilation is pure: it resolves selectors against the given
+            layout (a built population or the builder's build-time
+            context) without installing anything.  The builder injects
+            the returned descriptor into the population at ``build()``.
 
             Args:
-                pop: The population to compile against.
+                layout: Layout provider the selectors resolve against.
                 event_override: Override the event name (used when the
-                    registration call supplies a different event than the
+                    declaration call supplies a different event than the
                     decorator).
-                deme_selector_override: Override the deme selector (used by
-                    spatial registration to pin hooks to demes).
+                deme_selector_override: Override the deme selector (used
+                    by the spatial build flow to pin hooks to demes).
 
             Returns:
-                A ``CompiledHookDescriptor`` registered on *pop*.
+                A ``CompiledHookDescriptor`` for the builder to inject.
             """
             actual_event = event_override or event
             actual_deme_selector: DemeSelector = (
@@ -178,21 +180,21 @@ def hook(
                 raise ValueError(
                     f"Event not specified for hook '{func.__name__}'. "
                     "Specify in decorator @hook(event='...') or in the "
-                    "registration call .hooks(..., event='...')."
+                    "declaration call .hooks(..., event='...')."
                 )
 
             required = _count_required_parameters(func)
             if selectors is not None:
                 desc = compile_selector_callback(
                     func,
-                    pop,
+                    layout,
                     actual_event,
                     selectors,
                     priority,
                     deme_selector=actual_deme_selector,
                 )
             elif required == 0:
-                # Declarative: called ONCE at registration; its return value
+                # Declarative: called ONCE at compile time; its return value
                 # (list of HookOp) is compiled into a CSR plan.
                 result: object = func()
                 items = list(cast("List[object]", result)) if isinstance(result, list) else []
@@ -205,7 +207,7 @@ def hook(
                 ops = [op for op in items if isinstance(op, HookOp)]
                 desc = compile_declarative_hook(
                     ops,
-                    pop,
+                    layout,
                     actual_event,
                     priority,
                     deme_selector=actual_deme_selector,
@@ -229,7 +231,6 @@ def hook(
                     "(state, config, deme_id) form is no longer supported."
                 )
 
-            pop.register_compiled_hook(desc)
             return desc
 
         hook_func.register = register  # type: ignore[assignment]  # set on DecoratedHookFn proxy

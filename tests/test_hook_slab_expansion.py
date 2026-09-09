@@ -135,7 +135,17 @@ class TestPhaseC_HookSlabNSlabsGtOne:
         def scale_all():
             return [Op.scale(factor=0.5)]
 
-        desc = scale_all.register(pop)
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_star_hook")
+            .initial_state(individual_count={
+                "female": {"A|A@normal": 50, "A|A@exposed": 30},
+                "male": {"A|A@normal": 50, "A|A@exposed": 30},
+            })
+            .competition(juvenile_growth_mode=0)
+            .hooks(scale_all)
+            .build()
+        )
+        desc = pop.get_compiled_hooks("early")[0]
         # Verify the compiled plan targets all 6 ztypes (not just 1 slab)
         assert set(desc.plan.zidx_data.tolist()) == set(range(6))
         pop.run(1)
@@ -144,21 +154,21 @@ class TestPhaseC_HookSlabNSlabsGtOne:
 
     def test_specific_genotype_hook_affects_all_slabs(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
-        pop = (
-            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
-            .initial_state(individual_count={
-                "female": {"A|A@normal": 50, "A|A@exposed": 30, "a|a@normal": 20},
-                "male": {"A|A@normal": 50, "A|A@exposed": 30, "a|a@normal": 20},
-            })
-            .competition(juvenile_growth_mode=0)
-            .build()
-        )
 
         @nt.hook(event="early")
         def kill_AA():
             return [Op.kill(prob=1.0, genotypes="A|A")]
 
-        kill_AA.register(pop)
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_kill_AA")
+            .initial_state(individual_count={
+                "female": {"A|A@normal": 50, "A|A@exposed": 30, "a|a@normal": 20},
+                "male": {"A|A@normal": 50, "A|A@exposed": 30, "a|a@normal": 20},
+            })
+            .competition(juvenile_growth_mode=0)
+            .hooks(kill_AA)
+            .build()
+        )
         pop.run(1)
         ic = pop.state.individual_count
         # Both A|A slab variants (ztypes 0,1) should be killed
@@ -169,20 +179,20 @@ class TestPhaseC_HookSlabNSlabsGtOne:
 
     def test_add_hook_affects_correct_ztypes(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
-        pop = (
-            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
-            .initial_state(individual_count={
-                "female": {"A|A@normal": 50}, "male": {"A|A@normal": 50},
-            })
-            .competition(juvenile_growth_mode=0)
-            .build()
-        )
 
         @nt.hook(event="early")
         def add_aA():
             return [Op.add(delta=10, genotypes="a|A")]
 
-        add_aA.register(pop)
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_add_aA")
+            .initial_state(individual_count={
+                "female": {"A|A@normal": 50}, "male": {"A|A@normal": 50},
+            })
+            .competition(juvenile_growth_mode=0)
+            .hooks(add_aA)
+            .build()
+        )
         pop.run(1)
         ic = pop.state.individual_count
         # a|A is genotype 1 (unordered A|a) → ztypes 2,3; add delta=10 per sex
@@ -191,21 +201,22 @@ class TestPhaseC_HookSlabNSlabsGtOne:
 
     def test_sample_hook_affects_all_ztypes(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
-        pop = (
-            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
-            .initial_state(individual_count={
-                "female": {"A|A@normal": 50, "A|A@exposed": 30},
-                "male": {"A|A@normal": 50, "A|A@exposed": 30},
-            })
-            .competition(juvenile_growth_mode=0)
-            .build()
-        )
 
         @nt.hook(event="early")
         def sample_hook():
             return [Op.sample(size=10, genotypes="A|A")]
 
-        desc = sample_hook.register(pop)
+        pop = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_sample_hook")
+            .initial_state(individual_count={
+                "female": {"A|A@normal": 50, "A|A@exposed": 30},
+                "male": {"A|A@normal": 50, "A|A@exposed": 30},
+            })
+            .competition(juvenile_growth_mode=0)
+            .hooks(sample_hook)
+            .build()
+        )
+        desc = pop.get_compiled_hooks("early")[0]
         # Verify the compiled plan targets both slab variants of A|A
         assert set(desc.plan.zidx_data.tolist()) == {0, 1}
         pop.run(1)
@@ -262,7 +273,18 @@ class TestPhaseD_MultiLocusSlab:
         def scale_AA_BB():
             return [Op.scale(factor=0.5, genotypes="A1/B1|A1/B1")]
 
-        scale_AA_BB.register(pop)
+        hooked = (
+            nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="phD_run_hooked")
+            .initial_state(individual_count={
+                "female": {"A1/B1|A1/B1": {1: 50}},
+                "male": {"A1/B1|A1/B1": {1: 50}},
+            })
+            .competition(juvenile_growth_mode=0)
+            .hooks(scale_AA_BB)
+            .build()
+        )
+        hooked.run(1)
+        assert hooked.state.individual_count.sum() > 0
         pop.run(1)
         assert pop.state.individual_count.sum() > 0
 

@@ -63,9 +63,11 @@ def _species(name: str) -> nt.Species:
     )
 
 
-def _build_discrete(name: str) -> nt.DiscreteGenerationPopulation:
+def _build_discrete(
+    name: str, hook_calls: list | None = None
+) -> nt.DiscreteGenerationPopulation:
     """Return a deterministic discrete population with a known start."""
-    return (
+    builder = (
         nt.DiscreteGenerationPopulation.setup(species=_species(name), stochastic=False)
         .initial_state(
             individual_count={"female": {"WT|WT": 10}, "male": {"WT|WT": 10}}
@@ -73,13 +75,17 @@ def _build_discrete(name: str) -> nt.DiscreteGenerationPopulation:
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
         .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    return builder.build()
 
 
-def _build_age(name: str) -> nt.AgeStructuredPopulation:
+def _build_age(
+    name: str, hook_calls: list | None = None
+) -> nt.AgeStructuredPopulation:
     """Return a deterministic age-structured population with sperm storage."""
-    return (
+    builder = (
         nt.AgeStructuredPopulation.setup(species=_species(name), stochastic=False)
         .age_structure(n_ages=3, new_adult_age=1)
         .initial_state(
@@ -94,8 +100,10 @@ def _build_age(name: str) -> nt.AgeStructuredPopulation:
         )
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
         .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    return builder.build()
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -231,8 +239,7 @@ class TestStateSnapshotDiscipline:
             seen["after"] = float(ctx.state.individual_count[1, 1, 0])
             return 0
 
-        pop = _build_discrete("R5Loan")
-        pop.register_hooks(boost, event="first")
+        pop = _build_discrete("R5Loan", hook_calls=[((boost,), {"event": "first"})])
         pop.run(1)
         # The loan wrote the live arrays: the hook observed the change and
         # the engine carried the mutated adult count into age 1.
@@ -317,7 +324,11 @@ def _build_discrete_raw(name: str) -> nt.DiscreteGenerationPopulation:
     )
 
 
-def _build_beverton(name: str, carrying_capacity: float) -> nt.DiscreteGenerationPopulation:
+def _build_beverton(
+    name: str,
+    carrying_capacity: float,
+    hook_calls: list | None = None,
+) -> nt.DiscreteGenerationPopulation:
     """Return a discrete population whose capacity actually binds growth.
 
     ``eggs_per_female=6`` under Beverton-Holt dynamics pushes juveniles
@@ -332,7 +343,7 @@ def _build_beverton(name: str, carrying_capacity: float) -> nt.DiscreteGeneratio
     Returns:
         A built deterministic population with capacity-sensitive dynamics.
     """
-    return (
+    builder = (
         nt.DiscreteGenerationPopulation.setup(species=_species(name), stochastic=False)
         .initial_state(individual_count={"female": {"WT|WT": 10}, "male": {"WT|WT": 10}})
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
@@ -342,8 +353,10 @@ def _build_beverton(name: str, carrying_capacity: float) -> nt.DiscreteGeneratio
             low_density_growth_rate=2.0,
             juvenile_growth_mode="beverton_holt",
         )
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
+    return builder.build()
 
 
 def _defaulted_blueprint() -> Blueprint:
@@ -641,9 +654,10 @@ class TestDirectedRefreshUnderFrozenBlueprint:
             ctx.update().competition(carrying_capacity=8.0)
             return 0
 
-        in_hook = _build_beverton("R4RefreshEvent", 100000.0)
+        in_hook = _build_beverton(
+            "R4RefreshEvent", 100000.0, hook_calls=[((retune,), {"event": "first"})]
+        )
         in_hook._initialize_session(seed=5)
-        in_hook.register_hooks(retune, event="first")
         in_hook.run(1)
         assert float(in_hook.config.carrying_capacity) == 8.0
         in_hook.run(3)
@@ -739,15 +753,13 @@ class TestR5SnapshotChannelAttacks:
             seen["wildtype"] = ctx.metrics.genotype_counts["WT|WT:default"]
             return 0
 
-        pop = _build_age("R5MetricsTruth")
-        pop.register_hooks(probe, event="first")
+        pop = _build_age("R5MetricsTruth", hook_calls=[((probe,), {"event": "first"})])
         # Poison every cell of an external snapshot before the run.
         poisoned = pop.state
         poisoned.individual_count.fill(-999.0)
         del poisoned
 
-        twin = _build_age("R5MetricsTwin")
-        twin.register_hooks(probe, event="first")
+        twin = _build_age("R5MetricsTwin", hook_calls=[((probe,), {"event": "first"})])
 
         pop.run(1)
         twin.run(1)

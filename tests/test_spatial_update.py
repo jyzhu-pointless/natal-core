@@ -67,13 +67,19 @@ def _build_discrete(species, *, n_demes: int = 4, k: float = 500.0):
     )
 
 
-def _build_two_allele_discrete(name: str):
-    """A no-migration two-allele discrete spatial population (WT/Dr)."""
+def _build_two_allele_discrete(name: str, hook_calls: list | None = None):
+    """A no-migration two-allele discrete spatial population (WT/Dr).
+
+    Args:
+        name: Population name.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the spatial build chain.
+    """
     species = nt.Species.from_dict(
         name="__test_spatial_meiosis_plane__",
         structure={"auto": {"A": ["WT", "Dr"]}},
     )
-    return (
+    chain = (
         nt.SpatialPopulation.builder(
             species,
             n_demes=4,
@@ -94,8 +100,10 @@ def _build_two_allele_discrete(name: str):
             low_density_growth_rate=2.0,
             juvenile_growth_mode="beverton_holt",
         )
-        .build()
     )
+    for items, kwargs in hook_calls or []:
+        chain = chain.hooks(*items, **kwargs)
+    return chain.build()
 
 
 def _build_age(species, *, n_demes: int = 4, k: float = 500.0):

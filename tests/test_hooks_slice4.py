@@ -8,7 +8,8 @@ Covers the hook contract end to end:
 - on-demand metrics validated against hand-computed numpy references;
 - the parameter snapshot log (exact ``(tick, name, old, new)`` rows,
   zero rows for runs without changes);
-- Op-as-hook registration with identity-based idempotency;
+- Op-as-hook declaration with identity-based idempotency (duplicate
+  build-time declarations dedupe into one hook);
 - in-hook parameter writes visible through ``pop.params`` and used by
   subsequent runs.
 """
@@ -38,6 +39,7 @@ def _build_discrete(
     name: str,
     *,
     hook_items: list[object] | None = None,
+    hook_calls: list | None = None,
     carrying_capacity: float | None = None,
     eggs_per_female: float = 0.0,
     growth_mode: str = "beverton_holt",
@@ -72,6 +74,8 @@ def _build_discrete(
         )
     if hook_items:
         builder = builder.hooks(*hook_items)
+    for items, kwargs in hook_calls or []:
+        builder = builder.hooks(*items, **kwargs)
     return builder.build()
 
 
@@ -381,15 +385,19 @@ def test_params_log_records_runtime_update_rows() -> None:
 
 def test_params_log_records_hook_write_at_hook_tick() -> None:
     """A hook write snapshots at the hook's tick, not at run start."""
-    pop = _build_discrete("s4_log_hook", carrying_capacity=100_000.0)
-    pop.run(n_steps=2)  # advance to tick 2
-
     @nt.hook(event="first")
     def writer(pop: TickContext) -> int:
-        pop.params.carrying_capacity = 555.0
+        if pop.tick >= 2:  # declared at build; gated to fire from tick 2 on
+            pop.params.carrying_capacity = 555.0
         return 0
 
-    pop.update().hooks(writer)
+    pop = _build_discrete(
+        "s4_log_hook",
+        carrying_capacity=100_000.0,
+        hook_items=[writer],
+    )
+    pop.run(n_steps=2)  # advance to tick 2 (no fire before the gate)
+    assert pop.params_log == ()
     pop.run(n_steps=1)
 
     assert pop.params_log == ((2, "carrying_capacity", 100_000.0, 555.0),)
@@ -447,11 +455,15 @@ def test_hook_param_write_visible_and_used_by_run() -> None:
 
 
 def test_op_registers_as_declarative_hook() -> None:
-    """Bare Op objects register as CSR descriptors and execute."""
-    pop = _build_discrete("s4_op_hook")
-    pop.update().hooks(
-        Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=99.0),
-        event="first",
+    """Bare Op objects compile as CSR descriptors and execute."""
+    pop = _build_discrete(
+        "s4_op_hook",
+        hook_calls=[
+            (
+                (Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=99.0),),
+                {"event": "first"},
+            )
+        ],
     )
 
     compiled = pop.get_compiled_hooks("first")
@@ -466,13 +478,17 @@ def test_op_registers_as_declarative_hook() -> None:
 
 def test_op_group_registers_single_descriptor() -> None:
     """An op list compiles into one descriptor; the event rides on the call."""
-    pop = _build_discrete("s4_op_group")
-    pop.update().hooks(
-        [
-            Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=40.0),
-            Op.add(genotypes="WT|WT", ages=0, sex="male", delta=2.0),
+    pop = _build_discrete(
+        "s4_op_group",
+        hook_calls=[
+            (
+                ([
+                    Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=40.0),
+                    Op.add(genotypes="WT|WT", ages=0, sex="male", delta=2.0),
+                ],),
+                {"event": "first"},
+            )
         ],
-        event="first",
     )
 
     assert len(pop.get_compiled_hooks("first")) == 1
@@ -480,20 +496,23 @@ def test_op_group_registers_single_descriptor() -> None:
     assert float(pop.state.individual_count[1, 1, 0]) == 42.0
 
 
-def test_duplicate_registration_is_idempotent() -> None:
-    """Registering the same object for the same event twice is a no-op."""
-    pop = _build_discrete("s4_idem")
-
+def test_duplicate_declaration_is_idempotent() -> None:
+    """Declaring the same object for the same event twice is a no-op."""
     @nt.hook(event="first")
     def cb(pop: TickContext) -> int:
         return 0
 
     op = Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=7.0)
 
-    pop.update().hooks(cb)
-    pop.update().hooks(cb)  # deduped
-    pop.update().hooks(op, event="first")
-    pop.update().hooks(op, event="first")  # deduped
+    pop = _build_discrete(
+        "s4_idem",
+        hook_calls=[
+            ((cb,), {}),
+            ((cb,), {}),  # deduped
+            ((op,), {"event": "first"}),
+            ((op,), {"event": "first"}),  # deduped
+        ],
+    )
 
     assert len(pop.get_compiled_hooks("first")) == 2
 
@@ -505,14 +524,14 @@ def test_duplicate_registration_is_idempotent() -> None:
 
 def test_same_object_on_different_events_registers_twice() -> None:
     """(source, event) identity: one object on two events is two hooks."""
-    pop = _build_discrete("s4_idem_events")
-
     op = Op.add(genotypes="WT|WT", ages=0, sex="both", delta=1.0)
     op.event = "first"
-    pop.update().hooks(op)
     other = Op.add(genotypes="WT|WT", ages=0, sex="both", delta=1.0)
     other.event = "early"
-    pop.update().hooks(other)
+    pop = _build_discrete(
+        "s4_idem_events",
+        hook_calls=[((op,), {}), ((other,), {})],
+    )
 
     assert len(pop.get_compiled_hooks("first")) == 1
     assert len(pop.get_compiled_hooks("early")) == 1
@@ -520,30 +539,26 @@ def test_same_object_on_different_events_registers_twice() -> None:
 
 def test_legacy_three_param_signature_rejected() -> None:
     """The njit-era (state, config, deme_id) hook form is rejected up front."""
-    pop = _build_discrete("s4_legacy")
-
     @nt.hook(event="first")
     def legacy(state, config, deme_id):  # type: ignore[no-untyped-def]
         _ = (state, config, deme_id)
         return 0
 
     with pytest.raises(TypeError, match=r"def hook\(pop\) -> int"):
-        pop.update().hooks(legacy)
+        _build_discrete("s4_legacy", hook_items=[legacy])
 
     def legacy_plain(state, config, deme_id):  # type: ignore[no-untyped-def]
         _ = (state, config, deme_id)
         return 0
 
     with pytest.raises(TypeError, match="exactly one parameter"):
-        pop.update().hooks(legacy_plain, event="first")
+        _build_discrete("s4_legacy_plain", hook_calls=[((legacy_plain,), {"event": "first"})])
 
 
 def test_unknown_event_rejected() -> None:
-    pop = _build_discrete("s4_bad_event")
-
     def cb(pop: TickContext) -> int:
         _ = pop
         return 0
 
     with pytest.raises(ValueError, match="not in"):
-        pop.update().hooks(cb, event="midtick")
+        _build_discrete("s4_bad_event", hook_calls=[((cb,), {"event": "midtick"})])
