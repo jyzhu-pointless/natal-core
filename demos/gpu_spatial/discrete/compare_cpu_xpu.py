@@ -23,7 +23,9 @@ import reference_cpu
 from gpu_model import SpatialDiscreteXPU
 
 HERE = Path(__file__).resolve().parent
-OUT_JSON = HERE / "xpu_comparison_summary.json"
+OUTPUT_DIR = HERE / "outputs"
+OUT_JSON = OUTPUT_DIR / "xpu_comparison_summary.json"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def allele_dr_frequency_from_history(history: np.ndarray) -> float:
@@ -47,10 +49,6 @@ def main() -> None:
         [deme.state.individual_count for deme in cpu_pop.demes], axis=0
     )
     cfg = cpu_pop.deme(0).config
-    topology = reference_cpu.SquareGrid(
-        rows=reference_cpu.N_ROWS, cols=reference_cpu.N_COLS
-    )
-    adjacency = reference_cpu.build_adjacency_matrix(topology, row_normalize=True)
 
     # ---- CPU run (first run in this process) -------------------------------
     print("Running natal-core CPU reference ...")
@@ -70,10 +68,13 @@ def main() -> None:
     model = SpatialDiscreteXPU(
         state=initial_state,
         config=cfg,
-        adjacency=adjacency,
         migration_rate=reference_cpu.MIGRATION_RATE,
         n_ticks=reference_cpu.N_TICKS,
         device=device,
+        grid_shape=(reference_cpu.N_ROWS, reference_cpu.N_COLS),
+        wrap=False,
+        migration_kernel=reference_cpu.MIGRATION_KERNEL,
+        adjust_migration_on_edge=reference_cpu.MIGRATION_ADJUST_ON_EDGE,
     )
 
     torch.xpu.synchronize()
@@ -95,10 +96,13 @@ def main() -> None:
     model_warm = SpatialDiscreteXPU(
         state=initial_state,
         config=cfg,
-        adjacency=adjacency,
         migration_rate=reference_cpu.MIGRATION_RATE,
         n_ticks=reference_cpu.N_TICKS,
         device=device,
+        grid_shape=(reference_cpu.N_ROWS, reference_cpu.N_COLS),
+        wrap=False,
+        migration_kernel=reference_cpu.MIGRATION_KERNEL,
+        adjust_migration_on_edge=reference_cpu.MIGRATION_ADJUST_ON_EDGE,
     )
     torch.xpu.synchronize()
     gpu_warm_start = time.perf_counter()

@@ -29,6 +29,9 @@ GRID_SIZES: list[tuple[int, int]] = [
     (30, 30),
     (40, 40),
     (50, 50),
+    (100, 100),
+    (200, 200),
+    (400, 400),
 ]
 N_TICKS = 20
 
@@ -55,7 +58,6 @@ def build_cpu_population(
     states[center] = release
 
     topology = reference_cpu.SquareGrid(rows=rows, cols=cols)
-    adjacency = reference_cpu.build_adjacency_matrix(topology, row_normalize=True)
 
     return (
         nt.SpatialPopulation.builder(
@@ -82,7 +84,12 @@ def build_cpu_population(
             carrying_capacity=int(reference_cpu.CARRYING_CAPACITY),
             juvenile_growth_mode="fixed",
         )
-        .migration(adjacency=adjacency, migration_rate=reference_cpu.MIGRATION_RATE)
+        .migration(
+            kernel=reference_cpu.MIGRATION_KERNEL,
+            migration_rate=reference_cpu.MIGRATION_RATE,
+            strategy=reference_cpu.MIGRATION_STRATEGY,
+            adjust_migration_on_edge=reference_cpu.MIGRATION_ADJUST_ON_EDGE,
+        )
         .build()
     )
 
@@ -107,7 +114,8 @@ def time_cpu_warm(
 def time_xpu_warm(
     state: np.ndarray,
     cfg: object,
-    adjacency: np.ndarray,
+    rows: int,
+    cols: int,
     n_ticks: int,
     device: torch.device,
     *,
@@ -115,18 +123,23 @@ def time_xpu_warm(
     seed: int = 42,
 ) -> float:
     """Run once to warm XPU kernels, then time a fresh model."""
-    _warm = SpatialDiscreteXPU(
-        state=state, config=cfg, adjacency=adjacency,
-        migration_rate=reference_cpu.MIGRATION_RATE, n_ticks=n_ticks,
-        device=device, stochastic=stochastic, seed=seed,
+    common = dict(
+        state=state,
+        config=cfg,
+        migration_rate=reference_cpu.MIGRATION_RATE,
+        n_ticks=n_ticks,
+        device=device,
+        stochastic=stochastic,
+        seed=seed,
+        grid_shape=(rows, cols),
+        wrap=False,
+        migration_kernel=reference_cpu.MIGRATION_KERNEL,
+        adjust_migration_on_edge=reference_cpu.MIGRATION_ADJUST_ON_EDGE,
     )
+    _warm = SpatialDiscreteXPU(**common)
     _warm.run_no_history()
 
-    model = SpatialDiscreteXPU(
-        state=state, config=cfg, adjacency=adjacency,
-        migration_rate=reference_cpu.MIGRATION_RATE, n_ticks=n_ticks,
-        device=device, stochastic=stochastic, seed=seed,
-    )
+    model = SpatialDiscreteXPU(**common)
     torch.xpu.synchronize()
     start = time.perf_counter()
     model.run_no_history()
@@ -171,14 +184,12 @@ def main() -> None:
             [deme.state.individual_count for deme in pop.demes], axis=0
         )
         cfg = pop.deme(0).config
-        topology = reference_cpu.SquareGrid(rows=rows, cols=cols)
-        adjacency = reference_cpu.build_adjacency_matrix(topology, row_normalize=True)
 
         cpu_t = time_cpu_warm(
             pop, N_TICKS, stochastic=args.stochastic, seed=args.seed
         )
         xpu_t = time_xpu_warm(
-            state, cfg, adjacency, N_TICKS, device,
+            state, cfg, rows, cols, N_TICKS, device,
             stochastic=args.stochastic, seed=args.seed,
         )
 

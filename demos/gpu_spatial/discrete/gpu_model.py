@@ -1,14 +1,20 @@
-"""PyTorch XPU implementation of the deterministic spatial discrete model.
+"""PyTorch XPU implementation of the spatial discrete-generation model.
 
 This is intentionally aligned with the CPU reference in ``reference_cpu.py``:
 
 - 25 demes on a 5x5 square grid
-- ``stochastic=False`` discrete-generation lifecycle
+- ``stochastic=False``: deterministic discrete-generation lifecycle
+- ``stochastic=True``: Binomial / Multinomial / Poisson sampling aligned with
+  natal-core's stochastic discrete lifecycle
 - fixed juvenile density regulation
 - row-normalized adjacency migration
 
 The implementation uses only standard PyTorch tensor operations so it can run
 on ``xpu`` locally and later on ``cuda`` with a device change.
+
+Stochastic multinomial sampling uses a conditional-binomial decomposition
+instead of expanding each row to ``max_total`` categorical draws; this avoids
+both the O(max_total * n_rows) cost and any per-sample CPU synchronisation.
 
 This demo file is outside natal-core's strict ``src`` type-check scope, and it
 dynamically reads natal config objects that Pylance cannot fully infer.
@@ -20,6 +26,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 import reference_cpu
 
@@ -44,13 +51,17 @@ class SpatialDiscreteXPU:
         self,
         state: np.ndarray,
         config: object,
-        adjacency: np.ndarray,
+        adjacency: np.ndarray | None = None,
         *,
         migration_rate: float,
         n_ticks: int,
         device: torch.device | None = None,
         stochastic: bool = False,
         seed: int | None = None,
+        grid_shape: tuple[int, int] | None = None,
+        wrap: bool = False,
+        migration_kernel: np.ndarray | None = None,
+        adjust_migration_on_edge: bool = True,
     ) -> None:
         if device is None:
             device = torch.device("xpu" if torch.xpu.is_available() else "cpu")
@@ -124,43 +135,78 @@ class SpatialDiscreteXPU:
 
         self.migration_rate = float(migration_rate)
 
-        # --- migration matrix ------------------------------------------------
-        # natal's deterministic adjacency migration is:
-        #   next[d] = (1-rate) * current[d]
-        #             + rate * sum_s current[s] * adj[s, d]
-        # which in column-vector form is:
-        #   M = (1-rate) I + rate * adj^T
-        self.adjacency = torch.as_tensor(
-            adjacency, dtype=self.dtype, device=device
+        # --- migration setup --------------------------------------------------
+        # Stencil mode avoids a dense (D, D) adjacency/migration matrix and is
+        # the default for the large-grid benchmarks. Dense mode is kept as a
+        # backward-compatible fallback for explicit adjacency input.
+        self.grid_shape = grid_shape
+        self.wrap = bool(wrap)
+        self.adjust_migration_on_edge = bool(adjust_migration_on_edge)
+        self.migration_kernel = (
+            None if migration_kernel is None else np.asarray(migration_kernel)
         )
-        adj = self.adjacency
-        eye = torch.eye(adj.shape[0], dtype=self.dtype, device=device)
-        self.migration_matrix = (
-            (1.0 - self.migration_rate) * eye
-            + self.migration_rate * adj.T
-        )
-
-        # Sparse row data for stochastic migration.  natal's stochastic
-        # migration only routes outbound mass to actual neighbours, so using a
-        # dense D x D multinomial is wasteful.
-        adj_np = np.asarray(adjacency, dtype=np.float64)
+        self.use_stencil = grid_shape is not None
         n_demes = int(state.shape[0])
-        neighbor_lists: list[np.ndarray] = []
-        prob_lists: list[np.ndarray] = []
-        for i in range(n_demes):
-            nz = np.flatnonzero(adj_np[i] > 0.0)
-            neighbor_lists.append(nz.astype(np.int64))
-            row = adj_np[i, nz]
-            if row.sum() > 0.0:
-                row = row / row.sum()
-            prob_lists.append(row.astype(np.float32))
-        max_nnz = max((len(x) for x in neighbor_lists), default=0)
-        neighbor_indices = np.full((n_demes, max_nnz), -1, dtype=np.int64)
-        neighbor_probs = np.zeros((n_demes, max_nnz), dtype=np.float32)
-        for i in range(n_demes):
-            n = len(neighbor_lists[i])
-            neighbor_indices[i, :n] = neighbor_lists[i]
-            neighbor_probs[i, :n] = prob_lists[i]
+
+        if self.use_stencil:
+            rows, cols = int(grid_shape[0]), int(grid_shape[1])
+            if rows * cols != n_demes:
+                raise ValueError(
+                    f"grid_shape {grid_shape} does not match n_demes={n_demes}"
+                )
+            if self.migration_kernel is None:
+                raise ValueError("migration_kernel is required for stencil migration")
+            kernel = self.migration_kernel
+            if kernel.ndim != 2 or kernel.shape[0] % 2 == 0 or kernel.shape[1] % 2 == 0:
+                raise ValueError("migration_kernel must be a 2D odd-sized array")
+            self.grid_rows = rows
+            self.grid_cols = cols
+            self.kernel_pad_r = kernel.shape[0] // 2
+            self.kernel_pad_c = kernel.shape[1] // 2
+            self.kernel_total_sum = float(kernel.sum())
+            self.stencil_offsets: list[tuple[int, int, float]] = []
+            for kr in range(kernel.shape[0]):
+                for kc in range(kernel.shape[1]):
+                    if kr == self.kernel_pad_r and kc == self.kernel_pad_c:
+                        continue
+                    weight = float(kernel[kr, kc])
+                    if weight <= 0.0:
+                        continue
+                    self.stencil_offsets.append(
+                        (kr - self.kernel_pad_r, kc - self.kernel_pad_c, weight)
+                    )
+
+            ones_grid = torch.ones(
+                (1, rows, cols), dtype=self.dtype, device=device
+            )
+            degree = torch.zeros_like(ones_grid)
+            for dr, dc, weight in self.stencil_offsets:
+                degree += weight * self._shift_grid(ones_grid, dr, dc)
+            self.degree_map = degree.clamp_min(1e-10)
+
+            neighbor_indices, neighbor_probs = self._build_stencil_neighbor_arrays()
+            self.adjacency = None
+            self.migration_matrix = None
+        else:
+            if adjacency is None:
+                raise ValueError(
+                    "adjacency is required when grid_shape is not provided"
+                )
+            self.adjacency = torch.as_tensor(
+                adjacency, dtype=self.dtype, device=device
+            )
+            adj = self.adjacency
+            eye = torch.eye(adj.shape[0], dtype=self.dtype, device=device)
+            self.migration_matrix = (
+                (1.0 - self.migration_rate) * eye
+                + self.migration_rate * adj.T
+            )
+            neighbor_indices, neighbor_probs = (
+                self._build_adjacency_neighbor_arrays(
+                    np.asarray(adjacency, dtype=np.float64), n_demes
+                )
+            )
+
         self.neighbor_indices = torch.as_tensor(
             neighbor_indices, device=device
         )
@@ -173,6 +219,117 @@ class SpatialDiscreteXPU:
         self.migration_rate_by_age = [0.0, float(migration_rate)]
 
         self.tick = 0
+
+    # ------------------------------------------------------------------
+    # migration helpers
+    # ------------------------------------------------------------------
+    def _shift_grid(self, x: torch.Tensor, dr: int, dc: int) -> torch.Tensor:
+        """Shift a ``(C, rows, cols)`` grid by ``(dr, dc)``.
+
+        ``wrap=True`` uses periodic (torus) boundaries via ``torch.roll``.
+        ``wrap=False`` uses zero padding so out-of-grid neighbours contribute 0.
+        """
+        if self.wrap:
+            return torch.roll(x, shifts=(dr, dc), dims=(-2, -1))
+        padded = F.pad(
+            x,
+            (self.kernel_pad_c, self.kernel_pad_c, self.kernel_pad_r, self.kernel_pad_r),
+        )
+        return padded[
+            :,
+            self.kernel_pad_r + dr : self.kernel_pad_r + dr + self.grid_rows,
+            self.kernel_pad_c + dc : self.kernel_pad_c + dc + self.grid_cols,
+        ]
+
+    def _migration_stencil(self, flat: torch.Tensor, rate: float) -> torch.Tensor:
+        """Apply one stencil migration step to ``(D, C)`` counts.
+
+        With ``adjust_migration_on_edge=True`` each source sends ``rate`` of
+        its mass split over its valid neighbours; with ``False`` it sends
+        ``rate * valid_weight_sum / kernel_total_sum`` instead.
+        """
+        rows, cols = self.grid_rows, self.grid_cols
+        channels = flat.shape[1]
+        x_grid = flat.T.reshape(channels, rows, cols)
+
+        source = x_grid
+        if self.adjust_migration_on_edge:
+            source = x_grid / self.degree_map
+
+        neighbour_sum = torch.zeros_like(source)
+        for dr, dc, weight in self.stencil_offsets:
+            neighbour_sum = neighbour_sum + weight * self._shift_grid(source, dr, dc)
+
+        if self.adjust_migration_on_edge:
+            incoming = neighbour_sum
+        else:
+            incoming = neighbour_sum / self.kernel_total_sum
+
+        out_grid = (1.0 - rate) * x_grid + rate * incoming
+        return out_grid.reshape(channels, rows * cols).T
+
+    def _build_stencil_neighbor_arrays(self) -> tuple[np.ndarray, np.ndarray]:
+        """Build sparse neighbour index/probability rows from the stencil.
+
+        This keeps stochastic migration O(D * K) in memory instead of building
+        a dense adjacency matrix.
+        """
+        rows, cols = self.grid_rows, self.grid_cols
+        n_demes = rows * cols
+        max_nnz = len(self.stencil_offsets)
+        indices = np.full((n_demes, max_nnz), -1, dtype=np.int64)
+        probs = np.zeros((n_demes, max_nnz), dtype=np.float32)
+
+        for src in range(n_demes):
+            src_row, src_col = divmod(src, cols)
+            valid: list[tuple[int, float]] = []
+            for dr, dc, weight in self.stencil_offsets:
+                dst_row = src_row + dr
+                dst_col = src_col + dc
+                if self.wrap:
+                    dst_row %= rows
+                    dst_col %= cols
+                elif (
+                    dst_row < 0
+                    or dst_row >= rows
+                    or dst_col < 0
+                    or dst_col >= cols
+                ):
+                    continue
+                valid.append((dst_row * cols + dst_col, weight))
+
+            total = sum(weight for _dst, weight in valid)
+            if self.adjust_migration_on_edge:
+                denom = total if total > 0.0 else 1.0
+            else:
+                denom = self.kernel_total_sum if self.kernel_total_sum > 0.0 else 1.0
+            for k, (dst, weight) in enumerate(valid):
+                indices[src, k] = dst
+                probs[src, k] = weight / denom
+        return indices, probs
+
+    @staticmethod
+    def _build_adjacency_neighbor_arrays(
+        adjacency: np.ndarray, n_demes: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Build sparse neighbour rows from an explicit dense adjacency."""
+        neighbor_lists: list[np.ndarray] = []
+        prob_lists: list[np.ndarray] = []
+        for i in range(n_demes):
+            nz = np.flatnonzero(adjacency[i] > 0.0)
+            neighbor_lists.append(nz.astype(np.int64))
+            row = adjacency[i, nz]
+            if row.sum() > 0.0:
+                row = row / row.sum()
+            prob_lists.append(row.astype(np.float32))
+        max_nnz = max((len(x) for x in neighbor_lists), default=0)
+        indices = np.full((n_demes, max_nnz), -1, dtype=np.int64)
+        probs = np.zeros((n_demes, max_nnz), dtype=np.float32)
+        for i in range(n_demes):
+            n = len(neighbor_lists[i])
+            indices[i, :n] = neighbor_lists[i]
+            probs[i, :n] = prob_lists[i]
+        return indices, probs
 
     # ------------------------------------------------------------------
     # stochastic sampling helpers
@@ -205,23 +362,25 @@ class SpatialDiscreteXPU:
     def _sample_multinomial_rows(
         totals: torch.Tensor,
         probs: torch.Tensor,
-        device: torch.device,
         dtype: torch.dtype = torch.float32,
     ) -> torch.Tensor:
         """Sample independent Multinomial rows with different per-row totals.
 
         PyTorch's ``torch.distributions.Multinomial`` does not support
-        inhomogeneous per-row total counts, so this helper implements the
-        equivalent multinomial sampling manually:
+        inhomogeneous per-row total counts. Instead of expanding every row to
+        ``max_total`` categorical draws (which is O(max_total * n_rows) and
+        previously required a CPU sync), this implementation uses the standard
+        conditional-binomial decomposition:
 
-        1. Find ``max_total``, the largest per-row total.
-        2. Draw ``max_total`` Categorical samples for every row.
-        3. Keep only the first ``total[i]`` draws for row ``i``.
-        4. Count the kept category draws with ``scatter_add_``.
+        ``(X_1, ..., X_K) ~ Multinomial(n, p)`` is equivalent to sequentially
+        drawing
 
-        This is correct but costs ``O(max_total * n_rows)`` random draws and
-        temporary memory, which is a major reason the stochastic XPU prototype
-        is slow.
+        ``X_k ~ Binomial(n_remaining, p_k / sum_{j>=k} p_j)``
+
+        for ``k = 1..K-1``, with ``X_K`` equal to the remaining count.
+
+        This keeps the work at O(K) vectorised binomial draws per row and does
+        not require any CPU synchronisation.
 
         Args:
             totals: 1-D tensor of total counts per row.
@@ -232,51 +391,44 @@ class SpatialDiscreteXPU:
         """
         totals = SpatialDiscreteXPU._round_counts(totals)
         n_rows, n_categories = probs.shape
-        row_sum = probs.sum(dim=1)
-        active = (totals > 0.0) & (row_sum > 1e-10)
+        if n_rows == 0 or n_categories == 0:
+            return torch.zeros_like(probs)
 
-        safe_probs = probs.clone()
-        safe_probs = safe_probs / safe_probs.sum(dim=1, keepdim=True).clamp_min(1e-10)
+        # Normalize each row; invalid rows (total 0 or zero probability mass)
+        # become all-zero probability rows and therefore produce all-zero
+        # counts without any data-dependent CPU branch.
+        row_sum = probs.sum(dim=1, keepdim=True)
+        safe_probs = probs / row_sum.clamp_min(1e-10)
+        active = (totals > 0.0) & (row_sum.squeeze(1) > 1e-10)
         safe_probs = torch.where(
             active.unsqueeze(1), safe_probs, torch.zeros_like(safe_probs)
         )
-        # Defensive cleanup: some XPU reduction edge cases can leave NaNs in
-        # otherwise inactive rows; make inactive rows safe for Categorical.
         safe_probs = torch.nan_to_num(
-            safe_probs, nan=0.0, posinf=1.0, neginf=0.0
+            safe_probs, nan=0.0, posinf=0.0, neginf=0.0
         )
-        zero_rows = safe_probs.sum(dim=1) <= 1e-10
-        if bool(zero_rows.any().cpu().item()):
-            safe_probs[zero_rows, 0] = 1.0
 
-        max_total = int(totals.max().item()) if totals.numel() > 0 else 0
-        if max_total <= 0:
-            return torch.zeros_like(probs)
+        out = torch.zeros_like(probs)
+        remaining = totals.clamp_min(0.0)
 
-        # Sample a Categorical draw for every row enough times to cover each
-        # row's total, then mask draws beyond that row's total and count them.
-        cat = torch.distributions.Categorical(probs=safe_probs)
-        draws = cat.sample((max_total,))  # (max_total, n_rows)
+        # Conditional binomial decomposition. K is small in all current calls
+        # (genotype count or neighbour count), so K-1 vectorised draws is cheap.
+        for k in range(n_categories - 1):
+            tail = safe_probs[:, k:].sum(dim=1)  # (n_rows,)
+            cond_p = torch.where(
+                tail > 1e-10,
+                safe_probs[:, k] / tail.clamp_min(1e-10),
+                torch.zeros_like(tail),
+            )
+            remaining_int = remaining.round().clamp_min(0.0)
+            draws = torch.distributions.Binomial(
+                total_count=remaining_int, probs=cond_p
+            ).sample()
+            draws = torch.minimum(draws, remaining_int)
+            out[:, k] = draws
+            remaining = remaining_int - draws
 
-        row_pos = torch.arange(max_total, device=device).unsqueeze(1)
-        valid = row_pos < totals.unsqueeze(0)  # (max_total, n_rows)
-        draws = torch.where(valid, draws, torch.zeros_like(draws))
-
-        row_ids = (
-            torch.arange(n_rows, device=device)
-            .unsqueeze(0)
-            .expand(max_total, -1)
-            .reshape(-1)
-        )
-        cat_ids = draws.reshape(-1)
-        flat_index = row_ids * n_categories + cat_ids
-        flat_valid = valid.reshape(-1).to(dtype)
-
-        flat_counts = torch.zeros(
-            n_rows * n_categories, dtype=dtype, device=device
-        )
-        flat_counts.scatter_add_(0, flat_index, flat_valid)
-        return flat_counts.reshape(n_rows, n_categories)
+        out[:, n_categories - 1] = remaining.round().clamp_min(0.0)
+        return out
 
     # ------------------------------------------------------------------
     # deterministic lifecycle
@@ -376,10 +528,14 @@ class SpatialDiscreteXPU:
 
     def _migration_deterministic(self) -> None:
         """Apply deterministic migration to adult (age-1) individuals."""
-        # Flatten (sex, ztype) into one category axis for a clean matmul.
+        # Flatten (sex, ztype) into one category axis.
         D = self.state.shape[0]
         age1 = self.state[:, :, 1, :].reshape(D, -1)
-        age1 = self.migration_matrix @ age1
+        if self.use_stencil:
+            age1 = self._migration_stencil(age1, self.migration_rate)
+        else:
+            assert self.migration_matrix is not None
+            age1 = self.migration_matrix @ age1
         self.state[:, :, 1, :] = age1.reshape_as(self.state[:, :, 1, :])
 
     # ------------------------------------------------------------------
@@ -419,9 +575,7 @@ class SpatialDiscreteXPU:
             torch.zeros_like(n_flat),
         )
         P_flat = P.reshape(D * G, G)
-        pairs_flat = self._sample_multinomial_rows(
-            n_flat, P_flat, self.device, self.dtype
-        )
+        pairs_flat = self._sample_multinomial_rows(n_flat, P_flat, self.dtype)
         pairs = pairs_flat.reshape(D, G, G)
 
         # 3. Stochastic fertilization per (gf, gm) pair.
@@ -480,7 +634,7 @@ class SpatialDiscreteXPU:
             .reshape(-1, G)
         )
         offspring_counts_flat = self._sample_multinomial_rows(
-            n_viable, offspring_probs, self.device, self.dtype
+            n_viable, offspring_probs, self.dtype
         )
         offspring = offspring_counts_flat.reshape(D, G, G, G).sum(dim=(1, 2))
 
@@ -559,9 +713,7 @@ class SpatialDiscreteXPU:
             probs,
             torch.zeros_like(probs),
         )
-        recruited = self._sample_multinomial_rows(
-            desired, probs, self.device, self.dtype
-        )
+        recruited = self._sample_multinomial_rows(desired, probs, self.dtype)
 
         f_rec = recruited[:, :G]
         m_rec = recruited[:, G:]
@@ -580,7 +732,19 @@ class SpatialDiscreteXPU:
         self.state[:, 1, 0, :] = m_surv
 
     def _migration_stochastic(self) -> None:
-        """Stochastic migration using Binomial outbound + sparse Multinomial split."""
+        """Stochastic migration using one augmented multinomial per row.
+
+        natal's stochastic migration is equivalent to: first draw the number of
+        outbound individuals ``X ~ Binomial(n, rate)``, then split ``X`` over
+        neighbours with a multinomial. The joint distribution of
+        ``(stay, neighbour_1, ..., neighbour_K)`` is exactly
+
+        ``Multinomial(n, [1-rate, rate*p_1, ..., rate*p_K])``
+
+        so this implementation uses a single multinomial per (deme, category)
+        row. That removes one sampling call per row and lets the conditional-
+        binomial multinomial helper handle the split without any CPU sync.
+        """
         D = self.state.shape[0]
         C = self.state.shape[1] * self.state.shape[3]  # sex * ztype per age
         max_nnz = self.neighbor_probs.shape[1]
@@ -591,36 +755,46 @@ class SpatialDiscreteXPU:
             value = self.state[:, :, age_idx, :]  # (D, sex, G)
             value_flat = value.reshape(D, C)      # (D, categories)
 
-            outbound = self._sample_binomial(
-                value_flat,
-                rate,
-                self.device,
-                self.dtype,
-            )  # (D, C)
-            stay = value_flat - outbound
+            # Augmented probabilities: [stay, neighbour_1, ..., neighbour_K].
+            # Using 1 - rate*sum(neighbour_probs) also handles the
+            # adjust_migration_on_edge=False case where neighbour probabilities
+            # sum to less than 1 at the boundary.
+            neighbour_prob = self.neighbor_probs * rate  # (D, max_nnz)
+            stay_prob = (1.0 - neighbour_prob.sum(dim=1, keepdim=True)).clamp_min(
+                0.0
+            )
+            probs_aug = torch.cat([stay_prob, neighbour_prob], dim=1)
 
-            # Flatten rows as (source, category).  Each source deme uses its
-            # own sparse neighbour probability vector.
-            totals = outbound.reshape(-1)  # D*C
-            probs = self.neighbor_probs.repeat_interleave(C, dim=0)  # (D*C, max_nnz)
+            # Each (deme, category) row uses its deme's neighbour distribution.
+            probs_flat = (
+                probs_aug.unsqueeze(1)
+                .expand(D, C, -1)
+                .reshape(D * C, max_nnz + 1)
+            )
+            totals = value_flat.reshape(-1)  # D*C
+
             sampled = self._sample_multinomial_rows(
-                totals, probs, self.device, self.dtype
-            )  # (D*C, max_nnz)
+                totals, probs_flat, self.dtype
+            )  # (D*C, max_nnz+1)
+
+            stay = sampled[:, 0].reshape(D, C)
+            neighbour_counts = sampled[:, 1:].reshape(D, C, max_nnz)
 
             # Map sampled neighbour counts back to destination demes.
-            dst = self.neighbor_indices.repeat_interleave(C, dim=0)  # (D*C, max_nnz)
+            dst = self.neighbor_indices.unsqueeze(1).expand(D, C, max_nnz)
             cat = (
                 torch.arange(C, device=self.device)
                 .unsqueeze(0)
                 .expand(D, -1)
-                .reshape(-1)
-            )  # (D*C,)
-            cat = cat.unsqueeze(1).expand(-1, max_nnz)  # (D*C, max_nnz)
+            )  # (D, C)
+            cat = cat.unsqueeze(2).expand(-1, -1, max_nnz)  # (D, C, max_nnz)
 
             valid = dst >= 0
             index_flat = (dst * C + cat).clamp_min(0).reshape(-1)
             counts_flat = torch.where(
-                valid.reshape(-1), sampled.reshape(-1), torch.zeros_like(sampled.reshape(-1))
+                valid.reshape(-1),
+                neighbour_counts.reshape(-1),
+                torch.zeros_like(neighbour_counts.reshape(-1)),
             )
 
             incoming_flat = torch.zeros(
@@ -664,11 +838,11 @@ class SpatialDiscreteXPU:
         History index 0 is the initial state; indices 1..n_ticks are the
         states after each tick, matching ``reference_cpu.npy``.
         """
-        history = [self.state.detach().cpu().numpy().copy()]
+        history = [self.state.clone()]
         for _ in range(self.n_ticks):
             self.step()
-            history.append(self.state.detach().cpu().numpy().copy())
-        return np.stack(history, axis=0)
+            history.append(self.state.clone())
+        return torch.stack(history, axis=0).detach().cpu().numpy()
 
 
 # Backward-compatible alias for code written before stochastic support was
@@ -687,20 +861,17 @@ def build_gpu_from_reference(
         [deme.state.individual_count for deme in population.demes], axis=0
     )
     cfg = population.deme(0).config
-    topology = reference_cpu.SquareGrid(
-        rows=reference_cpu.N_ROWS, cols=reference_cpu.N_COLS
-    )
-    adjacency = reference_cpu.build_adjacency_matrix(
-        topology, row_normalize=True
-    )
 
     model = SpatialDiscreteXPU(
         state=state,
         config=cfg,
-        adjacency=adjacency,
         migration_rate=reference_cpu.MIGRATION_RATE,
         n_ticks=reference_cpu.N_TICKS,
         device=device,
+        grid_shape=(reference_cpu.N_ROWS, reference_cpu.N_COLS),
+        wrap=False,
+        migration_kernel=reference_cpu.MIGRATION_KERNEL,
+        adjust_migration_on_edge=reference_cpu.MIGRATION_ADJUST_ON_EDGE,
     )
     return model, population
 

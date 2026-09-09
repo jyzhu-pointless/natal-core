@@ -16,11 +16,13 @@ from pathlib import Path
 import numpy as np
 
 import natal as nt
-from natal.spatial import SquareGrid, batch_setting, build_adjacency_matrix
+from natal.spatial import SquareGrid, batch_setting
 
 HERE = Path(__file__).resolve().parent
-OUT_NPY = HERE / "reference_cpu.npy"
-OUT_JSON = HERE / "reference_cpu_summary.json"
+OUTPUT_DIR = HERE / "outputs"
+OUT_NPY = OUTPUT_DIR / "reference_cpu.npy"
+OUT_JSON = OUTPUT_DIR / "reference_cpu_summary.json"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Tunable model parameters
@@ -42,6 +44,17 @@ MALE_AGE0_SURVIVAL = 0.9
 CARRYING_CAPACITY = 1000.0
 LOW_DENSITY_GROWTH_RATE = 6.0
 MIGRATION_RATE = 0.1
+MIGRATION_STRATEGY = "kernel"
+MIGRATION_ADJUST_ON_EDGE = True
+# 3x3 Moore neighbourhood, center excluded (8 neighbours).
+MIGRATION_KERNEL = np.array(
+    [
+        [1.0, 1.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+    ],
+    dtype=np.float64,
+)
 
 
 def build_species() -> nt.Species:
@@ -82,10 +95,6 @@ def build_spatial_population(*, stochastic: bool = False) -> nt.SpatialPopulatio
     species = build_species()
     states = build_initial_states()
     topology = SquareGrid(rows=N_ROWS, cols=N_COLS)
-    # natal-core's builder defaults to an unnormalized binary adjacency in
-    # adjacency-mode migration. Pass an explicit row-normalized adjacency so
-    # deterministic migration conserves total population size.
-    adjacency = build_adjacency_matrix(topology, row_normalize=True)
 
     return (
         nt.SpatialPopulation.builder(
@@ -110,7 +119,12 @@ def build_spatial_population(*, stochastic: bool = False) -> nt.SpatialPopulatio
             juvenile_growth_mode="fixed",
             low_density_growth_rate=LOW_DENSITY_GROWTH_RATE,
         )
-        .migration(adjacency=adjacency, migration_rate=MIGRATION_RATE)
+        .migration(
+            kernel=MIGRATION_KERNEL,
+            migration_rate=MIGRATION_RATE,
+            strategy=MIGRATION_STRATEGY,
+            adjust_migration_on_edge=MIGRATION_ADJUST_ON_EDGE,
+        )
         .record_history(mode="raw", max_rows=1000)
         .build()
     )
