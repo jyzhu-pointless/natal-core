@@ -569,6 +569,24 @@ impl AgeStructuredSession {
         )
     }
 
+    /// Sum the live per-sex counts without exporting the state arrays.
+    ///
+    /// ## Returns
+    /// ``(total, female, male)`` — bitwise identical to the Python-side
+    /// ``individual_count.sum()`` reductions over the same state (the
+    /// reduction replicates NumPy's pairwise summation order).
+    fn counts(&self) -> (f64, f64, f64) {
+        let plane = self.blueprint.n_ages * self.blueprint.n_ztypes;
+        let female = crate::kernels::state_reduce::numpy_pairwise_sum(&self.state_ind[..plane]);
+        let male =
+            crate::kernels::state_reduce::numpy_pairwise_sum(&self.state_ind[plane..2 * plane]);
+        (
+            crate::kernels::state_reduce::numpy_pairwise_sum(&self.state_ind),
+            female,
+            male,
+        )
+    }
+
     /// Capture a memory checkpoint of everything the session owns.
     ///
     /// The state arrays are Python-owned, so they are passed in and returned

@@ -532,12 +532,28 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """int: Minimum age at which individuals are considered adults."""
         return self.config.new_adult_age
 
+    def _native_counts(self) -> tuple[float, float, float] | None:
+        """Sum per-sex counts natively when a live session owns the state.
+
+        Returns:
+            ``(total, female, male)`` from the session, or ``None`` when
+            no session exists yet (the local container is then
+            authoritative and stays the numpy-sum fallback source).
+        """
+        backend = self._rust_lifecycle_backend
+        if backend is None:
+            return None
+        return backend.counts()
+
     def get_total_count(self) -> float:
         """Return the total number of individuals in the population.
 
         Returns:
             float: Grand total across all sexes, ages, and genotypes.
         """
+        counts = self._native_counts()
+        if counts is not None:
+            return counts[0]
         return self._live_state().individual_count.sum()
 
     def get_female_count(self) -> float:
@@ -546,6 +562,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             float: Sum of all female individual counts.
         """
+        counts = self._native_counts()
+        if counts is not None:
+            return counts[1]
         return self._live_state().individual_count[Sex.FEMALE.value, :, :].sum()
 
     def get_male_count(self) -> float:
@@ -554,6 +573,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             float: Sum of all male individual counts.
         """
+        counts = self._native_counts()
+        if counts is not None:
+            return counts[2]
         return self._live_state().individual_count[Sex.MALE.value, :, :].sum()
 
     def get_adult_count(self, sex: str = "both") -> int:

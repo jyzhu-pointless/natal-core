@@ -141,6 +141,12 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     # Configurator.build(); None until then (e.g. clones built via __new__).
     _definition: ModelDefinition | None = None
 
+    # Cached projection mask for :meth:`observe`.  The Observation rule and
+    # the population layout are both frozen at build time, so the mask is
+    # compiled once and reused; clones rebuild it lazily (their rule object
+    # is shared, so the rebuilt mask is value-identical).
+    _observation_query_mask: Optional[np.ndarray] = None
+
     # Runtime reconfiguration log: the
     # build-time definition stays frozen; every committed preset
     # reconfiguration appends here so the post-build history of genetic
@@ -1021,6 +1027,10 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     def observe(self) -> ObservationResult:
         """Project current state through the population's observation.
 
+        The projection mask is compiled once from the frozen Observation
+        and layout, then reused across queries (the native projection
+        only reads it).
+
         Returns:
             ObservationResult with projected values and explicit axes.
 
@@ -1035,7 +1045,10 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
             from natal.frontend.output.observation import ObservationResult
 
             layout = self.history.schema.population
-            mask = obs.build_mask(layout.n_sexes, layout.n_ages, layout.n_ztypes)
+            mask = self._observation_query_mask
+            if mask is None:
+                mask = obs.build_mask(layout.n_sexes, layout.n_ages, layout.n_ztypes)
+                self._observation_query_mask = mask
             tick, values = backend.observe_current(mask, [0], obs.collapse_age, False)
             shape = (obs.n_groups, layout.n_sexes)
             if not obs.collapse_age:

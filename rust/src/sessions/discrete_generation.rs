@@ -436,6 +436,24 @@ impl DiscreteGenerationSession {
         (self.state_tick, PyArray1::from_slice(py, &self.state_ind))
     }
 
+    /// Sum the live per-sex counts without exporting the state arrays.
+    ///
+    /// ## Returns
+    /// ``(total, female, male)`` — bitwise identical to the Python-side
+    /// ``individual_count.sum()`` reductions over the same state (the
+    /// reduction replicates NumPy's pairwise summation order).
+    fn counts(&self) -> (f64, f64, f64) {
+        let plane = self.blueprint.n_ages * self.blueprint.n_ztypes;
+        let female = crate::kernels::state_reduce::numpy_pairwise_sum(&self.state_ind[..plane]);
+        let male =
+            crate::kernels::state_reduce::numpy_pairwise_sum(&self.state_ind[plane..2 * plane]);
+        (
+            crate::kernels::state_reduce::numpy_pairwise_sum(&self.state_ind),
+            female,
+            male,
+        )
+    }
+
     fn snapshot_state<'py>(&self, py: Python<'py>) -> PyResult<DiscreteSnapshot<'py>> {
         let ind_flat = PyArray1::from_slice(py, &self.state_ind);
         let rng_words = self.rng.state_words().to_vec();

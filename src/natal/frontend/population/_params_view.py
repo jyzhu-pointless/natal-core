@@ -21,17 +21,17 @@ A live, validated view over a population's parameters.  Design points
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, cast
+from dataclasses import fields as dataclass_fields
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.configurator._routes import lookup, lookup_or_none
-from natal.frontend.configurator._writers import CoreConfigWriter
+from natal.contracts.params import Params
+from natal.frontend.configurator._routes import RouteEntry, lookup, lookup_or_none
+from natal.frontend.configurator._writers import NATIVE_SCALAR_FIELDS, CoreConfigWriter
 
 if TYPE_CHECKING:
-    from typing import Any
-
     from natal.frontend.data import ModelDraft
     from natal.frontend.genetics import Species
     from natal.frontend.population.base import BasePopulation
@@ -59,6 +59,14 @@ _ECOLOGY_VECTORS: frozenset[str] = frozenset({
     "fertility",
     "competition_weights",
 })
+
+# Session-resident contract fields: everything the native engine owns a
+# live copy of.  Route entries resolving outside this set (layout
+# dimensions, blueprint flags, initial-state tables) are declaration
+# metadata and read from the draft directly.
+_PARAMS_CONTRACT_FIELDS: frozenset[str] = frozenset(
+    field.name for field in dataclass_fields(Params)
+)
 
 
 class TensorView:
@@ -221,11 +229,63 @@ class ParamsView:
         """The population's current draft."""
         if self._validate is not None:
             self._validate()
-        if self._validate is not None:
             candidate = self._pop._config  # pyright: ignore[reportPrivateUsage]  # callback owns the temporary candidate
             assert candidate is not None
             return candidate
         return self._pop.config
+
+    def _static_draft(self) -> ModelDraft:
+        """The declaration-side draft, without a native snapshot pull.
+
+        Structural fields (layout dimensions, blueprint flags,
+        initial-state tables) never change inside the session, so reading
+        them from the live draft is value-identical to the full-snapshot
+        path while skipping the session pull and the draft deepcopy.
+        """
+        draft = self._pop._config  # pyright: ignore[reportPrivateUsage]  # metadata source; the full pull stays on pop.config
+        if draft is None:
+            # Delegate to the public property: it raises the canonical
+            # uninitialized-config error before any native pull.
+            return self._pop.config
+        return draft
+
+    def _native_read_channel(self) -> Any | None:
+        """Resolve the field-level native read channel, or ``None``.
+
+        In-hook reads go through the event transaction: its getters
+        return the staged candidate values — the exact source the lazy
+        candidate projection materializes from — so transaction reads are
+        value-identical to the old full-projection path.  Outside
+        callbacks the deme channel or the panmictic session adapter
+        serves field reads directly; while a run holds the session
+        borrow (``_rust_run_active``), the channel is withheld and reads
+        fall back to the draft, matching ``pop.config``.
+        """
+        pop = self._pop
+        if self._validate is not None:
+            transaction = getattr(pop, "_event_transaction", None)
+            if transaction is not None and hasattr(transaction, "get_tensor"):
+                return transaction
+            return None
+        if getattr(pop, "_rust_run_active", False):
+            return None
+        writer = getattr(pop, "_runtime_parameter_writer", None)
+        if writer is not None and hasattr(writer, "get_tensor"):
+            return writer
+        backend = getattr(pop, "_rust_lifecycle_backend", None)
+        if backend is not None and hasattr(backend, "get_tensor"):
+            return backend
+        return None
+
+    @staticmethod
+    def _entry_reads_native(entry: RouteEntry) -> bool:
+        """Whether *entry*'s value lives in the session's live params."""
+        if entry.kind in ("scalar", "mode_enum"):
+            return entry.contract_field in NATIVE_SCALAR_FIELDS
+        if entry.kind in ("slot", "age_vec", "sex_row", "geno_tensor"):
+            return entry.contract_field in _PARAMS_CONTRACT_FIELDS
+        # bool rows are frozen blueprint flags: session structure, not values.
+        return False
 
     def _species(self) -> Species:
         """The population's species (pattern resolution)."""
@@ -344,14 +404,83 @@ class ParamsView:
         return sorted(names)
 
     def _read_entry(self, name: str) -> object:
-        """Resolve one route entry to a validated read."""
+        """Resolve one route entry to a validated read.
+
+        Session-resident values read field-by-field through the native
+        channel (never materializing a full snapshot); declaration
+        metadata and populations without a live channel read the draft.
+        """
         entry = lookup(name)
         if entry.config_field is None:
             raise AttributeError(
                 f"{name!r} lives on the spatial container, not on a "
                 f"population's params"
             )
-        draft = self._draft
+        channel = self._native_read_channel()
+        if channel is not None and self._entry_reads_native(entry):
+            return self._read_entry_native(channel, entry)
+        return self._read_entry_draft(entry)
+
+    def _read_entry_native(self, channel: Any, entry: RouteEntry) -> object:
+        """Read one session-resident route value through the native channel.
+
+        The draft only supplies immutable layout metadata (tensor
+        shapes); values come from ``get_scalar``/``get_tensor`` — the
+        same native source the full ``config_snapshot`` projection reads.
+
+        Args:
+            channel: The resolved native read channel.
+            entry: The route entry to read.
+
+        Returns:
+            Scalars as Python numbers; vectors as copies; genetics
+            tensors as read-only :class:`TensorView` facades.
+        """
+        contract = entry.contract_field
+        if entry.kind in ("scalar", "mode_enum"):
+            value = channel.get_scalar(contract)
+            if contract == "external_expected_eggs" and value < 0:
+                # Native -1.0 sentinel ↔ draft Optional translation.
+                return None
+            return float(value)
+        draft = self._static_draft()
+        shape = self._draft_field_shape(draft, entry)
+        values: NDArray[np.float64] = channel.get_tensor(contract)
+        if entry.kind == "geno_tensor":
+            return TensorView(lambda arr=values.reshape(shape): arr, self._resolver())
+        if entry.kind == "age_vec":
+            return values.reshape(shape).copy()
+        if entry.kind == "sex_row":
+            if not entry.config_path:
+                # Whole-table declaration (equilibrium): empty native
+                # tensor = derive mode, mirroring the snapshot sentinel.
+                if values.size == 0:
+                    return None
+                return values.reshape(shape).copy()
+            selected = values.reshape(shape)[entry.config_path]
+            return selected.copy()
+        # slot: one cell of a session tensor.
+        return float(values.reshape(shape)[entry.config_path])
+
+    @staticmethod
+    def _draft_field_shape(draft: ModelDraft, entry: RouteEntry) -> tuple[int, ...]:
+        """The declared shape of *entry*'s draft field (native tensors are flat)."""
+        assert entry.config_field is not None  # _read_entry rejects spatial-only rows first
+        if entry.kind == "sex_row" and not entry.config_path:
+            # The equilibrium declaration is Optional: derive its shape
+            # from the layout instead of the (possibly None) field.
+            return (2, int(draft.n_ages))
+        return np.shape(getattr(draft, entry.config_field))
+
+    def _read_entry_draft(self, entry: RouteEntry) -> object:
+        """Read *entry* from the draft (no live native channel available)."""
+        assert entry.config_field is not None  # _read_entry rejects spatial-only rows first
+        if self._validate is not None:
+            # In-hook: read the event candidate so pending writes in the
+            # same callback stay visible, exactly like the snapshot path.
+            draft = self._draft
+        else:
+            draft = self._static_draft()
         field_obj: object = getattr(draft, entry.config_field)
         if entry.kind == "bool":
             return bool(field_obj)
@@ -388,22 +517,35 @@ class ParamsView:
         # geno_tensor
         assert isinstance(field_obj, np.ndarray)
         tensor = cast("NDArray[np.float64]", field_obj)
+        # Copy once so a retained facade keeps the frozen values the
+        # snapshot path used to hand out, even if the draft is replaced.
         return TensorView(
-            lambda arr=tensor: arr, self._resolver()
+            lambda arr=tensor.copy(): arr, self._resolver()
         )
 
     def _read_contract_tensor(self, name: str) -> TensorView:
-        """Resolve a contract field name to a tensor facade."""
+        """Resolve a contract field name to a tensor facade.
+
+        Session-resident tensors read field-by-field through the native
+        channel (reshaped to the declared draft shape); the draft path
+        stays as the fallback when no channel is available.
+        """
         from natal.frontend.configurator._writers import contract_to_draft_field
 
-        draft = self._draft
-        field_obj: object = getattr(draft, contract_to_draft_field(name))
+        draft_field = contract_to_draft_field(name)
+        channel = self._native_read_channel()
+        if channel is not None and name in _PARAMS_CONTRACT_FIELDS:
+            values: NDArray[np.float64] = channel.get_tensor(name)
+            shape = np.shape(getattr(self._static_draft(), draft_field))
+            return TensorView(lambda arr=values.reshape(shape): arr, self._resolver())
+        draft = self._draft if self._validate is not None else self._static_draft()
+        field_obj: object = getattr(draft, draft_field)
         if not isinstance(field_obj, np.ndarray):
             raise AttributeError(
                 f"pop.params has no tensor {name!r}"
             )
         tensor = cast("NDArray[np.float64]", field_obj)
-        return TensorView(lambda arr=tensor: arr, self._resolver())
+        return TensorView(lambda arr=tensor.copy(): arr, self._resolver())
 
     # -- explicit writes -------------------------------------------------------
 

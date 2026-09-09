@@ -252,6 +252,26 @@ class RustLifecycleBackend:
         """Read one scalar directly from the authoritative session."""
         return float(self._session.get_scalar(name))
 
+    def get_tensor(self, name: str) -> NDArray[np.float64]:
+        """Read one detached tensor directly from the authoritative session.
+
+        Args:
+            name: Contract tensor field name (ecology vector or genetics
+                table).
+        """
+        return np.asarray(self._session.get_tensor(name))
+
+    def counts(self) -> tuple[float, float, float]:
+        """Sum the live per-sex counts natively, without a state export.
+
+        Returns:
+            ``(total, female, male)`` — bitwise identical to the NumPy
+            reductions the Python count queries previously performed over
+            ``state_snapshot`` arrays.
+        """
+        total, female, male = self._session.counts()
+        return (float(total), float(female), float(male))
+
     def apply(self, writes: dict[str, float]) -> None:
         """Batch scalar write straight into the session-owned params.
 
@@ -580,6 +600,26 @@ class RustDiscreteLifecycleBackend:
     def get_scalar(self, name: str) -> float:
         """Read one scalar directly from the authoritative session."""
         return float(self._session.get_scalar(name))
+
+    def get_tensor(self, name: str) -> NDArray[np.float64]:
+        """Read one detached tensor directly from the authoritative session.
+
+        Args:
+            name: Contract tensor field name (ecology vector or genetics
+                table).
+        """
+        return np.asarray(self._session.get_tensor(name))
+
+    def counts(self) -> tuple[float, float, float]:
+        """Sum the live per-sex counts natively, without a state export.
+
+        Returns:
+            ``(total, female, male)`` — bitwise identical to the NumPy
+            reductions the Python count queries previously performed over
+            ``state_snapshot`` arrays.
+        """
+        total, female, male = self._session.counts()
+        return (float(total), float(female), float(male))
 
     def apply(self, writes: dict[str, float]) -> None:
         """Batch scalar write straight into the session-owned params."""

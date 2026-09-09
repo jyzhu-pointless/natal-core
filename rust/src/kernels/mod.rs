@@ -16,3 +16,4 @@ pub(crate) mod equilibrium;
 pub(crate) mod offspring;
 pub(crate) mod rng;
 pub(crate) mod spatial;
+pub(crate) mod state_reduce;

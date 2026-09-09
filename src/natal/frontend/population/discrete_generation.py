@@ -563,18 +563,40 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             backend.clear_checkpoints()
             self._state_cache_stale = False
 
+    def _native_counts(self) -> tuple[float, float, float] | None:
+        """Sum per-sex counts natively when a live session owns the state.
+
+        Returns:
+            ``(total, female, male)`` from the session, or ``None`` when
+            no session exists yet (the local container is then
+            authoritative and stays the numpy-sum fallback source).
+        """
+        backend = self._rust_lifecycle_backend
+        if backend is None:
+            return None
+        return backend.counts()
+
     def get_total_count(self) -> int:
         """Return the total number of individuals across all categories."""
+        counts = self._native_counts()
+        if counts is not None:
+            return int(round(counts[0]))
         return int(round(np.sum(self._live_state().individual_count)))
 
     def get_female_count(self) -> int:
         """Return the total number of female individuals."""
+        counts = self._native_counts()
+        if counts is not None:
+            return int(round(counts[1]))
         return int(
             round(self._live_state().individual_count[int(Sex.FEMALE.value)].sum())
         )
 
     def get_male_count(self) -> int:
         """Return the total number of male individuals."""
+        counts = self._native_counts()
+        if counts is not None:
+            return int(round(counts[2]))
         return int(
             round(self._live_state().individual_count[int(Sex.MALE.value)].sum())
         )
