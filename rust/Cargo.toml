@@ -2,6 +2,9 @@
 name = "natal-engine-core"
 version = "0.1.0"
 edition = "2021"
+# Also serves as clippy's msrv: keeps version-gated lints (e.g.
+# manual_is_multiple_of) from suggesting APIs newer than this floor.
+rust-version = "1.86"
 description = "Rust simulation kernels for the NATAL Core engine"
 license = "MIT"
 

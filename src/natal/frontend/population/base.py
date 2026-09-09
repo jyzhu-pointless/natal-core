@@ -20,7 +20,6 @@ from typing import (
     List,
     Mapping,
     Optional,
-    Self,
     Tuple,
     TypeVar,
     Union,
@@ -83,6 +82,8 @@ RUNTIME_FLUSH_FIELDS: tuple[str, ...] = (
 T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationState])
 
 if TYPE_CHECKING:
+    from typing import Self
+
     from natal.frontend.configurator import Configurator
     from natal.frontend.configurator._writers import SessionChannel
     from natal.frontend.hooks import (

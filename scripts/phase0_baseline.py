@@ -80,11 +80,11 @@ def scenario_age_fixed():
 
 def scenario_age_logistic_hook():
     pop = _build_age_structured(mode=2, K=500, r=4.0)
-    pop.register_declarative_hook("early", [
+    pop.register_hooks([
         nt.Op.scale(genotypes="*", ages="*", sex="both", factor=0.98),
         nt.Op.add(genotypes="A|A", ages=1, sex="female", delta=5.0,
                   when="tick >= 2"),
-    ], name="phase0_control")
+    ], event="early", name="phase0_control")
     return pop
 
 

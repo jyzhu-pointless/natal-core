@@ -790,11 +790,7 @@ impl DiscreteGenerationSession {
                 self.genetics = genetics;
             }
         }
-        let n_cols = if n_rows == 0 {
-            0
-        } else {
-            flat_history.len() / n_rows
-        };
+        let n_cols = flat_history.len().checked_div(n_rows).unwrap_or(0);
         let history = PyArray2::<f64>::zeros(py, [n_rows, n_cols], false);
         history
             .readwrite()

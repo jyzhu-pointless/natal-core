@@ -46,7 +46,6 @@ from typing import (
     Mapping,
     Optional,
     ParamSpec,
-    Self,
     Sequence,
     cast,
 )
@@ -83,6 +82,8 @@ from natal.frontend.hooks.types import DemeSelector
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
+    from typing import Self
+
     from natal.frontend.data.definition import ModelDefinition
     from natal.frontend.genetics.definition_compiler import CompiledModel
     from natal.frontend.hooks.tick_context import TickContext

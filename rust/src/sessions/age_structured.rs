@@ -994,9 +994,7 @@ impl HookProgram {
         let n_hooks = extract_i64_scalar(program, "n_hooks")?;
         let op_types = extract_i64_array(program, "op_types_data")?;
         let has_set_param = extract_bool_scalar(program, "has_set_param")?
-            || op_types
-                .iter()
-                .any(|&op| op == crate::hooks::interpreter::OP_SET_PARAM_PUBLIC);
+            || op_types.contains(&crate::hooks::interpreter::OP_SET_PARAM_PUBLIC);
         Ok(Self {
             n_events: extract_i64_scalar(program, "n_events")?,
             n_hooks,
@@ -1185,11 +1183,7 @@ impl AgeStructuredSession {
             }
         }
 
-        let n_cols = if n_rows == 0 {
-            0
-        } else {
-            flat_history.len() / n_rows
-        };
+        let n_cols = flat_history.len().checked_div(n_rows).unwrap_or(0);
         let history = PyArray2::<f64>::zeros(py, [n_rows, n_cols], false);
         history
             .readwrite()

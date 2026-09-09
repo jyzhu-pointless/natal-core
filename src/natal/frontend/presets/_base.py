@@ -5,8 +5,10 @@ Public module — provides the core preset infrastructure.
 
 # pyright: reportPrivateUsage=false
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, Optional, Self, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
 
 from natal.frontend.genetics import Gene, Species
 from natal.frontend.genetics.compile import RecipeHost
@@ -20,6 +22,8 @@ from ._types import (
 )
 
 if TYPE_CHECKING:
+    from typing import Self
+
     from natal.frontend.population.base import BasePopulation
 
 
@@ -194,7 +198,7 @@ class GeneticPreset(ABC):
         self._custom_fitness_patch = patch_func
         return self
 
-    def clear_fitness_patch(self) -> 'GeneticPreset':
+    def clear_fitness_patch(self) -> GeneticPreset:
         """Remove any custom fitness patch, restoring default behavior.
 
         Returns:
@@ -221,7 +225,7 @@ class GeneticPreset(ABC):
         male_rate = rate.get(Sex.MALE) or rate.get("male") or rate.get("m") or rate.get("M") or 0.0
         return (female_rate, male_rate)
 
-    def apply(self, population: 'BasePopulation[Any]') -> None:
+    def apply(self, population: BasePopulation[Any]) -> None:
         """Register this preset onto a population (DEPRECATED).
 
         .. deprecated::
