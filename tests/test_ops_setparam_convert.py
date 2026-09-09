@@ -31,8 +31,12 @@ import natal as nt  # noqa: E402
 from natal.frontend.configurator import Configurator  # noqa: E402
 from natal.frontend.hooks.entry.declarative import Op  # noqa: E402
 from natal.frontend.hooks.types import OpType  # noqa: E402
-from natal.frontend.population.age_structured import AgeStructuredPopulation  # noqa: E402
-from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation  # noqa: E402
+from natal.frontend.population.age_structured import (
+    AgeStructuredPopulation,  # noqa: E402
+)
+from natal.frontend.population.discrete_generation import (
+    DiscreteGenerationPopulation,  # noqa: E402
+)
 from natal.frontend.spatial.population import SpatialPopulation  # noqa: E402
 
 try:
@@ -243,75 +247,6 @@ def test_convert_deterministic_conservation_bit_exact() -> None:
     np.testing.assert_array_equal(col_before, col_after)
 
 
-def test_convert_stochastic_expectation_conserved() -> None:
-    """Stochastic conversion conserves the moved count in expectation."""
-    from natal.frontend.hooks.runtime.csr_kernel import execute_csr_event_arrays
-    from natal.frontend.hooks.types import COND_ALWAYS
-
-    species = _fresh_species()
-    pop = _build_age_structured(species, "conv_stoch")
-    plan = nt.hooks.compile_declarative_hook(
-        [Op.convert("A|A", "A|a", probability=0.25)],
-        pop,
-        "early",
-    ).plan
-    assert plan is not None
-
-    n_trials = 200
-    n_moved_total = 0.0
-    expected_per_trial = (20 + 15) * 0.25  # females + males at age 2
-    for trial in range(n_trials):
-        ind = np.zeros((2, 1, 3), dtype=np.float64)
-        ind[0, 0, 0] = 20.0
-        ind[1, 0, 0] = 15.0
-        np.random.seed(trial)
-        execute_csr_event_arrays(
-            n_events=np.int32(1),
-            n_hooks=np.int32(1),
-            hook_offsets=np.array([0, 1], dtype=np.int32),
-            n_ops_list=np.array([1], dtype=np.int32),
-            op_offsets=np.array([0, 1], dtype=np.int32),
-            op_types_data=plan.op_types,
-            zidx_offsets_data=plan.zidx_offsets,
-            zidx_data=plan.zidx_data,
-            age_offsets_data=plan.age_offsets,
-            age_data=plan.age_data,
-            sex_masks_data=plan.sex_masks.ravel(),
-            params_data=plan.params,
-            condition_offsets_data=plan.condition_offsets,
-            condition_types_data=plan.condition_types,
-            condition_params_data=plan.condition_params,
-            sp_param_ids_data=plan.sp_param_ids,
-            sp_every_data=plan.sp_every,
-            sp_start_data=plan.sp_start,
-            rpn_offsets_data=plan.rpn_offsets,
-            rpn_kinds_data=plan.rpn_kinds,
-            rpn_payload_data=plan.rpn_payload,
-            sp_literals_data=plan.sp_literals,
-            convert_source_z_data=plan.convert_source_z,
-            convert_target_z_data=plan.convert_target_z,
-            deme_selector_types=np.array([0], dtype=np.int32),
-            deme_selector_offsets=np.array([0, 0], dtype=np.int32),
-            deme_selector_data=np.array([], dtype=np.int32),
-            event_id=0,
-            individual_count=ind,
-            sperm_storage=None,
-            has_sperm_storage=False,
-            tick=0,
-            stochastic=True,
-            continuous_sampling=False,
-            deme_id=0,
-        )
-        # Totals conserved per trial as well.
-        assert ind.sum() == 35.0
-        n_moved_total += float(ind[1, 0, 1] + ind[0, 0, 1])
-
-    mean_moved = n_moved_total / n_trials
-    # Binomial(35, 0.25) has sigma ~ 2.29; mean over 200 trials has
-    # sigma ~ 0.16, so 1.0 is a >6-sigma guard.
-    assert abs(mean_moved - expected_per_trial) < 1.0, mean_moved
-
-
 def test_convert_conditional_chain_split() -> None:
     """A probability=1.0 remainder expresses a one-to-many split."""
     species = _fresh_species()
@@ -464,7 +399,7 @@ def test_set_param_spatial_per_deme_columns() -> None:
     spatial.run(1, record_every=0)
 
     # The python dispatch path writes every deme's own draft via its
-    # HookExecutor; each deme population shows its own value.
+    # Native event dispatch; each deme population shows its own value.
     for deme in demes:
         assert deme.params.carrying_capacity == 111.0
 

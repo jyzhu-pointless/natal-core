@@ -7,7 +7,7 @@ This module is the "front-end compiler" for Op-based hooks:
 3) Condition strings are compiled into an RPN token stream.
 4) Everything is packed into a ``CompiledHookPlan`` (CSR-like arrays).
 
-The resulting plan is pure data and can be executed inside njit engine.
+The resulting plan is pure data and is executed by the native Rust engine.
 """
 
 from __future__ import annotations
@@ -633,7 +633,7 @@ def _to_rpn_condition(tokens: List[Tuple[int, int]]) -> Tuple[np.ndarray, np.nda
 
     Why RPN:
     - the runtime kernel can evaluate RPN with a tiny fixed-size stack
-    - no recursion, no Python objects, and predictable control flow in njit
+    - no recursion, no Python objects, and predictable control flow in Rust
 
     Args:
         tokens: List of tokens from _tokenize_condition_expr

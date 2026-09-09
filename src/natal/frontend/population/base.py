@@ -11,9 +11,8 @@ keeping internal state representations compatible with the NumPy-based engine.
 
 from __future__ import annotations
 
-import hashlib
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import (
     TYPE_CHECKING,
     Generic,
@@ -88,7 +87,6 @@ if TYPE_CHECKING:
     from natal.frontend.configurator._writers import SessionChannel
     from natal.frontend.hooks import (
         CompiledHookDescriptor,
-        HookExecutor,
     )
     from natal.frontend.hooks.tick_context import HookRunner
     from natal.frontend.output._recording import RecordingPlan
@@ -121,9 +119,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
             of compiled hook descriptors (CSR plans and Python callbacks)
             sorted by priority.  Homogeneous demes cloned from the
             same template share this list object via identity.
-        hook_executor (Optional[HookExecutor]): Python-side coordinator for
-            all hook types.  Lazily built on first use and invalidated whenever
-            hook registration changes the compiled descriptor list.
     """
 
     # Allowed hook events (subclasses may extend this list).
@@ -185,7 +180,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         """
         self._species = species
         self._name = name
-        self._hook_slot = self._derive_hook_slot(name)
         self._tick = 0
         # Deme index this population executes as: 0 for panmictic models,
         # the live deme index when a SpatialPopulation manages this object
@@ -223,8 +217,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         # Compiled hook descriptors (CSR plans | Python callbacks).
         self.compiled_hook_descriptors: List[CompiledHookDescriptor] = []
 
-        # Dispatch pair (Python-side coordinator + callback runner).
-        self.hook_executor: Optional[HookExecutor] = None
+        # Callback runner used to bridge Python callbacks into Rust sessions.
         self._hook_runner: Optional[HookRunner] = None
 
         # Static data container.
@@ -276,8 +269,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     @property
     def _recording_plan(self) -> Optional[RecordingPlan]:
         """The frozen recording plan (lives inside the run program)."""
-        recording = cast("Optional[RecordingPlan]", self._run_program.recording)
-        return recording
+        return self._run_program.recording
 
     @_recording_plan.setter
     def _recording_plan(self, plan: Optional[RecordingPlan]) -> None:
@@ -324,7 +316,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
             ("_rust_run_active", False),
             ("_state_cache_stale", False),
             ("_rust_needs_rebuild", False),
-            ("_rust_deferred_writes", False),
         ):
             object.__setattr__(clone, _attr, _value)
 
@@ -340,7 +331,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         # --- shared identity ---
         clone._species = self._species
         clone._name = name
-        clone._hook_slot = self._hook_slot
         clone._tick = int(self._tick)
         # Clones are built via __new__ (no __init__), so the deme index
         # must be copied explicitly; a spatial deme's clone keeps its id
@@ -349,7 +339,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
         # --- shared hooks (compiled, read-only during simulation) ---
         clone.compiled_hook_descriptors = self.compiled_hook_descriptors
-        clone.hook_executor = self.hook_executor
         clone._hook_runner = self._hook_runner
         # Clones start from an empty CSR program; registration populates it
         # lazily via _refresh_run_program (the shared descriptor list is
@@ -509,22 +498,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         """
         return self.species.get_all_haploid_genotypes()
 
-    @staticmethod
-    def _derive_hook_slot(name: str) -> int:
-        """Derive a stable non-negative hook slot from population name."""
-        digest = hashlib.sha1(name.encode("utf-8")).hexdigest()
-        # Keep int32-compatible positive range for config scalar stability.
-        return int(digest[:8], 16) & 0x7FFFFFFF
-
-    @property
-    def hook_slot(self) -> int:
-        """Stable unique slot identifier derived from the population name.
-
-        Used by the hook dispatch system to route hooks to the correct
-        population instance in multi-deme simulations.
-        """
-        return int(self._hook_slot)
-
     # ========================================================================
     # Basic properties
     # ========================================================================
@@ -594,7 +567,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         """Validate and commit an explicit configuration import to the live session."""
         from copy import deepcopy
 
-        from natal.contracts.materialize import materialize
+        from natal.contracts.materialize import materialize_params
 
         old = self._config
         if old is None:
@@ -605,10 +578,10 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         if any(not np.array_equal(getattr(old, field), getattr(config, field)) for field in layout):
             raise ValueError("Configuration import cannot change the model's active layout.")
         candidate = deepcopy(config)
-        contracts = materialize(candidate)
+        params = materialize_params(candidate)
         backend = getattr(self, "_rust_lifecycle_backend", None)
         if backend is not None:
-            backend.refresh_params(list(contracts.params.__dataclass_fields__), contracts.params)
+            backend.refresh_params(list(params.__dataclass_fields__), params)
         self._config = candidate
         self._mark_rust_dirty()
 
@@ -703,28 +676,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         """
         if old != new:
             self._params_log.append_detail((int(self._tick), name, float(old), float(new)), "update", self._deme_id)
-
-    def _absorb_rust_eco_journal(
-        self, rows: Sequence[Tuple[int, str, float, float]]
-    ) -> None:
-        """Transfer a legacy session journal into the native parameter log.
-
-        Bound production sessions commit directly to the shared native log.
-        This adapter handles unbound low-level callers without mutating draft
-        parameters or changing the authoritative native ecology.
-
-        Args:
-            rows: ``(tick, name, old, new)`` rows from a Rust backend's
-                ``drain_eco_journal`` (change-only, commit order).
-        """
-        # Sessions with a bound history append directly before capturing each
-        # checkpoint cursor. Unbound low-level/spatial adapters still transfer
-        # their commit journal here, into native log storage rather than a draft.
-        backend = getattr(self, "_rust_lifecycle_backend", None)
-        if backend is not None and getattr(backend, "history_bound", False):
-            return
-        for tick, name, old, new in rows:
-            self._params_log.append((int(tick), name, float(old), float(new)))
 
     @property
     def presets(self) -> List[GeneticPreset]:
@@ -840,15 +791,8 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         encodes that invariant instead of scattering Optional guards.
         The public :attr:`state` stays the snapshot face.
 
-        Under a live Rust backend the session owns the authoritative
-        counts and tick; ``_state`` is a lazily refreshed cache and this
-        accessor pulls a fresh snapshot whenever the cache is marked
-        stale (after runs, restores, or session writes).  Without a
-        backend (reference path) ``_state`` itself is authoritative.
-
         Returns:
-            The live ``_state`` container (arrays shared with the engine
-            or a fresh session snapshot under Rust).
+            The initialized live state container.
 
         Raises:
             RuntimeError: If the state has not been initialized.
@@ -900,22 +844,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         state; the next ``_live_state()`` read pulls a fresh snapshot.
         """
         self._state_cache_stale = True
-
-    def _flush_state_to_session(self, state: T_State) -> None:
-        """Push a borrowed live container back into the session.
-
-        The hook executor lends the live container to callbacks; after the
-        event, writes made through the loan reach the engine.  Without a
-        Rust backend the container already IS the engine state (no-op).
-
-        Args:
-            state: The borrowed container the callbacks may have written.
-        """
-        backend = getattr(self, "_rust_lifecycle_backend", None)
-        if backend is None:
-            return
-        backend.set_state(state)
-        self._state_cache_stale = False
 
     def _restore_ecology_to_draft(self, ecology: Mapping[str, object]) -> None:
         """Write a restored checkpoint's ecology into the draft.

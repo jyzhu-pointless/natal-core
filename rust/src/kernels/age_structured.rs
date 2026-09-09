@@ -1,7 +1,7 @@
 // Numeric loops deliberately mirror the Python reference index-by-index;
 // iterator rewrites would obscure parity review.
 #![allow(clippy::needless_range_loop)]
-// Batch signature mirrors the Numba kernel tuple layout.
+// Lifecycle stage functions accept several parallel state/config channels.
 #![allow(clippy::too_many_arguments)]
 //! Age-structured lifecycle kernels: reproduction, survival, aging, and the
 //! unified tick orchestration.
@@ -1144,32 +1144,6 @@ pub fn run_tick(
     Ok(0)
 }
 
-/// Run up to ``n_ticks`` complete ticks inside Rust and optionally record flattened history rows.
-///
-/// Recording mirrors the Numba ``_run_loop_structured`` layout:
-/// ``[tick, individual_count..., sperm_storage...]`` in raw mode, or
-/// ``[tick, observed...]`` where each observation group is summed over the
-/// ztype axis before flattening.
-///
-/// ## Parameters
-/// - `rng`: Random number generator.
-/// - `cfg`: Simulation config.
-/// - `hooks`: CSR hook program.
-/// - `ind`: Mutable individual-count flat slice.
-/// - `sperm`: Mutable sperm-storage flat slice.
-/// - `tick`: Starting tick.
-/// - `n_ticks`: Number of ticks to run.
-/// - `record_interval`: Record every N ticks; 0 disables recording.
-/// - `observation_mask`: Optional observation mask.
-/// - `eco_values`: Live scratch slice for ``OP_SET_PARAM`` evaluation.
-/// - `eco_ctx`: Optional write-back context (borrowed, not consumed); when
-///   present, ECO writes are committed and the config re-assembled at every
-///   event boundary of every tick (matching the Python lifecycle
-///   granularity).  The caller keeps ownership so it can drain
-///   ``eco_ctx.journal`` into its session audit trail after the batch.
-///
-/// ## Returns
-/// ``(final_tick, flat_history, n_rows, was_stopped)``.
 /// One full in-memory checkpoint captured at a record-aligned tick.
 ///
 /// The S2 record-point store (plan 13.1 R3): alongside every raw history
@@ -1236,130 +1210,4 @@ pub(crate) fn capture_checkpoint(
             .unwrap_or_default(),
     });
     Ok(())
-}
-
-pub fn run_batch(
-    rng: &mut SessionRng,
-    cfg: &AgeStructuredConfig,
-    hooks: &HookProgram,
-    ind: &mut [f64],
-    sperm: &mut [f64],
-    tick: i64,
-    n_ticks: i64,
-    record_interval: i64,
-    observation_mask: Option<&[f64]>,
-    eco_values: &mut [f64],
-    eco_ctx: &mut Option<EcoCtx<'_>>,
-    checkpoint_every: i64,
-    checkpoints: &mut Vec<TickCheckpoint>,
-) -> Result<(i64, Vec<f64>, usize, bool), String> {
-    // Loop n_ticks entirely in Rust.
-    // When recording is enabled, append a history row at the requested interval.
-    // Stops requested by hooks terminate the loop early.
-    let n_sexes = 2;
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
-    let n_obs_values = n_sexes * n_ages * n_ztypes;
-    let observation_groups = match observation_mask {
-        Some(mask) => {
-            if n_obs_values == 0 || mask.len() % n_obs_values != 0 {
-                return Err(format!(
-                    "observation_mask length {} is not a multiple of {}",
-                    mask.len(),
-                    n_obs_values
-                ));
-            }
-            mask.len() / n_obs_values
-        }
-        None => 0,
-    };
-
-    let mut current_tick = tick;
-    let mut history: Vec<f64> = Vec::new();
-    let mut n_rows: usize = 0;
-
-    let record_row = |history: &mut Vec<f64>,
-                      ind: &[f64],
-                      sperm: &[f64],
-                      observation_mask: Option<&[f64]>,
-                      observation_groups: usize,
-                      current_tick: i64| {
-        history.push(current_tick as f64);
-        match observation_mask {
-            Some(mask) => {
-                for group in 0..observation_groups {
-                    for sex in 0..n_sexes {
-                        for age in 0..n_ages {
-                            let mut total = 0.0;
-                            for ztype in 0..n_ztypes {
-                                let state_idx = (sex * n_ages + age) * n_ztypes + ztype;
-                                let mask_idx =
-                                    ((group * n_sexes + sex) * n_ages + age) * n_ztypes + ztype;
-                                total += ind[state_idx] * mask[mask_idx];
-                            }
-                            history.push(total);
-                        }
-                    }
-                }
-            }
-            None => {
-                history.extend_from_slice(ind);
-                history.extend_from_slice(sperm);
-            }
-        }
-    };
-
-    if record_interval > 0 && current_tick % record_interval == 0 {
-        record_row(
-            &mut history,
-            ind,
-            sperm,
-            observation_mask,
-            observation_groups,
-            current_tick,
-        );
-        n_rows += 1;
-        if checkpoint_every > 0 && current_tick % checkpoint_every == 0 {
-            capture_checkpoint(rng, ind, sperm, current_tick, eco_ctx, checkpoints)?;
-        }
-    }
-
-    for _ in 0..n_ticks {
-        // With an EcoCtx, run_tick commits ECO writes and re-assembles the
-        // config at every event boundary (matching the Python lifecycle);
-        // without one the batch cfg stays frozen for the whole batch.
-        // The batch loop is panmictic: hooks must see deme 0 (the
-        // TickContext.deme_id contract), never a -1 sentinel.
-        let result = run_tick(
-            rng,
-            cfg,
-            hooks,
-            ind,
-            sperm,
-            current_tick,
-            0,
-            eco_values,
-            eco_ctx,
-        )?;
-        if result != 0 {
-            return Ok((current_tick, history, n_rows, true));
-        }
-        current_tick += 1;
-        if record_interval > 0 && current_tick % record_interval == 0 {
-            record_row(
-                &mut history,
-                ind,
-                sperm,
-                observation_mask,
-                observation_groups,
-                current_tick,
-            );
-            n_rows += 1;
-            if checkpoint_every > 0 && current_tick % checkpoint_every == 0 {
-                capture_checkpoint(rng, ind, sperm, current_tick, eco_ctx, checkpoints)?;
-            }
-        }
-    }
-
-    Ok((current_tick, history, n_rows, false))
 }

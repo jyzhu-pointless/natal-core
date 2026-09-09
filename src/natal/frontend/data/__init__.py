@@ -26,15 +26,9 @@ from .constants import BEVERTON_HOLT, FIXED, LINEAR, LOGISTIC, NO_COMPETITION
 from .definition import ModelDefinition
 from .state import (
     DiscretePopulationState,
-    PlainDiscretePopulationState,
-    PlainPopulationState,
     PopulationState,
-    from_plain_discrete_population_state,
-    from_plain_population_state,
     parse_flattened_discrete_state,
     parse_flattened_state,
-    to_plain_discrete_population_state,
-    to_plain_population_state,
 )
 
 __all__ = [
@@ -64,14 +58,6 @@ __all__ = [
     'compress_hl',
     'decompress_hl',
     'compress_config',
-    # state helpers
-    'to_plain_population_state',
-    'to_plain_discrete_population_state',
-    'from_plain_population_state',
-    'from_plain_discrete_population_state',
     'parse_flattened_state',
     'parse_flattened_discrete_state',
-    # backward-compat aliases
-    'PlainPopulationState',
-    'PlainDiscretePopulationState',
 ]

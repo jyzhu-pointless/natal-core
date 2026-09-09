@@ -29,7 +29,7 @@ from natal.contracts.blueprint import Blueprint, format_type_name, frozen
 from natal.contracts.params import CustomValue, Params
 from natal.frontend.data.config import ModelDraft
 
-__all__ = ["Materialized", "SpatialMigration", "materialize"]
+__all__ = ["Materialized", "SpatialMigration", "materialize", "materialize_params"]
 
 
 class Materialized(NamedTuple):
@@ -224,17 +224,41 @@ def materialize(
         A :class:`Materialized` pair owning fresh copies of every
         array; the draft is safe to discard afterwards.
     """
-    if migration is None:
-        n_demes = 1
-        n_sexes = int(draft.n_sexes)
-        n_ages = int(draft.n_ages)
-        rate = np.zeros((n_demes, n_sexes, n_ages), dtype=np.float64)
-    else:
-        rate = np.array(migration.rate, dtype=np.float64, order="C")
+    rate = _copy_migration_rate(draft, None if migration is None else migration.rate)
     return Materialized(
         blueprint=_blueprint(draft, migration),
         params=_params(draft, rate),
     )
+
+
+def materialize_params(
+    draft: ModelDraft,
+    migration_rate: NDArray[np.float64] | None = None,
+) -> Params:
+    """Build an owned runtime ``Params`` projection from a draft.
+
+    This entry point is for runtime parameter refreshes that do not need a
+    rebuilt ``Blueprint``.  It keeps the same fresh-copy ownership contract
+    as :func:`materialize` while avoiding construction of frozen metadata.
+
+    Args:
+        draft: The current build-time configuration draft.
+        migration_rate: Optional owned migration-rate column.  When omitted,
+            a zero single-deme column is used.
+
+    Returns:
+        A fully owned ``Params`` instance.
+    """
+    return _params(draft, _copy_migration_rate(draft, migration_rate))
+
+
+def _copy_migration_rate(
+    draft: ModelDraft, migration_rate: NDArray[np.float64] | None
+) -> NDArray[np.float64]:
+    """Return an owned migration-rate column for Params-only materialization."""
+    if migration_rate is None:
+        return np.zeros((1, int(draft.n_sexes), int(draft.n_ages)), dtype=np.float64)
+    return np.array(migration_rate, dtype=np.float64, order="C")
 
 
 def ztype_names_from_registry(

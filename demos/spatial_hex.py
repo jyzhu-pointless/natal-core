@@ -74,7 +74,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
 def main() -> None:
     """Build + run the hex-grid spatial demo and report timing."""
     spatial = build_hex_spatial_population()
-    spatial.run(1)  # warm-up (Numba compilation)
+    spatial.run(1)  # warm-up the native session
     print("start")
     start = time.perf_counter()
     spatial.run(5)

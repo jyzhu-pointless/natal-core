@@ -177,7 +177,7 @@ How `_clone` shares and copies state:
 
 | Category | Contents | Reason |
 |-----------|------|------|
-| Shared reference | `_species`, `_config` (homogeneous clones share one exported config; the template deme keeps its own draft), `_index_registry`, `_registry`, `compiled_hook_descriptors`, `hook_executor`, `_hook_runner`, `_hook_slot`, `_genotypes_list`, `_haploid_genotypes_list` | Read-only during simulation; identical across homogeneous demes |
+| Shared reference | `_species`, `_config` (homogeneous clones share one exported config; the template deme keeps its own draft), `_index_registry`, `_registry`, `compiled_hook_descriptors`, native `HookProgram`, `_hook_runner`, `_genotypes_list`, `_haploid_genotypes_list` | Read-only during simulation; identical across homogeneous demes |
 | Shallow-copied lists | `_presets`, `_manual_gamete`, `_manual_zygote`, `_gamete_modifiers`, `_zygote_modifiers` | Each deme can add or remove modifiers without affecting the others |
 | Independent copies | `_state` (individual/sperm arrays copied from the template), `_initial_population_snapshot`, `_name`, `_deme_id`, `_tick`, `_params_log` (a fresh native log), `_reconfiguration_log`, `_run_program` | Each deme owns its runtime state and audit trail |
 | Reset | Rust session bridge fields (`_rust_lifecycle_backend = None`, ...) | Clones start backend-less and create a session on first run |

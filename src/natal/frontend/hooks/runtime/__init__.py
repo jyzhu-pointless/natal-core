@@ -1,1 +1,1 @@
-"""Hook runtime execution — CSR kernel and Python fallback."""
+"""Hook runtime support for native Rust event execution and callbacks."""

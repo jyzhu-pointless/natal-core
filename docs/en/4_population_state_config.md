@@ -7,6 +7,8 @@
 
 Understanding these two objects helps in organizing initialization, execution, and result interpretation more reliably.
 
+`ModelDraft` is materialized into owned `Blueprint` and `Params` contracts at build time. Runtime parameter refreshes use the Params projection directly. The retired `hook_slot`, `SimState`, and `PlainPopulationState` compatibility surfaces are no longer part of the public API.
+
 ## Overview
 
 After the user constructs a population via `setup(...).build()`, the framework internally follows this flow:

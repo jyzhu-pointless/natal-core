@@ -1,12 +1,8 @@
 """Hook management mixin for BasePopulation.
 
-Slice-4 target state: one registration entry
-(:meth:`HookManagerMixin.register_hooks`, called by ``.hooks()`` on both
-the build-time and runtime Configurator), one descriptor payload pair
-(CSR plan | Python callback), and one Python dispatch path
-(:class:`~natal.frontend.hooks.runtime.fallback.HookExecutor`) that runs
-the event's descriptors — plans and callbacks interleaved — in one
-stable ascending-priority order.
+The registration entry stores one descriptor payload pair (CSR plan or
+Python callback).  Native Rust sessions execute declarative plans and bridge
+Python callbacks at event boundaries in one stable priority order.
 
 The njit-era registration surface (``set_hook`` / ``get_hooks`` /
 ``remove_hook``, the plain ``(state, config, deme_id)`` hook map, and the
@@ -42,7 +38,6 @@ if TYPE_CHECKING:
     from typing import Any as _Any
     from typing import Protocol as _Protocol
 
-    from natal.frontend.hooks.runtime.fallback import HookExecutor
     from natal.frontend.hooks.tick_context import HookRunner
     from natal.frontend.hooks.types import HookProgram
     from natal.frontend.population.base import BasePopulation
@@ -71,7 +66,7 @@ class HookManagerMixin:
 
     Expects the host class (BasePopulation) to define these attributes:
     ``ALLOWED_EVENTS``, ``tick``, ``state``, ``config``,
-    ``compiled_hook_descriptors``, ``hook_executor``, ``_hook_runner``,
+    ``compiled_hook_descriptors``, ``_hook_runner``,
     ``_run_program``, and the ``_rust_needs_rebuild`` flag.
     """
 
@@ -84,7 +79,6 @@ class HookManagerMixin:
     state: object
     config: object
     compiled_hook_descriptors: list[CompiledHookDescriptor]
-    hook_executor: Optional[HookExecutor]
     _hook_runner: Optional[HookRunner]
     _run_program: RunProgram
     # Rust dirty-set bridge owned by BasePopulation (contract field names).
@@ -269,7 +263,6 @@ class HookManagerMixin:
             if self._same_hook_identity(existing, desc):
                 return
         self.compiled_hook_descriptors.append(desc)
-        self.hook_executor = None
         self._hook_runner = None
 
         # The Rust session snapshots the CSR hook program and callbacks at
@@ -327,6 +320,15 @@ class HookManagerMixin:
         native = getattr(self, "_runtime_parameter_writer", None)
         if native is None:
             native = getattr(self, "_rust_lifecycle_backend", None)
+        if native is None:
+            # Directly constructed standalone populations do not create a
+            # session until the first operation that needs native execution.
+            # Managed spatial demes have a runtime writer and therefore stay
+            # owned by their SpatialPopulation container.
+            initialize = getattr(self, "_initialize_session", None)
+            if callable(initialize):
+                initialize(seed=int(getattr(self, "_rust_backend_seed", 0) or 0))
+                native = getattr(self, "_rust_lifecycle_backend", None)
         if native is not None and hasattr(native, "trigger_event"):
             event_id = EVENT_ID_MAP.get(event_name)
             if event_id is None:
@@ -344,19 +346,9 @@ class HookManagerMixin:
                 result = int(native.trigger_event(event_id))
             cast("_Population", self)._mark_state_cache_stale()  # pyright: ignore[reportPrivateUsage]  # host owns its snapshot cache
             return result
-        if self.hook_executor is None:
-            self.ensure_hook_executor()
-        executor = self.hook_executor
-        if executor is None:
-            return RESULT_CONTINUE
-        event_id = EVENT_ID_MAP.get(event_name)
-        if event_id is None:
-            return RESULT_CONTINUE
-        return executor.execute_event(
-            event_id,
-            cast("_Population", self),
-            self.tick,
-            deme_id=deme_id,
+        raise RuntimeError(
+            "Native hook execution is unavailable; initialize a Rust session "
+            "before triggering events."
         )
 
     # ── Introspection ─────────────────────────────────────────────────
@@ -386,23 +378,13 @@ class HookManagerMixin:
         return self.has_python_callbacks()
 
     def invalidate_hook_dispatch(self) -> None:
-        """Drop the cached dispatch pair so the next event rebuilds it."""
-        self.hook_executor = None
+        """Invalidate callback wrappers after hook storage changes.
+
+        Declarative execution belongs to the native session.  The method is
+        retained as a small lifecycle seam for SpatialPopulation, which
+        invalidates all demes after copy-on-write hook registration.
+        """
         self._hook_runner = None
-
-    def ensure_hook_executor(self) -> None:
-        """Build the dispatch pair (executor + runner) lazily."""
-        if self.hook_executor is None:
-            from natal.frontend.hooks.runtime.fallback import HookExecutor
-            from natal.frontend.hooks.tick_context import HookRunner
-
-            runner = HookRunner(cast("_Population", self))
-            self._hook_runner = runner
-            self.hook_executor = HookExecutor.from_compiled_hooks(
-                self._run_program.hooks,
-                self.compiled_hook_descriptors,
-                runner,
-            )
 
     def _ensure_hook_runner(self) -> HookRunner:
         """Return the callback runner, building it on first use."""

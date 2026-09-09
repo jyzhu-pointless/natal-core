@@ -106,10 +106,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         if index_registry is not None:
             self._index_registry = index_registry
 
-        config_hook_slot = int(getattr(population_config, "hook_slot", 0))
-        if config_hook_slot <= 0:
-            config_hook_slot = self.hook_slot
-        self._config = population_config._replace(hook_slot=np.int32(config_hook_slot))
+        self._config = population_config
 
         self._genotypes_list = species.get_all_genotypes()
         self._haploid_genotypes_list = species.get_all_haploid_genotypes()
@@ -131,8 +128,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             self._live_state().sperm_storage[:] = cfg_init_sperm
 
         self.snapshots = {}
-        # True while a Rust batch run executes; in-hook writes defer to the
-        # next run (session borrow held by the engine).
         self._rust_run_active = False
         self._rust_lifecycle_backend: RustLifecycleBackend | None = None
         self._rust_backend_seed: int | None = None
@@ -141,9 +136,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         # straight to the session through the writers and the run-boundary
         # ecology flush.
         self._rust_needs_rebuild: bool = False
-        # True while a run's in-hook writes deferred to the draft; the run
-        # boundary flushes the draft into the session exactly when it is.
-        self._rust_deferred_writes: bool = False
 
         if initial_individual_count is not None:
             self._live_state().individual_count.fill(0.0)
@@ -607,7 +599,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     # ========================================================================
 
     def export_config(self) -> ModelDraft:
-        """Export population configuration to Config jitclass.
+        """Export a detached model configuration.
 
         Returns:
             ModelDraft: A copy of the current population configuration.
@@ -618,7 +610,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """Import configuration into the population.
 
         Args:
-            config: Config jitclass instance.
+            config: Model configuration to install.
         """
         self._require_standalone_owner("import_config")
         # Configuration is usually read-only (used by run_tick),
@@ -873,7 +865,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         self._rust_run_active = True
         try:
-            final_tick, history_new, was_stopped = backend.run(
+            final_tick, _history_new, was_stopped = backend.run(
                 n_steps=n_steps,
                 record_every=record_every,
                 observation_mask=self._observation_mask,
@@ -881,18 +873,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             )
         finally:
             self._rust_run_active = False
-            self._rust_deferred_writes = False
-
-        # Merge the session's set_param writes (params_log rows under their
-        # own commit ticks + final draft values) so the Rust run path keeps
-        # the same audit trail and draft visibility as the Python channel.
-        self._absorb_rust_eco_journal(backend.drain_eco_journal())
 
         # The session owns the state: only the mirror tick updates eagerly;
         # the cached container refreshes lazily on the next read.
         self._tick = int(final_tick)
         self._mark_state_cache_stale()
-        self._process_kernel_history(history_new, clear_history_on_start)
+        # Bound native HistoryStore receives records during the session run.
 
         if was_stopped:
             self._finished = True

@@ -337,14 +337,14 @@ class _DraftWriterBase:
             KeyError: If *field* is not a tensor contract field.
             ValueError: On a size mismatch (zero writes).
         """
-        from natal.contracts.materialize import materialize
-
         before = self._draft
         candidate = _DraftWriterBase(deepcopy(before))
         candidate._write_contract_tensor(field, values)
         fields = [field, "offspring_tensor"] if field == "meiosis_map" else [field]
         if self._session is not None:
-            self._session.refresh_params(fields, materialize(candidate.draft).params)
+            from natal.contracts.materialize import materialize_params
+
+            self._session.refresh_params(fields, materialize_params(candidate.draft))
         self._draft = candidate.draft
         if self._on_replace is not None:
             self._on_replace(self._draft)
@@ -371,8 +371,6 @@ class _DraftWriterBase:
 
     def _push_session(self, touched: list[RouteEntry]) -> None:
         """Submit all compiled products through the single native commit channel."""
-        from natal.contracts.materialize import materialize
-
         session = self._session
         assert session is not None
         fields = sorted({entry.contract_field for entry in touched if entry.kind != "bool" and entry.config_field is not None})
@@ -381,7 +379,9 @@ class _DraftWriterBase:
             # every genetics tensor for an ecological scalar edit is needless.
             session.apply({name: -1.0 if (value := getattr(self._draft, contract_to_draft_field(name))) is None else float(value) for name in fields})
         elif fields:
-            session.refresh_params(fields, materialize(self._draft).params)
+            from natal.contracts.materialize import materialize_params
+
+            session.refresh_params(fields, materialize_params(self._draft))
 
     def _apply_fitness_patch(
         self,

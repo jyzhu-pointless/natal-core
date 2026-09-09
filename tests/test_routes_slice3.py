@@ -1078,7 +1078,7 @@ class TestVocabularyPreserved:
     def test_every_method_index_entry_is_a_real_method(self):
         methods = {
             "setup", "age_structure", "initial_state", "survival",
-            "reproduction", "competition", "fitness", "hook", "migration",
+            "reproduction", "competition", "fitness", "migration",
         }
         assert set(ROUTES_BY_METHOD) == methods
         for name in ROUTES_BY_METHOD:

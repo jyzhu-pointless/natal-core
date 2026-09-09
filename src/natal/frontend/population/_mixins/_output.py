@@ -197,66 +197,6 @@ class OutputMixin(ModifierPresetMixin):
         self._tick = restored_tick
         history_obj.truncate(retain_until_tick=tick)
 
-    def _process_kernel_history(
-        self,
-        history_new: Optional[np.ndarray],
-        clear_history_on_start: bool
-    ) -> None:
-        """Process and append history array returned from simulation engine.
-
-        Args:
-            history_new: Engine rows with tick in the first column, or ``None``.
-            clear_history_on_start: Whether to discard the existing timeline
-                before committing the engine rows.
-
-        Raises:
-            RuntimeError: If the population History is not initialized.
-            ValueError: If row shape, schema, ordering, or boundary payload is
-                inconsistent with the existing History.
-        """
-        if history_new is None or history_new.shape[0] == 0:
-            return
-
-        if clear_history_on_start:
-            self.clear_history()
-
-        history_obj = self._history_obj
-        if history_obj is None:
-            raise RuntimeError("History is not initialized for this population.")
-        from natal.frontend.output.history import HistoryBatch
-
-        rows = history_new
-        schema = history_obj.schema
-        observation = schema.observation
-        if (
-            schema.mode == "observation"
-            and observation is not None
-            and observation.collapse_age
-            and rows.shape[1] != schema.row_size
-        ):
-            pop = schema.population
-            values = rows[:, 1:].reshape(
-                rows.shape[0],
-                observation.n_groups,
-                pop.n_sexes,
-                pop.n_ages,
-            ).sum(axis=-1)
-            collapsed = np.empty(
-                (rows.shape[0], schema.row_size), dtype=np.float64
-            )
-            collapsed[:, 0] = rows[:, 0]
-            collapsed[:, 1:] = values.reshape(rows.shape[0], -1)
-            rows = collapsed
-
-        history_obj._append_continuation(  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
-            HistoryBatch(schema=schema, rows=rows)
-        )
-        # Evicted history rows take their checkpoints with them: the
-        # store stays bounded by the same max_rows budget (plan S4).
-        backend = getattr(self, "_rust_lifecycle_backend", None)
-        if backend is not None and history_obj.ticks:
-            backend.retain_checkpoints_from(int(history_obj.ticks[0]))
-
     # ── Population queries ─────────────────────────────────────────
     # From base.py:963-982
 

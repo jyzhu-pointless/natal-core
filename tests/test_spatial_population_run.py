@@ -1259,7 +1259,7 @@ compact = pop._collect_compact_spatial_hooks()
 assert len(compact) == 1, f"expected 1 compact slot, got {len(compact)}"
 assert compact[0].deme_selector == "*", f"expected wildcard, got {compact[0].deme_selector}"
 
-registry = pop.hooks.registry
+registry = pop.hooks
 assert registry is not None
 assert int(registry.n_hooks) == 1, f"expected 1 hook slot in registry, got {int(registry.n_hooks)}"
 

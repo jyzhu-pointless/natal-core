@@ -1,1 +1,1 @@
-"""Hook compilation container (the njit codegen pipeline was removed)."""
+"""Hook compilation helpers for native Rust HookProgram values."""

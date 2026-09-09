@@ -11,11 +11,9 @@ Discipline:
       retired with the Numba removal).
     - Array contents may be mutated in place; scalar metadata requires
       ``_replace``.
-    - The draft is a *draft*: ``build()`` materializes it into the
-      Blueprint + Params contracts and the draft retires.  Until the
-      Rust core lands (slice ②) engines still read it as their runtime
-      carrier, which is why it retains the derived ``expected_*``
-      caches and the structured ``custom`` array (both die later).
+    - The draft is a build-time object. ``build()`` materializes it into
+      the ``Blueprint`` and ``Params`` contracts; runtime sessions consume
+      those owned contracts while configuration snapshots remain drafts.
 """
 
 from __future__ import annotations
@@ -92,7 +90,6 @@ class ModelDraft(NamedTuple):
             sperm storage.
         equilibrium_individual_distribution: Optional (2, n_ages)
             declared equilibrium; None selects derivation mode.
-        hook_slot: Reserved engine hook slot index.
         custom: User custom slots as a plain ``{name: value}`` dict
             (empty when none registered).  Values are validated and
             normalized by ``build_custom_slots``; scalars reach the Rust
@@ -162,7 +159,6 @@ class ModelDraft(NamedTuple):
     initial_sperm_storage: NDArray[np.float64]
     # -- declarations and plumbing --
     equilibrium_individual_distribution: Optional[NDArray[np.float64]]
-    hook_slot: int
     custom: dict[str, CustomValue]
     fixed_egg_count: bool
     has_sex_chromosomes: bool
@@ -248,4 +244,3 @@ class ModelDraft(NamedTuple):
                 gen_times[sex] = numerator / denominator
 
         return float(np.mean(gen_times))
-

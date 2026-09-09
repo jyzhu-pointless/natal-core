@@ -190,8 +190,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             self._live_state().individual_count.fill(0.0)
             self._distribute_initial_population(initial_individual_count)
 
-        # True while a Rust batch run executes; in-hook writes defer to the
-        # next run (session borrow held by the engine).
         self._rust_run_active = False
         self._rust_lifecycle_backend: RustDiscreteLifecycleBackend | None = None
         self._rust_backend_seed: int | None = None
@@ -200,9 +198,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         # straight to the session through the writers and the run-boundary
         # ecology flush.
         self._rust_needs_rebuild: bool = False
-        # True while a run's in-hook writes deferred to the draft; the run
-        # boundary flushes the draft into the session exactly when it is.
-        self._rust_deferred_writes: bool = False
 
         # Keep a pristine copy so reset() can restore the starting state.
         self._initial_population_snapshot = (
@@ -456,7 +451,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         self._rust_run_active = True
         try:
-            final_tick, history_new, was_stopped = backend.run(
+            final_tick, _history_new, was_stopped = backend.run(
                 n_steps=n_steps,
                 record_every=record_every,
                 observation_mask=self._observation_mask,
@@ -464,18 +459,12 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             )
         finally:
             self._rust_run_active = False
-            self._rust_deferred_writes = False
-
-        # Merge the session's set_param writes (params_log rows under their
-        # own commit ticks + final draft values) so the Rust run path keeps
-        # the same audit trail and draft visibility as the Python channel.
-        self._absorb_rust_eco_journal(backend.drain_eco_journal())
 
         # The session owns the state: only the mirror tick updates eagerly;
         # the cached container refreshes lazily on the next read.
         self._tick = int(final_tick)
         self._mark_state_cache_stale()
-        self._process_kernel_history(history_new, clear_history_on_start)
+        # Bound native HistoryStore receives records during the session run.
 
         if was_stopped:
             self._finished = True

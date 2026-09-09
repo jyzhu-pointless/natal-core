@@ -749,7 +749,7 @@ class TestRouteTableIntegrity:
         "mode_enum",
     }
     EXPECTED_COUNTS = {
-        "scalar": 15,
+        "scalar": 14,
         "geno_tensor": 8,
         "slot": 7,
         "sex_row": 5,
@@ -768,9 +768,9 @@ class TestRouteTableIntegrity:
     def _unique_entries(self) -> list[object]:
         return list({e.name: e for e in ROUTES.values()}.values())
 
-    def test_exactly_forty_four_rows_in_seven_shapes(self):
+    def test_exactly_forty_one_rows_in_seven_shapes(self):
         entries = self._unique_entries()
-        assert len(entries) == 42
+        assert len(entries) == 41
         counts = Counter(e.kind for e in entries)  # type: ignore[attr-defined]  # entries are RouteEntry records
         assert dict(counts) == self.EXPECTED_COUNTS
         for entry in entries:

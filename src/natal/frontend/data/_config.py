@@ -379,7 +379,6 @@ def build_population_config(
     low_density_growth_rate: float = 6.0,
     juvenile_growth_mode: int = LOGISTIC,
     generation_time: Optional[float] = None,
-    hook_slot: int = 0,
     has_sex_chromosomes: bool = False,
     zygotes_to_gametes_map: Optional[NDArray[np.float64]] = None,
     gametes_to_zygotes_map: Optional[NDArray[np.float64]] = None,
@@ -432,7 +431,6 @@ def build_population_config(
         low_density_growth_rate: Intrinsic growth rate at low density.
         juvenile_growth_mode: Growth mode (see constants).
         generation_time: Optional pre‑computed generation time; if None, computed.
-        hook_slot: Slot index for hooks (default 0).
         has_sex_chromosomes: Whether the species has sex‑chromosome constraints.
             If True, offspring sex is determined by genotype compatibility;
             if False, only sex_ratio is used (default False).
@@ -559,7 +557,6 @@ def build_population_config(
             initial_individual_count=m.initial_individual_count,
             initial_sperm_storage=m.initial_sperm_storage,
             equilibrium_individual_distribution=m.equilibrium_individual_distribution,
-            hook_slot=int(hook_slot),
             custom={},
             fixed_egg_count=bool(fixed_egg_count),
             has_sex_chromosomes=m.has_sex_chromosomes,
@@ -608,7 +605,6 @@ def build_population_config(
         initial_individual_count=m.initial_individual_count,
         initial_sperm_storage=m.initial_sperm_storage,
         equilibrium_individual_distribution=m.equilibrium_individual_distribution,
-        hook_slot=int(hook_slot),
         custom={},
         fixed_egg_count=bool(fixed_egg_count),
         has_sex_chromosomes=m.has_sex_chromosomes,

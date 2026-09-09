@@ -81,7 +81,14 @@ def test_discrete_batch_equals_segmented_ticks(config: ModelDraft) -> None:
     segmented = RustDiscreteLifecycleBackend(config, _empty_hook_program(), seed=6)
     state = _state(config, seed=6)
     for _ in range(3):
-        state, result = segmented.run_tick(state)
+        segmented.set_state(state)
+        _, _, stopped_one = segmented.run(n_steps=1, record_every=0)
+        tick_one, ind_one = segmented.state_snapshot()
+        state = DiscretePopulationState(
+            n_tick=tick_one,
+            individual_count=ind_one.reshape(state.individual_count.shape),
+        )
+        result = int(stopped_one)
         assert result == 0
 
     assert stopped is False
@@ -92,19 +99,25 @@ def test_discrete_batch_equals_segmented_ticks(config: ModelDraft) -> None:
     assert history.shape[0] == 4  # initial row + three ticks
 
 
-def test_discrete_tick_inplace_mutates_and_shares_array(
+def test_discrete_tick_snapshot_isolated_from_input(
     config: ModelDraft,
 ) -> None:
-    """The explicit in-place entry point avoids the state-array copy."""
+    """Native snapshots advance without mutating the caller's input."""
     state = _state(config, seed=7)
     backend = RustDiscreteLifecycleBackend(config, _empty_hook_program(), seed=0)
     original = state.individual_count.copy()
 
-    next_state, result = backend.run_tick_inplace(state)
+    backend.set_state(state)
+    _, _, stopped = backend.run(n_steps=1, record_every=0)
+    tick, ind_flat = backend.state_snapshot()
+    next_state = DiscretePopulationState(
+        n_tick=tick, individual_count=ind_flat.reshape(state.individual_count.shape)
+    )
+    result = int(stopped)
 
     assert result == 0
-    assert next_state.individual_count is state.individual_count
-    assert not np.array_equal(state.individual_count, original)
+    assert not np.shares_memory(next_state.individual_count, state.individual_count)
+    np.testing.assert_array_equal(state.individual_count, original)
 
 
 def test_stochastic_discrete_multi_seed_statistics(species: Species) -> None:
@@ -127,7 +140,14 @@ def test_stochastic_discrete_multi_seed_statistics(species: Species) -> None:
             stochastic_config, _empty_hook_program(), seed=seed
         )
         for _ in range(ticks):
-            state, result = backend.run_tick(state)
+            backend.set_state(state)
+            _, _, stopped = backend.run(n_steps=1, record_every=0)
+            tick, ind_flat = backend.state_snapshot()
+            state = DiscretePopulationState(
+                n_tick=tick,
+                individual_count=ind_flat.reshape(state.individual_count.shape),
+            )
+            result = int(stopped)
             assert result == 0
             assert np.isfinite(state.individual_count).all()
         total = float(state.individual_count.sum())

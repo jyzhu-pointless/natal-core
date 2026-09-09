@@ -108,12 +108,16 @@ class TestAllParameters:
             "migration.migration_rate",
             "age_structure.n_ages",
             "initial_state.initial_individual_count",
-            "hook.hook_slot",
         ],
     )
     def test_key_parameters_present(self, key: str):
         """Key parameters that must exist in the registry."""
         assert key in ALL_PARAMETERS, f"Missing expected parameter: {key}"
+
+    def test_legacy_hook_slot_is_absent(self):
+        """The retired name-derived hook slot is absent from all config surfaces."""
+        assert "hook.hook_slot" not in ALL_PARAMETERS
+        assert "hook_slot" not in ModelDraft._fields
 
 
 class TestParameterFieldMapping:
@@ -200,7 +204,6 @@ class TestParametersByDomain:
             "reproduction",
             "competition",
             "fitness",
-            "hook",
             "migration",
         }
         assert set(PARAMETERS_BY_DOMAIN) == expected

@@ -1369,10 +1369,10 @@ class Configurator:
             if backend is None:
                 backend = getattr(pop, "_rust_lifecycle_backend", None)
             if backend is not None:
-                from natal.contracts.materialize import materialize
+                from natal.contracts.materialize import materialize_params
 
                 candidate = current._replace(custom=normalized)
-                backend.refresh_params(["custom_slots"], materialize(candidate).params)
+                backend.refresh_params(["custom_slots"], materialize_params(candidate))
         self._custom_kwargs = dict(normalized)
         self._config = current._replace(custom=normalized)
         if pop is not None:
@@ -1876,7 +1876,7 @@ class Configurator:
 
     def _commit_genetic_candidate(self, candidate: Configurator, *, publish_definition: bool = True) -> None:
         """Commit products; reconfiguration publishes its final recipe identities later."""
-        from natal.contracts.materialize import materialize
+        from natal.contracts.materialize import materialize_params
 
         pop = self._pop_ref
         if pop is None:
@@ -1901,7 +1901,7 @@ class Configurator:
                 backend = getattr(pop, "_rust_lifecycle_backend", None)
         if backend is None:
             raise RuntimeError("A runtime genetic commit requires a native session")
-        backend.refresh_params(fields, materialize(new).params)
+        backend.refresh_params(fields, materialize_params(new))
         pop.set_config(new)
         pop._manual_gamete = list(candidate._manual_gamete)  # pyright: ignore[reportPrivateUsage]  # publish successful declaration metadata.
         pop._manual_zygote = list(candidate._manual_zygote)  # pyright: ignore[reportPrivateUsage]

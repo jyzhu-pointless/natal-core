@@ -4,50 +4,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from natal.frontend.hooks.runtime import sampling
 from tests._config_assertions import assert_config_equal
 from tests.test_review_runtime_regressions import ModelKind, _population
-
-
-@pytest.mark.parametrize("shape", [0.2, 1.0, 2.0, 1e9])
-def test_gamma_sampler_has_analytic_mean_and_variance(shape: float, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Gamma(shape,1) has mean=variance=shape across both rejection regimes.
-
-    20,000 independent draws use eight standard errors per moment. The Gamma
-    fourth central moment is 3*k*k+6*k, giving the variance-estimator bound.
-    These wide family-wise margins detect lost variance without seed selection.
-    """
-    rng = np.random.default_rng(91304)
-    monkeypatch.setattr(np.random, "random", rng.random)
-    monkeypatch.setattr(np.random, "normal", rng.normal)
-    n = 20000
-    draws = np.array([sampling._bounded_gamma(shape) for _ in range(n)])
-    assert abs(draws.mean() - shape) < 8 * np.sqrt(shape / n)
-    assert abs(draws.var() - shape) < 8 * np.sqrt((2 * shape**2 + 6 * shape) / n)
-    assert np.all(draws >= 0)
-
-
-def test_gamma_sampler_rejection_budget_and_precision_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Degenerate random sources terminate, and sub-ULP noise is not fabricated."""
-    monkeypatch.setattr(np.random, "random", lambda: 0.0)
-    assert sampling._bounded_gamma(2.0) == 2.0
-    monkeypatch.setattr(np.random, "random", lambda: 0.999999999)
-    assert sampling._bounded_gamma(0.2) == 0.2
-    limit = float(2**104)
-    assert sampling._bounded_gamma(limit) == limit
-
-
-@pytest.mark.parametrize("n,p,expected", [(5, 0, 0), (5, 1, 5), (0.5, 0.25, 0.125)])
-def test_continuous_binomial_exact_degenerate_limits(n: float, p: float, expected: float) -> None:
-    """Probability endpoints and the declared fractional-n rule are exact."""
-    assert sampling.continuous_binomial(n, p) == expected
-
-
-@pytest.mark.parametrize("n,p", [(np.inf, 0.5), (10, np.nan)])
-def test_continuous_binomial_rejects_nonfinite_inputs(n: float, p: float) -> None:
-    """Undefined parameters fail explicitly instead of entering rejection loops."""
-    with pytest.raises(ValueError, match="finite"):
-        sampling.continuous_binomial(n, p)
 
 
 @pytest.mark.parametrize("model", ["age", "discrete"])
@@ -103,22 +61,36 @@ def test_compression_preserves_closed_wild_type_population(declared: list[str] |
     np.testing.assert_array_equal(pop.config.offspring_tensor, np.ones((1, 1, 1)))
 
 
-@pytest.mark.parametrize("inplace", [False, True])
-def test_legacy_age_tick_adapter_matches_session_and_preserves_ownership(inplace: bool) -> None:
-    """Both retained tick adapters advance the same native state exactly once."""
-    pop = _population(f"LegacyTickAdapter_{inplace}", "age", stochastic=False)
+def test_native_age_tick_snapshot_advances_session_once() -> None:
+    """Native session advancement is observed through an isolated snapshot."""
+    pop = _population("NativeTickSnapshot", "age", stochastic=False)
     backend = pop._rust_lifecycle_backend
     state = pop._live_state()
+    backend.set_state(state)
     original = state.individual_count.copy()
-    next_state, result = (backend.run_tick_inplace(state) if inplace else backend.run_tick(state))
+    _, _, stopped = backend.run(n_steps=1, record_every=0)
     tick, counts, _ = backend.state_snapshot()
-    assert result == 0 and tick == next_state.n_tick == 1
-    np.testing.assert_array_equal(next_state.individual_count.ravel(), counts)
-    if inplace:
-        assert np.shares_memory(next_state.individual_count, state.individual_count)
-    else:
-        np.testing.assert_array_equal(state.individual_count, original)
-        assert not np.shares_memory(next_state.individual_count, state.individual_count)
+    assert not stopped and tick == 1
+    np.testing.assert_array_equal(state.individual_count, original)
+    counts[0] += 1.0
+    _, fresh_counts, _ = backend.state_snapshot()
+    assert not np.array_equal(counts, fresh_counts)
+
+
+def test_legacy_backend_tick_adapters_are_removed() -> None:
+    """Backends expose only session-owned state advancement."""
+    import natal.backends.rust.rust_backend as rust_backend
+
+    assert not hasattr(rust_backend.RustLifecycleBackend, "run_tick")
+    assert not hasattr(rust_backend.RustLifecycleBackend, "run_tick_inplace")
+    assert not hasattr(rust_backend.RustDiscreteLifecycleBackend, "run_tick")
+    assert not hasattr(rust_backend.RustDiscreteLifecycleBackend, "run_tick_inplace")
+    assert not hasattr(rust_backend, "rust_run_age_structured_aging")
+    assert not hasattr(rust_backend, "rust_run_discrete_aging")
+    import natal._engine_rs as engine
+
+    assert not hasattr(engine, "age_structured_aging")
+    assert not hasattr(engine, "discrete_aging")
 
 
 def test_legacy_scalar_log_ignores_no_change_and_retains_event_metadata() -> None:
@@ -139,22 +111,6 @@ def test_dashboard_equilibrium_metrics_follow_current_configuration() -> None:
     c_star, s_star = _derive_metrics(pop.config)
     assert c_star == pop.params.expected_competition_strength
     assert s_star == pop.params.expected_survival_rate
-
-
-def test_legacy_csr_interpreter_rejects_unknown_mutation_code() -> None:
-    """Malformed low-level plans cannot silently pretend an operation executed."""
-    from dataclasses import replace
-    import natal as nt
-    from tests.test_ops_addendum_adversarial import _compile_plan, _invoke_plan
-
-    pop = _population("UnknownMutationBoundary", "age", stochastic=False)
-    plan = _compile_plan(pop, [nt.Op.scale(genotypes="*", factor=0.5)])
-    malformed = replace(plan, op_types=np.full_like(plan.op_types, -1))
-    counts = pop._live_state().individual_count.copy()
-    before = counts.copy()
-    with pytest.raises(ValueError, match="Unknown mutation opcode"):
-        _invoke_plan(malformed, counts, None, tick=0, stochastic=False)
-    np.testing.assert_array_equal(counts, before)
 
 
 def test_legacy_preset_apply_preserves_manual_zygote_registration() -> None:
@@ -184,21 +140,3 @@ def test_legacy_preset_apply_preserves_manual_zygote_registration() -> None:
     assert [name for _, name, _ in pop.zygote_modifiers] == ["zygote-only/zygote"]
     assert pop.presets == []
     np.testing.assert_array_equal(pop.config.offspring_tensor, before)
-
-
-def test_legacy_csr_female_scaling_preserves_sperm_and_virgin_ratio() -> None:
-    """Halving 10 mothers with six mated leaves five mothers and three mated."""
-    import natal as nt
-    from tests.test_ops_addendum_adversarial import _compile_plan, _invoke_plan
-
-    pop = _population("FemaleSpermScaleBoundary", "age", stochastic=False)
-    plan = _compile_plan(pop, [nt.Op.scale(genotypes="WT|WT", ages=[1], sex="female", factor=0.5)])
-    state = pop._live_state()
-    counts = np.zeros_like(state.individual_count)
-    sperm = np.zeros_like(state.sperm_storage)
-    counts[0, 1, 0] = 10
-    sperm[1, 0, :] = [2, 4, 0]
-    _invoke_plan(plan, counts, sperm, tick=0, stochastic=False)
-    assert counts[0, 1, 0] == 5
-    np.testing.assert_array_equal(sperm[1, 0], [1, 2, 0])
-    assert counts[0, 1, 0] - sperm[1, 0].sum() == 2

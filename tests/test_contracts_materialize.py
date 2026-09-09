@@ -23,7 +23,7 @@ Every assertion pins a numeric or identity invariant:
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from importlib import import_module
 
 import numpy as np
 import pytest
@@ -33,15 +33,14 @@ import natal.contracts
 from natal.contracts import (
     CONTRACTS_VERSION,
     Blueprint,
-    CustomValue,
-    Params,
-    SimState,
     gtype_names_from_registry,
     materialize,
     ztype_names_from_registry,
 )
+from natal.contracts.materialize import materialize_params
 from natal.frontend.data import ModelDraft
-from natal.frontend.registry.index import IndexRegistry
+
+materialize_module = import_module("natal.contracts.materialize")
 
 
 def _age_config() -> ModelDraft:
@@ -322,9 +321,13 @@ def test_removed_legacy_fields_do_not_exist() -> None:
 
 def test_removed_public_names_are_inaccessible() -> None:
     with pytest.raises(ImportError):
-        from natal.contracts import ParamsBlock  # type: ignore[attr-defined]  # noqa: F401
+        from natal.contracts import (
+            ParamsBlock,  # type: ignore[attr-defined]  # noqa: F401
+        )
     with pytest.raises(ImportError):
-        from natal.contracts import build_params_dtype  # type: ignore[attr-defined]  # noqa: F401
+        from natal.contracts import (
+            build_params_dtype,  # type: ignore[attr-defined]  # noqa: F401
+        )
     with pytest.raises(ImportError):
         from natal.frontend.data import (  # type: ignore[attr-defined]  # noqa: F401
             PopulationConfig,
@@ -334,7 +337,9 @@ def test_removed_public_names_are_inaccessible() -> None:
             DiscretePopulationConfig,
         )
     with pytest.raises(ImportError):
-        from natal.frontend.data import PlainPopulationConfig  # type: ignore[attr-defined]  # noqa: F401
+        from natal.frontend.data import (
+            PlainPopulationConfig,  # type: ignore[attr-defined]  # noqa: F401
+        )
     with pytest.raises(ImportError):
         from natal.frontend.data import (  # type: ignore[attr-defined]  # noqa: F401
             to_plain_population_config,
@@ -344,7 +349,7 @@ def test_removed_public_names_are_inaccessible() -> None:
 def test_contracts_all_surface() -> None:
     expected = {
         "CONTRACTS_VERSION", "Blueprint", "CustomValue",
-        "Materialized", "Params", "SimState", "format_type_name",
+        "Materialized", "Params", "format_type_name",
         "gtype_names_from_registry", "materialize", "ztype_names_from_registry",
     }
     assert set(natal.contracts.__all__) == expected
@@ -383,18 +388,28 @@ def test_equilibrium_sentinel_shape() -> None:
     assert p.equilibrium_distribution.shape == (0, 0)
 
 
-def test_state_contract_replaces_tick_immutably() -> None:
-    """n_tick is a replaced scalar; arrays stay shared across _replace."""
-    state = SimState(
-        n_tick=0,
-        individual_count=np.ones((2, 2, 4), dtype=np.float64),
-        sperm_storage=np.zeros((0,)),
+def test_retired_sim_state_contract_is_absent() -> None:
+    """The unused legacy SimState contract is absent from all surfaces."""
+    for statement in (
+        "from natal import SimState",
+        "from natal.contracts import SimState",
+        "from natal.contracts.state import SimState",
+    ):
+        with pytest.raises((ImportError, ModuleNotFoundError)):
+            exec(statement, {})
+
+
+def test_retired_plain_state_surfaces_are_absent() -> None:
+    """Self-conversion aliases and functions are removed from state APIs."""
+    names = (
+        "PlainPopulationState", "PlainDiscretePopulationState",
+        "to_plain_population_state", "to_plain_discrete_population_state",
+        "from_plain_population_state", "from_plain_discrete_population_state",
     )
-    advanced = state._replace(n_tick=5)
-    assert advanced.n_tick == 5
-    assert advanced.individual_count is state.individual_count
-    # Restore checkpoint pattern: tick rewind shares the same arrays.
-    assert advanced._replace(n_tick=2).individual_count.shape == (2, 2, 4)
+    for module in ("natal", "natal.frontend.data", "natal.frontend.data.state"):
+        for name in names:
+            with pytest.raises((ImportError, AttributeError)):
+                getattr(__import__(module, fromlist=[name]), name)
 
 
 # ── name directory helpers ───────────────────────────────────────────────────
@@ -449,3 +464,28 @@ def test_params_class_surface() -> None:
     assert "viability_fitness" not in snapshot
     assert "offspring_tensor" not in snapshot
     assert snapshot["carrying_capacity"] == pytest.approx(1234.0)
+
+
+def test_params_only_materialization_skips_blueprint_and_preserves_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Params-only projection matches materialize and owns copied arrays."""
+    draft = _age_config()
+    monkeypatch.setattr(
+        materialize_module,
+        "_blueprint",
+        lambda *_args: pytest.fail("Params-only materialization built a Blueprint"),
+    )
+    params = materialize_params(draft)
+    assert params.carrying_capacity == pytest.approx(1234.0)
+    params.survival_rates[0, 0] = -1.0
+    assert draft.age_based_survival_rates[0, 0] != -1.0
+
+
+def test_params_only_materialization_copies_provided_migration_rate() -> None:
+    """A supplied migration-rate column is copied into Params."""
+    draft = _age_config()
+    migration_rate = np.full((2, 2, 2), 0.25, dtype=np.float64)
+    params = materialize_params(draft, migration_rate)
+    migration_rate[0, 0, 0] = 0.75
+    assert params.migration_rate[0, 0, 0] == pytest.approx(0.25)

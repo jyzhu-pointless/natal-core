@@ -1,7 +1,6 @@
 """Boundary-layer contracts between the frontend and the engine.
 
-This package defines the data contracts (``Blueprint``, ``Params``,
-``SimState``, and — from slice ④ — the ``Program`` bytecode container)
+This package defines the data contracts (``Blueprint`` and ``Params``)
 and the materialization bridge from the build-time draft.
 
 The frontend produces these objects; the native Rust engine consumes
@@ -11,8 +10,8 @@ Contract discipline:
     - The frozen/mutable split is absolute: ``Blueprint`` holds only
       rebuild-to-change data; every runtime-mutable value lives in
       ``Params``.
-    - Bump ``CONTRACTS_VERSION`` on any contract change; when the Rust
-      mirror lands (slice ②), update it in the same change.
+    - Bump ``CONTRACTS_VERSION`` on any contract change and update the
+      native mirror in the same change.
 
 Participation in the top-level lazy export follows the package rule:
 this ``__init__`` declares a non-empty literal ``__all__``.
@@ -26,7 +25,6 @@ from natal.contracts.materialize import (
     ztype_names_from_registry,
 )
 from natal.contracts.params import CustomValue, Params
-from natal.contracts.state import SimState
 
 __all__ = [
     "CONTRACTS_VERSION",
@@ -34,7 +32,6 @@ __all__ = [
     "CustomValue",
     "Materialized",
     "Params",
-    "SimState",
     "format_type_name",
     "gtype_names_from_registry",
     "materialize",

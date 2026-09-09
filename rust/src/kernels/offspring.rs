@@ -4,9 +4,7 @@
 //! The loop nest and the skip-zero short-circuit mirror the reference
 //! Python kernel *statement for statement* so both produce bit-identical
 //! f64 results (Rust's default FP semantics do not fuse multiply-adds).
-//! The Python side funnels every caller through this kernel when the
-//! extension is available; the pure-Python spelling stays only as the
-//! extension-less fallback until the Rust-only stage retires it.
+//! The Python side funnels every caller through this kernel.
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray3, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;

@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""Unit tests for deme selector support in hook descriptors and executor."""
+"""Unit tests for deme selector support in native hook descriptors."""
 
 from __future__ import annotations
 
 import natal as nt
 from natal.frontend.hooks.entry.declarative import compile_declarative_hook
-from natal.frontend.hooks.types import (
-    EVENT_EARLY,
-    RESULT_CONTINUE,
-    CompiledHookDescriptor,
-)
+from natal.frontend.hooks.types import RESULT_CONTINUE, CompiledHookDescriptor
 
 
 def _build_pop(name: str) -> nt.DiscreteGenerationPopulation:
@@ -34,12 +30,12 @@ def _build_pop(name: str) -> nt.DiscreteGenerationPopulation:
 
 
 def _register(desc: CompiledHookDescriptor, pop: nt.DiscreteGenerationPopulation) -> None:
-    """Register one compiled descriptor on *pop* and build its dispatch pair."""
+    """Register one descriptor and initialize its native event session."""
     pop.register_compiled_hook(desc)
-    pop.ensure_hook_executor()
+    pop._initialize_session()
 
 
-def test_executor_filters_callback_by_deme_selector() -> None:
+def test_native_filters_callback_by_deme_selector() -> None:
     """A single-parameter callback runs only when the deme selector matches."""
     calls: list[int] = []
 
@@ -59,18 +55,16 @@ def test_executor_filters_callback_by_deme_selector() -> None:
         source=only_deme_two,
     )
     _register(desc, pop)
-    assert pop.hook_executor is not None
-
-    result = pop.hook_executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=1)
+    result = pop.trigger_event("early", deme_id=1)
     assert result == RESULT_CONTINUE
     assert calls == []
 
-    result = pop.hook_executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=2)
+    result = pop.trigger_event("early", deme_id=2)
     assert result == RESULT_CONTINUE
     assert calls == [2]
 
 
-def test_executor_filters_csr_plan_by_deme_selector() -> None:
+def test_native_filters_csr_plan_by_deme_selector() -> None:
     """A CSR declarative plan runs only on demes inside the selector list."""
     pop = _build_pop("deme_selector_csr")
     desc = compile_declarative_hook(
@@ -81,10 +75,8 @@ def test_executor_filters_csr_plan_by_deme_selector() -> None:
         deme_selector=[0, 3],
     )
     _register(desc, pop)
-    assert pop.hook_executor is not None
-
-    pop.hook_executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=2)
+    pop.trigger_event("early", deme_id=2)
     assert float(pop.state.individual_count[0, 0, 0]) == 10.0
 
-    pop.hook_executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=3)
+    pop.trigger_event("early", deme_id=3)
     assert float(pop.state.individual_count[0, 0, 0]) == 11.0

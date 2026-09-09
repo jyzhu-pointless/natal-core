@@ -413,7 +413,7 @@ def _clone_deme(
 
     - ``_config`` — ModelDraft (and all ndarrays within it)
     - ``_species``, ``_index_registry``, ``_registry``
-    - ``compiled_hook_descriptors``, ``hook_executor``
+    - ``compiled_hook_descriptors`` and the native HookProgram
     - ``_gamete_modifiers``, ``_zygote_modifiers``
 
     Only these are **independent copies**:
@@ -1042,7 +1042,7 @@ class SpatialConfigurator:
             declared_zygote_types: Optional sequence of genotype
                 selectors to protect from compression pruning.
                 Hook genotype references are auto-collected; use this
-                only for genotypes introduced by custom njit hooks.
+                only for genotypes introduced by custom native hooks.
 
         Returns:
             Self for chaining.

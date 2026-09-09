@@ -7,6 +7,8 @@
 
 理解这两个对象有助于更稳定地组织初始化、运行与结果解释过程。
 
+`ModelDraft` 在构建时会物化为由自身拥有数据的 `Blueprint` 和 `Params` 合同；运行时参数刷新直接使用 Params 投影。已移除 `hook_slot`、`SimState` 以及 `PlainPopulationState` 兼容接口，它们不再属于公开 API。
+
 ## 概述
 
 用户通过 `setup(...).build()` 完成种群构建后，框架内部会形成以下流程：

@@ -92,7 +92,7 @@ def _build_population(
         model: ``"age"``, ``"discrete"``, or ``"wright_fisher"``.
         mode: ``"raw"`` or ``"observation"``.
         name: Base identifier for species and population.
-        install_noop_hook: Whether to install a no-op hook for Python dispatch.
+        install_noop_hook: Whether to install a no-op callback hook.
 
     Returns:
         A built non-spatial population with history recording.
@@ -487,17 +487,12 @@ def test_manual_snapshot_rejects_current_tick_without_duplicate_write(
 def test_snapshot_and_kernel_transport_require_initialized_history() -> None:
     """Recording boundaries reject a population whose typed History is absent."""
     population = _build_population("discrete", "raw", "missing_typed_history")
-    schema = population.history.schema
-    row = np.zeros((1, schema.row_size), dtype=np.float64)
     population._history_obj = None  # type: ignore[reportPrivateUsage]  # exercise the invalid pre-build boundary
 
     with pytest.raises(RuntimeError, match="History is not initialized"):
         population.record_snapshot()
-    with pytest.raises(RuntimeError, match="History is not initialized"):
-        population._process_kernel_history(  # type: ignore[reportPrivateUsage]  # verify engine transport boundary
-            row,
-            clear_history_on_start=False,
-        )
+    # Kernel transport is retired; the typed History boundary above is the
+    # only supported recording entry point when initialization is missing.
 
 
 def test_snapshot_rejects_missing_state_or_observation() -> None:
@@ -524,9 +519,8 @@ def test_kernel_transport_rejects_rows_before_current_history_tail() -> None:
     old_row = population.history._to_numpy()[0:1].copy()
 
     with pytest.raises(ValueError, match="starts before"):
-        population._process_kernel_history(  # type: ignore[reportPrivateUsage]  # verify stale engine batch rejection
-            old_row,
-            clear_history_on_start=False,
+        population.history._append_continuation(
+            HistoryBatch(schema=population.history.schema, rows=old_row)
         )
 
     assert population.history.ticks == (0, 1)
@@ -569,9 +563,8 @@ def test_spatial_kernel_transport_rejects_rows_before_current_tail() -> None:
     original = population.history._to_numpy().copy()
 
     with pytest.raises(ValueError, match="starts before"):
-        population._process_kernel_history(  # type: ignore[reportPrivateUsage]  # verify stale spatial engine batch rejection
-            original[0:1],
-            clear_history_on_start=False,
+        population.history._append_continuation(
+            HistoryBatch(schema=population.history.schema, rows=original[0:1])
         )
 
     np.testing.assert_array_equal(population.history._to_numpy(), original)

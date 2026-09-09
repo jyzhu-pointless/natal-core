@@ -1,6 +1,5 @@
 """Hook subsystem public API."""
 
-from .compile.container import CompiledEventHooks, noop_hook
 from .entry.declarative import (
     Op,
     compile_declarative_hook,
@@ -8,16 +7,6 @@ from .entry.declarative import (
 )
 from .entry.decorator import hook
 from .entry.selector import compile_selector_callback
-from .runtime.csr_kernel import (
-    build_hook_program,
-    deme_selector_matches,
-    eval_csr_condition_program,
-    execute_csr_event_arrays,
-    execute_csr_event_program,
-    execute_csr_event_program_with_state,
-    execute_single_csr_hook,
-)
-from .runtime.fallback import HookExecutor
 from .tick_context import BlueprintView, HookRunner, TickContext, TickMetrics
 from .types import (
     COND_ALWAYS,
@@ -48,6 +37,7 @@ from .types import (
     HookProgram,
     OpType,
     RunProgram,
+    deme_selector_matches,
     empty_hook_program,
 )
 
@@ -62,14 +52,6 @@ __all__ = [
     "HookProgram",
     "RunProgram",
     "empty_hook_program",
-    "HookExecutor",
-    "execute_csr_event_arrays",
-    "execute_csr_event_program_with_state",
-    "execute_csr_event_program",
-    "execute_single_csr_hook",
-    "build_hook_program",
-    "noop_hook",
-    "CompiledEventHooks",
     "hook",
     "compile_declarative_hook",
     "compile_selector_callback",
@@ -99,5 +81,4 @@ __all__ = [
     "RESULT_SKIP",
     "RESULT_STOP",
     "parse_condition",
-    "eval_csr_condition_program",
 ]

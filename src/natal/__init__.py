@@ -66,7 +66,7 @@ def _scan_unit(module_name: str, names: list[str], allow_legacy_key: bool) -> No
 _PUBLIC_EXPORTS: dict[str, list[str]] = {
     "contracts": [
         "CONTRACTS_VERSION", "Blueprint", "CustomValue", "Materialized", "Params",
-        "SimState", "format_type_name", "gtype_names_from_registry", "materialize",
+        "format_type_name", "gtype_names_from_registry", "materialize",
         "ztype_names_from_registry",
     ],
     "frontend.configurator": [
@@ -81,10 +81,7 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "extract_zygote_frequencies", "build_population_config",
         "build_discrete_engine_config", "build_custom_slots", "initialize_zygote_map",
         "initialize_gamete_map", "compress_hl", "decompress_hl", "compress_config",
-        "to_plain_population_state", "to_plain_discrete_population_state",
-        "from_plain_population_state", "from_plain_discrete_population_state",
         "parse_flattened_state", "parse_flattened_discrete_state",
-        "PlainPopulationState", "PlainDiscretePopulationState",
     ],
     "frontend.fitness": ["apply_preset_fitness_patch", "write_fitness_field"],
     "frontend.genetics": [
@@ -99,16 +96,13 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     "frontend.hooks": [
         "OpType", "DemeSelector", "deme_selector_matches", "HookOp", "Op",
         "CompiledHookPlan", "CompiledHookDescriptor", "HookProgram", "RunProgram",
-        "empty_hook_program", "HookExecutor", "execute_csr_event_arrays",
-        "execute_csr_event_program_with_state", "execute_csr_event_program",
-        "execute_single_csr_hook", "build_hook_program", "noop_hook",
-        "CompiledEventHooks", "hook", "compile_declarative_hook",
+        "empty_hook_program", "hook", "compile_declarative_hook",
         "compile_selector_callback", "TickContext", "TickMetrics", "BlueprintView",
         "HookRunner", "COND_ALWAYS", "COND_TICK_EQ", "COND_TICK_MOD", "ECO_PARAM_NAMES",
         "COND_TICK_GE", "COND_TICK_GT", "COND_TICK_LE", "COND_TICK_LT", "COND_OP_AND",
         "COND_OP_OR", "COND_OP_NOT", "EVENT_FIRST", "EVENT_EARLY", "EVENT_LATE",
         "EVENT_FINISH", "EVENT_NAMES", "EVENT_ID_MAP", "NUM_EVENTS", "RESULT_CONTINUE",
-        "RESULT_SKIP", "RESULT_STOP", "parse_condition", "eval_csr_condition_program",
+        "RESULT_SKIP", "RESULT_STOP", "parse_condition",
     ],
     "frontend.modifiers": [
         "build_modifier_wrappers", "evaluate_genotype_filter",

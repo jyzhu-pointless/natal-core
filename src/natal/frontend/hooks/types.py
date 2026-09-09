@@ -24,9 +24,9 @@ from typing import (
 import numpy as np
 
 if TYPE_CHECKING:
-    pass
+    from natal.frontend.output._recording import RecordingPlan
 
-# Any callable that can serve as a hook body (noop, njit, combined, kernel).
+# Any callable that can serve as a Python callback hook body.
 HookCallable = Callable[..., Any]
 
 
@@ -113,6 +113,17 @@ class HookOp:
 
 
 DemeSelector = Union[int, List[int], Tuple[int, ...], range, Literal["*"]]
+
+
+def deme_selector_matches(selector: DemeSelector, deme_id: int) -> bool:
+    """Return whether *deme_id* is selected by a hook descriptor."""
+    if selector == "*":
+        return True
+    if isinstance(selector, int):
+        return selector == deme_id
+    if isinstance(selector, range):
+        return deme_id in selector
+    return deme_id in selector
 
 
 # Condition type constants
@@ -355,4 +366,4 @@ class RunProgram(NamedTuple):
     """
 
     hooks: HookProgram
-    recording: Optional[object] = None
+    recording: Optional[RecordingPlan] = None

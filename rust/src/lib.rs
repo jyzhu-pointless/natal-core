@@ -28,8 +28,6 @@ use crate::sessions::spatial::SpatialSession;
 fn _engine_rs(module: &Bound<'_, PyModule>) -> PyResult<()> {
     use crate::kernels::offspring::compute_offspring_tensor;
 
-    module.add_function(wrap_pyfunction!(python::age_structured_aging, module)?)?;
-    module.add_function(wrap_pyfunction!(python::discrete_aging, module)?)?;
     module.add_class::<HistoryStore>()?;
     module.add_class::<ParameterLog>()?;
     module.add_function(wrap_pyfunction!(

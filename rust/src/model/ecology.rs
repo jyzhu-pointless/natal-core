@@ -942,9 +942,9 @@ impl EcologyParams {
 
     /// Snapshot the full ecology section as parallel word vectors.
     ///
-    /// Rust-native twin of the Python-dict ``ecology_snapshot``: the
-    /// record-point checkpoint store (run_batch) captures ecology without a
-    /// Python round trip.  Scalars follow the ``ECOLOGY_SCALAR_COLUMNS``
+    /// Rust-native twin of the Python-dict ``ecology_snapshot``: native
+    /// session checkpoints capture ecology without a Python round trip.
+    /// Scalars follow the ``ECOLOGY_SCALAR_COLUMNS``
     /// wire order (deme 0); vectors follow ``ECOLOGY_VECTORS`` (full
     /// columns).
     pub(crate) fn ecology_snapshot_words(&self) -> PyResult<(Vec<f64>, Vec<Vec<f64>>)> {

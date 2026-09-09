@@ -5,17 +5,6 @@ from collections.abc import Callable
 import numpy as np
 from numpy.typing import NDArray
 
-def age_structured_aging(
-    individual_count: NDArray[np.float64],
-    sperm_storage: NDArray[np.float64],
-) -> None:
-    """Advance age classes in place for an age-structured deme."""
-
-
-def discrete_aging(individual_count: NDArray[np.float64]) -> None:
-    """Move age-0 juveniles to age-1 adults in place for a discrete-generation deme."""
-
-
 def equilibrium_metrics(
     blueprint: object,
     params: object,

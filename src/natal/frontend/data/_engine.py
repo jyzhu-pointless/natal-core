@@ -553,7 +553,6 @@ def build_discrete_engine_config(
     )
 
     extreme_speed = int(kwargs.pop("extreme_speed_mode", 0))
-    hook_slot_val = int(kwargs.pop("hook_slot", 0))
     resolved_z_names = kwargs.pop("ztype_names", None)
     resolved_g_names = kwargs.pop("gtype_names", None)
     if resolved_z_names is None:
@@ -601,7 +600,6 @@ def build_discrete_engine_config(
         initial_individual_count=m.initial_individual_count,
         initial_sperm_storage=m.initial_sperm_storage,
         equilibrium_individual_distribution=equilibrium_val,
-        hook_slot=hook_slot_val,
         custom={},
         fixed_egg_count=m.fixed_egg_count,
         has_sex_chromosomes=m.has_sex_chromosomes,

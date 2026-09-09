@@ -72,6 +72,8 @@ This approach is highly readable, easy to maintain, and makes it easier for team
 
 The legacy `(state, config, deme_id)` three-parameter signature is explicitly rejected (`TypeError` -- it is a leftover of the njit era with no migration channel). Callbacks return `0` (or `RESULT_CONTINUE`) to continue; a non-zero value (or `RESULT_STOP`) stops the simulation.
 
+All four lifecycle events (`first`, `early`, `late`, and `finish`) execute in the native Rust session. The former Python CSR executor, samplers, and low-level execution exports are removed; only compiled `HookProgram` data and Python callback bridges remain.
+
 `.hooks()` is the single registration entry point: call it in the build chain, or via `pop.update().hooks(...)` after construction.
 
 ## `Op` Operations
@@ -121,7 +123,7 @@ Vector and genetics-tensor parameters raise `ValueError` -- use `pop.update()` /
 **Write semantics**:
 
 - Out of a run, the write flushes through the same channel as `pop.params.<name> = ...` (route dispatch, session refresh, and the parameter snapshot log).
-- Inside a `run()`, the write evolves within the session-owned ecology columns with the same event granularity and the same jsonc bounds (a non-finite or out-of-bounds value such as `"K / 0"` raises `ValueError` mid-run); when `run()` returns, the audited transitions are appended to `params_log` under their own commit ticks (HB-2 fix) and the final values are synchronized into the draft.
+- Inside a `run()`, the write evolves within the session-owned ecology columns with the same event granularity and the same jsonc bounds (a non-finite or out-of-bounds value such as `"K / 0"` raises `ValueError` mid-run). Each committed transition is written at its event boundary to the native `ParameterLog`, and later reads obtain the current values from the session snapshot.
 
 ### `Op.convert`: one-to-one probabilistic conversion
 

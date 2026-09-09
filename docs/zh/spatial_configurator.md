@@ -176,7 +176,7 @@ def _clone_deme(template, config, name):
 
 | 类别 | 内容 | 原因 |
 |------|------|------|
-| 共享引用 | `_species`、`_config`（同构克隆共享同一份导出配置；模板 deme 保留自己的 draft）、`_index_registry`、`_registry`、`compiled_hook_descriptors`、`hook_executor`、`_hook_runner`、`_hook_slot`、`_genotypes_list`、`_haploid_genotypes_list` | 仿真期间只读，同构 deme 完全一致 |
+| 共享引用 | `_species`、`_config`（同构克隆共享同一份导出配置；模板 deme 保留自己的 draft）、`_index_registry`、`_registry`、`compiled_hook_descriptors`、native `HookProgram`、`_hook_runner`、`_genotypes_list`、`_haploid_genotypes_list` | 仿真期间只读，同构 deme 完全一致 |
 | 浅拷贝列表 | `_presets`、`_manual_gamete`、`_manual_zygote`、`_gamete_modifiers`、`_zygote_modifiers` | 每个 deme 可独立增删修饰器，不影响其他 deme |
 | 独立副本 | `_state`（复制模板数值的个体/精子数组）、`_initial_population_snapshot`、`_name`、`_deme_id`、`_tick`、`_params_log`（新的原生日志）、`_reconfiguration_log`、`_run_program` | 每个 deme 有自己的运行状态与审计记录 |
 | 重置 | Rust 会话桥接字段（`_rust_lifecycle_backend = None` 等） | 克隆从无后端状态开始，首次运行时按需建立会话 |

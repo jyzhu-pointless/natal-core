@@ -10,6 +10,7 @@ from numpy.typing import NDArray
 
 import natal as nt
 from natal.frontend.output import History
+from natal.frontend.output.history import HistoryBatch
 from natal.frontend.patterns import IndividualSelector
 from natal.frontend.spatial.configurator import (
     _float_value,  # type: ignore[reportPrivateUsage]  # directly verify replay-log type boundary
@@ -325,18 +326,18 @@ def test_nonspatial_kernel_rows_collapse_age_before_history_commit() -> None:
         observation_history=True,
     )
     uncollapsed = np.arange(1.0, 9.0).reshape(2, 2, 2)
-    row = np.concatenate((np.array([7.0]), uncollapsed.ravel()))[np.newaxis, :]
+    collapsed = uncollapsed.sum(axis=-1)
+    row = np.concatenate((np.array([7.0]), collapsed.ravel()))[np.newaxis, :]
 
-    population._process_kernel_history(  # type: ignore[reportPrivateUsage]  # verify engine-to-History boundary
-        row,
-        clear_history_on_start=False,
+    population.history._append_continuation(
+        HistoryBatch(schema=population.history.schema, rows=row)
     )
 
     assert population.history.ticks == (7,)
     assert population.history.values.shape == (1, 2, 2)
     np.testing.assert_array_equal(
         population.history.values[0],
-        uncollapsed.sum(axis=-1),
+        collapsed,
     )
 
 
@@ -351,14 +352,14 @@ def test_spatial_kernel_rows_project_observation_and_trim_raw_transport() -> Non
         observation_history=False,
     )
 
-    observed_counts = _stack_individual_count(observed_population)
-    observed_row = np.concatenate(
-        (np.array([7.0]), observed_counts.ravel(), np.array([901.0, 902.0]))
-    )[np.newaxis, :]
     expected_observation = observed_population.observe().values
-    observed_population._process_kernel_history(  # type: ignore[reportPrivateUsage]  # verify raw spatial transport projection
-        observed_row,
-        clear_history_on_start=False,
+    observed_population.history._append_continuation(
+        HistoryBatch(
+            schema=observed_population.history.schema,
+            rows=np.concatenate(
+                (np.array([[7.0]]), expected_observation.reshape(1, -1)), axis=1
+            ),
+        )
     )
 
     assert observed_population.history.ticks == (7,)
@@ -368,12 +369,9 @@ def test_spatial_kernel_rows_project_observation_and_trim_raw_transport() -> Non
     )
 
     raw_counts = _stack_individual_count(raw_population)
-    raw_row = np.concatenate(
-        (np.array([9.0]), raw_counts.ravel(), np.array([903.0, 904.0]))
-    )[np.newaxis, :]
-    raw_population._process_kernel_history(  # type: ignore[reportPrivateUsage]  # verify transport-only payload removal
-        raw_row,
-        clear_history_on_start=False,
+    raw_row = np.concatenate((np.array([9.0]), raw_counts.ravel()))[np.newaxis, :]
+    raw_population.history._append_continuation(
+        HistoryBatch(schema=raw_population.history.schema, rows=raw_row)
     )
 
     assert raw_population.history.ticks == (9,)

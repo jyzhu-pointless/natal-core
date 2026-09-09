@@ -101,8 +101,6 @@ __all__ = [
     "rust_backend_available",
     "rust_migrate_csr_deterministic",
     "rust_migrate_csr_stochastic",
-    "rust_run_age_structured_aging",
-    "rust_run_discrete_aging",
 ]
 
 
@@ -162,81 +160,6 @@ def _session_call(fn: Callable[[], _T]) -> _T:
         _unwrap_set_param_bounds_error(err)
 
 
-def rust_run_age_structured_aging(
-    state: PopulationState,
-    config: ModelDraft,
-) -> PopulationState:
-    """Run the age-structured aging stage in Rust.
-
-    The Python-owned state is copied first, keeping the engine's
-    ``run_aging`` semantics; the Rust kernel then mutates the copies in place
-    through zero-copy NumPy views.
-
-    Args:
-        state: Current population state.
-        config: Population configuration (accepted for stage-signature
-            compatibility; Rust derives ``n_ages`` from the array shape).
-
-    Returns:
-        A new ``PopulationState`` with age classes advanced by one tick.
-
-    Raises:
-        RuntimeError: If the Rust extension is not built.
-    """
-    try:
-        from natal import _engine_rs
-    except ImportError as err:
-        raise RuntimeError(
-            "natal._engine_rs is not available; build it with `maturin develop` "
-            "and re-run."
-        ) from err
-    ind_count = np.array(state.individual_count, dtype=np.float64, order="C", copy=True)
-    sperm_store = np.array(state.sperm_storage, dtype=np.float64, order="C", copy=True)
-    _engine_rs.age_structured_aging(ind_count, sperm_store)
-    return PopulationState(
-        n_tick=state.n_tick,
-        individual_count=ind_count,
-        sperm_storage=sperm_store,
-    )
-
-
-def rust_run_discrete_aging(
-    state: DiscretePopulationState,
-    config: ModelDraft,
-) -> DiscretePopulationState:
-    """Run the discrete-generation aging stage in Rust.
-
-    The Python-owned state is copied first, keeping the engine's
-    ``run_discrete_aging`` semantics; the Rust kernel then mutates the copy in
-    place through a zero-copy NumPy view.
-
-    Args:
-        state: Current discrete population state.
-        config: Discrete population configuration (accepted for stage-signature
-            compatibility and currently unused by both implementations).
-
-    Returns:
-        A new ``DiscretePopulationState`` with juveniles moved to the adult
-        age class.
-
-    Raises:
-        RuntimeError: If the Rust extension is not built.
-    """
-    try:
-        from natal import _engine_rs
-    except ImportError as err:
-        raise RuntimeError(
-            "natal._engine_rs is not available; build it with `maturin develop` "
-            "and re-run."
-        ) from err
-    ind_count = np.array(state.individual_count, dtype=np.float64, order="C", copy=True)
-    _engine_rs.discrete_aging(ind_count)
-    return DiscretePopulationState(
-        n_tick=state.n_tick,
-        individual_count=ind_count,
-    )
-
-
 class RustLifecycleBackend:
     """Stateful Rust age-structured lifecycle backend.
 
@@ -245,8 +168,8 @@ class RustLifecycleBackend:
     owns its blueprint/params copies, its RNG, and the declarative CSR hook
     program; runtime value changes flow through
     :meth:`refresh_params` (directed pull, no rebuild, no RNG reset).
-    State arrays stay Python-owned and are copied before each tick,
-    preserving the engine's immutable-input contract.
+    The native session owns state arrays and exposes detached snapshots for
+    population queries, preserving one authoritative lifecycle state.
 
     Single-parameter Python callbacks are supported through the session's
     ``python_callbacks`` channel; the population bridges them at
@@ -465,70 +388,6 @@ class RustLifecycleBackend:
         )
         return int(tick), ind_flat, sperm_flat
 
-    def run_tick(
-        self,
-        state: PopulationState,
-        deme_id: int = 0,
-    ) -> tuple[PopulationState, int]:
-        """Run one full age-structured tick in Rust.
-
-        The stage order is first hook → reproduction → early hook → survival →
-        late hook → aging.
-
-        Args:
-            state: Current population state.  It is not modified; the returned
-                state contains the tick result.
-            deme_id: Deme index used by CSR deme selectors and reported to
-                hooks as ``pop.deme_id``.  ``0`` is the panmictic default.
-
-        Returns:
-            ``(next_state, result_code)`` where result code is ``0``
-            (continue) or ``1`` (a declarative stop operation triggered).
-        """
-        self.set_state(state)
-        result = int(_session_call(lambda: self._session.tick(int(deme_id))))
-        tick, ind_flat, sperm_flat = self.state_snapshot()
-        return (
-            PopulationState(
-                n_tick=int(tick),
-                individual_count=ind_flat.reshape(state.individual_count.shape),
-                sperm_storage=sperm_flat.reshape(state.sperm_storage.shape),
-            ),
-            result,
-        )
-
-    def run_tick_inplace(self, state: PopulationState) -> tuple[PopulationState, int]:
-        """Run one tick in place, sharing the caller-owned arrays.
-
-        Unlike :meth:`run_tick`, this method does **not** copy the state
-        arrays.  The input arrays are mutated directly and the returned
-        ``PopulationState`` shares them.  Use only when the caller accepts
-        in-place mutation.
-
-        Args:
-            state: Current population state.
-
-        Returns:
-            ``(next_state, result_code)`` where ``next_state`` wraps the same
-            arrays as *state*.
-
-        Raises:
-            ValueError: If either array is not C-contiguous float64.
-        """
-        self.set_state(state)
-        result = int(_session_call(lambda: self._session.tick(-1)))
-        tick, ind_flat, sperm_flat = self.state_snapshot()
-        state.individual_count[...] = ind_flat.reshape(state.individual_count.shape)
-        state.sperm_storage[...] = sperm_flat.reshape(state.sperm_storage.shape)
-        return (
-            PopulationState(
-                n_tick=int(tick),
-                individual_count=state.individual_count,
-                sperm_storage=state.sperm_storage,
-            ),
-            result,
-        )
-
     def observe_current(
         self, mask: NDArray[np.float64], selected: list[int], collapse_age: bool, aggregate: bool,
     ) -> tuple[int, NDArray[np.float64]]:
@@ -577,14 +436,11 @@ class RustLifecycleBackend:
     ) -> tuple[int, NDArray[np.float64], bool]:
         """Run up to ``n_steps`` ticks on the session-owned state.
 
-        The session owns the counts and the tick (plan S2): Python passes
-        control parameters only and reads state back through
-        :meth:`state_snapshot`.  Flattened history rows (when requested)
-        are returned without Python per-tick callbacks.  Parameter writes
-        made by in-run ``Op.set_param`` hooks accumulate in the session
-        audit journal — drain them with :meth:`drain_eco_journal` after
-        this call to keep the population's ``params_log`` and draft in
-        sync.
+        The session owns the counts, tick, native HistoryStore, and bound
+        ParameterLog. Python passes control parameters and reads detached
+        state snapshots. Bound runs record directly in native stores; an
+        unbound low-level run returns detached flat history rows. In-run
+        parameter writes are committed at native event boundaries.
 
         Args:
             n_steps: Number of ticks to execute.
@@ -842,61 +698,6 @@ class RustDiscreteLifecycleBackend:
         tick, ind_flat = _session_call(lambda: self._session.state_snapshot())
         return int(tick), ind_flat
 
-    def run_tick(
-        self, state: DiscretePopulationState
-    ) -> tuple[DiscretePopulationState, int]:
-        """Run one discrete/Wright-Fisher tick from an explicit state.
-
-        The explicit state is installed into the session, one tick runs,
-        and a fresh post-tick snapshot is returned (the spatial data plane
-        drives per-tick states this way).
-
-        Args:
-            state: The state to advance from.  It is not modified.
-
-        Returns:
-            ``(next_state, result_code)``.
-        """
-        self.set_state(state)
-        result = int(_session_call(lambda: self._session.tick(self._wf)))
-        tick, ind_flat = self.state_snapshot()
-        return (
-            DiscretePopulationState(
-                n_tick=int(tick),
-                individual_count=ind_flat.reshape(state.individual_count.shape),
-            ),
-            result,
-        )
-
-    def run_tick_inplace(
-        self, state: DiscretePopulationState
-    ) -> tuple[DiscretePopulationState, int]:
-        """Run one tick in place, sharing the caller-owned array.
-
-        Unlike :meth:`run_tick`, this method does **not** copy the state
-        array.  The input array is mutated directly and the returned state
-        shares it.
-
-        Args:
-            state: Current discrete population state.
-
-        Returns:
-            ``(next_state, result_code)``.
-
-        Raises:
-            ValueError: If the array is not C-contiguous float64.
-        """
-        self.set_state(state)
-        result = int(_session_call(lambda: self._session.tick(self._wf)))
-        tick, ind_flat = self.state_snapshot()
-        state.individual_count[...] = ind_flat.reshape(state.individual_count.shape)
-        return (
-            DiscretePopulationState(
-                n_tick=int(tick), individual_count=state.individual_count
-            ),
-            result,
-        )
-
     def observe_current(
         self, mask: NDArray[np.float64], selected: list[int], collapse_age: bool, aggregate: bool,
     ) -> tuple[int, NDArray[np.float64]]:
@@ -945,17 +746,19 @@ class RustDiscreteLifecycleBackend:
     ) -> tuple[int, NDArray[np.float64], bool]:
         """Run up to ``n_steps`` ticks inside Rust with optional recording.
 
-        In-run ``Op.set_param`` writes accumulate in the session audit
-        journal — drain them with :meth:`drain_eco_journal` after this call.
+        The session owns the counts, tick, native HistoryStore, and bound
+        ParameterLog. Bound runs record directly in native stores; an
+        unbound low-level run returns detached flat history rows. In-run
+        parameter writes are committed at native event boundaries.
 
         Args:
-            state: Current population state.  It is not modified.
             n_steps: Number of ticks to execute.
             record_every: Record interval in ticks.  ``0`` disables recording.
             observation_mask: Optional ``(n_groups, 2, 2, n_ztypes)`` mask.
+            checkpoint_every: Interval for native checkpoint capture. ``0`` disables it.
 
         Returns:
-            ``(next_state, history_rows, was_stopped)``.
+            ``(final_tick, history_rows, was_stopped)``.
 
         Raises:
             ValueError: When an in-run ``Op.set_param`` value fails the Rust

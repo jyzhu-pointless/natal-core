@@ -39,7 +39,6 @@ from natal.frontend.hooks import (
     HookProgram,
     OpType,
 )
-from natal.frontend.hooks.compile.container import CompiledEventHooks
 from natal.frontend.population.base import BasePopulation
 from natal.frontend.spatial.migration import (
     MigrationCSR,
@@ -1486,57 +1485,6 @@ class SpatialPopulation:
         if backend is not None:
             backend.clear_checkpoints()  # pyright: ignore[reportAttributeAccessIssue]  # session backend surface
 
-    def _process_kernel_history(
-        self,
-        history_new: Optional[NDArray[np.float64]],
-        clear_history_on_start: bool,
-    ) -> None:
-        """Process and append history array returned from spatial simulation engine.
-
-        Args:
-            history_new: Engine rows with tick in the first column, or ``None``.
-            clear_history_on_start: Whether to discard the existing spatial
-                timeline before committing the engine rows.
-
-        Raises:
-            RuntimeError: If spatial History is not initialized.
-            ValueError: If row shape, schema, ordering, or boundary payload is
-                inconsistent with the existing History.
-        """
-        if history_new is None or history_new.shape[0] == 0:
-            return
-
-        if clear_history_on_start:
-            self.clear_history()
-
-        history_obj = self.history
-        rows = history_new
-        if history_obj.schema.mode == "observation":
-            pop = history_obj.schema.population
-            ind_size = pop.n_demes * pop.n_sexes * pop.n_ages * pop.n_ztypes
-            projected_rows = np.empty(
-                (rows.shape[0], history_obj.schema.row_size), dtype=np.float64
-            )
-            projected_rows[:, 0] = rows[:, 0]
-            for row_index in range(rows.shape[0]):
-                counts = rows[row_index, 1 : 1 + ind_size].reshape(
-                    pop.n_demes, pop.n_sexes, pop.n_ages, pop.n_ztypes
-                )
-                values = self.observation.apply(counts)
-                projected_rows[row_index, 1:] = values.ravel()
-            rows = projected_rows
-        elif rows.shape[1] != history_obj.schema.row_size:
-            # Discrete spatial kernels carry a zero-valued sperm placeholder
-            # for a uniform engine signature. Raw History intentionally omits
-            # that transport-only payload.
-            rows = rows[:, : history_obj.schema.row_size]
-
-        from natal.frontend.output.history import HistoryBatch
-
-        history_obj._append_continuation(  # pyright: ignore[reportPrivateUsage]  # History owns flattened boundary validation
-            HistoryBatch(schema=history_obj.schema, rows=rows)
-        )
-
     # ========================================================================
     # Observation infrastructure
     # ========================================================================
@@ -1717,8 +1665,8 @@ class SpatialPopulation:
         deme._tick = int(tick)  # pyright: ignore[reportPrivateUsage]  # container restores the shared clock
 
     @property
-    def hooks(self) -> CompiledEventHooks:
-        """CompiledEventHooks: per-event hooks plus the CSR registry."""
+    def hooks(self) -> HookProgram:
+        """Return the aggregate native hook program for all demes."""
         return self._hooks
 
     def register_hooks(
@@ -2022,7 +1970,7 @@ class SpatialPopulation:
 
         Returns:
             HookProgram: Plain-data CSR payload consumed by hook execution
-            kernels and the Python ``HookExecutor`` path.
+            kernels and the native callback bridge.
 
         Note:
             This function packs all declarative operation arrays into contiguous
@@ -2174,8 +2122,8 @@ class SpatialPopulation:
                 all_convert_target_z.extend(plan.convert_target_z.tolist())
                 op_offsets.append(len(all_op_types))
 
-                # Persist compiled selector in compact integer encoding expected
-                # by njit-side selector matching helpers.
+                # Persist the selector in compact integer encoding for native
+                # hook execution.
                 sel = hook.deme_selector
                 if sel == "*":
                     all_deme_sel_types.append(0)
@@ -2223,7 +2171,7 @@ class SpatialPopulation:
             python_callback_slots=np.array(callback_slots, dtype=np.int32),
         )
 
-    def _compile_spatial_hooks_from_demes(self) -> CompiledEventHooks:
+    def _compile_spatial_hooks_from_demes(self) -> HookProgram:
         """Compile one aggregate hook bundle from current per-deme hooks.
 
         Uses the **compact** execution plan so that demes sharing identical
@@ -2232,8 +2180,7 @@ class SpatialPopulation:
         handed to the Rust session at enable/rebuild time.
 
         Returns:
-            CompiledEventHooks: per-event hook callables plus the CSR
-            registry consumed by the engine session.
+            HookProgram consumed by the native engine session.
 
         Implementation detail:
             This function is the single rebuild entrypoint used by
@@ -2242,9 +2189,7 @@ class SpatialPopulation:
         """
         compiled_hooks = self._collect_compact_spatial_hooks()
         registry = self._build_hook_program(compiled_hooks)
-        hooks = CompiledEventHooks()
-        hooks.registry = registry
-        return hooks
+        return registry
 
     def _refresh_spatial_hooks(self) -> None:
         """Rebuild the aggregate compiled hooks (single rebuild entrypoint)."""
@@ -2462,7 +2407,7 @@ class SpatialPopulation:
             ValueError: If demes export different config values.
         """
         # Spatial kernels assume equivalent config values across demes to avoid
-        # per-deme config branching inside njit paths.
+        # per-deme config branching inside native paths.
         export_fn = getattr(self._demes[0], "export_config", None)
         if not callable(export_fn):
             raise TypeError("deme[0] does not implement export_config()")
@@ -2581,7 +2526,7 @@ class SpatialPopulation:
         return sorted(hooks, key=lambda h: h.priority)
 
     def _has_compiled_hooks(self) -> bool:
-        """Return whether any managed deme has compiled (CSR/njit) hooks.
+        """Return whether any managed deme has compiled native hooks.
 
         Returns:
             ``True`` if at least one deme reports a non-empty compiled hook

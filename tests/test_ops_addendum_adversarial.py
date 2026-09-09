@@ -34,7 +34,6 @@ angles that file does not reach:
 
 from __future__ import annotations
 
-import math
 import sys
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -56,8 +55,6 @@ from natal.frontend.hooks.types import (  # noqa: E402
     RPN_MUL,
     RPN_PARAM,
     RPN_SUB,
-    CompiledHookPlan,
-    HookOp,
 )
 from natal.frontend.population.age_structured import (  # noqa: E402
     AgeStructuredPopulation,  # noqa: E402
@@ -138,75 +135,6 @@ def _mirror_convert_row(
     moved_virgin = virgins * prob
     moved_total = moved_mated + moved_virgin
     return female_src - moved_total, src_after, moved_total
-
-
-def _invoke_plan(
-    plan: CompiledHookPlan,
-    individual_count: np.ndarray,
-    sperm_storage: Optional[np.ndarray],
-    *,
-    tick: int,
-    stochastic: bool,
-    eco_values: Optional[np.ndarray] = None,
-    seed: Optional[int] = None,
-) -> Optional[np.ndarray]:
-    """Run one compiled plan through the CSR kernel on handcrafted arrays.
-
-    Mirrors the flat-array call shape used by ``HookExecutor`` so tests
-    can drive a single plan in isolation (no lifecycle, no write channel)
-    — the right level for kernel-semantics locks like IEEE division.
-    """
-    from natal.frontend.hooks.runtime.csr_kernel import execute_csr_event_arrays
-
-    if seed is not None:
-        np.random.seed(seed)
-    has_sperm = sperm_storage is not None and sperm_storage.size > 0
-    execute_csr_event_arrays(
-        n_events=np.int32(1),
-        n_hooks=np.int32(1),
-        hook_offsets=np.array([0, 1], dtype=np.int32),
-        n_ops_list=np.array([plan.n_ops], dtype=np.int32),
-        op_offsets=np.array([0, plan.n_ops], dtype=np.int32),
-        op_types_data=plan.op_types,
-        zidx_offsets_data=plan.zidx_offsets,
-        zidx_data=plan.zidx_data,
-        age_offsets_data=plan.age_offsets,
-        age_data=plan.age_data,
-        sex_masks_data=plan.sex_masks.ravel(),
-        params_data=plan.params,
-        condition_offsets_data=plan.condition_offsets,
-        condition_types_data=plan.condition_types,
-        condition_params_data=plan.condition_params,
-        sp_param_ids_data=plan.sp_param_ids,
-        sp_every_data=plan.sp_every,
-        sp_start_data=plan.sp_start,
-        rpn_offsets_data=plan.rpn_offsets,
-        rpn_kinds_data=plan.rpn_kinds,
-        rpn_payload_data=plan.rpn_payload,
-        sp_literals_data=plan.sp_literals,
-        convert_source_z_data=plan.convert_source_z,
-        convert_target_z_data=plan.convert_target_z,
-        deme_selector_types=np.array([0], dtype=np.int32),
-        deme_selector_offsets=np.array([0, 0], dtype=np.int32),
-        deme_selector_data=np.array([], dtype=np.int32),
-        event_id=0,
-        individual_count=individual_count,
-        sperm_storage=sperm_storage,
-        has_sperm_storage=has_sperm,
-        tick=tick,
-        stochastic=stochastic,
-        continuous_sampling=False,
-        deme_id=0,
-        eco_values=eco_values,
-    )
-    return eco_values
-
-
-def _compile_plan(pop: AgeStructuredPopulation, ops: List[HookOp]) -> CompiledHookPlan:
-    """Compile ops into a plan without registering them on the population."""
-    plan = nt.hooks.compile_declarative_hook(ops, pop, "early").plan
-    assert plan is not None
-    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -433,49 +361,6 @@ def test_rpn_expression_matrix_bitwise_vs_python(
     pop.register_hooks([Op.set_param("carrying_capacity", expr)], event="early")
     pop.trigger_event("early")
     assert pop.params.carrying_capacity == mirror(eggs, ratio)
-
-
-def test_rpn_ieee_division_kernel_semantics() -> None:
-    """Kernel-level division follows explicit IEEE-754 semantics.
-
-    ``x/0`` = +inf for x>0, -inf for x<0, nan for x=0, and nan propagates
-    through later multiplication.  Checked by invoking the kernel directly
-    with a handcrafted eco scratch so the params write channel (bounds
-    validation) cannot mask the raw float result.
-    """
-    species = _fresh_species()
-    pop = _build_age_structured(species, "ieee")
-
-    def eco_draft() -> np.ndarray:
-        return np.array([800.0, 100.0, 0.5, 0.05, 6.0])
-
-    plan = _compile_plan(pop, [Op.set_param("carrying_capacity", "K / 0")])
-    eco = _invoke_plan(
-        plan, np.zeros((2, 3, 3)), None, tick=0, stochastic=False,
-        eco_values=eco_draft(),
-    )
-    assert eco is not None and math.isinf(eco[0]) and eco[0] > 0
-
-    plan = _compile_plan(pop, [Op.set_param("carrying_capacity", "0 / 0")])
-    eco = _invoke_plan(
-        plan, np.zeros((2, 3, 3)), None, tick=0, stochastic=False,
-        eco_values=eco_draft(),
-    )
-    assert eco is not None and math.isnan(eco[0])
-
-    plan = _compile_plan(pop, [Op.set_param("carrying_capacity", "(0 - K) / 0")])
-    eco = _invoke_plan(
-        plan, np.zeros((2, 3, 3)), None, tick=0, stochastic=False,
-        eco_values=eco_draft(),
-    )
-    assert eco is not None and math.isinf(eco[0]) and eco[0] < 0
-
-    plan = _compile_plan(pop, [Op.set_param("carrying_capacity", "(K / 0) * 0")])
-    eco = _invoke_plan(
-        plan, np.zeros((2, 3, 3)), None, tick=0, stochastic=False,
-        eco_values=eco_draft(),
-    )
-    assert eco is not None and math.isnan(eco[0])
 
 
 def test_rpn_inf_result_crashes_at_write_channel_bounds() -> None:
@@ -800,58 +685,6 @@ def test_convert_nontrivial_three_bucket_matrix_deterministic_exact() -> None:
     )
     # Grand totals conserved.
     assert ind.sum() + sperm.sum() == ind_before.sum() + sperm_before.sum()
-
-
-def test_convert_stochastic_bucket_means_within_3sigma_and_exact_conservation() -> None:
-    """200 seeded stochastic runs: bucket means within 3-sigma, rows exact.
-
-    Per-trial invariants (exact, not statistical): the female and male row
-    sums are conserved bit-exactly (integer-valued binomial moves), and
-    the male sperm-label column totals never move.  Statistical: each
-    destination bucket's mean over 200 trials sits within 3 standard
-    errors of ``n * p``, which a biased or mis-parameterized kernel would
-    violate (sum of independent binomials for the combined female total).
-    """
-    species = _fresh_species()
-    pop = _build_age_structured(species, "stochbuckets")
-    plan = _compile_plan(pop, [Op.convert("A|A", "A|a", probability=0.25)])
-
-    p = 0.25
-    buckets = [12.0, 8.0, 4.0]
-    n_female, n_male = 40.0, 20.0
-    n_trials = 200
-    dst_bucket_sums = [0.0, 0.0, 0.0]
-    dst_female_sum = 0.0
-    dst_male_sum = 0.0
-    for trial in range(n_trials):
-        ind = np.zeros((2, 1, 3), dtype=np.float64)
-        ind[0, 0, 0] = n_female
-        ind[1, 0, 0] = n_male
-        sperm = np.zeros((1, 3, 3), dtype=np.float64)
-        sperm[0, 0, :] = buckets
-        _invoke_plan(plan, ind, sperm, tick=0, stochastic=True, seed=trial)
-        # Exact per-trial conservation.
-        assert ind[0, 0, :].sum() == n_female
-        assert ind[1, 0, :].sum() == n_male
-        np.testing.assert_array_equal(sperm.sum(axis=(0, 1)), buckets)
-        for mz in range(3):
-            dst_bucket_sums[mz] += float(sperm[0, 1, mz])
-        dst_female_sum += float(ind[0, 0, 1])
-        dst_male_sum += float(ind[1, 0, 1])
-
-    for mz, n_base in enumerate(buckets):
-        mean = dst_bucket_sums[mz] / n_trials
-        sigma3 = 3.0 * math.sqrt(n_base * p * (1.0 - p) / n_trials)
-        assert abs(mean - n_base * p) <= sigma3, f"bucket {mz}: {mean}"
-    # Combined female destination (buckets + virgins, one binomial(40, p)).
-    female_mean = dst_female_sum / n_trials
-    female_sigma3 = 3.0 * math.sqrt(n_female * p * (1.0 - p) / n_trials)
-    assert abs(female_mean - n_female * p) <= female_sigma3
-    male_mean = dst_male_sum / n_trials
-    male_sigma3 = 3.0 * math.sqrt(n_male * p * (1.0 - p) / n_trials)
-    assert abs(male_mean - n_male * p) <= male_sigma3
-    # Sanity floor for the statistics themselves: variance must be present.
-    assert dst_male_sum > 0.0
 
 
 def test_convert_three_way_split_chain_exact() -> None:
@@ -1472,3 +1305,43 @@ def _hb_minimal_age_build(sp: object, bad_value: object) -> None:
         )
         .build()
     )
+
+
+def test_native_convert_stochastic_buckets_conserve_rows_and_sperm_columns() -> None:
+    """Native conversion preserves bucket totals and its seeded mean."""
+    species = _fresh_species()
+    bucket_sums = np.zeros(3)
+    female_dest_sum = 0.0
+    male_dest_sum = 0.0
+    buckets = np.array([12.0, 8.0, 4.0])
+    n_female, n_male = 40.0, 20.0
+    probability = 0.25
+    n_trials = 200
+    for trial in range(n_trials):
+        pop = _build_age_structured(species, f"native_bucket_{trial}")
+        pop._config = pop.config._replace(stochastic=True)
+        state = pop._live_state()
+        counts = np.zeros_like(state.individual_count)
+        sperm = np.zeros_like(state.sperm_storage)
+        counts[0, 1, 0] = n_female
+        counts[1, 1, 0] = n_male
+        sperm[1, 0, :] = buckets
+        pop.import_state(state._replace(individual_count=counts, sperm_storage=sperm))
+        pop.register_hooks([Op.convert("A|A", "A|a", probability=0.25)], event="early")
+        pop._initialize_session(seed=trial)
+        pop.trigger_event("early")
+        result = pop.state
+        assert result.individual_count[0, 1].sum() == n_female
+        assert result.individual_count[1, 1].sum() == n_male
+        np.testing.assert_array_equal(result.sperm_storage.sum(axis=(0, 1)), buckets)
+        bucket_sums += result.sperm_storage[1, 1]
+        female_dest_sum += result.individual_count[0, 1, 1]
+        male_dest_sum += result.individual_count[1, 1, 1]
+    for observed, source in zip(bucket_sums / n_trials, buckets):
+        sigma3 = 3.0 * np.sqrt(source * probability * (1.0 - probability) / n_trials)
+        assert abs(observed - source * probability) <= sigma3
+    female_sigma3 = 3.0 * np.sqrt(n_female * probability * (1.0 - probability) / n_trials)
+    male_sigma3 = 3.0 * np.sqrt(n_male * probability * (1.0 - probability) / n_trials)
+    assert abs(female_dest_sum / n_trials - n_female * probability) <= female_sigma3
+    assert abs(male_dest_sum / n_trials - n_male * probability) <= male_sigma3
+    assert male_dest_sum > 0.0

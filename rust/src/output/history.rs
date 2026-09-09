@@ -35,6 +35,57 @@ pub struct HistoryData {
 }
 
 impl HistoryData {
+    fn empty(width: usize, dimensions: [usize; 4], raw: bool, max_rows: Option<usize>) -> Self {
+        Self {
+            rows: VecDeque::new(),
+            width,
+            max_rows,
+            dimensions,
+            raw,
+            mask: Vec::new(),
+            selected: (0..dimensions[0]).collect(),
+            collapse_age: false,
+            aggregate: false,
+            log: Arc::default(),
+            cursors: VecDeque::new(),
+            extra_logs: Vec::new(),
+            boundaries: VecDeque::new(),
+        }
+    }
+
+    /// Create an unbound store used by low-level session callers.
+    pub(crate) fn transient(width: usize, dimensions: [usize; 4], raw: bool) -> SharedHistory {
+        Arc::new(Mutex::new(Self::empty(width, dimensions, raw, None)))
+    }
+
+    /// Configure an unbound store from the session's compiled observation mask.
+    pub(crate) fn configure_observation_slice(&mut self, mask: Vec<f64>) -> PyResult<()> {
+        let selected = (0..self.dimensions[0]).collect::<Vec<_>>();
+        let projected = project(
+            &vec![0.0; self.dimensions.iter().product()],
+            &mask,
+            self.dimensions,
+            &selected,
+            false,
+            false,
+        )?;
+        self.width = 1 + projected.len();
+        self.mask = mask;
+        self.selected = selected;
+        Ok(())
+    }
+
+    /// Copy retained rows into the legacy low-level flat layout.
+    pub(crate) fn flat_rows(&self) -> (Vec<f64>, usize) {
+        let n_rows = self.rows.len();
+        let flat = self
+            .rows
+            .iter()
+            .flat_map(|row| row.iter().copied())
+            .collect();
+        (flat, n_rows)
+    }
+
     /// Validate the overlap before changing either rows or retention metadata.
     pub fn append_row(&mut self, row: Vec<f64>, continuation: bool) -> PyResult<bool> {
         if row.len() != self.width || !row[0].is_finite() || row[0].fract() != 0.0 {
@@ -145,21 +196,9 @@ impl HistoryStore {
             ));
         }
         Ok(Self {
-            data: Arc::new(Mutex::new(HistoryData {
-                rows: VecDeque::new(),
-                width,
-                max_rows,
-                dimensions,
-                raw,
-                mask: Vec::new(),
-                selected: (0..dimensions[0]).collect(),
-                collapse_age: false,
-                aggregate: false,
-                log: Arc::default(),
-                cursors: VecDeque::new(),
-                extra_logs: Vec::new(),
-                boundaries: VecDeque::new(),
-            })),
+            data: Arc::new(Mutex::new(HistoryData::empty(
+                width, dimensions, raw, max_rows,
+            ))),
         })
     }
     /// Attach the population's native parameter timeline before execution.

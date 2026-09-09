@@ -342,10 +342,7 @@ class TestNSlabsFullRepair:
             .hooks(inject_exposed)
             .build()
         )
-        # Ensure the hook executor is built before manually triggering "first".
-        # Without this, trigger_event falls through to _hooks (empty for
-        # declarative hooks) and the hook never fires.
-        pop.ensure_hook_executor()
+        # Manual events use the same native session as lifecycle runs.
         pop.trigger_event("first")
         state = pop.state.individual_count
         reg = pop.index_registry

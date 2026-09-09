@@ -351,7 +351,7 @@ impl DiscreteGenerationSession {
     ///
     /// ## Returns
     /// ``(final_tick, history, was_stopped)``.
-    #[allow(clippy::too_many_arguments)] // PyO3 boundary mirrors the Numba run_fn signature.
+    #[allow(clippy::too_many_arguments)] // PyO3 boundary exposes the complete run control surface.
     #[pyo3(signature = (n_ticks, record_interval, wf, observation_mask=None, checkpoint_every=0))]
     fn run<'py>(
         &mut self,
@@ -669,14 +669,30 @@ impl DiscreteGenerationSession {
             tick: self.state_tick,
             journal: Vec::new(),
         });
-        if let Some(shared) = self.history_store.as_ref().map(std::sync::Arc::clone) {
-            let mut current_tick = self.state_tick;
-            let mut stopped = false;
-            // Native retention occurs at each boundary. No array proportional
-            // to the requested run duration is allocated or crosses into Python.
-            for step in 0..=n_ticks.max(0) {
-                {
-                    let mut store = shared.lock().unwrap();
+        let bound = self.history_store.is_some();
+        let shared = if let Some(shared) = self.history_store.as_ref().map(std::sync::Arc::clone) {
+            shared
+        } else {
+            let shared = crate::output::history::HistoryData::transient(
+                if mask_vec.is_some() {
+                    1
+                } else {
+                    1 + self.state_ind.len()
+                },
+                [1, 2, 2, cfg.n_ztypes],
+                mask_vec.is_none(),
+            );
+            if let Some(mask) = mask_vec {
+                shared.lock().unwrap().configure_observation_slice(mask)?;
+            }
+            shared
+        };
+        let mut current_tick = self.state_tick;
+        let mut was_stopped = false;
+        for step in 0..=n_ticks.max(0) {
+            {
+                let mut store = shared.lock().unwrap();
+                if bound {
                     if let Some(ctx) = eco_ctx.as_mut() {
                         let mut log = store.log.lock().unwrap();
                         for &(tick, parameter, old, new, phase) in &ctx.journal {
@@ -695,92 +711,116 @@ impl DiscreteGenerationSession {
                         }
                         ctx.journal.clear();
                     }
-                    if !stopped && record_interval > 0 && current_tick % record_interval == 0 {
-                        let added = store.record(current_tick, &self.state_ind, &[], true)?;
-                        if added && store.raw {
-                            crate::kernels::age_structured::capture_checkpoint(
-                                &self.rng,
-                                &self.state_ind,
-                                &[],
-                                current_tick,
-                                &eco_ctx,
-                                &mut self.checkpoints,
-                            )
-                            .map_err(map_lifecycle_error)?;
-                        }
+                }
+                if !was_stopped && record_interval > 0 && current_tick % record_interval == 0 {
+                    let added = store.record(current_tick, &self.state_ind, &[], bound)?;
+                    if added
+                        && ((bound && store.raw)
+                            || (!bound
+                                && checkpoint_every > 0
+                                && current_tick % checkpoint_every == 0))
+                    {
+                        crate::kernels::age_structured::capture_checkpoint(
+                            &self.rng,
+                            &self.state_ind,
+                            &[],
+                            current_tick,
+                            &eco_ctx,
+                            &mut self.checkpoints,
+                        )
+                        .map_err(map_lifecycle_error)?;
+                    }
+                    if bound {
                         if let Some(row) = store.rows.front() {
                             self.checkpoints.retain(|cp| cp.tick >= row[0] as i64);
                         }
                     }
                 }
-                if step == n_ticks || stopped {
-                    break;
-                }
-                let (tick, _, _, was_stopped) = crate::kernels::discrete_generation::run_batch(
+            }
+            if step == n_ticks.max(0) || was_stopped {
+                break;
+            }
+            let result = if wf {
+                (|| -> Result<i32, String> {
+                    let hook_result = self.hooks.execute_event(
+                        &mut self.rng,
+                        0,
+                        &mut self.state_ind,
+                        &mut [],
+                        2,
+                        2,
+                        cfg.n_ztypes,
+                        current_tick,
+                        cfg.stochastic,
+                        cfg.continuous_sampling,
+                        0,
+                        &mut eco_values,
+                        &mut eco_ctx,
+                    )?;
+                    if let Some(ctx) = eco_ctx.as_mut() {
+                        ctx.tick = current_tick;
+                        ctx.commit(&eco_values)?;
+                    }
+                    if hook_result != 0 {
+                        Ok(hook_result)
+                    } else {
+                        let rebuilt = eco_ctx
+                            .as_ref()
+                            .map(|ctx| ctx.assemble_discrete())
+                            .transpose()?;
+                        crate::kernels::discrete_generation::run_wf_tick(
+                            &mut self.rng,
+                            rebuilt.as_ref().unwrap_or(&cfg),
+                            &mut self.state_ind,
+                        )
+                        .map(|_| 0)
+                    }
+                })()
+            } else {
+                crate::kernels::discrete_generation::run_tick(
                     &mut self.rng,
                     &cfg,
                     &self.hooks,
                     &mut self.state_ind,
                     current_tick,
-                    1,
                     0,
-                    None,
-                    wf,
                     &mut eco_values,
                     &mut eco_ctx,
-                    0,
-                    &mut self.checkpoints,
                 )
-                .map_err(|err| {
-                    self.state_tick = current_tick;
-                    if let Some(ctx) = eco_ctx.as_ref() {
-                        self.phase = ctx.phase;
-                    }
-                    map_lifecycle_error(err)
-                })?;
+            }
+            .map_err(|err| {
+                self.state_tick = current_tick;
                 if let Some(ctx) = eco_ctx.as_ref() {
                     self.phase = ctx.phase;
                 }
-                current_tick = tick;
-                stopped = was_stopped;
+                map_lifecycle_error(err)
+            })?;
+            if let Some(ctx) = eco_ctx.as_ref() {
+                self.phase = ctx.phase;
             }
-            self.state_tick = current_tick;
-            if let Some(ctx) = eco_ctx.as_mut() {
-                if let Some(genetics) = ctx.updated_genetics.take() {
-                    self.genetics = genetics;
-                }
+            if result != 0 {
+                was_stopped = true;
+            } else {
+                current_tick += 1;
             }
-            return Ok((
-                current_tick,
-                PyArray2::<f64>::zeros(py, [0, 0], false),
-                stopped,
-            ));
         }
-
-        let (final_tick, flat_history, n_rows, was_stopped) =
-            crate::kernels::discrete_generation::run_batch(
-                &mut self.rng,
-                &cfg,
-                &self.hooks,
-                &mut self.state_ind,
-                self.state_tick,
-                n_ticks,
-                record_interval,
-                mask_vec.as_deref(),
-                wf,
-                &mut eco_values,
-                &mut eco_ctx,
-                checkpoint_every,
-                &mut self.checkpoints,
-            )
-            .map_err(map_lifecycle_error)?;
-        self.state_tick = final_tick;
+        self.state_tick = current_tick;
         if let Some(ctx) = eco_ctx.as_mut() {
-            self.eco_journal.append(&mut ctx.journal);
+            if !bound {
+                self.eco_journal.append(&mut ctx.journal);
+            }
             if let Some(genetics) = ctx.updated_genetics.take() {
                 self.genetics = genetics;
             }
         }
+        if bound {
+            return Ok((
+                current_tick,
+                PyArray2::<f64>::zeros(py, [0, 0], false),
+                was_stopped,
+            ));
+        }
+        let (flat_history, n_rows) = shared.lock().unwrap().flat_rows();
         let n_cols = flat_history.len().checked_div(n_rows).unwrap_or(0);
         let history = PyArray2::<f64>::zeros(py, [n_rows, n_cols], false);
         history
@@ -788,6 +828,6 @@ impl DiscreteGenerationSession {
             .as_slice_mut()
             .map_err(|err| PyValueError::new_err(err.to_string()))?
             .copy_from_slice(&flat_history);
-        Ok((final_tick, history, was_stopped))
+        Ok((current_tick, history, was_stopped))
     }
 }

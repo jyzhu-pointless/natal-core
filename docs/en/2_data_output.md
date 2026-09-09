@@ -473,7 +473,10 @@ import pandas as pd
 def history_to_dataframe(observed_history):
     """Convert observed history records to DataFrame"""
     data = []
-    group_labels = observed_history.labels["group"]
+    observation = observed_history.schema.observation
+    if observation is None:
+        raise ValueError("history must use observation mode")
+    group_labels = observation.labels
     for i, tick in enumerate(observed_history.ticks):
         row = {
             "tick": tick,

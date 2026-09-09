@@ -927,7 +927,6 @@ class Dashboard:
                 )
             ),
             "generation_time": float(conf.generation_time),
-            "hook_slot": int(conf.hook_slot),
             "juvenile_growth_mode": {
                 "code": growth_mode,
                 "name": self._growth_mode_name(growth_mode),

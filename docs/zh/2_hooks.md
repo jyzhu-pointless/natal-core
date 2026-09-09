@@ -72,6 +72,8 @@ pop.run(n_steps=200, record_every=10)
 
 旧的 `(state, config, deme_id)` 三参数签名已被显式拒绝（`TypeError` —— 该签名是 njit 时代的遗物，没有迁移通道）。回调 Hook 返回值 `0`（或 `RESULT_CONTINUE`）继续模拟，非零值（或 `RESULT_STOP`）停止模拟。
 
+四个生命周期事件（`first`、`early`、`late` 和 `finish`）全部由 Rust native session 执行。旧的 Python CSR 执行器、采样器和低层执行导出已删除；当前只保留编译后的 `HookProgram` 数据和 Python 回调桥接。
+
 `.hooks()` 是注册 Hook 的唯一入口：构建链式 API 中可直接调用，构建完成后通过 `pop.update().hooks(...)` 注册。
 
 ## `Op` 操作
@@ -120,7 +122,7 @@ nt.Op.set_param("carrying_capacity", "K * 0.95", every=10)
 **写入语义**：
 
 - 运行外，写入通过 `pop.params.<name> = ...` 相同的通道（路由分派、会话刷新、参数快照日志）生效。
-- `run()` 运行中，写入在会话拥有的生态列内部演化（事件粒度相同、jsonc 边界校验相同；非有限值或越界值如 `"K / 0"` 会在运行中抛 `ValueError`）。`run()` 返回时，审计过的变化按各自提交 tick 追加到 `params_log`（HB-2 修复），最终值同步回 draft。
+- `run()` 运行中，写入在会话拥有的生态列内部演化（事件粒度相同、jsonc 边界校验相同；非有限值或越界值如 `"K / 0"` 会在运行中抛 `ValueError`）。每次成功变化都会在事件边界写入 native `ParameterLog`，后续读取从会话快照取得当前值。
 
 ### `Op.convert`：一对一概率转换
 

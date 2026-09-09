@@ -57,7 +57,6 @@
   {"domain": "fitness", "method": "fitness", "kind": "geno_tensor", "section": "genetics", "name": "female_ztype_compatibility", "config_field": "female_ztype_compatibility", "config_path": [], "dtype": "float", "bounds": [0, 1], "sensitive": false, "doc": "(n_genotypes,) female-side compatibility weights"},
   {"domain": "fitness", "method": "fitness", "kind": "geno_tensor", "section": "genetics", "name": "male_ztype_compatibility", "config_field": "male_ztype_compatibility", "config_path": [], "dtype": "float", "bounds": [0, 1], "sensitive": false, "doc": "(n_genotypes,) male-side compatibility weights"},
   // HOOK
-  {"domain": "hook", "method": "hook", "kind": "scalar", "section": "ecology", "name": "hook_slot", "config_field": "hook_slot", "config_path": [], "dtype": "int", "bounds": [0, 100], "sensitive": false},
   // MIGRATION
   {"domain": "migration", "method": "migration", "kind": "scalar", "section": "ecology", "name": "migration_rate", "config_field": null, "config_path": [], "dtype": "float", "bounds": [0, 1], "sensitive": false, "doc": "(n_demes, n_sexes, n_ages) migration-rate column in the spatial Params ecology section; the scalar here is the build-time sugar (adults of all sexes, juveniles 0) and the folded CSR lives on the Blueprint", "target": "spatial"}
 ]

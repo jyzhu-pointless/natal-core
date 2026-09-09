@@ -811,9 +811,7 @@ class TestEventParameterCommit:
         backend = deferred._rust_lifecycle_backend  # noqa: SLF001
         assert backend is not None
         assert backend._session.get_scalar("eggs_per_female") == 3.0  # noqa: SLF001
-        # The boundary consumed the flag (flush ran) and the finally
-        # cleared it; the session readback above is the effect proof.
-        assert deferred._rust_deferred_writes is False  # noqa: SLF001
+        # The session readback proves the boundary consumed the hook write.
         deferred_tick1 = deferred.state.individual_count.copy()
         deferred.run(1)
 
@@ -1077,14 +1075,11 @@ class TestDeferredFlushAtomicity:
     """A rejected in-run write must not schedule a boundary flush."""
 
     def test_in_run_writer_failure_leaves_no_deferral(self) -> None:
-        """An out-of-bounds in-run write surfaces and leaves no deferral.
+        """An out-of-bounds in-run write surfaces without changing state.
 
         The hook fires inside the batch; its write raises at validation.
-        The failure must surface from ``run()`` and the deferred flag
-        must NOT survive: the boundary flushes only when a write was
-        deferred, so a failed write must not cause a later spurious flush
-        that could re-push draft values over direct session writes (the
-        inverted contract pinned by ``test_direct_write_survives_into_the_next_run``).
+        The failure must surface from ``run()`` without changing the draft or
+        session configuration.
         """
         pop = _age_with_hook("BadWrite", _write_out_of_bounds, stochastic=False)
         pop._initialize_session(seed=1)
@@ -1093,8 +1088,7 @@ class TestDeferredFlushAtomicity:
             pop.run(1)
         # The failing write is atomic: neither the draft ...
         assert float(pop.config.carrying_capacity) == d0
-        # ... nor the deferral bookkeeping was committed.
-        assert pop._rust_deferred_writes is False  # noqa: SLF001
+        # ... nor the rebuild bookkeeping was committed.
         assert pop._rust_needs_rebuild is False  # noqa: SLF001
 
 

@@ -226,60 +226,6 @@ class DiscretePopulationState(NamedTuple):
         return np.concatenate((tick_arr, self.individual_count.flatten()))
 
 
-# Backward-compatible aliases
-PlainPopulationState = PopulationState
-PlainDiscretePopulationState = DiscretePopulationState
-
-
-def to_plain_population_state(state: PopulationState, copy: bool = True) -> PlainPopulationState:
-    """Convert a PopulationState to a plain (copied) instance.
-
-    Args:
-        state: Input PopulationState.
-        copy: If True, arrays are deep‑copied; otherwise they are referenced.
-
-    Returns:
-        A new PopulationState (or the same arrays if copy=False).
-    """
-    ind = state.individual_count.copy() if copy else state.individual_count
-    sperm = state.sperm_storage.copy() if copy else state.sperm_storage
-    return PopulationState(n_tick=int(state.n_tick), individual_count=ind, sperm_storage=sperm)
-
-
-def to_plain_discrete_population_state(
-    state: DiscretePopulationState,
-    copy: bool = True,
-) -> PlainDiscretePopulationState:
-    """Convert a DiscretePopulationState to a plain (copied) instance.
-
-    Args:
-        state: Input DiscretePopulationState.
-        copy: If True, the array is deep‑copied; otherwise it is referenced.
-
-    Returns:
-        A new DiscretePopulationState (or the same array if copy=False).
-    """
-    ind = state.individual_count.copy() if copy else state.individual_count
-    return DiscretePopulationState(n_tick=int(state.n_tick), individual_count=ind)
-
-
-def from_plain_population_state(plain: PlainPopulationState) -> PopulationState:
-    """Convert a plain PopulationState back (arrays are referenced, not copied)."""
-    return PopulationState(
-        n_tick=int(plain.n_tick),
-        individual_count=plain.individual_count,
-        sperm_storage=plain.sperm_storage,
-    )
-
-
-def from_plain_discrete_population_state(plain: PlainDiscretePopulationState) -> DiscretePopulationState:
-    """Convert a plain DiscretePopulationState back (array is referenced)."""
-    return DiscretePopulationState(
-        n_tick=int(plain.n_tick),
-        individual_count=plain.individual_count,
-    )
-
-
 def parse_flattened_state(
     flat_array: NDArray[np.float64],
     n_sexes: Union[int, np.integer],

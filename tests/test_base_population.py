@@ -101,10 +101,10 @@ class TestFinalizeHooks:
         pop.trigger_event("early")
         assert len(calls) == 1
 
-    def test_hook_executor_none_after_finalize(self, simple_species: nt.Species) -> None:
-        """``hook_executor`` is None immediately after ``_finalize_hooks()``."""
+    def test_hook_executor_bookkeeping_removed(self, simple_species: nt.Species) -> None:
+        """Native populations no longer carry Python executor bookkeeping."""
         pop = _build_pop(simple_species, "test_executor")
-        assert pop.hook_executor is None
+        assert not hasattr(pop, "hook_executor")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

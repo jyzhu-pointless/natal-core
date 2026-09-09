@@ -331,9 +331,13 @@ def test_rust_wf_tick_aligns_with_map_direct_oracle(
         n_tick=0, individual_count=cfg.initial_individual_count.copy()
     )
     expected = _wf_expected_from_maps(cfg)
-    rust_state, _ = RustDiscreteLifecycleBackend(
-        cfg, _empty_hook_program(), seed=0
-    ).run_tick(state)
+    backend = RustDiscreteLifecycleBackend(cfg, _empty_hook_program(), seed=0)
+    backend.set_state(state)
+    backend.run(n_steps=1, record_every=0)
+    tick, ind_flat = backend.state_snapshot()
+    rust_state = DiscretePopulationState(
+        n_tick=tick, individual_count=ind_flat.reshape(state.individual_count.shape)
+    )
     np.testing.assert_allclose(
         rust_state.individual_count, expected, rtol=1e-10, atol=1e-8
     )
@@ -392,9 +396,13 @@ def test_rust_standard_tick_aligns_with_map_direct_oracle(
         n_tick=0, individual_count=cfg.initial_individual_count.copy()
     )
     expected = _standard_tick_expected_from_maps(cfg, "A|B", "A|B")
-    rust_state, _ = RustDiscreteLifecycleBackend(
-        cfg, _empty_hook_program(), seed=0
-    ).run_tick(state)
+    backend = RustDiscreteLifecycleBackend(cfg, _empty_hook_program(), seed=0)
+    backend.set_state(state)
+    backend.run(n_steps=1, record_every=0)
+    tick, ind_flat = backend.state_snapshot()
+    rust_state = DiscretePopulationState(
+        n_tick=tick, individual_count=ind_flat.reshape(state.individual_count.shape)
+    )
     np.testing.assert_allclose(
         rust_state.individual_count, expected, rtol=1e-10, atol=1e-8
     )
@@ -437,9 +445,13 @@ def test_rust_wf_tick_aligns_after_drive_preset() -> None:
         n_tick=0, individual_count=cfg.initial_individual_count.copy()
     )
     expected = _wf_expected_from_maps(cfg)
-    rust_state, _ = RustDiscreteLifecycleBackend(
-        cfg, _empty_hook_program(), seed=0
-    ).run_tick(state)
+    backend = RustDiscreteLifecycleBackend(cfg, _empty_hook_program(), seed=0)
+    backend.set_state(state)
+    backend.run(n_steps=1, record_every=0)
+    tick, ind_flat = backend.state_snapshot()
+    rust_state = DiscretePopulationState(
+        n_tick=tick, individual_count=ind_flat.reshape(state.individual_count.shape)
+    )
     np.testing.assert_allclose(
         rust_state.individual_count, expected, rtol=1e-10, atol=1e-8
     )

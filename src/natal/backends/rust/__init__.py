@@ -3,7 +3,7 @@
 Python-side glue that feeds contract data to the Rust engine: blueprint
 extraction, params-block dtype-offset layout, the unified spatial bank
 interface, and the opaque RNG token object.  Custom hooks execute through
-the GIL-callback path (calling back into compiled njit functions).
+the native Rust callback path while reacquiring the Python GIL for callables.
 
 The compiled extension itself lives in the ``rust/`` crate; this package
 contains no engine logic, only contract adaptation.

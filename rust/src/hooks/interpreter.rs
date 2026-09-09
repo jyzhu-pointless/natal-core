@@ -2,7 +2,7 @@
 //!
 //! The flat-array layout and opcode values mirror
 //! ``natal.hooks.types.HookProgram`` and
-//! ``natal.hooks.runtime.csr_kernel``.  Declarative plan slots are
+//! ``natal.frontend.hooks.types``. Declarative plan slots are
 //! interpreted here; Python callback slots cross the GIL through
 //! ``HookProgram::fire_one_python_callback`` — both kinds interleave in
 //! one cross-type priority order driven by ``python_callback_slots``.
@@ -909,6 +909,14 @@ impl HookProgram {
         eco_values: &mut [f64],
         eco_ctx: &mut Option<crate::kernels::age_structured::EcoCtx<'_>>,
     ) -> Result<i32, String> {
+        for (op_index, &op_type) in self.op_types.iter().enumerate() {
+            if !(OP_SCALE..=OP_CONVERT).contains(&op_type) {
+                return Err(format!(
+                    "Unknown mutation opcode {} at operation {}",
+                    op_type, op_index
+                ));
+            }
+        }
         // Walk the serialized slot order, respecting deme selectors.
         // Callback slots fire through the GIL boundary inline; CSR slots
         // interpret their operations in place.  Stop requests from either

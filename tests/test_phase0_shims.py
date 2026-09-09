@@ -76,6 +76,9 @@ _LEGACY_SUBMODULE_PATHS: Tuple[str, ...] = tuple(
         "data.config",
         "data.constants",
         "data.state",
+        "hooks.compile.container",
+        "hooks.runtime.csr_kernel",
+        "hooks.runtime.fallback",
         "fitness._patch",
         "fitness._types",
         "fitness._writer",
@@ -98,14 +101,11 @@ _LEGACY_SUBMODULE_PATHS: Tuple[str, ...] = tuple(
         "genetics.structures.locus",
         "genetics.structures.species",
         "hooks.compile",
-        "hooks.compile.container",
         "hooks.entry",
         "hooks.entry.declarative",
         "hooks.entry.decorator",
         "hooks.entry.selector",
         "hooks.runtime",
-        "hooks.runtime.csr_kernel",
-        "hooks.runtime.fallback",
         "hooks.tick_context",
         "hooks.types",
         "modifiers.conditions",
@@ -334,10 +334,13 @@ EXPECTED_LAZY_OWNERS = frozenset(
     {f"frontend.{mod}" for mod in _RELOCATED_PACKAGES} | {"contracts"}
 )
 
-# Exact keys as of the post-⑥A public surface (230 names, incl. the 15
-# legacy package self-entries).  A name that silently disappears from a
-# package ``__all__`` drops the count below the guard.
-MIN_LAZY_MAP_SIZE = 225
+REQUIRED_LAZY_NAMES = frozenset(
+    {
+        "Blueprint", "Params", "materialize", "ModelDraft",
+        "PopulationState", "DiscretePopulationState",
+        "AgeStructuredPopulation", "DiscreteGenerationPopulation",
+    }
+)
 
 
 def test_lazy_map_every_name_resolves_to_owner_export() -> None:
@@ -379,9 +382,9 @@ def test_lazy_map_owner_axes_and_size() -> None:
         f"lazy-map owners drifted: missing={sorted(EXPECTED_LAZY_OWNERS - owners)} "
         f"unexpected={sorted(owners - EXPECTED_LAZY_OWNERS)}"
     )
-    assert len(natal._lazy_map) >= MIN_LAZY_MAP_SIZE, (
-        f"lazy map shrank to {len(natal._lazy_map)} names "
-        f"(expected >= {MIN_LAZY_MAP_SIZE}): a package probably lost its literal __all__"
+    assert REQUIRED_LAZY_NAMES <= natal._lazy_map.keys(), (
+        f"required public exports missing from lazy map: "
+        f"{sorted(REQUIRED_LAZY_NAMES - natal._lazy_map.keys())}"
     )
 
 

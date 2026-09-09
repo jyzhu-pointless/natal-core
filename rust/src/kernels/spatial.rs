@@ -12,7 +12,7 @@
 //! reproducibility contract.
 
 #![allow(clippy::needless_range_loop)] // Index loops mirror the Python reference for parity review.
-#![allow(clippy::too_many_arguments)] // Migration helpers mirror the Numba kernel signatures.
+#![allow(clippy::too_many_arguments)] // Migration helpers pass parallel state/layout channels.
 
 use rayon::prelude::*;
 
