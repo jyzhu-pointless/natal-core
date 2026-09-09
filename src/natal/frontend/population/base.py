@@ -37,7 +37,6 @@ from natal.frontend.data import (
 from natal.frontend.genetics import Genotype, HaploidGenotype, Species
 from natal.frontend.hooks.types import RunProgram, empty_hook_program
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
-from natal.frontend.population._mixins._observation import ObservationMixin
 from natal.frontend.population._mixins._output import OutputMixin
 from natal.frontend.registry.index import IndexRegistry
 
@@ -98,7 +97,7 @@ if TYPE_CHECKING:
 # A parameter snapshot row: (tick, parameter name, old value, new value).
 ParamChange = Tuple[int, str, float, float]
 
-class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
+class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     """Abstract base class for population models.
 
     The base class unifies common behavior for different population model
@@ -194,7 +193,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         self._deme_id: int = 0
         # DELAYED: Registry will be created via _initialize_registry()
         self._index_registry: Optional[IndexRegistry] = None
-        self._registry: Optional[IndexRegistry] = None
 
         # Program-level plans (CSR hooks + frozen recording plan).
         self._run_program: RunProgram = RunProgram(
@@ -355,7 +353,6 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
 
         # --- shared registry ---
         clone._index_registry = self._index_registry
-        clone._registry = self._registry
 
         # --- shared presets & modifiers ---
         clone._presets = list(self._presets)
@@ -452,11 +449,9 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         # If a registry was already injected (e.g. compressed by Configurator),
         # keep it — don't overwrite with a fresh one.
         if self._index_registry is not None:
-            self._registry = self._index_registry
             return
 
         self._index_registry = self._create_registry()
-        self._registry = self._index_registry
 
         # Set somatic (slab) labels before registering genotypes —
         # register_genotype() auto-cross-products with slab_labels.
@@ -540,13 +535,17 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     @property
     def registry(self) -> IndexRegistry:
         """IndexRegistry instance managing genotype, haplotype, and label indices."""
-        if self._registry is None:
-            raise AttributeError("Index registry has not been initialized.")
-        return self._registry
+        return self.index_registry
 
     @property
     def index_registry(self) -> IndexRegistry:
-        """Public accessor for the internal IndexRegistry."""
+        """Public accessor for the internal IndexRegistry.
+
+        ``registry`` is a retained alias reading the same field.
+
+        Raises:
+            AttributeError: If the registry has not been initialized yet.
+        """
         if self._index_registry is None:
             raise AttributeError("Index registry has not been initialized.")
         return self._index_registry

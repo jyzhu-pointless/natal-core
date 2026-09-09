@@ -33,14 +33,13 @@ class ModifierPresetMixin(HookManagerMixin):
     hook rebuilds.
 
     Expects the host class (BasePopulation) to define these attributes:
-    ``_config``, ``_registry``, ``_presets``, ``_species``,
+    ``_config``, ``_presets``, ``_species``,
     ``_gamete_modifiers``, ``_zygote_modifiers``, ``_manual_gamete``,
     ``_manual_zygote``, ``_index_registry``.
     """
 
     # Declared here so pyright knows these come from the host class.
     _config: Any  # type: ignore[assignment]
-    _registry: Any  # type: ignore[assignment]
     _presets: list[Any]  # type: ignore[assignment]
     _species: Any  # type: ignore[assignment]
     _gamete_modifiers: list[tuple[int, Optional[str], Any]]  # type: ignore[assignment]
@@ -127,9 +126,9 @@ class ModifierPresetMixin(HookManagerMixin):
             and by individual ``add_gamete_modifier`` /
             ``add_zygote_modifier`` when ``refresh=True``.
         """
-        if self._config is None or self._registry is None:
+        if self._config is None or self._index_registry is None:
             return
-        if not self._registry.index_to_haplo or not self._registry.index_to_genotype:
+        if not self._index_registry.index_to_haplo or not self._index_registry.index_to_genotype:
             return
         from natal.frontend.configurator import Configurator
 

@@ -45,7 +45,6 @@ from natal.frontend.configurator._routes import (
 from natal.frontend.configurator._writers import (
     CoreConfigWriter,
     DraftWriter,
-    HookConfigWriter,
 )
 from natal.frontend.data import ModelDraft
 from natal.frontend.utils.parameters import _build_registry
@@ -943,7 +942,7 @@ class TestWriterAtomicity:
 
         assert np.isfinite(derive_equilibrium_metrics_from_draft(writer.draft)[1])
 
-    def test_hook_writer_writes_session_directly(self):
+    def test_core_writer_pushes_session_for_scalars_and_tensors(self):
         recorded: list[tuple[str, object]] = []
 
         class FakeSession:
@@ -953,12 +952,15 @@ class TestWriterAtomicity:
             def tensor_write(self, field: str, values: np.ndarray) -> None:
                 recorded.append(("tensor", (field, values.copy())))
 
-        writer = HookConfigWriter(FakeSession())  # type: ignore[arg-type]  # structural fake of the runtime session protocol
+            def refresh_params(self, fields: list[str], source: Params) -> None:
+                recorded.append(("refresh", (list(fields), source)))
+
+        writer = CoreConfigWriter(_age_draft(), FakeSession())  # type: ignore[arg-type]  # structural fake of the runtime session protocol
         writer.apply({"carrying_capacity": 5000.0})
-        writer.tensor_write("survival_rates", np.arange(4, dtype=np.float64))
+        writer.tensor_write("survival_rates", np.arange(6, dtype=np.float64))
         assert recorded[0] == ("apply", {"carrying_capacity": 5000.0})
-        assert recorded[1][0] == "tensor"
-        assert recorded[1][1][0] == "survival_rates"
+        assert recorded[1][0] == "refresh"
+        assert recorded[1][1][0] == ["survival_rates"]
 
 
 # ── 4. pop.params surface ─────────────────────────────────────────────────────

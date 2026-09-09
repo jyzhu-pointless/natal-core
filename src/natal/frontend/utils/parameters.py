@@ -90,6 +90,34 @@ class ParamDescriptor:
     aliases: tuple[str, ...] = ()
     target: str = "config"
 
+    @property
+    def contract_field(self) -> str:
+        """Contract (Params) field name for the Rust dirty bridge.
+
+        Identical names map by default; only draft->contract renames are
+        listed in ``_CONTRACT_FIELD``.
+        """
+        if self.kind == "bool":
+            # Boolean rows are frozen Blueprint flags: the live session
+            # must be rebuilt, not value-refreshed.
+            return "__blueprint__"
+        if self.config_field is None:
+            return self.name
+        return _CONTRACT_FIELD.get(self.config_field, self.config_field)
+
+
+# Draft field -> contract (Params) field name.  Identical names map by
+# the default; only renames are listed.
+_CONTRACT_FIELD: dict[str, str] = {
+    "juvenile_growth_mode": "growth_mode",
+    "age_based_survival_rates": "survival_rates",
+    "age_based_mating_rates": "mating_rates",
+    "age_based_reproduction_rates": "reproduction_rates",
+    "female_age_based_fertility": "fertility",
+    "age_based_relative_competition_strength": "competition_weights",
+    "equilibrium_individual_distribution": "equilibrium_distribution",
+}
+
 
 # ── build registry from JSONC ──────────────────────────────────────────────
 

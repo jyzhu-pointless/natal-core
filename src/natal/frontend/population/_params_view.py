@@ -28,8 +28,9 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal.contracts.params import Params
-from natal.frontend.configurator._routes import RouteEntry, lookup, lookup_or_none
+from natal.frontend.configurator._routes import lookup, lookup_or_none
 from natal.frontend.configurator._writers import NATIVE_SCALAR_FIELDS, CoreConfigWriter
+from natal.frontend.utils.parameters import ParamDescriptor
 
 if TYPE_CHECKING:
     from natal.frontend.data import ModelDraft
@@ -278,7 +279,7 @@ class ParamsView:
         return None
 
     @staticmethod
-    def _entry_reads_native(entry: RouteEntry) -> bool:
+    def _entry_reads_native(entry: ParamDescriptor) -> bool:
         """Whether *entry*'s value lives in the session's live params."""
         if entry.kind in ("scalar", "mode_enum"):
             return entry.contract_field in NATIVE_SCALAR_FIELDS
@@ -421,7 +422,7 @@ class ParamsView:
             return self._read_entry_native(channel, entry)
         return self._read_entry_draft(entry)
 
-    def _read_entry_native(self, channel: Any, entry: RouteEntry) -> object:
+    def _read_entry_native(self, channel: Any, entry: ParamDescriptor) -> object:
         """Read one session-resident route value through the native channel.
 
         The draft only supplies immutable layout metadata (tensor
@@ -463,7 +464,7 @@ class ParamsView:
         return float(values.reshape(shape)[entry.config_path])
 
     @staticmethod
-    def _draft_field_shape(draft: ModelDraft, entry: RouteEntry) -> tuple[int, ...]:
+    def _draft_field_shape(draft: ModelDraft, entry: ParamDescriptor) -> tuple[int, ...]:
         """The declared shape of *entry*'s draft field (native tensors are flat)."""
         assert entry.config_field is not None  # _read_entry rejects spatial-only rows first
         if entry.kind == "sex_row" and not entry.config_path:
@@ -472,7 +473,7 @@ class ParamsView:
             return (2, int(draft.n_ages))
         return np.shape(getattr(draft, entry.config_field))
 
-    def _read_entry_draft(self, entry: RouteEntry) -> object:
+    def _read_entry_draft(self, entry: ParamDescriptor) -> object:
         """Read *entry* from the draft (no live native channel available)."""
         assert entry.config_field is not None  # _read_entry rejects spatial-only rows first
         if self._validate is not None:

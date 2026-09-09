@@ -68,6 +68,39 @@ class TestParamDescriptor:
         with pytest.raises(FrozenInstanceError):
             desc.domain = "other"  # type: ignore[misc]
 
+    @staticmethod
+    def _descriptor(**overrides: object) -> ParamDescriptor:
+        """A descriptor with per-kind variants available via *overrides*."""
+        base: dict[str, object] = dict(
+            domain="competition",
+            name="foo",
+            method="competition",
+            kind="scalar",
+            section="ecology",
+            config_field="carrying_capacity",
+            config_path=(),
+            dtype=float,
+            bounds=(0.0, 1.0),
+            sensitive=False,
+        )
+        base.update(overrides)
+        return ParamDescriptor(**base)  # type: ignore[arg-type]  # heterogeneous override values
+
+    def test_contract_field_aliases_renamed_draft_fields(self):
+        """Draft->contract renames flow through the mapping table."""
+        assert self._descriptor().contract_field == "carrying_capacity"
+        assert self._descriptor(config_field="age_based_survival_rates").contract_field == "survival_rates"
+
+    def test_contract_field_bool_rows_target_the_blueprint_sentinel(self):
+        """Bool rows are frozen Blueprint flags: rebuild, not refresh."""
+        desc = self._descriptor(kind="bool", config_field="stochastic")
+        assert desc.contract_field == "__blueprint__"
+
+    def test_contract_field_spatial_rows_fall_back_to_the_name(self):
+        """Spatial-only rows (config_field None) map to their own name."""
+        desc = self._descriptor(config_field=None, name="migration_rate")
+        assert desc.contract_field == "migration_rate"
+
 
 class TestAllParameters:
     """Integrity of the ALL_PARAMETERS registry."""

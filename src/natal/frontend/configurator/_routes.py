@@ -3,7 +3,7 @@
 This module is the single source of routing logic for parameter writes
 .  At import time it reads ``parameters.jsonc`` into:
 
-- ``ROUTES`` — a flat ``{lookup_name: RouteEntry}`` index (full key
+- ``ROUTES`` — a flat ``{lookup_name: ParamDescriptor}`` index (full key
   ``"competition.carrying_capacity"``, short name, and every alias);
 - ``ROUTES_BY_METHOD`` — a ``{method: [entries]}`` index mirroring the
   Configurator's domain methods.
@@ -43,7 +43,6 @@ __all__ = [
     "ROUTES",
     "ROUTES_BY_METHOD",
     "ResolvedWrite",
-    "RouteEntry",
     "commit_write",
     "dispatch",
     "is_replace_field",
@@ -53,71 +52,6 @@ __all__ = [
     "plan_write",
 ]
 
-
-# ── route entry ────────────────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True)
-class RouteEntry:
-    """One jsonc row: how a user-facing parameter reaches the draft.
-
-    Attributes:
-        name: User-facing name (e.g. ``"carrying_capacity"``).
-        kind: One of the seven parameter shapes.
-        section: ``"ecology"`` or ``"genetics"``.
-        method: Configurator method exposing the parameter.
-        config_field: ``ModelDraft`` field; ``None`` for spatial-only rows.
-        config_path: Index path into the field array.
-        bounds: Plausible ``(lo, hi)`` range.
-        aliases: Historical names resolving to this entry.
-        sensitive: Writing recomputes equilibrium metrics when ``True``.
-        domain: Category string (e.g. ``"competition"``).
-        dtype: Declared value type (``float``, ``int``, or ``bool``).
-        doc: One-line description.
-        target: ``"config"``, ``"spatial"``, or ``"hook"``.
-    """
-
-    name: str
-    kind: str
-    section: str
-    method: str
-    config_field: str | None
-    config_path: tuple[int, ...]
-    bounds: tuple[float, float]
-    aliases: tuple[str, ...]
-    sensitive: bool
-    domain: str
-    dtype: type
-    doc: str = ""
-    target: str = "config"
-
-    @property
-    def contract_field(self) -> str:
-        """Contract (Params) field name for the Rust dirty bridge.
-
-        Identical names map by default; only draft->contract renames are
-        listed in ``_CONTRACT_FIELD``.
-        """
-        if self.kind == "bool":
-            # Boolean rows are frozen Blueprint flags: the live session
-            # must be rebuilt, not value-refreshed.
-            return "__blueprint__"
-        if self.config_field is None:
-            return self.name
-        return _CONTRACT_FIELD.get(self.config_field, self.config_field)
-
-
-# Draft field -> contract (Params) field name.  Identical names map by
-# the default; only renames are listed.
-_CONTRACT_FIELD: dict[str, str] = {
-    "juvenile_growth_mode": "growth_mode",
-    "age_based_survival_rates": "survival_rates",
-    "age_based_mating_rates": "mating_rates",
-    "age_based_reproduction_rates": "reproduction_rates",
-    "female_age_based_fertility": "fertility",
-    "age_based_relative_competition_strength": "competition_weights",
-    "equilibrium_individual_distribution": "equilibrium_distribution",
-}
 
 # ModelDraft fields that must be written via ``_replace`` because the
 # NamedTuple slot itself is reassigned (plain Python scalars, Optional
@@ -162,7 +96,7 @@ _GROWTH_MODE_ALIASES: dict[str, int] = {
 
 def _build_routes(
     registry: dict[str, ParamDescriptor] | None = None,
-) -> tuple[dict[str, RouteEntry], dict[str, list[RouteEntry]]]:
+) -> tuple[dict[str, ParamDescriptor], dict[str, list[ParamDescriptor]]]:
     """Build the flat and per-method route indexes from the jsonc registry.
 
     Args:
@@ -185,10 +119,9 @@ def _build_routes(
     if registry is None:
         registry = ALL_PARAMETERS
     draft_fields = set(ModelDraft._fields)
-    flat: dict[str, RouteEntry] = {}
-    by_method: dict[str, list[RouteEntry]] = {}
-    for desc in registry.values():
-        entry = _to_entry(desc)
+    flat: dict[str, ParamDescriptor] = {}
+    by_method: dict[str, list[ParamDescriptor]] = {}
+    for entry in registry.values():
         if entry.config_field is not None and entry.config_field not in draft_fields:
             raise ValueError(
                 f"parameters.jsonc row {entry.name!r}: config_field "
@@ -216,38 +149,19 @@ def _build_routes(
     return flat, by_method
 
 
-def _to_entry(desc: ParamDescriptor) -> RouteEntry:
-    """Convert a :class:`ParamDescriptor` jsonc row into a route entry."""
-    return RouteEntry(
-        name=desc.name,
-        kind=desc.kind,
-        section=desc.section,
-        method=desc.method,
-        config_field=desc.config_field,
-        config_path=desc.config_path,
-        bounds=desc.bounds,
-        aliases=desc.aliases,
-        sensitive=desc.sensitive,
-        domain=desc.domain,
-        dtype=desc.dtype,
-        doc=desc.doc,
-        target=desc.target,
-    )
-
-
 _ROUTES_BUILD = _build_routes()
-ROUTES: dict[str, RouteEntry] = _ROUTES_BUILD[0]
-ROUTES_BY_METHOD: dict[str, list[RouteEntry]] = _ROUTES_BUILD[1]
+ROUTES: dict[str, ParamDescriptor] = _ROUTES_BUILD[0]
+ROUTES_BY_METHOD: dict[str, list[ParamDescriptor]] = _ROUTES_BUILD[1]
 
 
-def lookup(name: str) -> RouteEntry:
+def lookup(name: str) -> ParamDescriptor:
     """Resolve *name* (full key, short name, or alias) to its route entry.
 
     Args:
         name: Parameter name in any accepted form.
 
     Returns:
-        The owning :class:`RouteEntry`.
+        The owning :class:`ParamDescriptor`.
 
     Raises:
         KeyError: If *name* is not a registered parameter or alias.
@@ -258,7 +172,7 @@ def lookup(name: str) -> RouteEntry:
     raise KeyError(f"Unknown parameter: {name!r}")
 
 
-def lookup_or_none(name: str) -> RouteEntry | None:
+def lookup_or_none(name: str) -> ParamDescriptor | None:
     """Like :func:`lookup` but returns ``None`` for unregistered names."""
     return ROUTES.get(name)
 
@@ -303,13 +217,13 @@ class ResolvedWrite:
             ``None`` clears the equilibrium declaration.
     """
 
-    entry: RouteEntry
+    entry: ParamDescriptor
     scalar: float | bool | None = None
     vector: NDArray[np.float64] | None = None
     tensor: NDArray[np.float64] | None = None
 
 
-def _check_bounds(value: float, entry: RouteEntry) -> float:
+def _check_bounds(value: float, entry: ParamDescriptor) -> float:
     """Reject values outside the row's declared bounds.
 
     Args:
@@ -330,7 +244,7 @@ def _check_bounds(value: float, entry: RouteEntry) -> float:
     return value
 
 
-def _numeric(value: object, entry: RouteEntry) -> float:
+def _numeric(value: object, entry: ParamDescriptor) -> float:
     """Coerce *value* to a finite float, rejecting bools and non-numbers."""
     if isinstance(value, bool) or not isinstance(
         value, (int, float, np.integer, np.floating)
@@ -344,7 +258,7 @@ def _numeric(value: object, entry: RouteEntry) -> float:
     return numeric
 
 
-def _resolve_mode_enum(value: object, entry: RouteEntry) -> int:
+def _resolve_mode_enum(value: object, entry: ParamDescriptor) -> int:
     """Parse a growth-mode string alias or validate an integer selector.
 
     String aliases resolve case-insensitively through
@@ -376,7 +290,7 @@ def _resolve_mode_enum(value: object, entry: RouteEntry) -> int:
     return int(_check_bounds(mode_int, entry))
 
 
-def _resolve_age_vec(value: object, entry: RouteEntry, target: ModelDraft) -> NDArray[np.float64]:
+def _resolve_age_vec(value: object, entry: ParamDescriptor, target: ModelDraft) -> NDArray[np.float64]:
     """Parse a flexible per-age spec into an ``(n_ages,)`` vector."""
     n_ages = int(target.n_ages)
     vec = resolve_age_param(value, n_ages, np.ones(n_ages, dtype=np.float64))
@@ -388,7 +302,7 @@ def _resolve_age_vec(value: object, entry: RouteEntry, target: ModelDraft) -> ND
     return vec
 
 
-def _resolve_sex_row(value: object, entry: RouteEntry, target: ModelDraft) -> NDArray[np.float64] | None:
+def _resolve_sex_row(value: object, entry: ParamDescriptor, target: ModelDraft) -> NDArray[np.float64] | None:
     """Parse a (2, A) whole-table declaration or a single per-sex row.
 
     Whole-table entries (``config_path == ()``) accept a ``(2, n_ages)``
@@ -423,7 +337,7 @@ def _resolve_sex_row(value: object, entry: RouteEntry, target: ModelDraft) -> ND
     return row
 
 
-def _resolve_geno_tensor(value: object, entry: RouteEntry, target: ModelDraft) -> NDArray[np.float64]:
+def _resolve_geno_tensor(value: object, entry: ParamDescriptor, target: ModelDraft) -> NDArray[np.float64]:
     """Validate a whole-tensor write against the field's live shape."""
     if isinstance(value, Mapping):
         raise TypeError(
@@ -452,7 +366,7 @@ def _resolve_geno_tensor(value: object, entry: RouteEntry, target: ModelDraft) -
     return arr
 
 
-def plan_write(target: ModelDraft, entry: RouteEntry, value: object) -> ResolvedWrite:
+def plan_write(target: ModelDraft, entry: ParamDescriptor, value: object) -> ResolvedWrite:
     """Parse and fully validate a value against its route entry.
 
     No draft mutation happens here — callers may plan every write of a

@@ -71,8 +71,7 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     ],
     "frontend.configurator": [
         "Configurator", "CoreConfigWriter", "ConfigWriter", "DraftWriter",
-        "HookConfigWriter", "PopulationConfigBuilder", "ROUTES", "ROUTES_BY_METHOD",
-        "RouteEntry", "dispatch", "set_param",
+        "ROUTES", "ROUTES_BY_METHOD", "dispatch", "set_param",
     ],
     "frontend.data": [
         "ModelDefinition", "ModelDraft", "NO_COMPETITION", "FIXED", "LOGISTIC",

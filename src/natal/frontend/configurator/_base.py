@@ -59,6 +59,9 @@ from natal.contracts.materialize import (
 )
 from natal.frontend.configurator._params import (
     compute_expected_eggs_from_females,
+    resolve_age_structured_initial_individual_count,
+    resolve_age_structured_initial_sperm_storage,
+    resolve_discrete_initial_individual_count,
 )
 from natal.frontend.configurator._registry_builder import (
     build_registry,
@@ -1294,10 +1297,9 @@ class Configurator:
                 "initial_state() requires a Species reference. "
                 "Use Configurator.from_species() to create the instance."
             )
-        from natal.frontend.configurator._factory import PopulationConfigBuilder
 
         if self._config.discrete_generation:
-            array = PopulationConfigBuilder.resolve_discrete_initial_individual_count(
+            array = resolve_discrete_initial_individual_count(
                 species=self._species,
                 distribution=individual_count,
             )
@@ -1315,7 +1317,7 @@ class Configurator:
 
         n_ages = self._config.n_ages
         new_adult_age = self._config.new_adult_age
-        array = PopulationConfigBuilder.resolve_age_structured_initial_individual_count(
+        array = resolve_age_structured_initial_individual_count(
             species=self._species,
             distribution=individual_count,
             n_ages=n_ages,
@@ -1324,7 +1326,7 @@ class Configurator:
         overrides = {"initial_individual_count": array}
         if sperm_storage is not None:
             overrides["initial_sperm_storage"] = (
-                PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage(
+                resolve_age_structured_initial_sperm_storage(
                     species=self._species,
                     sperm_storage=sperm_storage,
                     n_ages=n_ages,

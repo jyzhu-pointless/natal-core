@@ -52,15 +52,6 @@ _GenotypeFilter = GenotypeFilter
 _SexSpecifier = Union[Sex, int, str]
 
 
-
-def _evaluate_genotype_filter(
-    genotype_filter: _GenotypeFilter,
-    genotype: Genotype,
-    compiled_filter: Optional[Callable[[Genotype], bool]],
-) -> Tuple[bool, Optional[Callable[[Genotype], bool]]]:
-    """Compatibility wrapper around shared genotype filter evaluator."""
-    return evaluate_genotype_filter(genotype_filter, genotype, compiled_filter)
-
 class GameteGtypeConversionRule:
     """Defines a whole-HaploidGenotype replacement rule at the gamete level.
 
@@ -167,7 +158,7 @@ class GameteGtypeConversionRule:
 
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check if rule applies to a given diploid genotype."""
-        applies, compiled = _evaluate_genotype_filter(
+        applies, compiled = evaluate_genotype_filter(
             self.genotype_filter,
             genotype,
             self._compiled_genotype_filter,
@@ -271,7 +262,7 @@ class GameteGlabConversionRule:
 
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check if rule applies to a given diploid genotype."""
-        applies, compiled = _evaluate_genotype_filter(
+        applies, compiled = evaluate_genotype_filter(
             self.genotype_filter,
             genotype,
             self._compiled_genotype_filter,
@@ -385,7 +376,7 @@ class GameteAlleleConversionRule:
         Returns:
             True if rule should apply to this genotype.
         """
-        applies, compiled = _evaluate_genotype_filter(
+        applies, compiled = evaluate_genotype_filter(
             self.genotype_filter,
             genotype,
             self._compiled_genotype_filter,

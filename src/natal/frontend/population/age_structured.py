@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
     Dict,
     List,
@@ -763,14 +762,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
     # ========================================================================
     # Evolution logic
     # ========================================================================
-
-    def _get_kernel_config(self) -> Tuple[Any, ...]:
-        """Build configuration tuple for simulation engine.
-
-        Returns:
-            tuple: An engine-compatible configuration tuple.
-        """
-        return self.export_config()
 
     def _initialize_session(self, seed: int = 0) -> AgeStructuredPopulation:
         """Enable the Rust lifecycle backend for subsequent runs.

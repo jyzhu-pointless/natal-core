@@ -45,7 +45,7 @@ class TestDiscreteBuilderInitialState(unittest.TestCase):
                     return idx
             raise KeyError(f"No ZType matches pattern {pattern}")
 
-        pop._registry = SimpleNamespace(
+        pop._index_registry = SimpleNamespace(
             get_genotype_index=lambda gt: genotype_to_index[gt],
             genotype_to_index=genotype_to_index,
             resolve_default_ztype_index=_resolve_default_ztype_index,
@@ -72,8 +72,8 @@ class TestDiscreteBuilderInitialState(unittest.TestCase):
 
         female_idx = int(Sex.FEMALE.value)
         male_idx = int(Sex.MALE.value)
-        wt_idx = pop._registry.get_genotype_index(self.gt_wt_wt) # type: ignore
-        drive_wt_idx = pop._registry.get_genotype_index(self.gt_drive_wt) # type: ignore
+        wt_idx = pop._index_registry.get_genotype_index(self.gt_wt_wt) # type: ignore
+        drive_wt_idx = pop._index_registry.get_genotype_index(self.gt_drive_wt) # type: ignore
 
         self.assertEqual(pop._state.individual_count[female_idx, 0, wt_idx], 3.0)
         self.assertEqual(pop._state.individual_count[female_idx, 1, wt_idx], 7.0)

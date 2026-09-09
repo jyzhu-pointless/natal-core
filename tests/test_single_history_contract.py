@@ -761,7 +761,7 @@ def test_age_legacy_state_adapters_round_trip_typed_history() -> None:
     source.run(1, record_every=1)
     state_flat = source.export_state()
     history_rows = source.history._to_numpy()
-    assert_config_equal(source._get_kernel_config(), source.config)  # pyright: ignore[reportPrivateUsage]  # adapter returns the same values in an independent snapshot
+    assert_config_equal(source.export_config(), source.config)  # adapter returns the same values in an independent snapshot
     np.testing.assert_array_equal(state_flat, source.state.flatten_all())
     np.testing.assert_array_equal(history_rows, source.history._to_numpy())
 

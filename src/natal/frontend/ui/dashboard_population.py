@@ -765,10 +765,6 @@ class Dashboard:
         self._do_export_logic(include_config, include_history, include_hooks)
         ui.notify('Export started...')
 
-    def _get_hooks_data(self):
-        """Serialize hook information for export."""
-        return get_hooks_data(self.pop)
-
     def _get_sexual_selection_data(self):  # type: ignore[reportUnknownParameterType]
         """Helper to get sexual selection fitness data for export."""
         config = self.pop.config
@@ -871,7 +867,7 @@ class Dashboard:
             }
 
         if include_hooks:
-            export_content["hooks"] = self._get_hooks_data()  # type: ignore[reportArgumentType]
+            export_content["hooks"] = get_hooks_data(self.pop)  # type: ignore[reportArgumentType]
 
         try:
             json_str = json.dumps(export_content, default=numpy_converter)
@@ -929,22 +925,16 @@ class Dashboard:
             "generation_time": float(conf.generation_time),
             "juvenile_growth_mode": {
                 "code": growth_mode,
-                "name": self._growth_mode_name(growth_mode),
+                "name": growth_mode_name(growth_mode),
             },
         }
-
-    def _growth_mode_name(self, mode: int) -> str:
-        return growth_mode_name(mode)
-
-    def _jsonable_config_value(self, value):  # type: ignore[reportMissingParameterType, reportUnknownParameterType]
-        return jsonable_config_value(value)
 
     def _get_full_config_data(self):  # type: ignore[reportUnknownParameterType]
         conf = self.pop.config
         data = {}
         for key, value in conf._asdict().items():
-            data[key] = self._jsonable_config_value(value)  # type: ignore[reportUnknownMemberType]
-        data["juvenile_growth_mode_name"] = self._growth_mode_name(int(conf.juvenile_growth_mode))
+            data[key] = jsonable_config_value(value)
+        data["juvenile_growth_mode_name"] = growth_mode_name(int(conf.juvenile_growth_mode))
         return data  # type: ignore[reportUnknownVariableType]
 
     def _get_presets_visualization_data(self):  # type: ignore[reportUnknownParameterType]
@@ -1211,7 +1201,7 @@ class Dashboard:
                             ui.label(f"Carrying Capacity: {conf.carrying_capacity}").classes('text-base')
                             ui.label(f"Eggs/Female: {conf.eggs_per_female}").classes('text-base')
                             mode_code = int(conf.juvenile_growth_mode)
-                            ui.label(f"Growth Mode: {mode_code} ({self._growth_mode_name(mode_code)})").classes('text-base')
+                            ui.label(f"Growth Mode: {mode_code} ({growth_mode_name(mode_code)})").classes('text-base')
                             ui.label(f"Stochastic: {conf.stochastic}").classes('text-base')
 
                         # Fitness Tables

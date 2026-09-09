@@ -42,9 +42,12 @@ from numpy.typing import NDArray
 
 from natal.frontend.configurator import Configurator
 from natal.frontend.configurator._base import normalize_observation_groups
-from natal.frontend.configurator._factory import (
+from natal.frontend.configurator._params import (
     InitialIndividualCountInput,
     InitialSpermStorageInput,
+    resolve_age_structured_initial_individual_count,
+    resolve_age_structured_initial_sperm_storage,
+    resolve_discrete_initial_individual_count,
 )
 from natal.frontend.data import ModelDraft
 from natal.frontend.genetics import Species
@@ -448,7 +451,8 @@ def _clone_deme(
 # The dispatch in ``_build_variant_config`` works like this:
 #
 #   1. *array kwarg* (individual_count, sperm_storage)
-#      → convert dict → array via PopulationConfigBuilder, then _replace.
+#      → convert dict → array via the _params resolve_* initial-state
+#        functions, then _replace.
 #   2. *multi-field kwarg* (carrying_capacity variants)
 #      → _replace into both base_carrying_capacity and the scaled
 #        carrying_capacity.
@@ -652,7 +656,6 @@ class SpatialConfigurator:
         if "individual_count" in expanded:
             n_demes = len(expanded["individual_count"])
             seen: set[tuple[tuple[str, Any], ...]] = set()
-            from natal.frontend.configurator._factory import PopulationConfigBuilder
 
             n_ages = int(full_config.n_ages)
             new_adult_age = int(full_config.new_adult_age)
@@ -673,14 +676,14 @@ class SpatialConfigurator:
                 dist = cast(InitialIndividualCountInput, ind_cnt)
 
                 if self._pop_type == "age_structured":
-                    array = PopulationConfigBuilder.resolve_age_structured_initial_individual_count(
+                    array = resolve_age_structured_initial_individual_count(
                         species=self._species,
                         distribution=dist,
                         n_ages=n_ages,
                         new_adult_age=new_adult_age,
                     )
                 else:
-                    array = PopulationConfigBuilder.resolve_discrete_initial_individual_count(
+                    array = resolve_discrete_initial_individual_count(
                         species=self._species,
                         distribution=dist,
                     )
@@ -2093,8 +2096,6 @@ class SpatialConfigurator:
             A new ``ModelDraft`` sharing all unchanged array references
             with *base_config*.
         """
-        from natal.frontend.configurator import PopulationConfigBuilder
-
         replace_kwargs: Dict[
             str, Any
         ] = {}  # Any: config field values (int, float, ndarray, bool)
@@ -2108,14 +2109,14 @@ class SpatialConfigurator:
             if kwarg == "individual_count":
                 distribution = cast(InitialIndividualCountInput, val)
                 if pop_type == "age_structured":
-                    array = PopulationConfigBuilder.resolve_age_structured_initial_individual_count(
+                    array = resolve_age_structured_initial_individual_count(
                         species=species,
                         distribution=distribution,
                         n_ages=int(base_config.n_ages),
                         new_adult_age=int(base_config.new_adult_age),
                     )
                 else:
-                    array = PopulationConfigBuilder.resolve_discrete_initial_individual_count(
+                    array = resolve_discrete_initial_individual_count(
                         species=species,
                         distribution=distribution,
                     )
@@ -2125,7 +2126,7 @@ class SpatialConfigurator:
             if kwarg == "sperm_storage":
                 if pop_type == "age_structured":
                     sperm_storage = cast(InitialSpermStorageInput, val)
-                    array = PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage(
+                    array = resolve_age_structured_initial_sperm_storage(
                         species=species,
                         sperm_storage=sperm_storage,
                         n_ages=int(base_config.n_ages),

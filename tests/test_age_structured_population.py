@@ -74,9 +74,9 @@ class TestBuildAndSetup:
     def test_registry_has_wt_wt(self):
         sp = _make_species("Age_reg")
         pop = _minimal_pop(sp, pop_name="Age_reg_pop")
-        genotype_strs = [str(g) for g in pop._registry.index_to_genotype]
+        genotype_strs = [str(g) for g in pop.registry.index_to_genotype]
         assert "WT|WT" in genotype_strs
-        assert len(pop._registry.index_to_genotype) == 3
+        assert len(pop.registry.index_to_genotype) == 3
 
 
 class TestRunTicks:

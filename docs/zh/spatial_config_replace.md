@@ -36,8 +36,8 @@
 
 | Builder kwarg | Config 字段 | 转换方式 |
 |---|---|---|
-| `individual_count` | `initial_individual_count` | `PopulationConfigBuilder.resolve_*_initial_individual_count()` |
-| `sperm_storage` | `initial_sperm_storage` | `PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage()` |
+| `individual_count` | `initial_individual_count` | `_params.resolve_*_initial_individual_count()` |
+| `sperm_storage` | `initial_sperm_storage` | `_params.resolve_age_structured_initial_sperm_storage()` |
 
 ### 2. 多字段映射（显式）
 
@@ -70,7 +70,7 @@ builder kwarg 名与 config 字段名不同，定义在 `_KWARG_RENAMES`：
 
 ## 数组字段的转换
 
-`individual_count` 和 `sperm_storage` 的值是用户传入的 dict（如 `{"female": {"WT|WT": 100}}`），需要先转换为 numpy 数组才能 `_replace`。转换通过 `PopulationConfigBuilder` 的静态方法完成：
+`individual_count` 和 `sperm_storage` 的值是用户传入的 dict（如 `{"female": {"WT|WT": 100}}`），需要先转换为 numpy 数组才能 `_replace`。转换由 `natal.frontend.configurator._params` 中的普通解析函数完成：
 
 - 年龄结构：`resolve_age_structured_initial_individual_count(species, distribution, n_ages, new_adult_age)`
 - 离散世代：`resolve_discrete_initial_individual_count(species, distribution)`
@@ -112,7 +112,7 @@ _build_heterogeneous()
        │   │
        │   ├─ _build_variant_config(sig_map, base_config)
        │   │   │
-       │   │   ├─ 数组字段 → PopulationConfigBuilder.resolve_* → _replace
+       │   │   ├─ 数组字段 → _params 的 resolve_* → _replace
        │   │   ├─ 多字段 → _replace(base=raw, scaled=raw*pop_scale)
        │   │   ├─ 重命名 → _replace(renamed_field=val)
        │   │   ├─ 动态发现 → hasattr → _replace

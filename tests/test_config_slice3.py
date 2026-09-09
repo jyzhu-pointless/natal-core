@@ -35,9 +35,11 @@ one numerical or identity invariant:
    population with ``growth_mode="ricker"`` reproduces the hand-derived
    Ricker recursion tick-by-tick, and mode 4 diverges from mode 3 —
    proving the Rust density kernel implements mode 4 end-to-end.
-8. **HookConfigWriter**: the in-hook writer talks to the session and to
-   nothing else — no refresh, no rebuild, no draft, no rebuild
-   scheduling — and its direct writes survive into the next ``run()``.
+8. **Direct session writes**: values pushed straight into the runtime
+   session channel touch nothing else — no rebuild scheduling, no draft
+   corruption — and survive into the next ``run()``; the runtime writer
+   routes scalar batches through ``apply`` and tensor writes through
+   ``refresh_params``.
 9. **Negative contracts**: frozen route records, replace-field
    classification, species-context guard for pattern patches, and
    pattern strings rejected outside the last axis.
@@ -67,9 +69,9 @@ from natal.frontend.configurator._routes import (
 from natal.frontend.configurator._writers import (
     CoreConfigWriter,
     DraftWriter,
-    HookConfigWriter,
 )
 from natal.frontend.data import ModelDraft, build_population_config
+from natal.frontend.utils.parameters import ParamDescriptor
 from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
 
 # ── markers and shared builders ───────────────────────────────────────────────
@@ -418,11 +420,11 @@ class TestParamsSessionSurface:
         pop = self._rust_age_pop()
         session = self._session(pop)
         draft0 = float(pop.config.carrying_capacity)
-        session0 = session.get_scalar("carrying_capacity")  # type: ignore[attr-defined]  # rust session readback
+        session0 = session.get_scalar("carrying_capacity")
         with pytest.raises(ValueError, match="requires a value in"):
             pop.params.carrying_capacity = -1.0
         assert float(pop.config.carrying_capacity) == draft0
-        assert session.get_scalar("carrying_capacity") == session0  # type: ignore[attr-defined]
+        assert session.get_scalar("carrying_capacity") == session0
         assert pop._rust_needs_rebuild is False
 
     def test_pattern_read_aggregates_exactly_like_manual_sum(self):
@@ -439,7 +441,7 @@ class TestParamsSessionSurface:
         pop = self._rust_age_pop()
         session = self._session(pop)
         draft0 = np.asarray(pop.config.age_based_survival_rates).copy()
-        session0 = np.asarray(session.get_tensor("survival_rates")).copy()  # type: ignore[attr-defined]
+        session0 = np.asarray(session.get_tensor("survival_rates")).copy()
         copy = pop.params.survival_rates.copy()
         copy[:] = 0.0
         np.testing.assert_array_equal(
@@ -447,7 +449,7 @@ class TestParamsSessionSurface:
         )
         np.testing.assert_array_equal(
             np.asarray(session.get_tensor("survival_rates")),
-            session0,  # type: ignore[attr-defined]
+            session0,
         )
 
     def test_direct_subscript_write_is_rejected(self):
@@ -464,7 +466,7 @@ class TestParamsSessionSurface:
             np.asarray(pop.config.age_based_survival_rates), rates
         )
         np.testing.assert_allclose(
-            np.asarray(session.get_tensor("survival_rates")).reshape(2, 4),  # type: ignore[attr-defined]
+            np.asarray(session.get_tensor("survival_rates")).reshape(2, 4),
             rates,
         )
 
@@ -473,7 +475,7 @@ class TestParamsSessionSurface:
         session = self._session(pop)
         pop.params.carrying_capacity = 900.0
         assert pop.params.carrying_capacity == 900.0
-        assert session.get_scalar("carrying_capacity") == 900.0  # type: ignore[attr-defined]
+        assert session.get_scalar("carrying_capacity") == 900.0
 
     def test_bool_write_marks_rebuild_and_run_drains_it(self):
         pop = self._rust_age_pop()
@@ -765,18 +767,18 @@ class TestRouteTableIntegrity:
         "equilibrium_distribution",
     }
 
-    def _unique_entries(self) -> list[object]:
+    def _unique_entries(self) -> list[ParamDescriptor]:
         return list({e.name: e for e in ROUTES.values()}.values())
 
     def test_exactly_forty_one_rows_in_seven_shapes(self):
         entries = self._unique_entries()
         assert len(entries) == 41
-        counts = Counter(e.kind for e in entries)  # type: ignore[attr-defined]  # entries are RouteEntry records
+        counts = Counter(e.kind for e in entries)
         assert dict(counts) == self.EXPECTED_COUNTS
         for entry in entries:
-            assert entry.kind in self.SEVEN_KINDS  # type: ignore[attr-defined]
-            assert entry.section in ("ecology", "genetics")  # type: ignore[attr-defined]
-            assert entry.bounds[0] <= entry.bounds[1]  # type: ignore[attr-defined]
+            assert entry.kind in self.SEVEN_KINDS
+            assert entry.section in ("ecology", "genetics")
+            assert entry.bounds[0] <= entry.bounds[1]
 
     def test_geno_tensor_rows_are_exactly_the_genetics_section(self):
         # The six fitness tensors are the genetics section; the two
@@ -784,14 +786,14 @@ class TestRouteTableIntegrity:
         geno = [
             e
             for e in self._unique_entries()
-            if e.kind == "geno_tensor"  # type: ignore[attr-defined]
+            if e.kind == "geno_tensor"
         ]
         genetics = [
-            e.name  # type: ignore[attr-defined]
+            e.name
             for e in self._unique_entries()
-            if e.section == "genetics"  # type: ignore[attr-defined]
+            if e.section == "genetics"
         ]
-        assert {e.name for e in geno} == {  # type: ignore[attr-defined]
+        assert {e.name for e in geno} == {
             "initial_individual_count",
             "initial_sperm_storage",
             "viability",
@@ -810,21 +812,21 @@ class TestRouteTableIntegrity:
             "male_ztype_compatibility",
         }
         for entry in geno:
-            if entry.name not in ("initial_individual_count", "initial_sperm_storage"):  # type: ignore[attr-defined]
-                assert entry.section == "genetics"  # type: ignore[attr-defined]
+            if entry.name not in ("initial_individual_count", "initial_sperm_storage"):
+                assert entry.section == "genetics"
 
     def test_sensitive_set_is_exactly_the_documented_five(self):
         sensitive = {
-            e.name  # type: ignore[attr-defined]
+            e.name
             for e in self._unique_entries()
-            if e.sensitive  # type: ignore[attr-defined]
+            if e.sensitive
         }
         assert sensitive == self.EXPECTED_SENSITIVE
 
     def test_every_alias_resolves_to_its_owning_entry(self):
         for entry in self._unique_entries():
-            canonical = lookup(entry.name)  # type: ignore[attr-defined]
-            for alias in entry.aliases:  # type: ignore[attr-defined]
+            canonical = lookup(entry.name)
+            for alias in entry.aliases:
                 assert lookup(alias) is canonical
 
     def test_full_key_lookup_matches_short_name(self):
@@ -1006,34 +1008,48 @@ class TestRickerEnginePath:
         pytest.fail("age-structured rust mode 4 is indistinguishable from mode 3")
 
 
-# ── 8. HookConfigWriter ───────────────────────────────────────────────────────
+# ── 8. direct session write channel ──────────────────────────────────────────
 
 
-class TestHookConfigWriterDirect:
-    def test_touches_only_the_session_channel(self):
+class TestDirectSessionWriteChannel:
+    """Writes pushed straight into the session (the channel production
+    hook updates drive through the event transaction) stay value-only:
+    no rebuild scheduling, no draft corruption, and they survive into
+    the next ``run()``.
+    """
+
+    def test_scalar_batches_push_only_the_apply_channel(self):
         session = RecordingSession()
-        writer = HookConfigWriter(session)  # type: ignore[arg-type]  # structural fake of the runtime session protocol
+        writer = CoreConfigWriter(_age_draft(), session)
         writer.apply({"carrying_capacity": 300.0, "eggs_per_female": 7.0})
-        writer.apply({"growth_mode": 4.0}, mode="multiply")  # mode ignored
-        writer.tensor_write("survival_rates", np.arange(6, dtype=np.float64))
+        writer.apply({"growth_mode": 4})
         assert session.applied == [
             {"carrying_capacity": 300.0, "eggs_per_female": 7.0},
-            {"growth_mode": 4.0},
+            {"growth_mode": 4},
         ]
-        assert len(session.tensors) == 1
-        field, values = session.tensors[0]
-        assert field == "survival_rates"
-        np.testing.assert_array_equal(values, np.arange(6, dtype=np.float64))
-        # No refresh, no rebuild: the writer never touches session structure.
+        # No tensor channel, no structural machinery: scalar batches only.
+        assert session.tensors == []
         assert session.other_calls == []
 
-    def test_binds_no_draft_and_schedules_no_rebuild(self):
+    def test_tensor_write_pushes_refresh_and_updates_the_draft(self):
+        session = RecordingSession()
+        writer = CoreConfigWriter(_age_draft(), session)
+        writer.tensor_write("survival_rates", np.arange(6, dtype=np.float64))
+        assert len(session.refreshed) == 1
+        fields, params = session.refreshed[0]
+        assert fields == ["survival_rates"]
+        np.testing.assert_array_equal(
+            params.survival_rates, np.arange(6, dtype=np.float64).reshape(2, 3)
+        )
+        assert session.other_calls == []
+
+    def test_direct_session_write_schedules_no_rebuild(self):
         pop = _age_pop()
         backend = pop._rust_lifecycle_backend  # noqa: SLF001
-        writer = HookConfigWriter(backend)
-        assert getattr(writer, "draft", None) is None
         old_snapshot = pop.config
-        writer.apply({"carrying_capacity": 300.0})
+        backend.apply({"carrying_capacity": 300.0})
+        # Reads go through the live session; the earlier snapshot copy is
+        # untouched — direct writes never corrupt the draft history.
         assert float(pop.config.carrying_capacity) == 300.0
         assert float(old_snapshot.carrying_capacity) == 500.0
         # No rebuild is scheduled: direct session writes are values only.
@@ -1042,18 +1058,16 @@ class TestHookConfigWriterDirect:
     def test_direct_write_survives_into_the_next_run(self):
         """Session-only direct writes survive and drive the next run.
 
-        HookConfigWriter (the in-hook path) bypasses the draft on
-        purpose: it is the emergency push channel.  A run only flushes
-        the draft at the boundary when an in-run write deferred through a
-        writer — a bare session push leaves no deferral and is therefore
-        not overwritten.
+        A run only flushes the draft at the boundary when an in-run write
+        deferred through a writer — a bare session push leaves no
+        deferral and is therefore not overwritten.
         """
         pop = _discrete_pop(0)
         session = pop._rust_lifecycle_backend._session  # noqa: SLF001
-        writer = HookConfigWriter(pop._rust_lifecycle_backend)  # noqa: SLF001
-        writer.apply({"carrying_capacity": 300.0})
+        backend = pop._rust_lifecycle_backend  # noqa: SLF001
+        backend.apply({"carrying_capacity": 300.0})
         rates = np.full(4, 0.5)
-        writer.tensor_write("survival_rates", rates)
+        backend.tensor_write("survival_rates", rates)
         assert session.get_scalar("carrying_capacity") == 300.0
         pop.run(n_steps=1)
         assert session.get_scalar("carrying_capacity") == 300.0

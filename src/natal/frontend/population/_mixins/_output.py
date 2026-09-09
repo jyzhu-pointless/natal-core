@@ -43,7 +43,6 @@ class OutputMixin(ModifierPresetMixin):
     _live_state: Any  # type: ignore[assignment]  # host live container accessor (snapshot twin)
     _mark_state_cache_stale: Any  # type: ignore[assignment]  # host flags the session cache stale
     _restore_ecology_to_draft: Any  # type: ignore[assignment]  # host writes restored ecology into the draft
-    _registry: Any  # type: ignore[assignment]  # host provides at runtime
     _observation: Observation | None  # type: ignore[assignment]  # host owns mutable policy
     _history_obj: History | None  # type: ignore[assignment]  # host owns mutable row storage
     _tick: int  # type: ignore[assignment]  # host owns mutable lifecycle state
@@ -283,7 +282,7 @@ class OutputMixin(ModifierPresetMixin):
             Dict[str, float]: Mapping ``{allele_name: frequency}``.
             Frequencies are per-locus proportions in the range ``[0.0, 1.0]``.
         """
-        if self._state is None or self._registry is None:
+        if self._state is None or self._index_registry is None:
             return {}
 
         # A Rust-backed population marks its Python snapshot stale after a run.
@@ -306,7 +305,7 @@ class OutputMixin(ModifierPresetMixin):
         # Sum over sex and age to get total count per genotype.
         genotype_counts = state.individual_count.sum(axis=(0, 1))
 
-        registry = self._registry
+        registry = self._index_registry
         for z_idx, (genotype, _slab) in enumerate(registry.index_to_ztype):
             count = genotype_counts[z_idx]
             if count <= 0:

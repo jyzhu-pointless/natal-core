@@ -24,12 +24,12 @@ from natal.frontend.presets._types import (
     _is_viability_age_map,
     _is_viability_scaling_config,
     _is_zygote_viability_scaling_config,
-    _normalize_sex_key,
     _SexualSelectionScalingConfig,
     _split_config_mode,
     _ViabilityScalingConfig,
     _ZygoteViabilityScalingConfig,
 )
+from natal.frontend.utils.helpers import resolve_sex_label
 
 
 def _apply_viability_allele_scaling(
@@ -90,7 +90,7 @@ def _apply_viability_allele_scaling(
                 # sex_config can be either:
                 #   - direct scale for default age
                 #   - nested {age: scale}
-                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
                 if _is_effect_scale(sex_config):
                     factor = _calculate_allele_effect(sex_config, copies, mode)
                     current = float(viability_arr[sex_idx, default_age, z_idx])
@@ -158,7 +158,7 @@ def _apply_fecundity_allele_scaling(
             config_map = cast(Mapping[object, object], config)
             for sex_key, scale in config_map.items():
                 # Sex-specific branch.
-                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
                 if not _is_effect_scale(scale):
                     raise TypeError(
                         f"Invalid fecundity sex scale for '{allele_name}', sex '{sex_key}': {type(scale).__name__}"
@@ -264,7 +264,7 @@ def _apply_zygote_viability_allele_scaling(
                 # Sex-specific config.
                 config_map = cast(Mapping[object, object], config)
                 for sex_key, sex_config in config_map.items():
-                    sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                    sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
                     if _is_effect_scale(sex_config):
                         total_scale = _calculate_allele_effect(sex_config, copy_count, mode)
                         current = float(zygote_arr[sex_idx, z_idx])
@@ -404,7 +404,7 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
 
             # sex-specific: {sex: float | {age: scale}}
             for sex_key, sex_config in config_map.items():
-                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
                 if isinstance(sex_config, (int, float)):
                     for z_idx in z_indices:
                         deps.config.set_viability_fitness(sex_idx, z_idx, float(sex_config))
@@ -448,7 +448,7 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
 
             config_map = cast(Mapping[object, object], config)
             for sex_key, scale in config_map.items():
-                sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
                 if not isinstance(scale, (int, float)):
                     raise TypeError(
                         f"Invalid fecundity sex scale for selector '{selector}', sex '{sex_key}'"
@@ -542,7 +542,7 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
             elif isinstance(config, Mapping):
                 config_map = cast(Mapping[object, object], config)
                 for sex_key, sex_config in config_map.items():
-                    sex_idx = _normalize_sex_key(_coerce_sex_specifier(sex_key))
+                    sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
                     if isinstance(sex_config, (int, float)):
                         for z_idx in z_indices:
                             deps.config.set_zygote_viability_fitness(sex_idx, z_idx, float(sex_config))

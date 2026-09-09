@@ -73,7 +73,7 @@ class TestBuildAndSetup:
         sp = _make_species("Disc_tick0")
         pop = _minimal_pop(sp, pop_name="Disc_tick0_pop")
         assert pop._tick == 0
-        n_genotypes = len(pop._registry.index_to_genotype)
+        n_genotypes = len(pop.registry.index_to_genotype)
         assert pop.state.individual_count.shape == (2, 2, n_genotypes), (
             f"expected shape (2, 2, {n_genotypes}), got {pop.state.individual_count.shape}"
         )
@@ -81,7 +81,7 @@ class TestBuildAndSetup:
     def test_registry_has_expected_genotypes(self):
         sp = _make_species("Disc_gtypes")
         pop = _minimal_pop(sp, pop_name="Disc_gtypes_pop")
-        genotype_strs = [str(g) for g in pop._registry.index_to_genotype]
+        genotype_strs = [str(g) for g in pop.registry.index_to_genotype]
         assert "WT|WT" in genotype_strs
         # Unordered genotypes: WT|WT, WT|Dr, Dr|Dr = 3
         assert len(genotype_strs) == 3, (
@@ -308,7 +308,7 @@ class TestMixedGenotypes:
             .build()
         )
         pop.run(1)
-        genotype_strs = [str(g) for g in pop._registry.index_to_genotype]
+        genotype_strs = [str(g) for g in pop.registry.index_to_genotype]
         assert "WT|Dr" in genotype_strs or "Dr|WT" in genotype_strs
 
     def test_all_wt_parents_produce_only_wt_offspring(self):
@@ -318,7 +318,7 @@ class TestMixedGenotypes:
         pop.run(3)
 
         wt_wt_idx = next(
-            i for i, g in enumerate(pop._registry.index_to_genotype) if str(g) == "WT|WT"
+            i for i, g in enumerate(pop.registry.index_to_genotype) if str(g) == "WT|WT"
         )
         # Both sexes, adult age (index 1)
         for sex in (0, 1):
@@ -511,7 +511,7 @@ class TestHomingDriveIntegration:
         assert pop._state.individual_count.sum() > 0, (
             "stochastic population should not be empty after 10 ticks"
         )
-        n_genotypes = len(pop._registry.index_to_genotype)
+        n_genotypes = len(pop.registry.index_to_genotype)
         assert pop._state.individual_count.shape == (2, 2, n_genotypes), (
             f"expected shape (2, 2, {n_genotypes}), "
             f"got {pop._state.individual_count.shape}"

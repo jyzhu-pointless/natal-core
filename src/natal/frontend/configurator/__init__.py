@@ -20,20 +20,15 @@ from natal.frontend.configurator._base import (
     Configurator,
     set_param,
 )
-from natal.frontend.configurator._factory import (
-    PopulationConfigBuilder,
-)
 from natal.frontend.configurator._routes import (
     ROUTES,
     ROUTES_BY_METHOD,
-    RouteEntry,
     dispatch,
 )
 from natal.frontend.configurator._writers import (
     ConfigWriter,
     CoreConfigWriter,
     DraftWriter,
-    HookConfigWriter,
 )
 
 __all__ = [
@@ -41,11 +36,8 @@ __all__ = [
     "CoreConfigWriter",
     "ConfigWriter",
     "DraftWriter",
-    "HookConfigWriter",
-    "PopulationConfigBuilder",
     "ROUTES",
     "ROUTES_BY_METHOD",
-    "RouteEntry",
     "dispatch",
     "set_param",
 ]

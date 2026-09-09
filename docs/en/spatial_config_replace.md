@@ -36,8 +36,8 @@ Builder parameters that require dict → numpy array conversion, defined in `_AR
 
 | Builder kwarg | Config Field | Conversion Method |
 |---|---|---|
-| `individual_count` | `initial_individual_count` | `PopulationConfigBuilder.resolve_*_initial_individual_count()` |
-| `sperm_storage` | `initial_sperm_storage` | `PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage()` |
+| `individual_count` | `initial_individual_count` | `_params.resolve_*_initial_individual_count()` |
+| `sperm_storage` | `initial_sperm_storage` | `_params.resolve_age_structured_initial_sperm_storage()` |
 
 ### 2. Multi-Field Mapping (Explicit)
 
@@ -70,7 +70,7 @@ Changes to `carrying_capacity`, `eggs_per_female`, and `sex_ratio` affect `expec
 
 ## Array Field Conversion
 
-The values for `individual_count` and `sperm_storage` are user-provided dicts (e.g., `{"female": {"WT|WT": 100}}`), which must be converted to numpy arrays before `_replace`. Conversion is done via static methods on `PopulationConfigBuilder`:
+The values for `individual_count` and `sperm_storage` are user-provided dicts (e.g., `{"female": {"WT|WT": 100}}`), which must be converted to numpy arrays before `_replace`. Conversion is done by the plain resolver functions in `natal.frontend.configurator._params`:
 
 - Age-structured: `resolve_age_structured_initial_individual_count(species, distribution, n_ages, new_adult_age)`
 - Discrete generation: `resolve_discrete_initial_individual_count(species, distribution)`
@@ -112,7 +112,7 @@ _build_heterogeneous()
        │   │
        │   ├─ _build_variant_config(sig_map, base_config)
        │   │   │
-       │   │   ├─ Array fields → PopulationConfigBuilder.resolve_* → _replace
+       │   │   ├─ Array fields → _params resolve_* → _replace
        │   │   ├─ Multi-field → _replace(base=raw, scaled=raw*pop_scale)
        │   │   ├─ Renames → _replace(renamed_field=val)
        │   │   ├─ Dynamic discovery → hasattr → _replace

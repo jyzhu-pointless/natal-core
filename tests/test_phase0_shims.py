@@ -561,3 +561,45 @@ def test_public_export_list_matches_module_all() -> None:
             "add it there to publish its names"
         )
     assert set(listed) <= discovered, "listed unit no longer exists on disk"
+
+
+def test_p2_retired_exports_stay_removed() -> None:
+    """Negative contract: names retired by the P2 redundancy cleanup.
+
+    ``RouteEntry`` (merged into ``ParamDescriptor``), ``HookConfigWriter``
+    (test-only writer), and ``PopulationConfigBuilder`` (dissolved into
+    plain resolver functions in ``configurator._params``) must be
+    unreachable through the lazy top level and every owning package or
+    module import path.  The surviving descriptor type stays exported and
+    carries the contract-field mapping that used to live on RouteEntry.
+    """
+    import importlib.util
+
+    for name in ("RouteEntry", "HookConfigWriter", "PopulationConfigBuilder"):
+        assert not hasattr(natal, name), f"retired export {name!r} is back"
+
+    with pytest.raises(ImportError):
+        from natal.frontend.configurator import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            RouteEntry,
+        )
+    with pytest.raises(ImportError):
+        from natal.frontend.configurator import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            HookConfigWriter,
+        )
+    with pytest.raises(ImportError):
+        from natal.frontend.configurator import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            PopulationConfigBuilder,
+        )
+    with pytest.raises(ImportError):
+        from natal.frontend.configurator._writers import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+            HookConfigWriter,
+        )
+    assert importlib.util.find_spec("natal.frontend.configurator._factory") is None, (
+        "dissolved PopulationConfigBuilder module is back on disk"
+    )
+
+    assert hasattr(natal, "ParamDescriptor")
+    from natal.frontend.utils.parameters import ALL_PARAMETERS
+
+    entry = ALL_PARAMETERS["competition.carrying_capacity"]
+    assert entry.contract_field == "carrying_capacity"

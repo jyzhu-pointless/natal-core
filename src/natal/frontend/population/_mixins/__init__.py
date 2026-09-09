@@ -5,6 +5,5 @@ This package extracts reusable behavior from
 
 - ``_hooks``: Hook registration, compilation, and lifecycle integration.
 - ``_modifiers``: Modifier and preset management.
-- ``_observation``: Observation mask building and history recording.
 - ``_output``: Query, export, and lifecycle-orchestration methods.
 """

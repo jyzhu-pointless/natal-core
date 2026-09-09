@@ -51,7 +51,7 @@ class TestOrderedDefault:
             individual_count={"female": {"A|a": 50, "a|A": 30}},
         ).competition(juvenile_growth_mode=nt.NO_COMPETITION).build()
         # Both forms accepted; registry canonicalizes to 3 entries
-        assert pop._registry.num_genotypes() == 3
+        assert pop.registry.num_genotypes() == 3
         assert pop.state.individual_count.sum() == 80
 
 

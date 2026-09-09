@@ -1,4 +1,4 @@
-"""ConfigWriter protocol and its three implementations.
+"""ConfigWriter protocol and its two implementations.
 
 Writers are the only components that turn ``{name: value}`` batches
 into draft mutations and session pushes.  Every domain method of the
@@ -14,9 +14,6 @@ Configurator collapses to: parse kwargs -> build a writes dict -> one
   borrow), so the write lands in the draft and the run boundary flushes
   it.  ``session=None`` degrades it to draft-only writes
   (reference-path populations).
-- :class:`HookConfigWriter` — in-hook path.  Borrows
-  the live session and writes it directly, bypassing locks and the
-  draft.
 
 Atomicity contract: :meth:`ConfigWriter.apply` resolves and validates
 every entry *before* committing anything — one invalid entry means zero
@@ -38,7 +35,6 @@ from numpy.typing import NDArray
 
 from natal.frontend.configurator._routes import (
     ResolvedWrite,
-    RouteEntry,
     commit_write,
     lookup,
     plan_write,
@@ -52,6 +48,7 @@ from natal.frontend.data._engine import (
     recompute_offspring_tensor,
     validate_meiosis_table,
 )
+from natal.frontend.utils.parameters import ParamDescriptor
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -64,7 +61,6 @@ __all__ = [
     "ConfigWriter",
     "CoreConfigWriter",
     "DraftWriter",
-    "HookConfigWriter",
     "SessionChannel",
     "contract_to_draft_field",
     "recompute_offspring_tensor",
@@ -158,7 +154,7 @@ def contract_to_draft_field(contract: str) -> str:
     return _CONTRACT_TO_DRAFT.get(contract, contract)
 
 
-def _committed_scalar(draft: ModelDraft, entry: RouteEntry) -> float | None:
+def _committed_scalar(draft: ModelDraft, entry: ParamDescriptor) -> float | None:
     """Read the committed scalar payload of *entry* from *draft*.
 
     Vector-shaped kinds and session sentinel declarations return ``None``
@@ -183,7 +179,7 @@ def _committed_scalar(draft: ModelDraft, entry: RouteEntry) -> float | None:
 AuditValue = bool | int | float | NDArray[np.float64] | None
 
 
-def _committed_value(draft: ModelDraft, entry: RouteEntry) -> AuditValue:
+def _committed_value(draft: ModelDraft, entry: ParamDescriptor) -> AuditValue:
     """Copy the actual routed value, preserving scalar types and tensor shape."""
     if entry.config_field is None:
         return None
@@ -277,7 +273,7 @@ class _DraftWriterBase:
                     _committed_value(self._draft, entry),
                 )
 
-    def _stage(self, writes: Mapping[str, object], *, mode: str = "replace") -> list[RouteEntry]:
+    def _stage(self, writes: Mapping[str, object], *, mode: str = "replace") -> list[ParamDescriptor]:
         """Resolve every write, then commit atomically.
 
         Args:
@@ -295,10 +291,10 @@ class _DraftWriterBase:
                 writes; pattern patches resolve at write time exactly
                 as ``fitness()`` always has).
         """
-        touched: list[RouteEntry] = []
+        touched: list[ParamDescriptor] = []
         plans: list[ResolvedWrite] = []
         patches: list[
-            tuple[RouteEntry, Mapping[str, float | Mapping[str, float]]]
+            tuple[ParamDescriptor, Mapping[str, float | Mapping[str, float]]]
         ] = []
         for name, value in writes.items():
             entry = lookup(name)
@@ -364,12 +360,12 @@ class _DraftWriterBase:
         if self._on_replace is not None:
             self._on_replace(self._draft)
 
-    def _finish(self, touched: list[RouteEntry]) -> None:
+    def _finish(self, touched: list[ParamDescriptor]) -> None:
         """Push committed values to the session and refresh sensitive caches."""
         if self._session is not None:
             self._push_session(touched)
 
-    def _push_session(self, touched: list[RouteEntry]) -> None:
+    def _push_session(self, touched: list[ParamDescriptor]) -> None:
         """Submit all compiled products through the single native commit channel."""
         session = self._session
         assert session is not None
@@ -385,7 +381,7 @@ class _DraftWriterBase:
 
     def _apply_fitness_patch(
         self,
-        entry: RouteEntry,
+        entry: ParamDescriptor,
         patch: Mapping[str, float | Mapping[str, float]],
         mode: str,
     ) -> None:
@@ -501,42 +497,4 @@ class CoreConfigWriter(_DraftWriterBase):
             species=species, registry=registry,
             param_log=param_log,
             param_value_log=param_value_log,
-        )
-
-
-class HookConfigWriter:
-    """In-hook writer: direct session writes, no locks, no draft.
-
-    Hook wiring hands this to hook callables that must retune the
-    running simulation from inside a tick.  Writes go straight into the
-    session-owned params using contract field names; validation is
-    delegated to the Rust-side channel checks.
-    """
-
-    def __init__(self, session: SessionChannel) -> None:
-        """Bind the writer to a live session.
-
-        Args:
-            session: The Rust backend adapter to write through.
-        """
-        self._session = session
-
-    def apply(self, writes: Mapping[str, object], *, mode: str = "replace") -> None:
-        """Push a scalar batch straight into the session.
-
-        Args:
-            writes: Contract scalar field names to numeric values.
-            mode: Ignored (accepted for protocol compatibility).
-        """
-        _ = mode
-        # Values arrive as user numbers; float() is the runtime guard for
-        # the object-typed protocol boundary.
-        self._session.apply({
-            name: float(cast("float", value)) for name, value in writes.items()
-        })
-
-    def tensor_write(self, field: str, values: NDArray[np.float64]) -> None:
-        """Push whole-tensor contents straight into the session."""
-        self._session.tensor_write(
-            field, np.ascontiguousarray(values, dtype=np.float64).ravel()
         )

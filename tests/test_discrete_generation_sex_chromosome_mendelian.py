@@ -136,7 +136,7 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
     female_by_phase: dict[str, float] = {"A|A": 0.0, "A|a": 0.0, "a|A": 0.0, "a|a": 0.0}
     male_by_phase: dict[str, float] = {"A|A": 0.0, "A|a": 0.0, "a|A": 0.0, "a|a": 0.0}
 
-    ztype_lookup = pop._registry.index_to_ztype
+    ztype_lookup = pop.registry.index_to_ztype
     for idx in range(len(female_age1)):
         count_f = float(female_age1[idx])
         if count_f == 0.0:
@@ -302,7 +302,7 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
     female_by_maternal_x: dict[str, float] = {"X1": 0.0, "X2": 0.0}
     male_by_maternal_x: dict[str, float] = {"X1": 0.0, "X2": 0.0}
 
-    ztype_lookup = pop._registry.index_to_ztype
+    ztype_lookup = pop.registry.index_to_ztype
     for idx in range(len(female_age1)):
         count_f = float(female_age1[idx])
         if count_f == 0.0:

@@ -182,6 +182,38 @@ class TestClone:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TestRegistryStorage
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestRegistryStorage:
+    """The population keeps exactly ONE registry storage field.
+
+    ``registry`` and ``index_registry`` are two public names reading the
+    same single ``_index_registry`` field; the legacy duplicate
+    ``_registry`` storage must not come back, and clones share the object.
+    """
+
+    def test_public_registry_names_read_one_storage_field(
+        self, simple_species: nt.Species,
+    ) -> None:
+        pop = _build_pop(simple_species, "registry_single_storage")
+        assert pop.registry is pop.index_registry
+        assert pop.registry is pop._index_registry
+        assert not hasattr(pop, "_registry"), (
+            "legacy duplicate registry storage field came back"
+        )
+
+    def test_clone_shares_the_single_registry(
+        self, simple_species: nt.Species,
+    ) -> None:
+        pop = _build_pop(simple_species, "registry_clone_share")
+        clone = pop._clone("registry_clone_share_c1")
+        assert clone.registry is pop.registry
+        assert clone.index_registry is pop.index_registry
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # TestRefreshModifiers
 # ══════════════════════════════════════════════════════════════════════════════
 

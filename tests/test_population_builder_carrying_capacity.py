@@ -8,10 +8,15 @@ from numpy.typing import NDArray
 import pytest
 
 import natal as nt
+from natal.frontend.configurator._params import (
+    compute_expected_eggs_from_distribution,
+    build_equilibrium_distribution,
+    compute_expected_eggs_from_females,
+    resolve_carrying_capacity,
+)
 from natal.frontend.data._engine import (
     derive_equilibrium_metrics_from_draft,
 )
-from natal.frontend.configurator import PopulationConfigBuilder
 
 
 def _make_species(name: str = "TestSp") -> nt.Species:
@@ -27,7 +32,7 @@ class TestCarryingCapacityResolution:
 
     def test_old_juvenile_carrying_capacity_has_priority(self) -> None:
         """Test that old_juvenile_carrying_capacity is used if provided."""
-        result = PopulationConfigBuilder._resolve_carrying_capacity(
+        result = resolve_carrying_capacity(
             age_1_carrying_capacity=None,
             old_juvenile_carrying_capacity=500.0,
         )
@@ -35,7 +40,7 @@ class TestCarryingCapacityResolution:
 
     def test_explicit_carrying_capacity_used_when_no_old_juvenile(self) -> None:
         """Test that explicit age_1_carrying_capacity is used when old_juvenile is None."""
-        result = PopulationConfigBuilder._resolve_carrying_capacity(
+        result = resolve_carrying_capacity(
             age_1_carrying_capacity=1000.0,
             old_juvenile_carrying_capacity=None,
         )
@@ -44,7 +49,7 @@ class TestCarryingCapacityResolution:
     def test_initial_state_fallback(self) -> None:
         """Test fallback to initial_individual_count when no explicit capacity given."""
         init = np.array([[[100.0]], [[100.0]]])  # shape (2, 1, 1)
-        result = PopulationConfigBuilder._resolve_carrying_capacity(
+        result = resolve_carrying_capacity(
             age_1_carrying_capacity=None,
             old_juvenile_carrying_capacity=None,
             initial_individual_count=init,
@@ -54,7 +59,7 @@ class TestCarryingCapacityResolution:
     def test_error_when_no_source_provided(self) -> None:
         """Test that ValueError is raised when no source is available."""
         with pytest.raises(ValueError, match="No valid carrying capacity source"):
-            PopulationConfigBuilder._resolve_carrying_capacity(
+            resolve_carrying_capacity(
                 age_1_carrying_capacity=None,
                 old_juvenile_carrying_capacity=None,
             )
@@ -66,7 +71,7 @@ class TestCarryingCapacityResolution:
             [1.0, 0.9, 0.8, 0.7],
             [1.0, 0.8, 0.7, 0.6],
         ], dtype=np.float64)
-        dist = PopulationConfigBuilder._build_equilibrium_distribution(
+        dist = build_equilibrium_distribution(
             K=1000.0, sex_ratio=0.5, age_based_survival_rates=survival, n_ages=n_ages,
         )
         # Age-1 should be split by sex_ratio
@@ -89,7 +94,7 @@ class TestCarryingCapacityResolution:
         reproduction = np.array([0.0, 0.0, 1.0, 1.0], dtype=np.float64)
         fertility = np.array([0.0, 0.0, 1.0, 0.8], dtype=np.float64)
 
-        eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
+        eggs = compute_expected_eggs_from_females(
             expected_num_new_adult_females=500.0,
             eggs_per_female=100.0,
             age_based_survival_rates=survival,
@@ -103,7 +108,7 @@ class TestCarryingCapacityResolution:
         # Eggs = 500*1.0*1.0*100 + 400*1.0*0.8*100 = 50000 + 32000 = 82000
         assert eggs == pytest.approx(82000.0)
 
-    def test_compute_expected_eggs_from_distribution(self) -> None:
+    def testcompute_expected_eggs_from_distribution(self) -> None:
         """Test expected egg computation from full distribution."""
         n_ages = 3
         dist = np.array([
@@ -113,7 +118,7 @@ class TestCarryingCapacityResolution:
         reproduction = np.array([0.0, 0.0, 1.0], dtype=np.float64)
         fertility = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 
-        eggs = PopulationConfigBuilder._compute_expected_eggs_from_distribution(
+        eggs = compute_expected_eggs_from_distribution(
             equilibrium_distribution=dist,
             eggs_per_female=100.0,
             age_based_reproduction_rates=reproduction,
@@ -204,13 +209,13 @@ class TestCarryingCapacityResolution:
 
         # Build equilibrium distribution from K=500
         K = 500.0
-        dist = PopulationConfigBuilder._build_equilibrium_distribution(
+        dist = build_equilibrium_distribution(
             K=K, sex_ratio=sex_ratio, age_based_survival_rates=survival, n_ages=n_ages,
         )
 
         # Compute expected eggs from the distribution
         reproduction = mating[0]  # use female mating rates
-        eggs_from_dist = PopulationConfigBuilder._compute_expected_eggs_from_distribution(
+        eggs_from_dist = compute_expected_eggs_from_distribution(
             equilibrium_distribution=dist,
             eggs_per_female=eggs_per_female,
             age_based_reproduction_rates=reproduction,
@@ -268,12 +273,12 @@ class TestCarryingCapacityResolution:
         expected_females = 200.0
 
         # Build equilibrium distribution from K
-        dist = PopulationConfigBuilder._build_equilibrium_distribution(
+        dist = build_equilibrium_distribution(
             K=K, sex_ratio=sex_ratio, age_based_survival_rates=survival, n_ages=n_ages,
         )
 
         # Compute expected eggs from expected_num_new_adult_females
-        external_eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
+        external_eggs = compute_expected_eggs_from_females(
             expected_num_new_adult_females=expected_females,
             eggs_per_female=eggs_per_female,
             age_based_survival_rates=survival,
@@ -548,7 +553,7 @@ class TestChamperModel:
 
     def test_expected_eggs_from_females_default_rates(self) -> None:
         """Verify eggs computation with default reproduction (all adults mate, fertility=1)."""
-        eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
+        eggs = compute_expected_eggs_from_females(
             expected_num_new_adult_females=self.expected_num_new_adult_females,
             eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
@@ -566,7 +571,7 @@ class TestChamperModel:
         """Eggs computation with custom reproduction participation rates."""
         reproduction = np.array([0.0, 0.0, 0.5, 1.0, 1.0, 0.8, 0.5, 0.0], dtype=np.float64)
 
-        eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
+        eggs = compute_expected_eggs_from_females(
             expected_num_new_adult_females=self.expected_num_new_adult_females,
             eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
@@ -586,7 +591,7 @@ class TestChamperModel:
         reproduction = np.array([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64)
         fertility = np.array([0.0, 0.0, 0.8, 1.0, 1.0, 0.8, 0.5, 0.0], dtype=np.float64)
 
-        eggs = PopulationConfigBuilder.compute_expected_eggs_from_females(
+        eggs = compute_expected_eggs_from_females(
             expected_num_new_adult_females=self.expected_num_new_adult_females,
             eggs_per_female=self.eggs_per_female,
             age_based_survival_rates=self.survival_rates,
@@ -606,7 +611,7 @@ class TestChamperModel:
         dist = np.array([self.equilibrium_female, self.equilibrium_male], dtype=np.float64)
         reproduction = np.array([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64)
 
-        eggs = PopulationConfigBuilder._compute_expected_eggs_from_distribution(
+        eggs = compute_expected_eggs_from_distribution(
             equilibrium_distribution=dist,
             eggs_per_female=self.eggs_per_female,
             age_based_reproduction_rates=reproduction,

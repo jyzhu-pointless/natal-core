@@ -59,15 +59,6 @@ __all__ = [
 _GenotypeFilter = GenotypeFilter
 
 
-def _evaluate_genotype_filter(
-    genotype_filter: _GenotypeFilter,
-    genotype: Genotype,
-    compiled_filter: Optional[Callable[[Genotype], bool]],
-) -> Tuple[bool, Optional[Callable[[Genotype], bool]]]:
-    """Compatibility wrapper around shared genotype filter evaluator."""
-    return evaluate_genotype_filter(genotype_filter, genotype, compiled_filter)
-
-
 # ============================================================================
 # Rule definition
 # ============================================================================
@@ -307,7 +298,7 @@ class ZygoteAlleleConversionRule:
 
     def applies_to_genotype(self, genotype: Genotype) -> bool:
         """Check whether this rule should be evaluated for *genotype*."""
-        applies, compiled = _evaluate_genotype_filter(
+        applies, compiled = evaluate_genotype_filter(
             self.genotype_filter,
             genotype,
             self._compiled_genotype_filter,
