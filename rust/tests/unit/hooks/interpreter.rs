@@ -84,20 +84,23 @@ fn rpn_evaluates_expressions_against_current_values() {
     let mut eco = [200.0, 0.0, 0.0, 0.0, 0.0];
     let mut rng = seeded();
     let mut ind = vec![0.0; 2];
-    let result = program.execute_event(
-        &mut rng,
-        1,
-        &mut ind,
-        &mut [],
-        2,
-        1,
-        1,
-        5,
-        false,
-        false,
-        0,
-        &mut eco,
-    );
+    let result = program
+        .execute_event(
+            &mut rng,
+            1,
+            &mut ind,
+            &mut [],
+            2,
+            1,
+            1,
+            5,
+            false,
+            false,
+            0,
+            &mut eco,
+            &mut None,
+        )
+        .unwrap();
     assert_eq!(result, RESULT_CONTINUE);
     assert!((eco[0] - 190.0).abs() < 1e-12, "K * 0.95 with K=200 -> 190");
 }
@@ -117,20 +120,23 @@ fn rpn_division_by_zero_follows_ieee_semantics() {
     let mut eco = [50.0, 0.0, 0.0, 0.0, 0.0];
     let mut rng = seeded();
     let mut ind = vec![0.0; 2];
-    program.execute_event(
-        &mut rng,
-        1,
-        &mut ind,
-        &mut [],
-        2,
-        1,
-        1,
-        0,
-        false,
-        false,
-        0,
-        &mut eco,
-    );
+    program
+        .execute_event(
+            &mut rng,
+            1,
+            &mut ind,
+            &mut [],
+            2,
+            1,
+            1,
+            0,
+            false,
+            false,
+            0,
+            &mut eco,
+            &mut None,
+        )
+        .unwrap();
     assert!(
         eco[0].is_infinite() && eco[0] > 0.0,
         "1/0 -> +inf, got {}",
@@ -154,20 +160,23 @@ fn set_param_respects_every_and_start_schedule() {
         let mut eco = [7.0, 0.0, 0.0, 0.0, 0.0];
         let mut rng = seeded();
         let mut ind = vec![0.0; 2];
-        program.execute_event(
-            &mut rng,
-            1,
-            &mut ind,
-            &mut [],
-            2,
-            1,
-            1,
-            tick,
-            false,
-            false,
-            0,
-            &mut eco,
-        );
+        program
+            .execute_event(
+                &mut rng,
+                1,
+                &mut ind,
+                &mut [],
+                2,
+                1,
+                1,
+                tick,
+                false,
+                false,
+                0,
+                &mut eco,
+                &mut None,
+            )
+            .unwrap();
         let expected = if tick >= 5 && (tick - 5) % 10 == 0 {
             -1.0
         } else {
@@ -202,9 +211,12 @@ fn deterministic_convert_conserves_totals_with_sperm() {
 
     let mut rng = seeded();
     let mut eco = [0.0; N_ECO_PARAMS];
-    let result = program.execute_event(
-        &mut rng, 1, &mut ind, &mut sperm, 2, n_ages, n_ztypes, 0, false, false, 0, &mut eco,
-    );
+    let result = program
+        .execute_event(
+            &mut rng, 1, &mut ind, &mut sperm, 2, n_ages, n_ztypes, 0, false, false, 0, &mut eco,
+            &mut None,
+        )
+        .unwrap();
     assert_eq!(result, RESULT_CONTINUE);
 
     let total_after: f64 = ind.iter().sum::<f64>() + sperm.iter().sum::<f64>();
@@ -281,20 +293,23 @@ fn stochastic_convert_conservs_expectation() {
         ind[0] = 100.0; // female A|A, age 0, no sperm
         let mut rng = crate::kernels::rng::new_rng(1_000 + trial as u64);
         let mut eco = [0.0; N_ECO_PARAMS];
-        program.execute_event(
-            &mut rng,
-            1,
-            &mut ind,
-            &mut [],
-            2,
-            1,
-            n_ztypes,
-            0,
-            true,
-            false,
-            0,
-            &mut eco,
-        );
+        program
+            .execute_event(
+                &mut rng,
+                1,
+                &mut ind,
+                &mut [],
+                2,
+                1,
+                n_ztypes,
+                0,
+                true,
+                false,
+                0,
+                &mut eco,
+                &mut None,
+            )
+            .unwrap();
         moved_sum += ind[2];
     }
     let mean = moved_sum / trials as f64;
@@ -304,4 +319,134 @@ fn stochastic_convert_conservs_expectation() {
         (mean - 50.0).abs() < 2.5,
         "expected 50 moved on average, got {mean}"
     );
+}
+
+/// Fixture: event 0 carries one CSR hook, event 1 carries two; each hook
+/// owns exactly one op (op offsets 0|1|3), all selectors wildcard.
+fn two_event_csr_program() -> HookProgram {
+    HookProgram {
+        n_events: 4,
+        n_hooks: 3,
+        hook_offsets: vec![0, 1, 3, 3, 3],
+        op_offsets: vec![0, 1, 2, 3],
+        op_types: vec![OP_ADD, OP_ADD, OP_ADD],
+        params: vec![1.0, 1.0, 1.0],
+        zidx_offsets: vec![0, 1, 2, 3],
+        zidx_data: vec![0, 0, 0],
+        age_offsets: vec![0, 1, 2, 3],
+        age_data: vec![0, 0, 0],
+        sex_masks: vec![false; 6],
+        condition_offsets: vec![0, 1, 2, 3],
+        condition_types: vec![COND_ALWAYS; 3],
+        condition_params: vec![0; 3],
+        deme_selector_types: vec![0; 3],
+        deme_selector_offsets: vec![0, 0, 0, 0],
+        python_callback_slots: vec![-1, -1, -1],
+        ..HookProgram::default()
+    }
+}
+
+fn none_callbacks(counts: [usize; 4]) -> Vec<Vec<pyo3::Py<pyo3::PyAny>>> {
+    pyo3::prepare_freethreaded_python();
+    pyo3::Python::with_gil(|py| {
+        counts
+            .iter()
+            .map(|n| (0..*n).map(|_| py.None()).collect())
+            .collect()
+    })
+}
+
+/// Installing callback lists on a CSR-only program appends paired zero-op
+/// wildcard slots at each event segment end and keeps every CSR column
+/// consistent (offsets shifted, n_hooks grown, slot column interleaved).
+#[test]
+fn install_callback_lists_appends_paired_slots() {
+    let mut program = two_event_csr_program();
+    program.install_callback_lists(none_callbacks([1, 0, 2, 0]));
+
+    assert_eq!(program.n_hooks, 6);
+    assert_eq!(program.hook_offsets, vec![0, 2, 4, 6, 6]);
+    // Slot column: event 0 keeps its CSR slot then the callback; event 1
+    // keeps both CSR slots; event 2 gains two callback slots.
+    assert_eq!(program.python_callback_slots, vec![-1, 0, -1, -1, 0, 1]);
+    // New slots own empty op ranges at the segment boundaries.
+    assert_eq!(program.op_offsets, vec![0, 1, 1, 2, 3, 3, 3]);
+    assert_eq!(program.op_offsets[2], program.op_offsets[1]);
+    assert_eq!(program.op_offsets[6], program.op_offsets[5]);
+    // Wildcard deme selectors keep every segment executable.
+    assert_eq!(program.deme_selector_types, vec![0; 6]);
+    assert_eq!(program.deme_selector_offsets.len(), 7);
+    assert_eq!(program.event_callback_count(0), 1);
+    assert_eq!(program.event_callback_count(1), 0);
+    assert_eq!(program.event_callback_count(2), 2);
+    // The CSR ops themselves are untouched.
+    assert_eq!(program.op_types.len(), 3);
+}
+
+/// Clearing demotes callback slots to inert CSR slots; re-installing on a
+/// mixed (CSR + demoted) program appends fresh slots at the segment ends
+/// instead of resurrecting the demoted indexes.
+#[test]
+fn clear_then_reinstall_keeps_pairing_repairable() {
+    let mut program = two_event_csr_program();
+    program.install_callback_lists(none_callbacks([1, 0, 2, 0]));
+    program.clear_callbacks();
+
+    // Mixed program (CSR ops present): slots demote, lists empty.
+    assert_eq!(program.python_callback_slots, vec![-1; 6]);
+    assert!(program.python_callbacks.iter().all(|l| l.is_empty()));
+    assert_eq!(program.n_hooks, 6);
+
+    program.install_callback_lists(none_callbacks([0, 0, 1, 0]));
+    // The re-registered callback lands after the demoted slots.
+    assert_eq!(program.python_callback_slots[6], 0);
+    assert_eq!(program.hook_offsets, vec![0, 2, 4, 7, 7]);
+    assert_eq!(program.n_hooks, 7);
+    assert_eq!(program.event_callback_count(2), 1);
+}
+
+/// A callbacks-only program (no CSR ops) resets to the empty default on
+/// clear, so repeated set/clear cycles cannot grow the program forever.
+#[test]
+fn clear_resets_callbacks_only_program() {
+    let mut program = HookProgram::default();
+    program.install_callback_lists(none_callbacks([2, 0, 0, 0]));
+    assert_eq!(program.n_hooks, 2);
+
+    program.clear_callbacks();
+    assert_eq!(program.n_hooks, 0);
+    assert!(program.python_callback_slots.is_empty());
+
+    program.install_callback_lists(none_callbacks([1, 0, 0, 0]));
+    assert_eq!(program.n_hooks, 1);
+    assert_eq!(program.python_callback_slots, vec![0]);
+}
+
+/// Shrinking an event's callback list demotes the surplus slots to inert
+/// ``-1`` entries in place: CSR columns (offsets, n_hooks, segment bounds)
+/// stay untouched and no slot references the shorter list out of range.
+#[test]
+fn install_callback_lists_shrink_demotes_surplus_slots() {
+    let mut program = two_event_csr_program();
+    program.install_callback_lists(none_callbacks([1, 0, 2, 0]));
+    let hook_offsets_before = program.hook_offsets.clone();
+    let op_offsets_before = program.op_offsets.clone();
+    let n_hooks_before = program.n_hooks;
+
+    // Event 2 shrinks from two callbacks to none; event 0 keeps its one.
+    program.install_callback_lists(none_callbacks([1, 0, 0, 0]));
+
+    assert_eq!(program.n_hooks, n_hooks_before);
+    assert_eq!(program.hook_offsets, hook_offsets_before);
+    assert_eq!(program.op_offsets, op_offsets_before);
+    assert_eq!(program.python_callback_slots, vec![-1, 0, -1, -1, -1, -1]);
+    assert_eq!(program.event_callback_count(0), 1);
+    assert_eq!(program.event_callback_count(2), 0);
+
+    // Growing back appends fresh slots (the demoted ones stay inert);
+    // the event's callbacks remain addressable with indexes 0 and 1.
+    program.install_callback_lists(none_callbacks([1, 0, 2, 0]));
+    assert_eq!(program.python_callback_slots[6..=7], vec![0, 1]);
+    assert_eq!(program.n_hooks, 8);
+    assert_eq!(program.event_callback_count(2), 2);
 }

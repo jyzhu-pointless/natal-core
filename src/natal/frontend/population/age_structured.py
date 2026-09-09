@@ -764,7 +764,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         CSR declarative hooks travel to Rust inside the ``HookProgram``;
         single-parameter Python callbacks are bridged through the
         session's ``python_callbacks`` channel (fired at event boundaries
-        after the CSR hooks ran, state copies written back per call).
+        interleaved with the CSR slots by priority, state copies written back per call).
 
         The current config is materialized into the contract pair once; the
         session owns its copies.  Value changes flow straight to the

@@ -78,33 +78,23 @@ impl DiscreteGenerationSession {
             tick: self.state_tick,
             journal: Vec::new(),
         });
-        let mut result = self.hooks.execute_event(
-            &mut self.rng,
-            event as i64,
-            &mut self.state_ind,
-            &mut [],
-            2,
-            2,
-            self.blueprint.n_ztypes,
-            self.state_tick,
-            self.blueprint.stochastic,
-            self.blueprint.continuous_sampling,
-            deme_id,
-            &mut values,
-        );
+        let mut result = 0;
         let operation = (|| -> Result<(), String> {
-            if result == 0 {
-                result = self.hooks.fire_python_callbacks(
-                    event,
-                    &mut self.state_ind,
-                    &mut [],
-                    self.state_tick,
-                    deme_id,
-                    &mut self.rng,
-                    &mut values,
-                    &mut ctx,
-                )?;
-            }
+            result = self.hooks.execute_event(
+                &mut self.rng,
+                event as i64,
+                &mut self.state_ind,
+                &mut [],
+                2,
+                2,
+                self.blueprint.n_ztypes,
+                self.state_tick,
+                self.blueprint.stochastic,
+                self.blueprint.continuous_sampling,
+                deme_id,
+                &mut values,
+                &mut ctx,
+            )?;
             if let Some(context) = ctx.as_mut() {
                 context.commit(&values)?;
             }
@@ -303,8 +293,8 @@ impl DiscreteGenerationSession {
         self.hooks = HookProgram::default();
     }
 
-    /// Register Python callbacks fired at the first/early/late event
-    /// boundaries after the CSR hooks ran (see ``AgeStructuredSession``).
+    /// Register Python callbacks interleaved with the CSR hooks by the
+    /// event's cross-type priority order (see ``AgeStructuredSession``).
     #[pyo3(signature = (first, early, late, finish=None))]
     fn set_python_callbacks(
         &mut self,
@@ -313,12 +303,13 @@ impl DiscreteGenerationSession {
         late: Vec<Py<PyAny>>,
         finish: Option<Vec<Py<PyAny>>>,
     ) {
-        self.hooks.python_callbacks = vec![first, early, late, finish.unwrap_or_default()];
+        self.hooks
+            .install_callback_lists(vec![first, early, late, finish.unwrap_or_default()]);
     }
 
     /// Clear all Python callbacks.
     fn clear_python_callbacks(&mut self) {
-        self.hooks.python_callbacks = vec![Vec::new(), Vec::new(), Vec::new()];
+        self.hooks.clear_callbacks();
     }
 
     /// Reseed the Rust RNG used by stochastic sampling.

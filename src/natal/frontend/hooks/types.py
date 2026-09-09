@@ -285,6 +285,13 @@ class HookProgram(NamedTuple):
     # to the Python lifecycle orchestration so writes reach the route
     # table / dirty bridge / params snapshot log (single write channel).
     has_set_param: bool = False
+    # Cross-type priority interleaving: per-hook-slot column of length
+    # ``n_hooks``.  ``-1`` marks a CSR plan slot; ``>= 0`` marks a Python
+    # callback slot whose value indexes ``python_callbacks[event]`` (the
+    # event's callback list in the same stable priority order).  Programs
+    # with ``n_hooks > 0`` must carry this column so a callback never
+    # silently drops when the program crosses the Rust wire.
+    python_callback_slots: np.ndarray = np.array([], dtype=np.int32)
 
 
 def empty_hook_program(n_events: int = NUM_EVENTS) -> HookProgram:
@@ -329,6 +336,7 @@ def empty_hook_program(n_events: int = NUM_EVENTS) -> HookProgram:
         convert_source_z=np.array([], dtype=np.int32),
         convert_target_z=np.array([], dtype=np.int32),
         has_set_param=False,
+        python_callback_slots=np.array([], dtype=np.int32),
     )
 
 

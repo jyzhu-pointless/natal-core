@@ -110,33 +110,23 @@ impl SpatialSession {
             tick: self.state_tick,
             journal: Vec::new(),
         });
-        let mut result = self.hooks.execute_event(
-            &mut self.rngs[deme],
-            event as i64,
-            ind,
-            sperm,
-            2,
-            n_ages,
-            z,
-            self.state_tick,
-            self.blueprint.stochastic,
-            self.blueprint.continuous_sampling,
-            deme as i64,
-            &mut values,
-        );
+        let mut result = 0;
         let outcome = (|| -> Result<(), String> {
-            if result == 0 {
-                result = self.hooks.fire_python_callbacks(
-                    event,
-                    ind,
-                    sperm,
-                    self.state_tick,
-                    deme as i64,
-                    &mut self.rngs[deme],
-                    &mut values,
-                    &mut ctx,
-                )?;
-            }
+            result = self.hooks.execute_event(
+                &mut self.rngs[deme],
+                event as i64,
+                ind,
+                sperm,
+                2,
+                n_ages,
+                z,
+                self.state_tick,
+                self.blueprint.stochastic,
+                self.blueprint.continuous_sampling,
+                deme as i64,
+                &mut values,
+                &mut ctx,
+            )?;
             if let Some(context) = ctx.as_mut() {
                 context.commit(&values)?;
             }
@@ -550,7 +540,8 @@ impl SpatialSession {
         self.hooks = HookProgram::default();
     }
 
-    /// Register Python callables fired at the deme-tick event boundaries.
+    /// Register Python callables interleaved with the CSR hooks at the
+    /// deme-tick event boundaries.
     ///
     /// Any callback-carrying program demotes the scheduler to a stable
     /// deme-order sequential loop so cross-deme callback order cannot
@@ -565,12 +556,13 @@ impl SpatialSession {
         late: Vec<Py<PyAny>>,
         finish: Option<Vec<Py<PyAny>>>,
     ) {
-        self.hooks.python_callbacks = vec![first, early, late, finish.unwrap_or_default()];
+        self.hooks
+            .install_callback_lists(vec![first, early, late, finish.unwrap_or_default()]);
     }
 
     /// Clear all Python callbacks.
     fn clear_python_callbacks(&mut self) {
-        self.hooks.python_callbacks = vec![Vec::new(), Vec::new(), Vec::new()];
+        self.hooks.clear_callbacks();
     }
 
     /// Reseed every per-deme RNG stream from the new base seed.

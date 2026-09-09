@@ -1178,7 +1178,7 @@ def compile_declarative_hook(
     return CompiledHookDescriptor(
         name=name,                    # Human-readable name for debugging
         event=event,                  # Simulation event when this hook triggers
-        priority=priority,            # Execution priority (higher = earlier)
+        priority=priority,            # Execution priority (lower = earlier)
         deme_selector=deme_selector, # Which demes this hook applies to
         plan=plan,                    # Compiled execution plan
         meta={"n_ztypes": index_registry.n_ztypes, "n_ages": n_ages},  # Population metadata

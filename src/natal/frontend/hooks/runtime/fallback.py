@@ -1,24 +1,24 @@
 """Python hook executor — the orchestration-layer dispatch.
 
 ``HookExecutor`` is the single Python-side execution path for events: it
-runs CSR declarative plans through the CSR interpreter
-(:mod:`natal.frontend.hooks.runtime.csr_kernel`) and then fires
-single-parameter Python callbacks with a
-:class:`~natal.frontend.hooks.tick_context.TickContext`.
+runs one event's descriptors — CSR declarative plans and
+single-parameter Python callbacks alike — interleaved in a single stable
+ascending-priority order.  Plans run through the CSR interpreter
+(:mod:`natal.frontend.hooks.runtime.csr_kernel`); callbacks fire through
+a :class:`~natal.frontend.hooks.tick_context.TickContext`.
 
 Wiring:
 
 - **finish events**: fired Python-side after a run stops or finishes —
-  the executor runs the finish-event CSR plans and callbacks directly.
-- **rust in-tick events**: CSR runs inside the Rust engine; only the
-  callback half is used, adapted to the ``(ind, sperm, tick, deme_id)``
-  bridge signature.
+  the executor runs the finish-event descriptors directly.
+- **rust in-tick events**: the whole interleaved order runs inside the
+  Rust engine; only out-of-band triggers use this executor.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Dict, List, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
@@ -137,20 +137,29 @@ def _flush_eco_writes(
 
 
 class HookExecutor:
-    """Python-layer coordinator: CSR plans first, then Python callbacks."""
+    """Python-layer coordinator for one event's cross-type priority order.
+
+    The event's descriptors — CSR plans and Python callbacks alike —
+    execute interleaved in one stable ascending-priority order.  CSR
+    slots run through the CSR interpreter; callback slots dispatch
+    through the :class:`~natal.frontend.hooks.tick_context.HookRunner`
+    with a fresh :class:`TickContext`.
+    """
 
     def __init__(
         self,
         registry: HookProgram,
-        hooks_by_event: Dict[int, List[CompiledHookDescriptor]],
+        hooks_by_event: Dict[int, List[Tuple[CompiledHookDescriptor, Optional[int]]]],
         runner: HookRunner,
     ) -> None:
         """Initialize with a CSR registry, descriptor map, and callback runner.
 
         Args:
             registry: HookProgram for CSR operations (never ``None``).
-            hooks_by_event: CSR-plan descriptors grouped by event_id and
-                sorted by priority.  Built by ``from_compiled_hooks``.
+            hooks_by_event: Descriptors grouped by event_id, priority
+                ordered; callback descriptors carry their index into the
+                runner's callback list (``None`` for CSR plans).  Built
+                by ``from_compiled_hooks``.
             runner: The callback dispatcher for Python callbacks.
         """
         self.registry = registry
@@ -163,19 +172,31 @@ class HookExecutor:
         compiled_hooks: List[CompiledHookDescriptor],
         runner: HookRunner,
     ) -> HookExecutor:
-        """Group CSR descriptors by event_id and sort by priority.
+        """Group descriptors by event_id in one cross-type priority order.
+
+        Both CSR plans and Python callbacks enter the same stable
+        priority sort, so ``execute_event`` interleaves them.  Each
+        callback descriptor is annotated with its position inside the
+        event's callback subsequence — the same subsequence order the
+        runner holds, because both sort the same registration-ordered
+        list by priority.
 
         Descriptors without a recognized event_id or without any
         execution payload are silently skipped.
         """
-        hooks_by_event: Dict[int, List[CompiledHookDescriptor]] = defaultdict(list)
-        for desc in compiled_hooks:
+        hooks_by_event: Dict[int, List[Tuple[CompiledHookDescriptor, Optional[int]]]] = defaultdict(list)
+        callback_counter: Dict[int, int] = defaultdict(int)
+        for desc in sorted(compiled_hooks, key=lambda x: x.priority):
             event_id = EVENT_ID_MAP.get(desc.event)
-            if event_id is not None and desc.plan is not None:
-                hooks_by_event[event_id].append(desc)
-
-        for event_id in hooks_by_event:
-            hooks_by_event[event_id].sort(key=lambda x: x.priority)
+            if event_id is None:
+                continue
+            is_callback = desc.callback is not None
+            if not is_callback and desc.plan is None:
+                continue
+            cb_index = callback_counter[event_id] if is_callback else None
+            if is_callback:
+                callback_counter[event_id] += 1
+            hooks_by_event[event_id].append((desc, cb_index))
 
         return HookExecutor(
             registry if registry is not None else empty_hook_program(),
@@ -190,15 +211,12 @@ class HookExecutor:
         tick: int,
         deme_id: int = 0,
     ) -> int:
-        """Run all hooks for *event_id* in priority order.
+        """Run all hooks for *event_id* in one cross-type priority order.
 
-        For each event, in order:
-
-        1. CSR plans — one ``execute_csr_event_arrays`` call per
-           descriptor.  Aborts on ``RESULT_STOP``.
-        2. Python callbacks — dispatched through the
-           :class:`~natal.frontend.hooks.tick_context.HookRunner` with a
-           fresh :class:`TickContext` per callback.
+        CSR plan descriptors and Python callback descriptors interleave
+        by ascending priority (ties keep registration order).  A CSR stop
+        op or a nonzero callback return aborts the event, skipping every
+        later hook of either kind.
 
         Args:
             event_id: Numeric event id.
@@ -239,8 +257,25 @@ class HookExecutor:
         # preserves hook priority order.
         eco_values: np.ndarray | None = None
 
-        for desc in self.hooks_by_event.get(event_id, []):
+        ran_callbacks = False
+        for desc, cb_index in self.hooks_by_event.get(event_id, []):
             if not deme_selector_matches(desc.deme_selector, deme_id):
+                continue
+            if cb_index is not None:
+                # Callback slot: dispatch exactly this callback so the
+                # runner's deme selector stays authoritative too.
+                result = self._runner.run_event(
+                    event_id,
+                    tick=tick,
+                    deme_id=deme_id,
+                    state=state,
+                    only_index=cb_index,
+                )
+                if result != RESULT_CONTINUE:
+                    if ran_callbacks:
+                        population._flush_state_to_session(state)  # pyright: ignore[reportPrivateUsage]  # hook writes reach the session-owned state
+                    return result
+                ran_callbacks = True
                 continue
             plan = desc.plan
             if plan is None:
@@ -296,25 +331,23 @@ class HookExecutor:
                 eco_values=eco_values,
             )
             if result == RESULT_STOP:
+                if ran_callbacks:
+                    population._flush_state_to_session(state)  # pyright: ignore[reportPrivateUsage]  # hook writes reach the session-owned state
                 return RESULT_STOP
             if eco_values is not None and plan_has_set_param:
                 _flush_eco_writes(
                     population, eco_values, _fired_set_param_names(plan, tick)
                 )
 
-        # Python callbacks run after all CSR plans for the event.  The
-        # borrowed container (a session snapshot under Rust) is flushed
-        # back afterwards so callback and CSR writes reach the
-        # session-owned state.
-        result = self._runner.run_event(
-            event_id,
-            tick=tick,
-            deme_id=deme_id,
-            state=state,
-        )
-        population._flush_state_to_session(state)  # pyright: ignore[reportPrivateUsage]  # hook writes reach the session-owned state
-        return result
+        # Flush the borrowed container (a session snapshot under Rust)
+        # once per event; callbacks already observed each other's writes
+        # through the same live container.
+        if ran_callbacks:
+            population._flush_state_to_session(state)  # pyright: ignore[reportPrivateUsage]  # hook writes reach the session-owned state
+        return RESULT_CONTINUE
 
-    def get_hooks_for_event(self, event_id: int) -> List[CompiledHookDescriptor]:
-        """Return CSR descriptors for *event_id*, sorted by priority."""
+    def get_hooks_for_event(
+        self, event_id: int
+    ) -> List[Tuple[CompiledHookDescriptor, Optional[int]]]:
+        """Return the event's descriptors with callback indexes, priority ordered."""
         return self.hooks_by_event.get(event_id, [])

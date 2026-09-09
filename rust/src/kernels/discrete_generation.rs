@@ -642,12 +642,12 @@ pub fn run_tick(
 ) -> Result<i32, String> {
     // One discrete tick follows: first hook -> reproduction -> early hook
     // -> survival -> late hook -> aging.
-    // Discrete tick order mirrors the age-structured engine; optional
-    // Python callbacks fire at each event boundary after the CSR hooks.
-    // With an EcoCtx, set_param writes are committed at each boundary and
-    // the config re-assembled so later stages of the same tick observe
-    // them (Python parity).  The ctx tick is re-stamped per tick so batch
-    // loops journal under the correct tick value.
+    // Discrete tick order mirrors the age-structured engine; each event
+    // executes CSR plan slots and Python callback slots in one cross-type
+    // priority order.  With an EcoCtx, set_param writes are committed at
+    // each boundary and the config re-assembled so later stages of the
+    // same tick observe them (Python parity).  The ctx tick is re-stamped
+    // per tick so batch loops journal under the correct tick value.
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.tick = tick;
         ctx.phase = 0;
@@ -667,19 +667,8 @@ pub fn run_tick(
         cfg.continuous_sampling,
         deme_id,
         eco_values,
-    );
-    if result == 0 {
-        result = hooks.fire_python_callbacks(
-            0,
-            ind,
-            &mut [],
-            tick,
-            deme_id,
-            rng,
-            eco_values,
-            eco_ctx,
-        )?;
-    }
+        eco_ctx,
+    )?;
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
         if hooks.has_set_param
@@ -715,19 +704,8 @@ pub fn run_tick(
         cfg.continuous_sampling,
         deme_id,
         eco_values,
-    );
-    if result == 0 {
-        result = hooks.fire_python_callbacks(
-            1,
-            ind,
-            &mut [],
-            tick,
-            deme_id,
-            rng,
-            eco_values,
-            eco_ctx,
-        )?;
-    }
+        eco_ctx,
+    )?;
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
         if hooks.has_set_param
@@ -763,19 +741,8 @@ pub fn run_tick(
         cfg.continuous_sampling,
         deme_id,
         eco_values,
-    );
-    if result == 0 {
-        result = hooks.fire_python_callbacks(
-            2,
-            ind,
-            &mut [],
-            tick,
-            deme_id,
-            rng,
-            eco_values,
-            eco_ctx,
-        )?;
-    }
+        eco_ctx,
+    )?;
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
         if hooks.has_set_param
@@ -1028,7 +995,7 @@ pub fn run_batch(
     }
     for _ in 0..n_ticks {
         let result = if wf {
-            let mut result = hooks.execute_event(
+            let result = hooks.execute_event(
                 rng,
                 0,
                 ind,
@@ -1041,19 +1008,8 @@ pub fn run_batch(
                 cfg.continuous_sampling,
                 0,
                 eco_values,
-            );
-            if result == 0 {
-                result = hooks.fire_python_callbacks(
-                    0,
-                    ind,
-                    &mut [],
-                    current_tick,
-                    0,
-                    rng,
-                    eco_values,
-                    eco_ctx,
-                )?;
-            }
+                eco_ctx,
+            )?;
             if let Some(ctx) = eco_ctx.as_mut() {
                 ctx.tick = current_tick;
                 ctx.commit(eco_values)?;

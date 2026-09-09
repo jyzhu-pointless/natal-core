@@ -1029,10 +1029,10 @@ def test_compact_plan_run_tick_deterministic_state() -> None:
 
 
 def test_compact_plan_csr_then_callback_ordering() -> None:
-    """Within one event CSR plans run before Python callbacks.
+    """Within one event the priority order interleaves both hook kinds.
 
-    CSR ×2 then callback +1 on age-1 female=100 → 201 (reversed order
-    would give 202).
+    callback(pri=0) +1 then CSR(pri=1) ×2 on age-1 female=100 → 202
+    (the pre-interleaving plan-first order would give 201).
     """
     species = _make_species("compact_mixed_exact")
 
@@ -1053,10 +1053,98 @@ def test_compact_plan_csr_then_callback_ordering() -> None:
 
     sp.run_tick()
 
-    # CSR runs first: female[age=1] 100×2=200, then callback +1 → 201.
+    # Callback runs first: female[age=1] 100+1=101, then CSR ×2 → 202.
     # Survival keeps age 1 (rate 1.0); aging moves the result into age 2.
     for i in range(2):
-        assert float(sp.deme(i).state.individual_count[0, 2, 0]) == 201.0
+        assert float(sp.deme(i).state.individual_count[0, 2, 0]) == 202.0
+
+
+def test_compact_plan_deme_targeted_callback_keeps_wildcard_slots_aligned() -> None:
+    """A deme-targeted callback must not shift other demes' callback slots.
+
+    Regression guard for the cross-type slot wiring: the compact slot column
+    numbers callbacks inside the reference deme's selector-filtered
+    sequence, while the cross-deme bridges index each deme's *unfiltered*
+    callback list. When a targeted callback (here ``deme=1``, priority 0)
+    sorts before a wildcard callback (priority 5), the wildcard slot of the
+    excluded deme dispatched the targeted callback instead — skipped by the
+    selector — and the wildcard callback silently never ran on that deme.
+    """
+    species = _make_species("compact_targeted_shift")
+    calls: list[tuple[str, int]] = []
+
+    @nt.hook(event="first", priority=0, deme=1)
+    def targeted(pop: TickContext) -> int:
+        """Fires only on deme 1 and sorts before the wildcard callback."""
+        calls.append(("A", int(pop.deme_id)))
+        return 0
+
+    @nt.hook(event="first", priority=5)
+    def wildcard(pop: TickContext) -> int:
+        """Fires on every deme after the targeted callback on deme 1."""
+        calls.append(("B", int(pop.deme_id)))
+        return 0
+
+    sp = _build_quiescent_age_pop(species, n_demes=2)
+    sp.register_hooks(targeted)
+    sp.register_hooks(wildcard)
+
+    sp.run_tick()
+
+    # Deme 0 runs the wildcard only (the targeted selector excludes it);
+    # deme 1 runs the targeted callback first (priority 0 < 5), then the
+    # wildcard. The failing wiring dropped ("B", 0) entirely.
+    assert calls == [("B", 0), ("A", 1), ("B", 1)]
+
+
+def test_compact_plan_heterogeneous_groups_identity_mapped_bridges() -> None:
+    """Heterogeneous compact groups map callback slots by identity.
+
+    Copy-on-write splits deme 2 onto its own hook storage, so the compact
+    plan carries three groups (0 | 1 | 2). Every group's wildcard callback
+    is the same descriptor object, and the group-2-only callback exists in
+    no other deme's runner — the bridges must translate each slot by
+    callback identity (per-deme runner index), never by positional
+    coincidence across groups.
+    """
+    species = _make_species("compact_hetero_bridges")
+    calls: list[tuple[str, int]] = []
+
+    @nt.hook(event="first", priority=0)
+    def everywhere(pop: TickContext) -> int:
+        """Wildcard callback registered before the deme-1-targeted one."""
+        calls.append(("AB", int(pop.deme_id)))
+        return 0
+
+    @nt.hook(event="first", priority=1)
+    def deme2_only(pop: TickContext) -> int:
+        """Registered through the container with deme=2 (storage split)."""
+        calls.append(("C", int(pop.deme_id)))
+        return 0
+
+    @nt.hook(event="first", priority=0, deme=1)
+    def target_deme_one(pop: TickContext) -> int:
+        """Ties with ``everywhere`` at priority 0; registration order wins."""
+        calls.append(("T1", int(pop.deme_id)))
+        return 0
+
+    sp = _build_quiescent_age_pop(species, n_demes=3)
+    sp.register_hooks(everywhere)
+    sp.register_hooks(target_deme_one)
+    sp.register_hooks(deme2_only, event="first", deme=2)
+    assert len({id(d.compiled_hook_descriptors) for d in sp.demes}) == 2  # type: ignore[attr-defined]  # duck-typed doubles share the population surface
+
+    sp.run_tick()
+
+    # Deme 0: everywhere only. Deme 1: everywhere then T1 (priority-0 tie,
+    # registration order). Deme 2: everywhere then C.
+    assert calls == [
+        ("AB", 0),
+        ("AB", 1),
+        ("T1", 1),
+        ("AB", 2),
+        ("C", 2),
+    ]
 
 
 def test_builder_homogeneous_demes_share_compiled_hooks() -> None:

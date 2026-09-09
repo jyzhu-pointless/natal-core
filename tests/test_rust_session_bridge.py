@@ -396,6 +396,54 @@ def test_python_callback_fires_and_stops(age_species: Species) -> None:
     assert next_state.n_tick == 5
 
 
+def test_python_callback_shrinking_list_replaces_table(age_species: Species) -> None:
+    """A shorter callback list demotes surplus slots instead of erroring.
+
+    Regression guard: ``set_python_callbacks`` used to leave dangling slot
+    references after shrinking, failing the next run with "hook program
+    references callback N ... no such callback is registered" and wedging
+    the session in the Failed state. The demoted slots become inert zero-op
+    hooks; growing back appends fresh slots.
+    """
+    draft = _build_age_draft(age_species, stochastic=False)
+    backend = RustLifecycleBackend(draft, None, seed=0)
+    state = _age_state(draft)
+
+    calls: list[int] = []
+
+    def cb_a(ind: object, sperm: object, tick: int, deme_id: int) -> int:
+        """Record ticks."""
+        _ = ind, sperm, deme_id
+        calls.append(int(tick))
+        return 0
+
+    def cb_b(ind: object, sperm: object, tick: int, deme_id: int) -> int:
+        """Record distinguished ticks."""
+        _ = ind, sperm, deme_id
+        calls.append(1000 + int(tick))
+        return 0
+
+    backend.set_python_callbacks([cb_a, cb_b], [], [])
+    backend.set_state(state)
+    backend.run(n_steps=1, record_every=0)
+    assert calls == [0, 1000]
+    calls.clear()
+
+    backend.set_python_callbacks([cb_a], [], [])
+    backend.run(n_steps=1, record_every=0)
+    assert calls == [1]
+    calls.clear()
+
+    backend.set_python_callbacks([cb_a, cb_b], [], [])
+    backend.run(n_steps=1, record_every=0)
+    assert calls == [2, 1002]
+    calls.clear()
+
+    backend.set_python_callbacks([], [], [])
+    backend.run(n_steps=1, record_every=0)
+    assert calls == []
+
+
 def test_python_callback_observes_state_copies(age_species: Species) -> None:
     """Callback arrays are copies: mutating them cannot touch live state."""
     draft = _build_age_draft(age_species, stochastic=False)

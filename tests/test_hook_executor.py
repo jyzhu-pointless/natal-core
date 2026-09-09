@@ -1,8 +1,9 @@
 """Tests for the HookExecutor class in its own module (hooks/runtime/fallback.py).
 
 HookExecutor is the Python dispatch layer shared by the reference paths:
-it runs CSR declarative plans first, then Python callbacks, for one event.
-Tests here verify event grouping, priority ordering, deme selector
+for one event it runs CSR declarative plans and Python callbacks
+interleaved in a single stable ascending-priority order.  Tests here
+verify event grouping, cross-type priority ordering, deme selector
 filtering, RESULT_STOP propagation, and invalid event ids.
 """
 
@@ -148,6 +149,65 @@ def test_hook_executor_priority_ordering() -> None:
     assert float(pop.state.individual_count[0, 0, 0]) == 23.0
 
 
+def test_hook_executor_interleaves_plan_and_callback_by_priority() -> None:
+    """A callback with smaller priority runs before a CSR plan.
+
+    The callback (priority 0) adds 100 first (10 → 110); the plan
+    (priority 1) then sets the slot to 20.  Final 20 proves the
+    callback executed first — the pre-interleaving executor always ran
+    plans before callbacks and would finish at 120.
+    """
+    pop = _build_pop("executor_interleaved")
+    set_twenty = _compiled(
+        [nt.Op.set_count(genotypes="WT|WT", ages=0, sex="female", value=20.0)],
+        pop,
+        "early",
+        priority=1,
+    )
+
+    def add_hundred_fn(ctx) -> int:
+        ctx.state.individual_count[0, 0, 0] += 100.0
+        return 0
+
+    add_hundred = CompiledHookDescriptor(
+        name="add_hundred", event="early", priority=0, callback=add_hundred_fn
+    )
+
+    executor, pop = _executor_with_pop([add_hundred, set_twenty])
+
+    result = executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=0)
+
+    assert result == RESULT_CONTINUE
+    assert float(pop.state.individual_count[0, 0, 0]) == 20.0
+
+
+def test_hook_executor_interleave_callback_reads_earlier_plan() -> None:
+    """A callback observes the write of a smaller-priority CSR plan."""
+    pop = _build_pop("executor_interleave_read")
+    set_seven = _compiled(
+        [nt.Op.set_count(genotypes="WT|WT", ages=0, sex="female", value=7.0)],
+        pop,
+        "early",
+        priority=0,
+    )
+    observed: dict[str, float] = {}
+
+    def reader(ctx) -> int:
+        observed["female_age0"] = float(ctx.state.individual_count[0, 0, 0])
+        return 0
+
+    reader_desc = CompiledHookDescriptor(
+        name="reader", event="early", priority=1, callback=reader
+    )
+
+    executor, pop = _executor_with_pop([set_seven, reader_desc])
+
+    result = executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=0)
+
+    assert result == RESULT_CONTINUE
+    assert observed["female_age0"] == 7.0
+
+
 # ---------------------------------------------------------------------------
 # Deme selector filtering
 # ---------------------------------------------------------------------------
@@ -289,6 +349,38 @@ def test_hook_executor_callback_stop_propagation() -> None:
     assert calls == ["stop"]
 
 
+def test_hook_executor_callback_stop_skips_later_plan() -> None:
+    """A stopping callback (priority 0) skips a later-priority CSR plan."""
+
+    def stopping_callback(pop: object) -> int:
+        """Request termination before the plan's priority slot."""
+        _ = pop
+        return RESULT_STOP
+
+    pop = _build_pop("executor_cb_stop_skips_plan")
+    stopper = CompiledHookDescriptor(
+        name="stopping_callback",
+        event="early",
+        priority=0,
+        callback=stopping_callback,
+        source=stopping_callback,
+    )
+    set_999 = _compiled(
+        [nt.Op.set_count(genotypes="WT|WT", ages=0, sex="female", value=999.0)],
+        pop,
+        "early",
+        priority=1,
+    )
+
+    executor, pop = _executor_with_pop([stopper, set_999])
+
+    result = executor.execute_event(EVENT_EARLY, pop, tick=0, deme_id=0)
+
+    assert result == RESULT_STOP
+    # The plan never ran: the initial count is untouched.
+    assert float(pop.state.individual_count[0, 0, 0]) == 10.0
+
+
 # ---------------------------------------------------------------------------
 # Invalid event_id
 # ---------------------------------------------------------------------------
@@ -311,7 +403,7 @@ def test_hook_executor_invalid_event_id() -> None:
 
 
 def test_get_hooks_for_event_returns_sorted() -> None:
-    """get_hooks_for_event returns descriptors sorted by priority."""
+    """get_hooks_for_event returns priority-ordered (descriptor, index) pairs."""
     pop = _build_pop("executor_sorted")
     ops = [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)]
     desc_a = _compiled(ops, pop, "early", priority=5)
@@ -319,4 +411,34 @@ def test_get_hooks_for_event_returns_sorted() -> None:
     executor = _executor([desc_a, desc_b])
     hooks = executor.get_hooks_for_event(EVENT_EARLY)
     assert len(hooks) == 2
-    assert hooks[0].priority <= hooks[1].priority
+    assert hooks[0][0].priority <= hooks[1][0].priority
+    assert hooks[0][1] is None and hooks[1][1] is None  # CSR plans carry no callback index
+
+
+def test_get_hooks_for_event_indexes_callbacks_in_priority_order() -> None:
+    """Callback descriptors carry their index inside the callback subsequence."""
+    pop = _build_pop("executor_sorted_cb")
+    ops = [nt.Op.add(genotypes="WT|WT", ages=0, sex="female", delta=1.0)]
+    csr_a = _compiled(ops, pop, "early", priority=0)
+
+    def make_cb(name: str):
+        def cb(ctx) -> int:
+            return 0
+
+        cb.__name__ = name
+        return cb
+
+    cb_low = CompiledHookDescriptor(
+        name="cb_low", event="early", priority=2, callback=make_cb("cb_low")
+    )
+    cb_high = CompiledHookDescriptor(
+        name="cb_high", event="early", priority=1, callback=make_cb("cb_high")
+    )
+
+    executor = _executor([csr_a, cb_low, cb_high])
+    hooks = executor.get_hooks_for_event(EVENT_EARLY)
+    # Priority order: csr(0), cb_high(1), cb_low(2); callback indexes
+    # renumber the callbacks within their own subsequence.
+    assert [h[0].name for h in hooks][1:] == ["cb_high", "cb_low"]
+    assert hooks[0][0].plan is not None  # the priority-0 slot is the CSR plan
+    assert [h[1] for h in hooks] == [None, 0, 1]

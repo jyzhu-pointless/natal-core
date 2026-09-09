@@ -168,7 +168,7 @@ run the same CSR plan through the Rust-side interpreter.
 
 ## Mixing Hook Types
 
-A single event may mix declarative and callback shapes. Within one event, declarative ops run first in `priority` order (lower values first), then Python callbacks commit one by one in `priority` order:
+A single event may mix declarative and callback shapes. Within one event, both kinds execute interleaved in one cross-type `priority` order (lower values first; ties keep registration order):
 
 ```python
 from natal.frontend.hooks import hook, Op
@@ -204,7 +204,7 @@ pop = (
 )
 ```
 
-The execution order of same-priority hooks is unspecified; priority semantics are consistent across all three entry points: in-tick, `trigger_event`, and finish events.
+Same-priority hooks run in registration order (stable sort); priority semantics are consistent across all three entry points: in-tick, `trigger_event`, and finish events.
 
 ## Choosing a Hook Shape
 
@@ -251,7 +251,7 @@ For chain-style updates inside a hook, use the Configurator returned by `pop.upd
 ## Event transactions
 
 - A callback commits state, ecology, genetic parameters, custom values, and RNG position together. Invalid state or an exception discards that callback's candidate; earlier successful callbacks remain committed.
-- Declarative operations execute in priority order and see earlier writes in the same event. Their final parameter changes commit once per native event, so repeated writes to one parameter produce one audit row from its initial to final value. Python callbacks commit separately after the declarative event and produce their own rows.
+- All hooks of an event (declarative and callback) execute in one cross-type `priority` order and see earlier writes. Declarative parameter writes commit once per native event — repeated writes to one parameter produce one audit row from its initial to final value — while each Python callback commits separately and produces its own rows.
 - A successful parameter update is visible to later callbacks and stages of the same tick in ordinary and spatial models. Rust owns the current values and the parameter log; Python configuration reads return isolated snapshots. Spatial `ctx.params.tensor_write()` and deme parameter writes fork changed genetics inside the native session and leave other demes unchanged.
 - Callback exceptions preserve their original Python type. A failed session requires reset or checkpoint restoration before another run.
 - `stop()` halts at the current event boundary and preserves its state and phase. The tick does not advance; continuing requires reset or restoration of a Ready checkpoint.

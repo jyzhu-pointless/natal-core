@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Event execution ordering and stop semantics for the slice-4 hook forms.
 
-Slice-4 semantics (26 decisions): within one event the executor runs
-
-1. all CSR declarative plans, in priority order, then
-2. all single-parameter Python callbacks, in priority order.
+Cross-type priority semantics: within one event, CSR declarative plans
+and single-parameter Python callbacks execute interleaved in one stable
+ascending-priority order (lower values run first; ties keep registration
+order).  A stop request from either kind aborts the event, skipping every
+later hook of either kind.
 
 The legacy njit-hook interleaving is gone — njit hooks have no migration
 channel, so every former njit hook below is a Python callback with the
@@ -82,14 +83,14 @@ def test_callback_priority_ordering_first_event() -> None:
 
 
 def test_mixed_csr_then_callbacks_in_order() -> None:
-    """CSR plans run first, then callbacks — each group priority-ordered."""
+    """CSR(pri=0) → cb(pri=1) → cb(pri=2): priority order across types."""
     pop = _build_discrete_population("mixed_csr_then_cb")
     calls: List[str] = []
     observed: dict[str, float] = {}
 
     @hook(event="first", priority=0)
-    def first_cb_late_pri():
-        # priority 0 declared via decorator; CSR phase runs before callbacks
+    def first_csr_early_pri():
+        # priority 0: runs before both callbacks despite being a plan
         return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0)]
 
     @hook(event="first", priority=1)
@@ -108,11 +109,11 @@ def test_mixed_csr_then_callbacks_in_order() -> None:
         calls.append("early_probe")
         observed["early_seen"] = float(pop.state.individual_count[1, 1, 0])
 
-    pop.update().hooks(first_cb_late_pri, cb_one, cb_two, early_probe)
+    pop.update().hooks(first_csr_early_pri, cb_one, cb_two, early_probe)
     pop.run(n_steps=1)
 
     # Observed at the early boundary (before aging wipes age-1):
-    # 10 + csr(3) + cb_one(2) = 15: CSR ran before the callbacks.
+    # 10 + csr(3) + cb_one(2) = 15: the priority-0 plan ran first.
     assert calls == ["cb_one", "cb_two", "early_probe"]
     assert observed["early_seen"] == 15.0
 
@@ -178,14 +179,15 @@ def test_unified_csr_before_callback() -> None:
     assert pop.state.individual_count[1, 1, 0] == 120.0
 
 
-def test_csr_phase_runs_before_lower_priority_callback() -> None:
-    """CSR(pri=1) runs before callback(pri=0): phase order beats priority.
+def test_callback_beats_lower_priority_csr() -> None:
+    """callback(pri=0) → CSR(pri=1): one priority order across both kinds.
 
-    The CSR plan sets age-0 male to 20 first; the higher-priority
-    callback then adds 100 → 120 survives aging.  Proves the CSR phase
-    executes before the callback phase regardless of priority.
+    The callback adds 100 first (10 → 110); the higher-value plan then
+    sets the slot to 20 outright.  The final 20 proves the callback ran
+    before the plan — the pre-interleaving engine always ran plans first
+    and would finish at 120.
     """
-    pop = _build_simple_discrete_population("cb_then_csr_phase")
+    pop = _build_simple_discrete_population("cb_beats_csr")
 
     @hook(event="early", priority=0)
     def cb_hook(pop):
@@ -200,8 +202,31 @@ def test_csr_phase_runs_before_lower_priority_callback() -> None:
 
     pop.run(n_steps=1)
 
-    # CSR set_count (20) ran first, then the callback's +100 → 120.
-    assert pop.state.individual_count[1, 1, 0] == 120.0
+    # callback +100 (110) ran first, then set_count(20) overwrote it.
+    assert pop.state.individual_count[1, 1, 0] == 20.0
+
+
+def test_callback_observes_priority_earlier_csr_write() -> None:
+    """A callback reads the mutation of a smaller-priority CSR plan."""
+    pop = _build_simple_discrete_population("cb_sees_csr")
+
+    @hook(event="early", priority=0)
+    def csr_hook():
+        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20)]
+
+    observed: dict[str, float] = {}
+
+    @hook(event="early", priority=1)
+    def cb_hook(pop):
+        observed["male_age0"] = float(pop.state.individual_count[1, 0, 0])
+        return 0
+
+    pop.update().hooks(csr_hook, cb_hook)
+
+    pop.run(n_steps=1)
+
+    assert observed["male_age0"] == 20.0
+    assert pop.state.individual_count[1, 1, 0] == 20.0
 
 
 def test_callbacks_share_state_mutations_in_order() -> None:
@@ -245,6 +270,44 @@ def test_same_priority_callbacks_stable_order() -> None:
 
     # first sets to 100, second adds 1 → 101 at age-1
     assert pop.state.individual_count[1, 1, 0] == 101.0
+
+
+def test_same_priority_mixed_tie_keeps_registration_order() -> None:
+    """Equal-priority CSR plans and callbacks tie in registration order.
+
+    Two interleavings in one event, all at priority 0: the plan registered
+    first runs before the callback registered after it, and the callback
+    registered first observes the pre-plan state before the later plan.
+    """
+    pop = _build_simple_discrete_population("tie_mixed_order")
+    observed: List[float] = []
+
+    @hook(event="first", priority=0)
+    def plan_set_twenty():
+        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20.0)]
+
+    @hook(event="first", priority=0)
+    def cb_after_plan(pop):
+        observed.append(float(pop.state.individual_count[1, 0, 0]))
+        return 0
+
+    @hook(event="first", priority=0)
+    def cb_before_plan(pop):
+        observed.append(float(pop.state.individual_count[1, 0, 0]))
+        return 0
+
+    @hook(event="first", priority=0)
+    def plan_set_thirty():
+        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=30.0)]
+
+    pop.update().hooks(plan_set_twenty, cb_after_plan, cb_before_plan, plan_set_thirty)
+
+    pop.run(n_steps=1)
+
+    # Registration order under one priority: plan(20) -> cb sees 20 ->
+    # cb sees 20 -> plan(30). Aging moves the slot to age 1.
+    assert observed == [20.0, 20.0]
+    assert pop.state.individual_count[1, 1, 0] == 30.0
 
 
 def test_csr_on_other_event_still_executes() -> None:

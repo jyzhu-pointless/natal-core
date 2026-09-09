@@ -543,6 +543,31 @@ class HookRunner:
         """Return whether any event carries a Python callback."""
         return any(len(entries) > 0 for entries in self._callbacks.values())
 
+    def callback_index(
+        self, event_id: int, callback: Callable[[TickContext], Optional[int]]
+    ) -> Optional[int]:
+        """Return *callback*'s index in the event's priority-ordered list.
+
+        Identity match (``is``), so a cloned spatial descriptor resolves to
+        the same runner entry as the original.  Registration is idempotent
+        per (source, event), so one event never holds the same callback
+        object twice.
+
+        Args:
+            event_id: Numeric event id.
+            callback: The callback object held by a descriptor.
+
+        Returns:
+            The runner list index, or ``None`` when the event does not
+            carry this callback.
+        """
+        for index, (_priority, entry, _selector) in enumerate(
+            self._callbacks.get(event_id, [])
+        ):
+            if entry is callback:
+                return index
+        return None
+
     def _matches(self, selector: Any, deme_id: int) -> bool:
         """Evaluate one deme selector (``*``, int, range, or collection)."""
         if selector == "*":

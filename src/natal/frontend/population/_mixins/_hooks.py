@@ -5,7 +5,8 @@ Slice-4 target state: one registration entry
 the build-time and runtime Configurator), one descriptor payload pair
 (CSR plan | Python callback), and one Python dispatch path
 (:class:`~natal.frontend.hooks.runtime.fallback.HookExecutor`) that runs
-CSR plans and then single-parameter callbacks.
+the event's descriptors — plans and callbacks interleaved — in one
+stable ascending-priority order.
 
 The njit-era registration surface (``set_hook`` / ``get_hooks`` /
 ``remove_hook``, the plain ``(state, config, deme_id)`` hook map, and the
@@ -308,8 +309,9 @@ class HookManagerMixin:
     def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
         """Trigger an event and execute all registered hooks for it.
 
-        Execution order per event: CSR declarative plans first, then
-        single-parameter Python callbacks (each receiving a fresh
+        Execution order per event: CSR declarative plans and Python
+        callbacks interleaved by one stable ascending-priority order
+        (each callback receives a fresh
         :class:`~natal.frontend.hooks.tick_context.TickContext`).
 
         Args:
@@ -449,7 +451,11 @@ class HookManagerMixin:
         """Pack all declarative descriptors into a CSR ``HookProgram``.
 
         Callback-only descriptors contribute a (zero-op) hook slot so
-        deme-selector arrays stay aligned with ``n_hooks``.
+        deme-selector arrays stay aligned with ``n_hooks``.  The slot
+        column ``python_callback_slots`` marks those slots with the
+        callback's index inside the event's priority-ordered callback
+        list, so the executors interleave CSR plans and Python callbacks
+        by one stable priority order.
         """
         import numpy as np
 
@@ -467,6 +473,20 @@ class HookManagerMixin:
             hook_offsets.append(hook_offsets[-1] + len(hooks))
 
         n_hooks = hook_offsets[-1]
+
+        # Callback slot column: per event, the running index of each
+        # callback-only descriptor matches the HookRunner's stable
+        # priority sort of the same descriptors (both sort the same
+        # registration-ordered list by priority).
+        callback_slots: List[int] = []
+        for hooks in hook_list_by_event:
+            next_callback_index = 0
+            for hook in hooks:
+                if hook.callback is not None:
+                    callback_slots.append(next_callback_index)
+                    next_callback_index += 1
+                else:
+                    callback_slots.append(-1)
 
         all_op_types: List[int] = []
         all_zidx_offsets: List[int] = [0]
@@ -612,6 +632,7 @@ class HookManagerMixin:
             deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
             deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
             deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
+            python_callback_slots=np.array(callback_slots, dtype=np.int32),
         )
 
     @staticmethod

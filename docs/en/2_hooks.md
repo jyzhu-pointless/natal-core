@@ -221,7 +221,7 @@ The native Rust engine is the only execution backend, so hooks have a single exe
 
 - Declarative `Op`s compile into a CSR program (contiguous arrays + offset table) executed in event order inside the Rust session.
 - Single-parameter callbacks (`TickContext`) cross the Python<->Rust boundary at event boundaries; each invocation gets its own context wrapper, and its writes join that invocation's event transaction — committed on success, discarded on failure.
-- Within one event, declarative ops run first in priority order, then Python callbacks commit one by one in priority order; later operations see earlier writes.
+- Within one event, declarative ops and Python callbacks interleave in one cross-type `priority` order (lower values first; ties keep registration order). The two kinds share a single comparable scale: whichever hook — callback or declarative — has the smaller `priority` always runs first, and later hooks see earlier writes.
 
 Hooks are "Op is a hook": `Op` objects constitute the hook program, and a declarative `@hook` function is just the compiler entry point returning the Op list. There is no `initialize` event -- express initialization logic with the first tick of the `first` event (`when="tick == 1"`) or with the `finish` event.
 

@@ -2,9 +2,10 @@
 //!
 //! The flat-array layout and opcode values mirror
 //! ``natal.hooks.types.HookProgram`` and
-//! ``natal.hooks.runtime.csr_kernel``.  Only declarative hooks are interpreted
-//! here; custom hook callables are invoked back into Python by
-//! ``HookProgram::fire_python_callbacks``.
+//! ``natal.hooks.runtime.csr_kernel``.  Declarative plan slots are
+//! interpreted here; Python callback slots cross the GIL through
+//! ``HookProgram::fire_one_python_callback`` — both kinds interleave in
+//! one cross-type priority order driven by ``python_callback_slots``.
 #![allow(clippy::needless_range_loop)] // Index loops mirror the CSR kernel for parity review.
 #![allow(clippy::too_many_arguments)] // execute_event mirrors the HookProgram flat-array signature.
 
@@ -149,16 +150,23 @@ pub struct HookProgram {
     // OP_CONVERT data area (single-ZType endpoints per op; -1 otherwise).
     pub convert_source_z: Vec<i64>,
     pub convert_target_z: Vec<i64>,
+    /// Cross-type priority interleaving: per-hook-slot column of length
+    /// ``n_hooks``.  ``-1`` marks a CSR plan slot; ``>= 0`` marks a Python
+    /// callback slot whose value indexes this event's entry in
+    /// ``python_callbacks`` (built in the same stable priority order).
+    pub python_callback_slots: Vec<i64>,
     /// True when any op is ``OP_SET_PARAM``; lets sessions rebuild their
     /// per-tick config so in-run parameter writes take effect on the next
     /// tick (matching the Python lifecycle granularity).
     pub has_set_param: bool,
-    /// Optional Python callables per in-tick event (first, early, late),
-    /// fired at the event boundary after the CSR hooks ran.  Empty lists
-    /// keep the kernels callback-free; each callable receives
-    /// ``(ind, sperm, tick, deme_id)`` and a nonzero return stops the run.
-    /// Each callback receives private copies of the arrays, and the copies
-    /// are written back after the call so hook state mutations take effect.
+    /// Optional Python callables per event (first, early, late, finish),
+    /// fired at this event's callback slots inside ``execute_event`` —
+    /// interleaved with the CSR plan slots in the program's cross-type
+    /// priority order.  Empty lists keep the kernels callback-free; each
+    /// callable receives ``(ind, sperm, tick, deme_id)`` and a nonzero
+    /// return stops the run.  Each callback receives private copies of the
+    /// arrays, and the copies are written back after the call so hook
+    /// state mutations take effect.
     pub python_callbacks: Vec<Vec<Py<PyAny>>>,
     /// Completed spatial callback candidates awaiting stable deme-order merge.
     /// Stage cursors from demes stopped or failed during this tick.
@@ -173,31 +181,169 @@ pub struct HookProgram {
 }
 
 impl HookProgram {
-    /// Fire the Python callbacks registered for one event boundary.
+    /// Install the per-event callback lists, keeping slots paired.
+    ///
+    /// Slot positions live in the CSR arrays, so this method repairs the
+    /// pairing for the standalone-usage shapes: an event whose segment
+    /// carries fewer callback slots than the new list has callbacks gets
+    /// the missing zero-op wildcard slots appended at the segment end
+    /// (synthesizing a whole program when the session started empty), and
+    /// surplus slots are demoted to inert ``-1`` slots so a shrunk list
+    /// replaces the previous table instead of leaving dangling references.
+    /// A population-built program already interleaves exactly as many
+    /// slots as its lists carry, so only the callback table is replaced.
     ///
     /// ## Parameters
-    /// - `event`: Event index (0 first, 1 early, 2 late).
-    /// - `ind`: Current individual-count flat slice.  Each callback receives
-    ///   a private copy; mutations are written back into this slice after
-    ///   the call so later callbacks and lifecycle stages observe them.
-    /// - `sperm`: Current sperm-storage flat slice (same copy/write-back
-    ///   semantics as *ind*; often empty for discrete models).
+    /// - `lists`: Per-event callback lists (first, early, late, finish).
+    pub fn install_callback_lists(&mut self, lists: Vec<Vec<Py<PyAny>>>) {
+        // Normalize the sentinel arrays up to n_hooks first: a fresh
+        // default program carries none of them, and the slot-append path
+        // below inserts at n_hooks-relative positions.
+        if self.op_offsets.is_empty() {
+            self.op_offsets.push(0);
+        }
+        while (self.python_callback_slots.len() as i64) < self.n_hooks {
+            self.python_callback_slots.push(-1);
+        }
+        while (self.deme_selector_offsets.len() as i64) < self.n_hooks + 1 {
+            let last = self.deme_selector_offsets.last().copied().unwrap_or(0);
+            self.deme_selector_offsets.push(last);
+        }
+        while (self.deme_selector_types.len() as i64) < self.n_hooks {
+            self.deme_selector_types.push(0);
+        }
+        if (self.hook_offsets.len() as i64) < self.n_events + 1 {
+            let last = self.hook_offsets.last().copied().unwrap_or(0);
+            self.hook_offsets.resize(self.n_events as usize + 1, last);
+        }
+        if self.n_events < lists.len() as i64 {
+            let last = *self.hook_offsets.last().unwrap_or(&0);
+            self.hook_offsets.resize(lists.len() + 1, last);
+            self.n_events = lists.len() as i64;
+        }
+        for event in 0..lists.len() {
+            let existing = self.event_callback_count(event);
+            let wanted = lists[event].len();
+            match wanted.cmp(&existing) {
+                std::cmp::Ordering::Less => self.demote_callback_slots(event, wanted),
+                std::cmp::Ordering::Greater => {
+                    self.append_callback_slots(event, existing, wanted - existing)
+                }
+                std::cmp::Ordering::Equal => {}
+            }
+        }
+        self.python_callbacks = lists;
+    }
+
+    /// Count the callback slots inside one event's hook segment.
+    fn event_callback_count(&self, event: usize) -> usize {
+        if event + 1 >= self.hook_offsets.len() {
+            return 0;
+        }
+        let start = self.hook_offsets[event] as usize;
+        let end = self.hook_offsets[event + 1] as usize;
+        self.python_callback_slots
+            [start.min(self.python_callback_slots.len())..end.min(self.python_callback_slots.len())]
+            .iter()
+            .filter(|slot| **slot >= 0)
+            .count()
+    }
+
+    /// Demote one event segment's callback slots with index >= *keep* to
+    /// inert ``-1`` slots (the standalone shrink-list path; the slots stay
+    /// as zero-op CSR hooks so no dangling callback reference remains).
+    fn demote_callback_slots(&mut self, event: usize, keep: usize) {
+        if event + 1 >= self.hook_offsets.len() {
+            return;
+        }
+        let start = self.hook_offsets[event] as usize;
+        let end = self.hook_offsets[event + 1] as usize;
+        let slots_len = self.python_callback_slots.len();
+        let lo = start.min(slots_len);
+        let hi = end.min(slots_len);
+        for slot in self.python_callback_slots[lo..hi].iter_mut() {
+            if *slot >= keep as i64 {
+                *slot = -1;
+            }
+        }
+    }
+
+    /// Append *count* zero-op wildcard callback slots to an event segment.
+    ///
+    /// The CSR arrays stay consistent: the new hooks own empty op ranges
+    /// (op_offsets repeat the segment boundary), wildcard deme selectors,
+    /// and slot indexes starting at *first_index*; later event offsets
+    /// shift by the inserted count.
+    fn append_callback_slots(&mut self, event: usize, first_index: usize, count: usize) {
+        let seg_end = self.hook_offsets[event + 1] as usize;
+        let op_boundary = self.op_offsets.get(seg_end).copied().unwrap_or(0);
+        let sel_boundary = self
+            .deme_selector_offsets
+            .get(seg_end)
+            .copied()
+            .unwrap_or(0);
+        for step in 0..count {
+            self.python_callback_slots
+                .insert(seg_end + step, (first_index + step) as i64);
+            self.deme_selector_types.insert(seg_end + step, 0);
+            self.op_offsets.insert(seg_end + step + 1, op_boundary);
+            self.deme_selector_offsets
+                .insert(seg_end + step + 1, sel_boundary);
+        }
+        for offset in self.hook_offsets.iter_mut().skip(event + 1) {
+            *offset += count as i64;
+        }
+        self.n_hooks += count as i64;
+    }
+
+    /// Clear the callback lists and demote their slots.
+    ///
+    /// Callback slots become inert zero-op CSR slots so a later event
+    /// trigger cannot reference a cleared callback.  A callbacks-only
+    /// program (no declarative ops at all) resets to the empty default.
+    pub fn clear_callbacks(&mut self) {
+        if self.n_hooks > 0 && self.op_types.is_empty() {
+            *self = HookProgram::default();
+            self.python_callbacks = vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+            return;
+        }
+        for slot in self.python_callback_slots.iter_mut() {
+            *slot = -1;
+        }
+        self.python_callbacks = vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    }
+
+    /// Fire one Python callback with the native callback ABI.
+    ///
+    /// Handles both callback forms: raw array hooks receive private
+    /// copies of the state slices (mutated copies are validated and
+    /// written back); transactional hooks receive a
+    /// [`HookTransaction`](crate::hooks::transaction::HookTransaction)
+    /// and commit parameters, genetics, RNG, and state together.
+    ///
+    /// ## Parameters
+    /// - `callback`: The Python callable (``__natal_transaction__``
+    ///   attribute selects the transactional form).
+    /// - `ind`: Current individual-count flat slice.
+    /// - `sperm`: Current sperm-storage flat slice (empty for discrete).
     /// - `tick`: Current tick.
     /// - `deme_id`: Current deme id.
+    /// - `rng`: Random number generator (shared with the kernel stream).
+    /// - `eco_values`: Live ECO scratch indexed by ECO param id.
+    /// - `eco_ctx`: Optional write-back context for transactional
+    ///   callbacks; ``None`` rejects transactional callbacks.
     ///
     /// ## Returns
-    /// ``Ok(0)`` to continue, ``Ok(nonzero)`` when a callback requested a
-    /// stop, or an error string when a callback raised.
+    /// ``Ok(0)`` to continue, ``Ok(nonzero)`` when the callback requested
+    /// a stop, or an error string when the callback raised or produced an
+    /// invalid candidate.
     ///
     /// ## Notes
     /// The GIL is already held inside every pymethod, so ``with_gil`` here
     /// is a cheap re-entry, not a lock acquisition from a foreign thread.
-    /// The write-back keeps Python-callback semantics identical to the
-    /// declarative path: a hook's state writes are visible to subsequent
-    /// hooks and lifecycle stages.
-    pub fn fire_python_callbacks(
+    fn fire_one_python_callback(
         &self,
-        event: usize,
+        callback: &Py<PyAny>,
         ind: &mut [f64],
         sperm: &mut [f64],
         tick: i64,
@@ -206,131 +352,117 @@ impl HookProgram {
         eco_values: &mut [f64],
         eco_ctx: &mut Option<crate::kernels::age_structured::EcoCtx<'_>>,
     ) -> Result<i32, String> {
-        let Some(callbacks) = self.python_callbacks.get(event) else {
-            return Ok(0);
-        };
-        if callbacks.is_empty() {
-            return Ok(0);
-        }
-        if let Some(ctx) = eco_ctx.as_mut() {
-            ctx.commit(eco_values)?;
-        }
         Python::with_gil(|py| -> PyResult<i32> {
-            for callback in callbacks {
-                let transactional = callback
+            let transactional = callback
+                .bind(py)
+                .getattr("__natal_transaction__")
+                .and_then(|value| value.extract::<bool>())
+                .unwrap_or(false);
+            let arrays = if transactional {
+                None
+            } else {
+                Some((
+                    PyArray1::from_slice(py, ind),
+                    PyArray1::from_slice(py, sperm),
+                ))
+            };
+            let transaction = if transactional {
+                let ctx = eco_ctx.as_ref().ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err(
+                        "callback requires a session transaction",
+                    )
+                })?;
+                Some(Py::new(
+                    py,
+                    crate::hooks::transaction::HookTransaction {
+                        active: true,
+                        parameters_changed: false,
+                        blueprint: ctx.bp.clone(),
+                        params: ctx.params.clone(),
+                        genetics: ctx
+                            .updated_genetics
+                            .as_ref()
+                            .unwrap_or(ctx.genetics)
+                            .clone(),
+                        rng: rng.clone(),
+                        state_ind: ind.to_vec(),
+                        state_sperm: sperm.to_vec(),
+                        state_arrays: None,
+                    },
+                )?)
+            } else {
+                None
+            };
+            let outcome = if let Some(tx) = transaction.as_ref() {
+                callback
                     .bind(py)
-                    .getattr("__natal_transaction__")
-                    .and_then(|value| value.extract::<bool>())
-                    .unwrap_or(false);
-                let arrays = if transactional {
-                    None
-                } else {
-                    Some((
-                        PyArray1::from_slice(py, ind),
-                        PyArray1::from_slice(py, sperm),
-                    ))
-                };
-                let transaction = if transactional {
-                    let ctx = eco_ctx.as_ref().ok_or_else(|| {
-                        pyo3::exceptions::PyRuntimeError::new_err(
-                            "callback requires a session transaction",
-                        )
-                    })?;
-                    Some(Py::new(
-                        py,
-                        crate::hooks::transaction::HookTransaction {
-                            active: true,
-                            parameters_changed: false,
-                            blueprint: ctx.bp.clone(),
-                            params: ctx.params.clone(),
-                            genetics: ctx
-                                .updated_genetics
-                                .as_ref()
-                                .unwrap_or(ctx.genetics)
-                                .clone(),
-                            rng: rng.clone(),
-                            state_ind: ind.to_vec(),
-                            state_sperm: sperm.to_vec(),
-                            state_arrays: None,
-                        },
-                    )?)
-                } else {
-                    None
-                };
-                let outcome = if let Some(tx) = transaction.as_ref() {
-                    callback
-                        .bind(py)
-                        .call1((py.None(), py.None(), tick, deme_id, tx.clone_ref(py)))
-                } else {
-                    let (ind_arr, sperm_arr) = arrays.as_ref().expect("raw callback arrays exist");
-                    callback
-                        .bind(py)
-                        .call1((ind_arr.clone(), sperm_arr.clone(), tick, deme_id))
-                }
-                .and_then(|value| value.extract::<i32>());
-                // Invalidation happens even when Python raises. Retained samplers
-                // cannot advance either the candidate or the live stream later.
-                if let Some(tx) = transaction.as_ref() {
-                    tx.borrow_mut(py).active = false;
-                }
-                let result = outcome?;
-                let state_candidate = if let Some(tx) = transaction.as_ref() {
-                    tx.borrow(py).candidate_state(py)?
-                } else {
-                    let (ind_arr, sperm_arr) = arrays.as_ref().expect("raw callback arrays exist");
-                    let a = ind_arr.readonly().as_slice()?.to_vec();
-                    let b = sperm_arr.readonly().as_slice()?.to_vec();
-                    if a.len() != ind.len()
-                        || b.len() != sperm.len()
-                        || a.iter().chain(&b).any(|v| !v.is_finite() || *v < 0.0)
-                    {
-                        return Err(pyo3::exceptions::PyValueError::new_err(
-                            "Hook state must preserve shape and contain finite nonnegative counts",
-                        ));
-                    }
-                    Some((a, b))
-                };
-                if let Some(tx) = transaction.as_ref() {
-                    let candidate = tx.borrow(py);
-                    // Read-only and state-only callbacks have no parameter
-                    // products to validate, clone, or publish into the bank.
-                    if candidate.parameters_changed {
-                        candidate.params.validate(&candidate.blueprint)?;
-                        candidate.genetics.validate(&candidate.blueprint)?;
-                        let ctx = eco_ctx.as_mut().expect("transaction requires context");
-                        for (id, value) in eco_values.iter_mut().enumerate() {
-                            *value = candidate.params.eco_value(id, ctx.deme);
-                        }
-                        *ctx.params = candidate.params.clone();
-                        ctx.updated_genetics = Some(candidate.genetics.clone());
-                        let mut commits = self
-                            .callback_commits
-                            .lock()
-                            .expect("callback queue poisoned");
-                        let update = (
-                            deme_id as usize,
-                            candidate.params.clone(),
-                            candidate.genetics.clone(),
-                        );
-                        if let Some(previous) =
-                            commits.iter_mut().find(|entry| entry.0 == deme_id as usize)
-                        {
-                            *previous = update;
-                        } else {
-                            commits.push(update);
-                        }
-                    }
-                    *rng = candidate.rng.clone();
-                }
-                if let Some((ind_candidate, sperm_candidate)) = state_candidate {
-                    ind.copy_from_slice(&ind_candidate);
-                    sperm.copy_from_slice(&sperm_candidate);
-                }
-                if result != 0 {
-                    return Ok(result);
-                }
+                    .call1((py.None(), py.None(), tick, deme_id, tx.clone_ref(py)))
+            } else {
+                let (ind_arr, sperm_arr) = arrays.as_ref().expect("raw callback arrays exist");
+                callback
+                    .bind(py)
+                    .call1((ind_arr.clone(), sperm_arr.clone(), tick, deme_id))
             }
-            Ok(0)
+            .and_then(|value| value.extract::<i32>());
+            // Invalidation happens even when Python raises. Retained samplers
+            // cannot advance either the candidate or the live stream later.
+            if let Some(tx) = transaction.as_ref() {
+                tx.borrow_mut(py).active = false;
+            }
+            let result = outcome?;
+            let state_candidate = if let Some(tx) = transaction.as_ref() {
+                tx.borrow(py).candidate_state(py)?
+            } else {
+                let (ind_arr, sperm_arr) = arrays.as_ref().expect("raw callback arrays exist");
+                let a = ind_arr.readonly().as_slice()?.to_vec();
+                let b = sperm_arr.readonly().as_slice()?.to_vec();
+                if a.len() != ind.len()
+                    || b.len() != sperm.len()
+                    || a.iter().chain(&b).any(|v| !v.is_finite() || *v < 0.0)
+                {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "Hook state must preserve shape and contain finite nonnegative counts",
+                    ));
+                }
+                Some((a, b))
+            };
+            if let Some(tx) = transaction.as_ref() {
+                let candidate = tx.borrow(py);
+                // Read-only and state-only callbacks have no parameter
+                // products to validate, clone, or publish into the bank.
+                if candidate.parameters_changed {
+                    candidate.params.validate(&candidate.blueprint)?;
+                    candidate.genetics.validate(&candidate.blueprint)?;
+                    let ctx = eco_ctx.as_mut().expect("transaction requires context");
+                    for (id, value) in eco_values.iter_mut().enumerate() {
+                        *value = candidate.params.eco_value(id, ctx.deme);
+                    }
+                    *ctx.params = candidate.params.clone();
+                    ctx.updated_genetics = Some(candidate.genetics.clone());
+                    let mut commits = self
+                        .callback_commits
+                        .lock()
+                        .expect("callback queue poisoned");
+                    let update = (
+                        deme_id as usize,
+                        candidate.params.clone(),
+                        candidate.genetics.clone(),
+                    );
+                    if let Some(previous) =
+                        commits.iter_mut().find(|entry| entry.0 == deme_id as usize)
+                    {
+                        *previous = update;
+                    } else {
+                        commits.push(update);
+                    }
+                }
+                *rng = candidate.rng.clone();
+            }
+            if let Some((ind_candidate, sperm_candidate)) = state_candidate {
+                ind.copy_from_slice(&ind_candidate);
+                sperm.copy_from_slice(&sperm_candidate);
+            }
+            Ok(result)
         })
         .map_err(crate::hooks::transaction::preserve_error)
     }
@@ -723,11 +855,16 @@ fn convert_count(
 }
 
 impl HookProgram {
-    /// Execute all CSR hooks for one lifecycle event in priority order.
+    /// Execute all hooks for one lifecycle event in cross-type priority order.
     ///
-    /// The method iterates hooks belonging to ``event_id``, filters by deme
-    /// selector, evaluates each operation's condition, and applies mutating or
-    /// stop-checking operations.  It mirrors ``natal.hooks.runtime.csr_kernel``.
+    /// The hook slots of an event were serialized in one stable priority
+    /// order (ascending; ties keep registration order) regardless of
+    /// payload kind.  This method walks that order: CSR plan slots are
+    /// interpreted in place; Python callback slots (marked by
+    /// ``python_callback_slots``) cross the GIL through
+    /// [`fire_one_python_callback`].  A stop request — a CSR stop op or a
+    /// nonzero callback return — aborts the event, skipping every later
+    /// hook of either kind.
     ///
     /// ## Parameters
     /// - `rng`: Random number generator for stochastic operations.
@@ -746,9 +883,15 @@ impl HookProgram {
     ///   expressions against the current values and writes new values
     ///   back into this slice; the session owns the write-back into its
     ///   ecology columns.
+    /// - `eco_ctx`: Optional write-back context.  Pending set_param
+    ///   writes are committed before every Python callback (so
+    ///   transaction snapshots observe earlier CSR hooks) and the caller
+    ///   commits once more at the event boundary.
     ///
     /// ## Returns
-    /// ``RESULT_CONTINUE`` (0) or ``RESULT_STOP`` (1) if a stop operation triggered.
+    /// ``Ok(RESULT_CONTINUE)`` (0) or ``Ok(RESULT_STOP)`` (1) if a stop
+    /// triggered; an error string when a Python callback raised or
+    /// produced an invalid candidate.
     #[allow(clippy::too_many_arguments)] // Mirrors the Python flat-array kernel signature.
     pub fn execute_event(
         &self,
@@ -764,18 +907,56 @@ impl HookProgram {
         continuous_sampling: bool,
         deme_id: i64,
         eco_values: &mut [f64],
-    ) -> i32 {
-        // Iterate hooks in serialized order, respecting deme selectors.
-        // For each operation: evaluate condition, apply mutation or stop check.
-        // Stop operations short-circuit the whole event immediately.
+        eco_ctx: &mut Option<crate::kernels::age_structured::EcoCtx<'_>>,
+    ) -> Result<i32, String> {
+        // Walk the serialized slot order, respecting deme selectors.
+        // Callback slots fire through the GIL boundary inline; CSR slots
+        // interpret their operations in place.  Stop requests from either
+        // kind short-circuit the whole event immediately.
         if event_id < 0 || event_id >= self.n_events || self.n_hooks == 0 {
-            return RESULT_CONTINUE;
+            return Ok(RESULT_CONTINUE);
         }
         let hook_start = self.hook_offsets[event_id as usize] as usize;
         let hook_end = self.hook_offsets[event_id as usize + 1] as usize;
 
         for hook_idx in hook_start..hook_end {
             if hook_idx >= self.n_hooks as usize || !deme_matches(self, hook_idx, deme_id) {
+                continue;
+            }
+            let callback_slot = self
+                .python_callback_slots
+                .get(hook_idx)
+                .copied()
+                .unwrap_or(-1);
+            if callback_slot >= 0 {
+                // Commit pending set_param writes first so the callback's
+                // transaction snapshot observes the earlier CSR hooks.
+                if let Some(ctx) = eco_ctx.as_mut() {
+                    ctx.commit(eco_values)?;
+                }
+                let Some(callback) = self
+                    .python_callbacks
+                    .get(event_id as usize)
+                    .and_then(|callbacks| callbacks.get(callback_slot as usize))
+                else {
+                    return Err(format!(
+                        "hook program references callback {callback_slot} of event \
+                         {event_id}, but no such callback is registered"
+                    ));
+                };
+                let result = self.fire_one_python_callback(
+                    callback,
+                    individual_count,
+                    sperm_storage,
+                    tick,
+                    deme_id,
+                    rng,
+                    eco_values,
+                    eco_ctx,
+                )?;
+                if result != RESULT_CONTINUE {
+                    return Ok(result);
+                }
                 continue;
             }
             let op_start = self.op_offsets[hook_idx] as usize;
@@ -988,22 +1169,22 @@ impl HookProgram {
                         }
                     }
                     if op_type == OP_STOP_IF_ZERO && selected_total <= 0.0 {
-                        return RESULT_STOP;
+                        return Ok(RESULT_STOP);
                     }
                     if op_type == OP_STOP_IF_BELOW && selected_total < param {
-                        return RESULT_STOP;
+                        return Ok(RESULT_STOP);
                     }
                     if op_type == OP_STOP_IF_ABOVE && selected_total > param {
-                        return RESULT_STOP;
+                        return Ok(RESULT_STOP);
                     }
                 } else if op_type == OP_STOP_IF_EXTINCTION
                     && individual_count.iter().sum::<f64>() <= 0.0
                 {
-                    return RESULT_STOP;
+                    return Ok(RESULT_STOP);
                 }
             }
         }
-        RESULT_CONTINUE
+        Ok(RESULT_CONTINUE)
     }
 }
 

@@ -1960,7 +1960,12 @@ class SpatialPopulation:
 
             # Clone each descriptor from the reference deme's sequence with
             # the compact selector, preserving per-deme execution semantics:
-            # every deme in the group still executes every slot once.
+            # every deme in the group still executes every slot once.  The
+            # callback identity (``desc.callback``) is preserved so the
+            # callback bridges can map each callback slot back to every
+            # deme's own runner index: per-deme selectors may filter
+            # differently, so the filtered slot order and a deme's
+            # unfiltered registration order need not coincide.
             ref_seq = sequences[deme_ids[0]]
             for desc in ref_seq:
                 compact.append(replace(desc, deme_selector=selector))
@@ -2031,11 +2036,22 @@ class SpatialPopulation:
 
         hook_offsets: list[int] = [0]
         hook_list_by_event: list[list[CompiledHookDescriptor]] = []
+        callback_slots: list[int] = []
         for event_name in events:
             hooks = [h for h in compiled_hooks if h.event == event_name]
             hook_list_by_event.append(hooks)
             hook_offsets.append(hook_offsets[-1] + len(hooks))
-
+            # Number the event's callback slots globally in compact order
+            # (groups concatenated); the callback bridges are registered in
+            # this same order, so slot j addresses bridge j regardless of
+            # which compact group the slot came from.
+            next_callback_index = 0
+            for hook in hooks:
+                if hook.callback is not None:
+                    callback_slots.append(next_callback_index)
+                    next_callback_index += 1
+                else:
+                    callback_slots.append(-1)
         n_hooks = hook_offsets[-1]
         all_op_types: list[int] = []
         all_zidx_offsets: list[int] = [0]
@@ -2204,6 +2220,7 @@ class SpatialPopulation:
             deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
             deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
             deme_selector_data=np.array(all_deme_sel_data, dtype=np.int32),
+            python_callback_slots=np.array(callback_slots, dtype=np.int32),
         )
 
     def _compile_spatial_hooks_from_demes(self) -> CompiledEventHooks:
@@ -2734,15 +2751,30 @@ class SpatialPopulation:
             EVENT_FINISH,
             EVENT_FIRST,
             EVENT_LATE,
+            EVENT_NAMES,
         )
 
         runners = [HookRunner(deme) for deme in self._demes]
+        per_deme_adapters = {
+            event_id: [runner.rust_callbacks(event_id) for runner in runners]
+            for event_id in (EVENT_FIRST, EVENT_EARLY, EVENT_LATE, EVENT_FINISH)
+        }
+        # One bridge per callback slot of the compact program, in the same
+        # order ``_build_hook_program`` numbers them.  Per-deme selectors may
+        # filter differently, so a slot's compact position is translated to
+        # each deme's own runner index by callback identity — never by
+        # positional coincidence.
+        compact = self._collect_compact_spatial_hooks()
         bridges: list[list[Callable[..., int]]] = []
-        for event_id in (EVENT_FIRST, EVENT_EARLY, EVENT_LATE, EVENT_FINISH):
-            per_deme = [runner.rust_callbacks(event_id) for runner in runners]
+        for event_id, event_name in enumerate(EVENT_NAMES):
             event_bridges: list[Callable[..., int]] = []
-            for index in range(max((len(entries) for entries in per_deme), default=0)):
-                selected = [entries[index] if index < len(entries) else None for entries in per_deme]
+            for slot_desc in compact:
+                if slot_desc.event != event_name or slot_desc.callback is None:
+                    continue
+                mapping = [
+                    runner.callback_index(event_id, slot_desc.callback)
+                    for runner in runners
+                ]
 
                 def bridge(
                     ind: NDArray[np.float64] | None,
@@ -2750,11 +2782,14 @@ class SpatialPopulation:
                     tick: int,
                     deme_id: int,
                     transaction: EventTransaction,
-                    callbacks: list[Callable[..., int] | None] = selected,
+                    mapping: list[int | None] = mapping,
+                    adapters: list[list[Callable[..., int]]] = per_deme_adapters[event_id],
                 ) -> int:
                     """Dispatch one callback transaction to its stable deme owner."""
-                    callback = callbacks[int(deme_id)]
-                    return int(callback(ind, sperm, tick, deme_id, transaction)) if callback is not None else 0
+                    index = mapping[int(deme_id)]
+                    if index is None:
+                        return 0
+                    return int(adapters[int(deme_id)][index](ind, sperm, tick, deme_id, transaction))
 
                 bridge.__natal_transaction__ = True  # pyright: ignore[reportFunctionMemberAccess]  # native event transaction ABI
                 event_bridges.append(bridge)

@@ -115,7 +115,7 @@ def compile_selector_callback(
         pop: The population to compile against.
         event: Resolved event name.
         selectors_spec: Symbolic selector specs.
-        priority: Execution priority.
+        priority: Execution priority — lower values run first.
         deme_selector: Deme selector for spatial filtering.
 
     Returns:

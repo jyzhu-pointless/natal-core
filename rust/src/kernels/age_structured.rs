@@ -1016,10 +1016,10 @@ pub fn run_tick(
 ) -> Result<i32, String> {
     // One structured tick follows the Python reference order:
     // first hook -> reproduction -> early hook -> survival -> late hook -> aging.
-    // Optional Python callbacks fire at each event boundary after the CSR
-    // hooks; a nonzero callback result stops the run.  With an EcoCtx,
-    // set_param writes are committed at each boundary and the config is
-    // re-assembled so later stages of the same tick observe them.
+    // Each event executes its CSR plan slots and Python callback slots in
+    // one cross-type priority order; a nonzero result stops the run.  With
+    // an EcoCtx, set_param writes are committed at each boundary and the
+    // config is re-assembled so later stages of the same tick observe them.
     // The ctx tick is re-stamped here so batch loops journal every tick
     // under its own tick value (the ctx outlives one batch, not one tick).
     if let Some(ctx) = eco_ctx.as_mut() {
@@ -1041,11 +1041,8 @@ pub fn run_tick(
         cfg.continuous_sampling,
         deme_id,
         eco_values,
-    );
-    if result == 0 {
-        result =
-            hooks.fire_python_callbacks(0, ind, sperm, tick, deme_id, rng, eco_values, eco_ctx)?;
-    }
+        eco_ctx,
+    )?;
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
         if hooks.has_set_param
@@ -1083,11 +1080,8 @@ pub fn run_tick(
         cfg.continuous_sampling,
         deme_id,
         eco_values,
-    );
-    if result == 0 {
-        result =
-            hooks.fire_python_callbacks(1, ind, sperm, tick, deme_id, rng, eco_values, eco_ctx)?;
-    }
+        eco_ctx,
+    )?;
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
         if hooks.has_set_param
@@ -1125,11 +1119,8 @@ pub fn run_tick(
         cfg.continuous_sampling,
         deme_id,
         eco_values,
-    );
-    if result == 0 {
-        result =
-            hooks.fire_python_callbacks(2, ind, sperm, tick, deme_id, rng, eco_values, eco_ctx)?;
-    }
+        eco_ctx,
+    )?;
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
         if hooks.has_set_param

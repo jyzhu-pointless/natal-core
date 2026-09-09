@@ -104,33 +104,23 @@ impl AgeStructuredSession {
             tick: self.state_tick,
             journal: Vec::new(),
         });
-        let mut result = self.hooks.execute_event(
-            &mut self.rng,
-            event as i64,
-            &mut self.state_ind,
-            &mut self.state_sperm,
-            2,
-            self.blueprint.n_ages,
-            self.blueprint.n_ztypes,
-            self.state_tick,
-            self.blueprint.stochastic,
-            self.blueprint.continuous_sampling,
-            deme_id,
-            &mut values,
-        );
+        let mut result = 0;
         let operation = (|| -> Result<(), String> {
-            if result == 0 {
-                result = self.hooks.fire_python_callbacks(
-                    event,
-                    &mut self.state_ind,
-                    &mut self.state_sperm,
-                    self.state_tick,
-                    deme_id,
-                    &mut self.rng,
-                    &mut values,
-                    &mut ctx,
-                )?;
-            }
+            result = self.hooks.execute_event(
+                &mut self.rng,
+                event as i64,
+                &mut self.state_ind,
+                &mut self.state_sperm,
+                2,
+                self.blueprint.n_ages,
+                self.blueprint.n_ztypes,
+                self.state_tick,
+                self.blueprint.stochastic,
+                self.blueprint.continuous_sampling,
+                deme_id,
+                &mut values,
+                &mut ctx,
+            )?;
             if let Some(context) = ctx.as_mut() {
                 context.commit(&values)?;
             }
@@ -342,13 +332,16 @@ impl AgeStructuredSession {
         self.hooks = HookProgram::default();
     }
 
-    /// Register Python callbacks fired at the first/early/late event
-    /// boundaries after the CSR hooks ran.
+    /// Register Python callbacks interleaved with the CSR hooks.
+    ///
+    /// The callbacks are fired inside ``execute_event`` at the callback
+    /// slots of the event's cross-type priority order (the program's
+    /// ``python_callback_slots`` column marks those slots).
     ///
     /// ## Parameters
-    /// - `first`: Callables invoked after the ``first`` CSR event.
-    /// - `early`: Callables invoked after the ``early`` CSR event.
-    /// - `late`: Callables invoked after the ``late`` CSR event.
+    /// - `first`: Callables of the ``first`` event (priority order).
+    /// - `early`: Callables of the ``early`` event.
+    /// - `late`: Callables of the ``late`` event.
     ///
     /// ## Notes
     /// Each callable receives ``(ind, sperm, tick, deme_id)`` where the two
@@ -362,12 +355,13 @@ impl AgeStructuredSession {
         late: Vec<Py<PyAny>>,
         finish: Option<Vec<Py<PyAny>>>,
     ) {
-        self.hooks.python_callbacks = vec![first, early, late, finish.unwrap_or_default()];
+        self.hooks
+            .install_callback_lists(vec![first, early, late, finish.unwrap_or_default()]);
     }
 
     /// Clear all Python callbacks.
     fn clear_python_callbacks(&mut self) {
-        self.hooks.python_callbacks = vec![Vec::new(), Vec::new(), Vec::new()];
+        self.hooks.clear_callbacks();
     }
 
     /// Reseed the Rust RNG used by stochastic sampling.
@@ -995,6 +989,25 @@ impl HookProgram {
         let op_types = extract_i64_array(program, "op_types_data")?;
         let has_set_param = extract_bool_scalar(program, "has_set_param")?
             || op_types.contains(&crate::hooks::interpreter::OP_SET_PARAM_PUBLIC);
+        // The callback slot column drives cross-type priority interleaving.
+        // Reject non-empty programs without it: silently treating callback
+        // slots as zero-op CSR slots would drop the callbacks entirely.
+        let python_callback_slots = match extract_i64_array(program, "python_callback_slots") {
+            Ok(slots) => slots,
+            Err(_) if n_hooks == 0 => Vec::new(),
+            Err(_) => {
+                return Err(PyValueError::new_err(
+                    "hook program is missing 'python_callback_slots'; rebuild the \
+                     population program with the current natal version",
+                ));
+            }
+        };
+        if python_callback_slots.len() != n_hooks as usize {
+            return Err(PyValueError::new_err(format!(
+                "python_callback_slots has {} entries but n_hooks is {n_hooks}",
+                python_callback_slots.len()
+            )));
+        }
         Ok(Self {
             n_events: extract_i64_scalar(program, "n_events")?,
             n_hooks,
@@ -1022,6 +1035,7 @@ impl HookProgram {
             sp_literals: extract_f64_array(program, "sp_literals")?,
             convert_source_z: extract_i64_array(program, "convert_source_z")?,
             convert_target_z: extract_i64_array(program, "convert_target_z")?,
+            python_callback_slots,
             has_set_param,
             ..Default::default()
         })
