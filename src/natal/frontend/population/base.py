@@ -1072,7 +1072,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         return self.run_tick()
 
     @abstractmethod
-    def get_total_count(self) -> int:
+    def get_total_count(self) -> float:
         """Return the total number of individuals in the population."""
         pass
 
@@ -1125,12 +1125,12 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         return obs.project(ic, tick=self._tick)
 
     @abstractmethod
-    def get_female_count(self) -> int:
+    def get_female_count(self) -> float:
         """Return the total number of female individuals."""
         pass
 
     @abstractmethod
-    def get_male_count(self) -> int:
+    def get_male_count(self) -> float:
         """Return the total number of male individuals."""
         pass
 

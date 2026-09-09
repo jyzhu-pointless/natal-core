@@ -133,7 +133,8 @@ class SpatialDashboard:
 
         try:
             if not any(getattr(deme, "_finished", False) for deme in self.pop.demes):
-                if self.slider_speed.value <= 0:
+                speed = self.slider_speed.value
+                if speed is None or speed <= 0:
 
                     def run_batch() -> None:
                         start = time.time()
@@ -179,7 +180,8 @@ class SpatialDashboard:
 
     def _update_timer_interval(self) -> None:
         """Update timer interval based on the speed slider."""
-        value = float(self.slider_speed.value)
+        raw_speed = self.slider_speed.value
+        value = 0.0 if raw_speed is None else float(raw_speed)
         self._tick_timer.interval = 0.01 if value <= 0.0 else value
 
     def _get_hex_vertices(self, center_x: float, center_y: float, size: float = 1.0) -> tuple[list[float], list[float]]:
@@ -1404,9 +1406,9 @@ class SpatialDashboard:
 
     def _do_export(self) -> None:
         """Handle export button click in the dialog."""
-        include_config = self.cb_config.value
-        include_history = self.cb_history.value
-        include_hooks = self.cb_hooks.value
+        include_config = bool(self.cb_config.value)
+        include_history = bool(self.cb_history.value)
+        include_hooks = bool(self.cb_hooks.value)
         self.export_dialog.close()
         self._do_export_logic(include_config, include_history, include_hooks)
         ui.notify("Export started...")  # type: ignore[reportPossiblyUnboundVariable]  # nicegui import is conditional; binding verified at runtime

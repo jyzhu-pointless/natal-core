@@ -10,7 +10,7 @@ falling back to another execution path.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, NoReturn, Protocol, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, NoReturn, Protocol, TypeAlias, TypeVar, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -57,7 +57,9 @@ def config_snapshot_from_session(session: _ConfigReadSession, draft: ModelDraft)
         elif isinstance(current, np.ndarray):
             values = session.get_tensor(name)
             if values.size == current.size:
-                fields[target] = values.reshape(np.asarray(current, dtype=np.float64).shape)
+                fields[target] = values.reshape(
+                    cast(NDArray[np.float64], current).shape
+                )
         else:
             value = session.get_scalar(name)
             fields[target] = None if name == "external_expected_eggs" and value < 0 else value

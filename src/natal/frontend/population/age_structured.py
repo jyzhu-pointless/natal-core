@@ -540,7 +540,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """int: Minimum age at which individuals are considered adults."""
         return self.config.new_adult_age
 
-    def get_total_count(self) -> int:
+    def get_total_count(self) -> float:
         """Return the total number of individuals in the population.
 
         Returns:
@@ -548,7 +548,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         return self._live_state().individual_count.sum()
 
-    def get_female_count(self) -> int:
+    def get_female_count(self) -> float:
         """Return the total number of female individuals.
 
         Returns:
@@ -556,7 +556,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         return self._live_state().individual_count[Sex.FEMALE.value, :, :].sum()
 
-    def get_male_count(self) -> int:
+    def get_male_count(self) -> float:
         """Return the total number of male individuals.
 
         Returns:
@@ -995,7 +995,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         else:
             return self._live_state().individual_count.sum(axis=(0, 2))
 
-    def get_genotype_count(self, genotype: Genotype) -> Tuple[int, int]:
+    def get_genotype_count(self, genotype: Genotype) -> Tuple[float, float]:
         """Return total counts for a genotype as (female_count, male_count).
 
         .. deprecated::

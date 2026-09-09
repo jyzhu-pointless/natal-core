@@ -63,17 +63,17 @@ class OutputMixin(ModifierPresetMixin):
     # ── Abstract query methods (from base.py:944-957) ──────────────
 
     @abstractmethod
-    def get_total_count(self) -> int:
+    def get_total_count(self) -> float:
         """Return the total number of individuals in the population."""
         ...
 
     @abstractmethod
-    def get_female_count(self) -> int:
+    def get_female_count(self) -> float:
         """Return the total number of female individuals."""
         ...
 
     @abstractmethod
-    def get_male_count(self) -> int:
+    def get_male_count(self) -> float:
         """Return the total number of male individuals."""
         ...
 
@@ -261,17 +261,17 @@ class OutputMixin(ModifierPresetMixin):
     # From base.py:963-982
 
     @property
-    def total_population_size(self) -> int:
+    def total_population_size(self) -> float:
         """Total population size (alias of ``get_total_count``)."""
         return self.get_total_count()
 
     @property
-    def total_females(self) -> int:
+    def total_females(self) -> float:
         """Total number of females (alias of ``get_female_count``)."""
         return self.get_female_count()
 
     @property
-    def total_males(self) -> int:
+    def total_males(self) -> float:
         """Total number of males (alias of ``get_male_count``)."""
         return self.get_male_count()
 

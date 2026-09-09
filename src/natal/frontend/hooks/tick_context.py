@@ -131,23 +131,23 @@ class TickMetrics:
     @property
     def total(self) -> float:
         """Total number of individuals."""
-        return float(np.sum(self._state.individual_count))
+        return float(self._state.individual_count.sum())
 
     @property
     def by_sex(self) -> NDArray[np.float64]:
         """Per-sex totals with shape ``(n_sexes,)``."""
-        return np.sum(self._state.individual_count, axis=(1, 2))
+        return self._state.individual_count.sum(axis=(1, 2))
 
     @property
     def by_age(self) -> NDArray[np.float64]:
         """Per-age totals with shape ``(n_ages,)``."""
-        return np.sum(self._state.individual_count, axis=(0, 2))
+        return self._state.individual_count.sum(axis=(0, 2))
 
     @property
     def genotype_counts(self) -> dict[str, float]:
         """Total count per zygote type, keyed by catalog name."""
         ic = self._state.individual_count
-        counts = np.sum(ic, axis=(0, 1))
+        counts = ic.sum(axis=(0, 1))
         names = self._blueprint.ztype_names
         return {
             name: float(counts[idx])
@@ -246,7 +246,7 @@ class TickMetrics:
 
         config = self._config()
         ic = self._state.individual_count
-        sex_age = np.sum(ic, axis=2)  # (n_sexes, n_ages)
+        sex_age = ic.sum(axis=2)  # (n_sexes, n_ages)
         n_ages = int(config.n_ages)
         distribution = np.zeros((2, n_ages), dtype=np.float64)
         n_rows = min(2, sex_age.shape[0])

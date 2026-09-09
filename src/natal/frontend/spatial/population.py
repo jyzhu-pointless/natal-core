@@ -1202,7 +1202,7 @@ class SpatialPopulation:
                 first = getattr(drafts[0], draft_field, None)
                 if first is None or np.asarray(first).ndim == 0:
                     continue
-                per_deme = np.asarray(first).shape
+                per_deme: tuple[int, ...] = np.asarray(first).shape
                 if column.size == n_demes * int(np.prod(per_deme)):
                     columns[name] = column.reshape((n_demes,) + per_deme)
         except TypeError:

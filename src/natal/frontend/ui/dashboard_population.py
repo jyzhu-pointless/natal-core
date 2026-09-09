@@ -129,7 +129,8 @@ class Dashboard:
                 self.tabs_main.set_value('inspection')
 
             if not self.pop.is_finished:
-                if self.slider_speed.value <= 0:
+                speed = self.slider_speed.value
+                if speed is None or speed <= 0:
                     def run_batch():
                         start = time.time()
                         ticks = 0
@@ -180,7 +181,7 @@ class Dashboard:
         val = self.slider_speed.value
         # If 0 (Turbo), run timer frequently to drive the batch loop
         # If > 0, use value as delay
-        self._tick_timer.interval = 0.01 if val <= 0 else val
+        self._tick_timer.interval = 0.01 if val is None or val <= 0 else val
 
     def _discrete_display(self) -> bool:
         """Whether individual counts should be displayed as integers."""
@@ -757,9 +758,9 @@ class Dashboard:
 
     def _do_export(self):
         """The click handler for the dialog's export button."""
-        include_config = self.cb_config.value
-        include_history = self.cb_history.value
-        include_hooks = self.cb_hooks.value
+        include_config = bool(self.cb_config.value)
+        include_history = bool(self.cb_history.value)
+        include_hooks = bool(self.cb_hooks.value)
         self.export_dialog.close()
         self._do_export_logic(include_config, include_history, include_hooks)
         ui.notify('Export started...')

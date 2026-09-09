@@ -189,7 +189,7 @@ def _committed_value(draft: ModelDraft, entry: RouteEntry) -> AuditValue:
         return None
     value: object = getattr(draft, entry.config_field)
     if isinstance(value, np.ndarray):
-        typed = np.asarray(value, dtype=np.float64)
+        typed = np.asarray(cast(NDArray[np.float64], value), dtype=np.float64)
         selected = typed[entry.config_path] if entry.config_path else typed
         if np.ndim(selected) > 0:
             return np.array(selected, dtype=np.float64, copy=True)

@@ -581,13 +581,13 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
     def get_female_count(self) -> int:
         """Return the total number of female individuals."""
         return int(
-            round(np.sum(self._live_state().individual_count[int(Sex.FEMALE.value)]))
+            round(self._live_state().individual_count[int(Sex.FEMALE.value)].sum())
         )
 
     def get_male_count(self) -> int:
         """Return the total number of male individuals."""
         return int(
-            round(np.sum(self._live_state().individual_count[int(Sex.MALE.value)]))
+            round(self._live_state().individual_count[int(Sex.MALE.value)].sum())
         )
 
     def clear_history(self) -> None:
