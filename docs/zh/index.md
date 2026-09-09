@@ -174,7 +174,7 @@ launch(pop)
 14. [IndexRegistry 索引机制](4_index_registry.md)
 15. [PopulationState 与 ModelDraft](4_population_state_config.md)
 16. [模拟内核深度解析](4_simulation_engine.md)
-18. [Observation 历史记录实现解析](observation_impl.md)
+17. [Observation 历史记录实现解析](observation_impl.md)
 
 
 ## API 文档

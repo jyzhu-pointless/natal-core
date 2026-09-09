@@ -25,7 +25,7 @@ This can be understood as:
 
 ## `PopulationState`: The State Object for Age-Structured Models
 
-`PopulationState` is defined in `src/natal/population_state.py` and is essentially a `NamedTuple` container.
+`PopulationState` is defined in `src/natal/frontend/data/state.py` and is essentially a `NamedTuple` container.
 
 ### Field Structure
 
@@ -44,7 +44,7 @@ Field descriptions:
 
 ## `DiscretePopulationState`: The State Object for Discrete-Generation Models
 
-The discrete-generation model uses `DiscretePopulationState`, also defined in `src/natal/population_state.py`.
+The discrete-generation model uses `DiscretePopulationState`, also defined in `src/natal/frontend/data/state.py`.
 
 ### Field Structure
 
@@ -62,7 +62,7 @@ Key differences from `PopulationState`:
 
 ## `ModelDraft`: Model Rules and Mapping Configuration
 
-`ModelDraft` is defined in `src/natal/population_config.py` and contains the fixed parameters and matrices required to run the model.
+`ModelDraft` is defined in `src/natal/frontend/data/config.py` and contains the fixed parameters and matrices required to run the model.
 
 ### Configuration Groups
 
@@ -89,24 +89,30 @@ Key differences from `PopulationState`:
   - `initial_individual_count`
   - `initial_sperm_storage`
 
-### What to Pay Attention to When Using
+### Draft Representation Versus the Runtime Contract
 
-`ModelDraft` is a `NamedTuple` whose topology (which fields exist and their shapes) is **immutable** after construction. However, the 9 ecological parameters (e.g., `carrying_capacity`, `eggs_per_female`) are stored as 0-d ndarrays and **can be mutated in-place inside hooks**:
+`ModelDraft` is a `NamedTuple` whose topology (which fields exist and their shapes) is **immutable** after construction. Two distinct uses matter:
+
+- **The authoritative runtime data lives in the Rust session.** Every access to `pop.config` returns a **detached query snapshot** (`pop.config is pop.config` is False): field values are projected from the session and arrays are copies. Mutating the snapshot — scalar assignment, `set_param(pop.config, ...)`, or `snapshot.viability_fitness[...] = x` — never writes back to the population.
+- **Runtime updates go through controlled channels.** Use `pop.params.<name>` or `pop.update()` for ecology scalars, and `pop.params.tensor_write(name, values)` for vectors and tensors. Inside a callback the same surfaces are `ctx.params` / `ctx.update()`, whose writes join the event transaction: they commit when the callback succeeds and are discarded when it fails.
 
 ```python
 @nt.hook(event="early")
-def heatwave(pop: TickContext) -> int:
-    if pop.tick == 10:
-        pop.params.carrying_capacity = 2000.0  # bounds-validated runtime write, applies immediately
+def heatwave(ctx: TickContext) -> int:
+    if ctx.tick == 10:
+        ctx.params.carrying_capacity = 2000.0  # jsonc bounds-checked; later stages of the tick see it
     return 0
 ```
 
-Large array fields (`viability_fitness`, `zygotes_to_gametes_map`, etc.) are not recommended for runtime modification but can technically be mutated in-place via array indexing. You can print the field values of `ModelDraft` to confirm that the model parameters match expectations:
-
 ```python
+# Query: a snapshot, for reads and diagnostics
 cfg = pop.config
 print(cfg.n_ages, cfg.n_ztypes)
 print(cfg.viability_fitness.shape)
+
+# Write: a controlled channel
+pop.params.carrying_capacity = 8000.0
+pop.params.tensor_write("viability_fitness", new_table)
 ```
 
 ## Minimal Example: Inspecting State and Config
@@ -172,13 +178,13 @@ hist_view = nt.population_history_to_readable_dict(pop)
 print(hist_view["n_snapshots"], hist_view["snapshots"][-1]["tick"])
 ```
 
-If you need to apply observation rules, use ``pop.observe()`` for the current state or ``pop.history.observe(pop.observation)`` for recorded history (see [Population Observation Rules](2_data_output.md)):
+If you need to apply observation rules, use `pop.observe()` for the current state or `pop.history.observe(pop.observation)` for recorded history (see [Population Observation Rules](2_data_output.md)):
 
 ```python
 # Project current state through the canonical observation
 result = pop.observe()
-print(result.labels)
-print(result.values)
+print("Observation axes:", result.axes)
+print("Observation values:", result.values)
 ```
 
 If directly working with `PopulationState` / `DiscretePopulationState`, you can also call the corresponding functions and explicitly pass labels:

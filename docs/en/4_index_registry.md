@@ -1,6 +1,6 @@
 # `IndexRegistry` Indexing Mechanism
 
-`IndexRegistry` is a core component in the NATAL framework responsible for associating genetic objects (such as Genotype, HaploidGenotype, etc.) with integer indices. It serves as a key bridge connecting the "high-level object world" with the "low-level numerical computation world," ensuring that users can work with intuitive genetic objects while the underlying computation efficiently handles integer indices.
+`IndexRegistry` is a core component in the NATAL framework responsible for associating genetic objects (such as Genotype, HaploidGenotype, etc.) with integer indices. It serves as a key bridge connecting the "high-level object world" with the "low-level numerical computation world," ensuring that users can work with intuitive genetic objects while the underlying computation efficiently handles integer indices. It indexes diploid ZTypes and haploid GTypes, including their somatic and gamete labels; the `ZygoteTypePattern` example below parses a pattern before resolving matching registry indices.
 
 ## Core Concepts
 
@@ -50,7 +50,7 @@ Both systems are **symmetric** in design:
 - If unspecified, a single `"default"` label is created automatically.
 - The engine cross-products every genotype/haplotype with every label, producing the full ZType/GType space.
 
-Slabs are used by concrete Presets such as **Wolbachia** (cytoplasmic incompatibility modelled via a `"wolbachia_infected"` slab) and **TransgenicBackground** (marker expression tracked per individual). Without these Presets, most simulations have a single `"default"` slab and the slab system is invisible.
+Slabs are used by concrete Presets such as **Wolbachia** (cytoplasmic incompatibility modelled with the default `infected` / `normal` slabs and a `wolbachia` gamete label) and **TransgenicBackground** (marker expression tracked per individual). Without these Presets, most simulations have a single `"default"` slab and the slab system is invisible.
 
 ### Index Registry Structure
 
@@ -75,16 +75,16 @@ class IndexRegistry:
 
 ### Relationship with the Old API
 
-Backward-compatible properties reconstruct the flat lists from the ZType/GType spaces:
+Backward-compatible properties reconstruct the flat lists from the ZType/GType spaces (illustrative: obtain `Genotype` objects with `species.get_genotype_from_str(...)`):
 
 ```python
 # Old-style: unique genotypes only (deduplicated from ZType space)
-registry.index_to_genotype  # [Genotype("A|A"), Genotype("A|a"), ...]
-registry.haplo_to_index     # {HaploidGenotype("A"): 0, HaploidGenotype("a"): 1, ...}
+registry.index_to_genotype  # [<Genotype A|A>, <Genotype A|a>, ...]
+registry.haplo_to_index     # {<HaploidGenotype A>: 0, <HaploidGenotype a>: 1, ...}
 
 # New-style: includes label dimension
-registry.index_to_ztype     # [(Genotype("A|A"), "default"), (Genotype("A|A"), "infected"), ...]
-registry.index_to_gtype     # [(HaploidGenotype("A"), "default"), (HaploidGenotype("A"), "cas9_deposited"), ...]
+registry.index_to_ztype     # [(<Genotype A|A>, "default"), (<Genotype A|A>, "infected"), ...]
+registry.index_to_gtype     # [(<HaploidGenotype A>, "default"), (<HaploidGenotype A>, "cas9_deposited"), ...]
 ```
 
 The computed `N_ztype` is the length of `_index_to_ztype` — this is the value consumed as the last axis of the engine's `individual_count` array.
@@ -113,6 +113,7 @@ Labels are registered first so that the auto-cross-product covers all slab/glab 
 ### Registration API
 
 ```python
+# Illustrative: obtain Genotype objects via species.get_genotype_from_str("A|a")
 # Low-level: register a single (genotype, slab) pair
 registry.register_ztype(Genotype("A|a"), "default")       # returns ZType index
 
@@ -180,7 +181,7 @@ The meaning of "no `@slab`" depends on which API function you are calling:
 
 #### Important: `initial_state` Keys Must Be Exact
 
-Keys passed to `initial_state()` must be exact genotype strings — fuzzy patterns like `"*|*"` or `"Drive|*"` will not behave as expected. Such patterns may silently only match the *first* ZType in registration order, which is almost certainly wrong. If you need pattern-style matching for initial state, use a `first`-event hook with `Op.set_count()` instead.
+Keys passed to `initial_state()` must be exact genotype strings. Fuzzy patterns such as `"*|*"` or `"Drive|*"` raise `ValueError` during parsing (for example `Cannot parse haplotype segment string '*'`); they never silently match a ZType. If you need pattern-style matching for the initial state, use a `first`-event hook with `Op.set_count()` instead.
 
 ## Index Compression (Reachability BFS)
 
@@ -195,7 +196,7 @@ Compression uses a fixed-point BFS (implemented in `build_compression_mask` in `
 ```
 1. Seeds: collect reachable genotypes
    a. initial_individual_count > 0  (genotypes that start with individuals)
-   b. declared genotypes             (seeds from .declare(), see below)
+   b. declared genotypes and hook-referenced genotypes (see "Declare Semantics" below)
 
 2. From reachable genotypes, derive reachable haplotypes:
    for each reachable genotype g:
@@ -216,7 +217,7 @@ Compression uses a fixed-point BFS (implemented in `build_compression_mask` in `
    - ZType mask: -1 for pruned (genotype, slab) pairs, ≥0 for survivors
 ```
 
-The key insight: once the reachable set stabilises, the compression mask maps old indices to new compressed indices. Pruned entries are permanently removed from the registry via `registry.compress(mask)`.
+The key insight: once the reachable set stabilises, the compression mask maps old indices to new compressed indices. Pruned entries are permanently removed from the registry via `registry.compress(ztype_mask, gtype_mask)`.
 
 ### Declare Semantics
 
@@ -224,7 +225,7 @@ The `declare` mechanism (`setup(compress=True, declared_zygote_types={"AA"})`) a
 
 Example: If the initial state only has `aa` individuals, and a hook releases `AA` individuals at tick 100:
 
-1. Without declare: the BFS starts with only `aa`. Reachable haplotypes are `{a}`. The fixed point is reached immediately — `A` is never discovered. When the hook tries to release `AA` at runtime, its ZType index is -1 (pruned), causing an error.
+1. Without declare and without hook collection: the BFS starts with only `aa`. Reachable haplotypes are `{a}`. The fixed point is reached immediately — `A` is never discovered. `AA` is absent from the compressed registry, so a runtime lookup by name fails. (Note: the build chain automatically collects genotypes referenced by declarative and selector hooks as seeds, so this path mainly affects introductions the collector cannot see, such as a pure callback writing counts directly.)
 
 2. With `declare("AA")`: `AA` is a seed. Reachable haplotypes become `{a, A}`. The BFS combines `A` + `a` → `Aa` is discovered, which produces `{A, a}` again. Fixed point: `{AA, Aa, aa}` are all reachable, and compression preserves all three.
 
@@ -248,6 +249,7 @@ Without the `declare`, `A` would never enter the reachable haplotype set, and `A
 - `declared_zygote_types` is set on `.setup(compress=True, declared_zygote_types=...)`.
 - The BFS is **symmetrical** — declaring a genotype also brings in all haplotypes it produces, which may combine to form additional genotypes not explicitly declared.
 - Declared genotypes are expanded to **all slab variants** for the BFS (internally, they are treated as reachable ZTypes across all slabs).
+- The old chain entry `.compress_genotypes(True)` still works but is deprecated (there is no `.declare()` method); declare seeds with `.setup(compress=True, declared_zygote_types={...})`.
 
 ## User Interface Notes
 
@@ -257,20 +259,22 @@ Without the `declare`, `A` would never enter the reachable haplotype set, and `A
 
 ```python
 # Look up the genotype index via IndexRegistry, then access
-idx = pop.index_registry.genotype_to_index["A1|A2"]
+gt = pop.species.get_genotype_from_str("A1|A2")
+idx = pop.index_registry.ztype_index(gt, "default")
 pop.state.individual_count[0, 3, idx]
 ```
 
-### Pattern Matching with GenotypeSelector
+### Pattern Matching with ZygoteTypePattern
 
 ```python
-# Use GenotypeSelector for pattern-based operations
-from natal.frontend.patterns import GenotypeSelector
-selector = GenotypeSelector("A1|*", pop.index_registry)
-indices = selector.select()  # Returns matching integer index array
+# Parse the pattern with ZygoteTypePattern, then resolve indices through the registry
+from natal.frontend.patterns import ZygoteTypePattern
+pattern = ZygoteTypePattern.parse("A1|*", pop.species)
+indices = list(pop.index_registry.resolve_ztype_indices(pattern))  # matching integer indices
 ```
 
-**Note**: The old import path `from natal.genetic_patterns import GenotypeSelector` has been updated to `from natal.frontend.patterns import GenotypeSelector`.
+**Note**: `ZygoteTypePattern` is the current pattern parser for this registry
+resolution path.
 
 ## Internal Framework Usage
 
@@ -320,7 +324,7 @@ For operations involving multiple genotypes, using vectorized approaches is more
 ```
 String "A1|A2"
     ↓ Species.get_genotype_from_str()
-Global Cache Species.genotype_cache
+Structure cache Species.structure_cache
     ↓ [hit]
 Genotype object (unique)
     ↓ IndexRegistry.register_genotype()

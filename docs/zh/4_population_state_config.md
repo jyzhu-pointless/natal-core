@@ -9,7 +9,7 @@
 
 ## 概述
 
-用户通过 Builder 或 `setup(...).build()` 完成种群构建后，框架内部会形成以下流程：
+用户通过 `setup(...).build()` 完成种群构建后，框架内部会形成以下流程：
 
 ```text
 用户输入参数
@@ -25,7 +25,7 @@
 
 ## `PopulationState`：年龄结构模型的状态对象
 
-`PopulationState` 定义在 `src/natal/population_state.py`，本质上是 `NamedTuple` 容器。
+`PopulationState` 定义在 `src/natal/frontend/data/state.py`，本质上是 `NamedTuple` 容器。
 
 ### 字段结构
 
@@ -44,7 +44,7 @@ class PopulationState(NamedTuple):
 
 ## `DiscretePopulationState`：离散世代模型的状态对象
 
-离散世代模型使用 `DiscretePopulationState`，同样定义在 `src/natal/population_state.py`。
+离散世代模型使用 `DiscretePopulationState`，同样定义在 `src/natal/frontend/data/state.py`。
 
 ### 字段结构
 
@@ -62,7 +62,7 @@ class DiscretePopulationState(NamedTuple):
 
 ## `ModelDraft`：模型规则与映射配置
 
-`ModelDraft` 定义在 `src/natal/population_config.py`，包含运行模型所需的固定参数与矩阵。
+`ModelDraft` 定义在 `src/natal/frontend/data/config.py`，包含运行模型所需的固定参数与矩阵。
 
 ### 配置内容分组
 
@@ -89,24 +89,30 @@ class DiscretePopulationState(NamedTuple):
   - `initial_individual_count`
   - `initial_sperm_storage`
 
-### 使用时应关注什么
+### 草稿表示与运行合同
 
-`ModelDraft` 是一个 `NamedTuple`，其拓扑结构（包含哪些字段、字段的 shape）在构建后**不可变**。但其中生态参数（如 `carrying_capacity`、`eggs_per_female` 等 9 个标量）以 0-d ndarray 形式存储，**可以在 Hook 中原地修改**：
+`ModelDraft` 是一个 `NamedTuple`，其拓扑结构（包含哪些字段、字段的 shape）在构建后**不可变**。使用时需要区分两种用途：
+
+- **运行数据的权威副本在 Rust 会话中。** `pop.config` 每次访问都返回一个**分离的查询快照**（`pop.config is pop.config` 为 False）：字段值来自会话投影，数组是拷贝。修改快照——标量赋值、`set_param(pop.config, ...)`、`snapshot.viability_fitness[...] = x`——都不会写回种群。
+- **运行期更新走受控通道。** 生态标量用 `pop.params.<name>` 或 `pop.update()`；向量/张量用 `pop.params.tensor_write(name, values)`。回调内同样用 `ctx.params` / `ctx.update()`，写入进入事件事务：回调成功才提交，失败则丢弃本次候选。
 
 ```python
 @nt.hook(event="early")
-def heatwave(pop: TickContext) -> int:
-    if pop.tick == 10:
-        pop.params.carrying_capacity = 2000.0  # bounds-validated runtime write, applies immediately
+def heatwave(ctx: TickContext) -> int:
+    if ctx.tick == 10:
+        ctx.params.carrying_capacity = 2000.0  # 经 jsonc 边界校验，同一 tick 的后续阶段可见
     return 0
 ```
 
-大数组字段（如 `viability_fitness`、`zygotes_to_gametes_map`）不建议在运行中修改，但技术上也可通过数组索引进行原地赋值。可以打印输出 `ModelDraft` 的字段值，以确认模型参数是否符合预期：
-
 ```python
+# 查询：快照，适合读取与诊断
 cfg = pop.config
 print(cfg.n_ages, cfg.n_ztypes)
 print(cfg.viability_fitness.shape)
+
+# 写入：受控通道
+pop.params.carrying_capacity = 8000.0
+pop.params.tensor_write("viability_fitness", new_table)
 ```
 
 ## 最简示例：查看 state 与 config
@@ -172,7 +178,7 @@ hist_view = nt.population_history_to_readable_dict(pop)
 print(hist_view["n_snapshots"], hist_view["snapshots"][-1]["tick"])
 ```
 
-如果需要在翻译时直接应用 observation rules（详见 [种群观测规则](2_data_output.md)），可使用观测集成接口：
+如果需要在翻译时直接应用 observation rules（详见 [种群观测规则](2_data_output.md)），当前状态用 `pop.observe()`，已记录的历史用 `pop.history.observe(pop.observation)`：
 
 ```python
 observed = pop.observe()

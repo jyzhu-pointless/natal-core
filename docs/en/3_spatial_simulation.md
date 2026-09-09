@@ -16,7 +16,7 @@ spatial = (
 )
 ```
 
-> **Tip**: `SpatialConfigurator` is the preferred construction method for homogeneous/heterogeneous spatial populations. The construction time for 2601 homogeneous demes has been reduced from ~2.6s to ~16ms. See [SpatialConfigurator Documentation](spatial_builder.md).
+> **Tip**: `SpatialConfigurator` is the preferred construction method for homogeneous/heterogeneous spatial populations (build one template, clone the rest). See [SpatialConfigurator Documentation](spatial_configurator.md).
 
 ## Two Construction Paths
 
@@ -804,7 +804,7 @@ The practical usage order of SpatialPopulation can be remembered in four steps:
 
 ## Related Chapters
 
-- [SpatialConfigurator: Batch Construction](spatial_builder.md)
+- [SpatialConfigurator: Batch Construction of Spatial Populations](spatial_configurator.md)
 - [Spatial Lifecycle Wrapper](spatial_lifecycle_wrapper.md)
 - [Migration Kernel Implementation](migration_kernel_impl.md)
 - [the Simulation Engine Deep Dive](4_simulation_engine.md)

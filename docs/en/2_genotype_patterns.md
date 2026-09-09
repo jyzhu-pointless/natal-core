@@ -61,6 +61,7 @@ A `@` suffix on the pattern string constrains matches to specific gamete labels 
 | `@!X` | Exclude label X | `A\|a@!wildtype` |
 | `@{A,B}` | Any label in set | `A\|a@{high,low}` |
 | `@!{A,B}` | Exclude labels in set | `@!{wildtype,default}` |
+| `@*` | Any label (same as omitting @) | `A\|a@*` |
 
 GenotypePattern uses `@` for somatic labels; HaploidGenotypePattern uses `@` for gamete labels:
 
@@ -169,21 +170,25 @@ Parentheses syntax is applicable to both haploid and diploid patterns and can si
 
 ### Integrating with Observations
 
-The `groups["genotype"]` in the Observation section supports `GenotypePattern` parsing:
+Each value of `with_observation(groups=...)` in the Observation section must be an `IndividualSelector`, whose `ztype` field supports `GenotypePattern` parsing:
 
 ```python
+import natal as nt
+
 groups = {
-    "target_group": {
+    "target_group": nt.IndividualSelector(
         # Ordered matching: Maternal|Paternal
-        "genotype": "A1/B1|A2/B2; C1/D1|C2/D2",
-        "sex": "female",
-    },
-    "target_group_unordered": {
+        ztype="A1/B1|A2/B2; C1/D1|C2/D2",
+        sex="female",
+    ),
+    "target_group_unordered": nt.IndividualSelector(
         # Unordered matching: two homologous chromosome copies can be swapped
-        "genotype": "A1/B1::A2/B2; C1/D1::C2/D2",
-        "sex": "female",
-    }
+        ztype="A1/B1::A2/B2; C1/D1::C2/D2",
+        sex="female",
+    ),
 }
+
+# Pass it at build time: .with_observation(groups)
 ```
 
 ### Integrating with Presets
@@ -199,6 +204,9 @@ class PatternDrivenPreset(GeneticPreset):
 
     def _build_filter(self, species):
         return species.parse_genotype_pattern(self.target_pattern)
+
+    def zygote_modifier(self, host):
+        return None
 
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("pattern_rules")

@@ -92,7 +92,7 @@ Key point: AgeStructured follows the "long-term sperm storage" path, and `sperm_
 
 1. reproduction
   - Only age1 adults participate in mating and fertilization.
-  - Uses a temporary `temp_sperm_store` for the current step's fertilization; does not retain a long-term sperm bank across ticks.
+  - The current step fertilizes through a temporary pairing buffer; no sperm bank is retained across ticks (the discrete model has no `sperm_storage` state).
   - Offspring are written into age0.
 2. survival
   - First apply density regulation to age0 (also supports the four growth modes).
@@ -139,12 +139,14 @@ the session multiplies the rate column by that CSR each tick.
 
 ## 5. Relationship with `state`/`config`
 
-During simulation, engine read and write two core objects:
+The Rust session owns the runtime state and ecology parameters; Python-side `pop.state` and `pop.config` are **query snapshots** (regenerated on every access, so mutating them never affects the engine) — see [PopulationState and ModelDraft](4_population_state_config.md).
 
-- `state`: The current population distribution and time step.
-- `config`: Rule parameters such as survival rates, mating rates, fitness, and mapping matrices.
+- `state`: the current population distribution and time step (snapshot read).
+- `config`: a projection of rule parameters such as survival rates, mating rates, fitness, and mapping matrices (snapshot read).
 
-If you have read the previous chapter, you can think of this chapter as "how `state`/`config` are consumed and updated in each tick."
+Runtime writes go through controlled channels: `pop.params.<name>` / `pop.update()` for scalars and `pop.params.tensor_write(...)` for vectors and tensors. The spatial container exposes no `state`/`config` attributes; its parameter writes are covered in [Spatial Lifecycle Execution](spatial_lifecycle_wrapper.md).
+
+If you have read the previous chapter, you can think of this chapter as "how these snapshots are consumed and updated in each tick."
 
 ## 6. History Recording Mechanism
 

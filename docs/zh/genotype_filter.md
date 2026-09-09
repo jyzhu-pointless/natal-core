@@ -87,6 +87,9 @@ ruleset.add_allele_convert(
 当规则作用范围复杂时，建议使用物种提供的模式解析能力生成 `genotype_filter`，避免使用脆弱的字符串判断。
 
 ```python
+from natal.frontend.presets import GeneticPreset
+
+
 class PatternBasedPreset(GeneticPreset):
     def __init__(self, pattern: str, conversion_rate: float = 0.95):
         super().__init__(name="PatternBasedPreset")
@@ -106,6 +109,9 @@ class PatternBasedPreset(GeneticPreset):
             genotype_filter=pattern_filter,
         )
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 实践建议：
@@ -117,6 +123,9 @@ class PatternBasedPreset(GeneticPreset):
 ## 条件突变（基因型依赖）
 
 ```python
+from natal.frontend.presets import GeneticPreset
+
+
 class ConditionalMutation(GeneticPreset):
     """条件突变 - 只在特定基因型背景下发生"""
 
@@ -139,6 +148,9 @@ class ConditionalMutation(GeneticPreset):
         )
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 ## 与 Observation 保持统计口径一致

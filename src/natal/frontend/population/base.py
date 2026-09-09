@@ -290,7 +290,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     ) -> Self:
         """Create a lightweight functional copy sharing compiled state and config.
 
-        Used by ``SpatialBuilder`` to efficiently clone template demes without
+        Used by ``SpatialConfigurator`` to efficiently clone template demes without
         re-running hook compilation or preset application. The clone shares
         compiled hooks, index registry, modifier pipelines, and config arrays
         with the template. Only state arrays and history are independent.

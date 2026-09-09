@@ -1,5 +1,7 @@
 # SpatialPopulation Initialization Optimization Plan
 
+> **Historical design**: this page records the bottleneck analysis and implementation plan from the time SpatialConfigurator was proposed. It is **not a guarantee of current behavior** — some phases, performance expectations, and API ideas were never implemented. The current implementation entry point is [SpatialConfigurator: Batch Construction of Spatial Populations](spatial_configurator.md).
+
 ## Current State and Bottlenecks
 
 ### 1. Each deme independently goes through the builder pipeline

@@ -129,7 +129,7 @@ class MyCustomPreset(GeneticPreset):
         # 返回ZygoteModifier或None
         return None
 
-    def fitness_patch(self) -> PresetFitnessPatch:
+    def fitness_patch(self) -> Optional[PresetFitnessPatch]:
         """定义适应度效应"""
         # 返回适应度配置字典或None
         return None
@@ -137,8 +137,8 @@ class MyCustomPreset(GeneticPreset):
 
 实现要点：
 
-1. **所有方法都是可选的** - 可以实现 1~3 个方法
-2. **至少实现一个方法** - 否则预设不会有任何效果
+1. **`gamete_modifier` 与 `zygote_modifier` 必须定义** - `GeneticPreset` 是抽象基类，缺少任一个都无法实例化（可以 `return None` 表示该阶段不修饰）
+2. **`fitness_patch` 可选** - 不定义即无适应度效应；定义了也可以返回 `None`
 3. **可以返回 None** - 表示该阶段不需要修饰
 4. **支持延迟物种绑定** - 可以在创建时不指定 `Species`
 5. **`gamete_modifier` / `zygote_modifier` 的入参是 `host`** - 它是一个统一入口（接口约定 `natal.frontend.genetics.compile.RecipeHost`）：运行时指向当前的 Population，编译阶段指向构建中的 Configurator，两种场景都可以通过它读取 `species`、`config`、`registry`、`index_registry` 四项只读信息
@@ -163,9 +163,12 @@ class PointMutation(GeneticPreset):
         ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
         return ruleset.to_gamete_modifier(host)
 
+    def zygote_modifier(self, host):
+        return None  # 合子阶段不修饰
+
     def fitness_patch(self):
         return {
-            "viability_allele": {"Mutant": 0.98}  # 轻微有害
+            "viability_per_allele": {"Mutant": 0.98}  # 轻微有害
         }
 ```
 
@@ -191,6 +194,9 @@ class BidirectionalMutation(GeneticPreset):
         ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None  # 合子阶段不修饰
 ```
 
 ## 小结

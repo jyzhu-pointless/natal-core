@@ -174,7 +174,7 @@ It is recommended to start with Part 1 to get up to speed, then use Part 2 as a 
 14. [IndexRegistry Indexing Mechanism](4_index_registry.md)
 15. [PopulationState and ModelDraft](4_population_state_config.md)
 16. [the Simulation Engine in Depth](4_simulation_engine.md)
-18. [Observation History Recording Implementation](observation_impl.md)
+17. [Observation History Recording Implementation](observation_impl.md)
 
 ## API Documentation
 

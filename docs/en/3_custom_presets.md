@@ -133,7 +133,7 @@ class MyCustomPreset(GeneticPreset):
         # Return ZygoteModifier or None
         return None
 
-    def fitness_patch(self) -> PresetFitnessPatch:
+    def fitness_patch(self) -> Optional[PresetFitnessPatch]:
         """Define fitness effects"""
         # Return fitness configuration dictionary or None
         return None
@@ -141,8 +141,8 @@ class MyCustomPreset(GeneticPreset):
 
 Implementation notes:
 
-1. **All methods are optional** - you can implement 1-3 methods
-2. **At least one method must be implemented** - otherwise the preset will have no effect
+1. **`gamete_modifier` and `zygote_modifier` are abstract methods** - both must be implemented (they may return `None`); otherwise the subclass cannot be instantiated (`TypeError`)
+2. **`fitness_patch` is optional** - the default implementation returns `None`
 3. **Can return None** - indicates no modification needed at that stage
 4. **Supports deferred species binding** - can create without specifying `Species`
 5. **The parameter of `gamete_modifier` / `zygote_modifier` is `host`** - one uniform entry point (interface contract `natal.frontend.genetics.compile.RecipeHost`): at runtime it points to the live Population, during compilation it points to the in-progress Configurator; both expose the same four read-only attributes — `species`, `config`, `registry`, `index_registry`
@@ -167,9 +167,12 @@ class PointMutation(GeneticPreset):
         ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
         return ruleset.to_gamete_modifier(host)
 
+    def zygote_modifier(self, host):
+        return None
+
     def fitness_patch(self):
         return {
-            "viability_allele": {"Mutant": 0.98}  # Slightly deleterious
+            "viability_per_allele": {"Mutant": 0.98}  # Slightly deleterious
         }
 ```
 
@@ -195,6 +198,9 @@ class BidirectionalMutation(GeneticPreset):
         ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 ## 2. Using genotype_filter to Control Rule Scope
@@ -245,7 +251,7 @@ This clearly defines the scope of the mechanism.
 
 ### Integration with Pattern Matching Syntax
 
-When rule conditions are complex, it is recommended to reuse the pattern syntax from the documentation rather than writing manual string containment checks.
+When rule conditions are complex, it is recommended to reuse the pattern matching syntax (see [Genotype Pattern Matching](2_genotype_patterns.md)) rather than writing manual string containment checks.
 
 ```python
 def build_filter_from_pattern(species, pattern: str):
@@ -300,6 +306,9 @@ class PatternBasedPreset(GeneticPreset):
             genotype_filter=pattern_filter,
         )
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 Practical advice:
@@ -333,6 +342,9 @@ class ConditionalMutation(GeneticPreset):
         )
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 ### Maintaining Statistical Consistency with Observations
@@ -408,16 +420,24 @@ class DrivePreset(GeneticPreset):
         )
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
-### Applying Presets in the Builder
+### Applying Presets in the Configurator Build Chain
 
 ```python
+import natal as nt
+
+# The species must declare the W and D alleles used by DrivePreset
+species = nt.Species.from_dict(name="DriveExpSpecies", structure={"chr1": {"A": ["W", "D"]}})
+
 pop = (
     nt.AgeStructuredPopulation
     .setup(species=species, name="DriveExperiment", stochastic=True)
-    .age_structure(n_ages=8)
-    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
+    .age_structure(n_ages=8, new_adult_age=2)
+    .initial_state({"female": {"W|W": 500}, "male": {"W|W": 500}})
     .presets(DrivePreset(conversion_rate=0.55))
     .build()
 )
@@ -433,7 +453,7 @@ Before conducting large-scale experiments, at least complete the following check
 2. Filter check: Does the `genotype_filter` hit range match expectations?
 3. Conservation check: Is frequency normalization valid?
 4. Control check: Is the trend reasonable compared to a baseline without Preset?
-5. Stability check: Are conclusions robust when changing random seeds?
+5. Stability check: for stochastic models (`stochastic=True`), are conclusions robust across repeated runs? (No public random-seed API is exposed yet.)
 
 ### Experiment Recording Advice
 
@@ -442,7 +462,7 @@ It is recommended to write Preset configuration into experiment metadata:
 - Preset name
 - Key parameters (e.g., `conversion_rate`)
 - Code version or commit
-- Random seed
+- Randomness settings (e.g. `stochastic`) and runtime environment
 
 This significantly reduces the risk of "results cannot be reproduced."
 

@@ -11,5 +11,5 @@ steps.
 ## Complete Module Reference
 
 ::: natal.frontend.population.discrete_generation
-		options:
-			heading_level: 3
+    options:
+      heading_level: 3

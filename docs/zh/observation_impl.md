@@ -38,7 +38,7 @@ Population state
 非空间 Configurator 使用：
 
 ```text
-.with_observation(groups, collapse_age=False)
+.with_observation(groups, *, collapse_age=False)
 ```
 
 空间 Configurator 额外接受 deme 选择与处理方式：
@@ -46,6 +46,7 @@ Population state
 ```text
 .with_observation(
     groups,
+    *,
     collapse_age=False,
     demes=None,
     deme_mode="preserve",
@@ -196,7 +197,7 @@ Rust spatial session
 4. `collapse_age=True` 与未折叠结果沿 age 轴求和逐元素相等。
 5. raw History 保留所有 deme、ZType 及适用的 sperm storage。
 6. raw History 的事后投影与同 tick 的 `Observation.apply()` 逐元素相等。
-7. 引擎内批次与带外快照在确定性模拟中产生相同 ticks 和相同 payload。
+7. 引擎内批次与带外快照在确定性模拟中，对同一 tick 产生相同 payload；注意批次记录包含 tick 0 的初始边界，而带外 `record_snapshot()` 记录当前 tick。
 8. 未选择的 deme 不依赖 sentinel 表示，真实零计数不会与选择状态混淆。
 
 断言应比较明确的轴和逐坐标值；只比较总和或排序后的扁平数组无法发现轴交换和 deme 顺序错误。

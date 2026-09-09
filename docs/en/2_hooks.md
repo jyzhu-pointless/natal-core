@@ -106,7 +106,7 @@ nt.Op.set_param("carrying_capacity", "K * 0.95", every=10)
 - `every` / `start` control the firing plan: `tick >= start and (tick - start) % every == 0`; `when` adds an extra condition.
 - The `event` argument defaults to `early`.
 
-- Targets are exactly these **5 ecology parameters** (must be both 0-d writable draft arrays and Rust session columns):
+- Targets are exactly these **5 ecology parameters** (the same ecology scalars `ctx.params` writes by attribute and the Rust session holds as columns):
 
 | Parameter | Notes |
 |---|---|
@@ -215,13 +215,13 @@ pop.run(n_steps=100, record_every=10)
 
 When multiple hooks exist, make the execution order explicit with `priority` to avoid implicit-order reproducibility issues.
 
-## Execution Paths
+## Execution Path
 
-The physical execution path of a hook is decided by the backend selected for the population:
+The native Rust engine is the only execution backend, so hooks have a single execution path:
 
-- **Reference (Python) backend**: declarative Ops compile into a CSR plan (contiguous arrays + offset table) interpreted in Python per event; callbacks (`TickContext`) are invoked directly.
-- **Rust (native extension) backend**: the CSR plan and dispatcher run inside the Rust session; single-parameter callbacks are bridged into the session (each invocation gets its own context wrapper).
-- Both paths run the same event order and the same deterministic arithmetic; `stochastic=False` trajectories are bitwise identical.
+- Declarative `Op`s compile into a CSR program (contiguous arrays + offset table) executed in event order inside the Rust session.
+- Single-parameter callbacks (`TickContext`) cross the Python<->Rust boundary at event boundaries; each invocation gets its own context wrapper, and its writes join that invocation's event transaction — committed on success, discarded on failure.
+- Within one event, declarative ops run first in priority order, then Python callbacks commit one by one in priority order; later operations see earlier writes.
 
 Hooks are "Op is a hook": `Op` objects constitute the hook program, and a declarative `@hook` function is just the compiler entry point returning the Op list. There is no `initialize` event -- express initialization logic with the first tick of the `first` event (`when="tick == 1"`) or with the `finish` event.
 

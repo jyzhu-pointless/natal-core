@@ -5,7 +5,7 @@ Population configuration and initialization.
 
 ## Overview
 
-The `population_config` module handles population configuration, including survival schedules, fecundity rates, and initial population setup.
+The `natal.frontend.data.config` module (`ModelDraft`) handles population configuration, including survival schedules, fecundity rates, and initial population setup.
 
 ## Complete Module Reference
 

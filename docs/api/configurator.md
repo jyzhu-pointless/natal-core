@@ -7,6 +7,14 @@ Parameter configuration — build and runtime modification of population models.
 `Configurator` is the unified API for setting and modifying simulation parameters
 identically at build time and runtime.
 
+## API Reference
+
+::: natal.frontend.configurator._base.Configurator
+    options:
+      heading_level: 3
+      filters:
+        - "!^_"
+
 Key features:
 
 - **Fluent chain API** — `.competition(carrying_capacity=10000).reproduction(eggs_per_female=50).build()`
@@ -14,8 +22,9 @@ Key features:
 - **Runtime modification** — `pop.update().competition(carrying_capacity=5000)` without rebuilding
 - **One configurator** — the same `Configurator` dispatches parameters for discrete and age-structured models
 - **Preset/modifier/fitness** — declarations compile into genetic tables; runtime reconfiguration updates the existing session
-- **Equilibrium sync** — `carrying_capacity` / `eggs_per_female` / `sex_ratio` changes
-  derive the equilibrium metrics on read
+- **Equilibrium metrics** — derived on read (`pop.params.expected_*`); writes to the
+  sensitive parameters (K / eggs / sex_ratio / the Champer overrides) refresh the
+  draft cache
 
 ## Quick Start
 
@@ -52,7 +61,8 @@ cfg = nt.Configurator.for_discrete(species)
 cfg = nt.DiscreteGenerationPopulation.setup(species)
 
 # Chain configuration — only discrete-relevant parameters are shown
-cfg.age_structure(n_ages=2, new_adult_age=1)          # fixed 2 ages
+# Discrete drafts are normalized to 2 ages at construction;
+# age_structure() is not applicable here (it raises RuntimeError).
 cfg.reproduction(
     eggs_per_female=50,               # eggs per female per tick
     sex_ratio=0.5,                    # fraction female offspring
@@ -126,7 +136,7 @@ cfg.initial_state(individual_count={
 Set the initial population distribution. *individual_count* is required,
 format: `{sex: {genotype: age_data}}`.
 
-### `custom(**fields)`
+### `custom(**kwargs)`
 ```python
 cfg.custom(temperature=25.0, debug=True)
 ```
@@ -196,9 +206,9 @@ rules; runtime reconfiguration replaces validated tables without resetting the s
 pop.update().reconfigure_preset(homing_drive, drive_conversion_rate=0.95)
 ```
 Modify a registered preset parameter and re-apply from baselines. Restores
-baseline fitness/gamete arrays, applies the updated preset parameters, and
-syncs equilibrium. Requires that the preset was first registered via
-`presets()`.
+baseline fitness/gamete arrays and recompiles the genetic tables in place.
+Equilibrium metrics follow on read. Requires that the preset was first
+registered via `presets()`.
 
 ### `modifiers(gamete_modifiers=None, zygote_modifiers=None)`
 ```python
@@ -218,24 +228,30 @@ Write fitness values to config arrays. Flat dicts apply to both sexes;
 nested `{"female": {...}, "male": {...}}` for sex-specific values.
 `mode="replace"` overwrites, `mode="multiply"` scales existing values.
 
-### `hooks(*hook_items)`
+### `hooks(*hook_items, event=None, priority=0, deme="*", name=None)`
 ```python
 cfg.hooks(my_hook)
 ```
-Register event hooks, forwarded to the Population constructor at `build()` time.
+Register event hooks. On a build-time chain the registration is stored and
+compiled when `build()` runs; on a runtime chain (`pop.update().hooks(...)`) it
+takes effect immediately.
 
-### `build(name=None, hooks=None)`
+### `build(name=None, hook_items=None)`
 ```python
 pop = cfg.build(name="MyPop")
 ```
-Sync equilibrium metrics and create the Population object.
+Create the Population object: finalize declarations, apply optional index
+compression, and freeze the observation and history layout. `hook_items`
+accepts the same item shapes as `hooks()` and registers them together with
+any hooks already stored by `hooks()`.
 
 ### `apply()`
 ```python
 cfg.apply()
 ```
-Run equilibrium sync without creating a Population. Normally unnecessary —
-`build()` calls `apply()` internally.
+A no-op compatibility shim that returns `self`; `build()` calls it internally.
+Equilibrium metrics are derived on read (`pop.params.expected_*`), so there are
+no stored copies to sync.
 
 ## Runtime Modification
 
@@ -293,12 +309,19 @@ spatial.params.tensor_write("carrying_capacity", [100.0, 200.0, 300.0, 400.0])
 ### `set_param(config, name, value)`
 ```python
 from natal.frontend.configurator import set_param
-set_param(config, "competition.carrying_capacity", 5000.0)
-set_param(config, "carrying_capacity", 5000.0)  # short name also works
+
+draft = pop.config                                     # detached query snapshot
+draft = set_param(draft, "competition.carrying_capacity", 5000.0)
+draft = set_param(draft, "carrying_capacity", 5000.0)   # short name also works
 ```
-The foundation of all higher-level APIs. Resolves parameter names through the
-`parameters.py` registry, locates the config field and index, and writes in-place.
-Equilibrium-sensitive parameters (K / eggs / sex_ratio) auto-trigger sync.
+A **draft-level** function: it resolves names through the `parameters.jsonc`
+registry, locates the config field, and commits the value into the draft it was
+given. It is *not* the runtime write path — `pop.update()` and
+`pop.params` are, and they additionally sync the Rust session and append a
+parameter-log row. Ecology scalars are NamedTuple slots written through
+`_replace`, so the returned draft must be rebound; array-backed fields (custom
+slots, vector/tensor contents) are mutated in place and return the same draft.
+Equilibrium metrics are derived on read, so no stored copies need syncing.
 
 ### Declarative Parameter Updates
 

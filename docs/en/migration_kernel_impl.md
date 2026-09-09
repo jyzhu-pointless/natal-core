@@ -1,4 +1,6 @@
-# Migration Kernel Internal Implementation
+# Migration Kernel Internal Implementation (Historical: the njit era, removed)
+
+> **Historical implementation note**: this page documents the deleted Python/njit migration kernels (symbols such as `_build_kernel_offset_table`, `run_spatial_migration`, and `migrate_scalar_bucket` no longer exist in `src/`, and the `src/natal/engine/` directory is gone). The current implementation folds a CSR at build time in `src/natal/frontend/spatial/migration.py` and executes it in `rust/src/kernels/spatial.rs`. See [Spatial Lifecycle Execution](spatial_lifecycle_wrapper.md) for the current description. The material below explains the historical design only and is not a guarantee of current behavior.
 
 This article covers the underlying mechanisms of kernel-based migration, including the conversion process from kernel to spatial offsets, boundary handling strategies, and routing for heterogeneous kernels.
 
@@ -259,7 +261,7 @@ for src in prange(n_demes):
     )
 ```
 
-This approach does not pre-build an O(n_demes²) dense adjacency matrix; each source deme constructs its sparse migration row on demand within `prange`.
+In the historical implementation this approach did not pre-build an O(n_demes²) dense adjacency matrix; each source deme constructed its sparse migration row on demand within `prange`. **The current implementation differs**: the build always materializes a dense `(n_demes, n_demes)` adjacency (`src/natal/frontend/spatial/population.py`) and then folds it into CSR, so the dense-matrix cost remains for large grids.
 
 ## 6. Comparison with Adjacency Mode
 
@@ -272,7 +274,7 @@ This approach does not pre-build an O(n_demes²) dense adjacency matrix; each so
 | Boundary handling | Pre-encoded in the matrix | Runtime decision (wrap/clip) |
 | Heterogeneous kernels | Not supported (or requires pre-built n² dense matrix) | Per-kernel grouped offset tables |
 
-For large-scale grids (e.g., 501×501 = 251001 demes), kernel mode avoids the storage and access overhead of an O(n²) adjacency matrix.
+In the historical implementation, kernel mode avoided the O(n²) adjacency-matrix overhead for large grids; the current implementation still materializes a dense adjacency first, so that benefit no longer applies.
 
 ## 7. Key Decisions and Edge Cases
 
@@ -307,8 +309,10 @@ if virgin_count < 0.0 and abs(virgin_count) < 1e-10:
 
 | File | Content |
 |------|---------|
-| `src/natal/engine/migration/kernel.py` | `_build_kernel_offset_table`, `_build_source_kernel_sparse_row`, `apply_spatial_kernel_migration` |
-| `src/natal/engine/migration/adjacency.py` | `migrate_scalar_bucket`, `migrate_sperm_bucket` |
-| `src/natal/engine/spatial_migrator.py` | `run_spatial_migration`, `apply_spatial_adjacency_migration` (dispatch entry points) |
-| `src/natal/spatial_population.py` | `_build_heterogeneous_kernel_arrays`, runtime scheduling |
-| `src/natal/engine/templates/spatial_lifecycle_*.tmpl.py` | Code generation templates (calling `run_spatial_migration` in the njit path) |
+| `src/natal/frontend/spatial/migration.py` | `fold_migration_csr`, `_kernel_row_entries` (build-time fold) |
+| `src/natal/frontend/spatial/topology.py` | `build_adjacency_matrix`, `build_gaussian_kernel`, coordinate wrapping |
+| `src/natal/frontend/spatial/population.py` | dense adjacency materialization and migration scheduling |
+| `rust/src/kernels/spatial.rs` | runtime CSR migration kernel |
+| `rust/src/sessions/spatial.rs` | session-level migration calls and deme streams |
+
+Historical files (deleted, listed for reference only): `src/natal/engine/migration/kernel.py`, `.../adjacency.py`, `src/natal/engine/spatial_migrator.py`, `src/natal/spatial_population.py`, `src/natal/engine/templates/spatial_lifecycle_*.tmpl.py`.

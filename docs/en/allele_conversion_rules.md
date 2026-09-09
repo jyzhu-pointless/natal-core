@@ -129,7 +129,7 @@ class MyCustomPreset(GeneticPreset):
         # Return ZygoteModifier or None
         return None
 
-    def fitness_patch(self) -> PresetFitnessPatch:
+    def fitness_patch(self) -> Optional[PresetFitnessPatch]:
         """Define fitness effects"""
         # Return fitness configuration dict or None
         return None
@@ -137,8 +137,8 @@ class MyCustomPreset(GeneticPreset):
 
 Implementation highlights:
 
-1. **All methods are optional** - you can implement 1-3 methods
-2. **At least implement one method** - otherwise the preset will have no effect
+1. **`gamete_modifier` and `zygote_modifier` are required** - `GeneticPreset` is an abstract base class, and a subclass missing either one cannot be instantiated (returning `None` is fine when that stage needs no modification)
+2. **`fitness_patch` is optional** - omit it for no fitness effect; it may also return `None`
 3. **Can return None** - indicating no modification is needed at that stage
 4. **Supports deferred species binding** - `Species` can be unspecified at creation time
 5. **The parameter of `gamete_modifier` / `zygote_modifier` is `host`** - one uniform entry point (interface contract `natal.frontend.genetics.compile.RecipeHost`): at runtime it points to the live Population, during compilation it points to the in-progress Configurator; both expose the same four read-only attributes — `species`, `config`, `registry`, `index_registry`
@@ -163,9 +163,12 @@ class PointMutation(GeneticPreset):
         ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
         return ruleset.to_gamete_modifier(host)
 
+    def zygote_modifier(self, host):
+        return None  # no zygote-stage modification
+
     def fitness_patch(self):
         return {
-            "viability_allele": {"Mutant": 0.98}  # Slightly deleterious
+            "viability_per_allele": {"Mutant": 0.98}  # Slightly deleterious
         }
 ```
 
@@ -191,6 +194,9 @@ class BidirectionalMutation(GeneticPreset):
         ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None  # no zygote-stage modification
 ```
 
 ## Chapter Summary

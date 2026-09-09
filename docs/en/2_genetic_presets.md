@@ -146,9 +146,14 @@ pop.run(n_steps=100)
 import natal as nt
 from natal.frontend.presets import HomingDrive, ToxinAntidoteDrive
 
+# The species must declare every allele the presets use
+species = nt.Species.from_dict("MultiDriveSpecies", {
+    "chr1": {"A": ["WT", "Drive", "Toxin", "Target", "Disrupted"]}
+})
+
 # Create multiple presets
-drive1 = HomingDrive("Drive1", "Drive", "WT", conversion_rate=0.95)
-drive2 = ToxinAntidoteDrive("Drive2", "Toxin", "Target", conversion_rate=0.90)
+drive1 = HomingDrive("Drive1", "Drive", "WT", drive_conversion_rate=0.95)
+drive2 = ToxinAntidoteDrive("Drive2", "Toxin", "Target", "Disrupted", conversion_rate=0.90)
 
 # Apply multiple presets simultaneously
 pop = (nt.DiscreteGenerationPopulation.setup(species, name="MultiDriveTest")

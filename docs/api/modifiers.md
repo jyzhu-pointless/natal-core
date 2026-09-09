@@ -4,7 +4,7 @@ Genetic and fitness modifiers.
 
 ## Overview
 
-The `modifiers` module defines how various genetic and external factors influence individual fitness and allele inheritance.
+The `modifiers` subpackage defines gamete and zygote modifier rules that alter gamete or zygote production (fitness itself lives in `natal.frontend.fitness`).
 
 ## Complete Module Reference
 

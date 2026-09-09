@@ -11,7 +11,7 @@ This chapter covers three scenarios:
 
 ## 1. Between-Tick Modification: `pop.update()`
 
-`pop.update()` returns a `Configurator` wrapper over the current config. Chained methods are identical to the build chain and take effect immediately:
+`pop.update()` returns a `Configurator` **bound to the running population**. Chained methods have the same syntax as the build chain; every call is validated against the parameter route table and committed to the running population (draft and Rust session stay in sync), so later stages of the same tick see the new value:
 
 ```python
 import natal as nt
@@ -31,11 +31,11 @@ pop.update().competition(carrying_capacity=5000)
 # several parameters chained
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
-# custom fields (readable/writable from hooks)
+# custom fields (write in callbacks; read pop.config.custom outside)
 pop.update().custom(temperature=35.0)
 ```
 
-Each call internally goes through `set_param(config, name, value)` -> in-place write of the plain scalar.
+Each call commits to the running population and appends a parameter-log row when the value actually changes; it operates on the running population, not on a query snapshot.
 
 ## 2. Between-Tick Modification: The `pop.params` Surface
 
@@ -57,27 +57,29 @@ for row in pop.params_log:
 
 ---
 
-## 3. Between-Tick Modification: The `set_param()` Low-Level API
+## 3. `set_param()`: A Draft-Level Low-Level API
 
-The underlying implementation of `pop.update()`. Suitable for scripts and notebooks:
+`set_param()` writes only the **draft** you pass in; it never writes to a running population. `pop.config` is a query snapshot, so calling `set_param()` on it does not change the population — use `pop.update()` or `pop.params` to modify a running population. This function suits draft-only work (scripts, notebooks, offline configuration):
 
 ```python
 from natal.frontend.configurator import set_param
 
-set_param(pop.config, "competition.carrying_capacity", 5000.0)
+# Ecology scalars are NamedTuple slots: bind the returned draft
+draft = pop.config
+draft = set_param(draft, "competition.carrying_capacity", 5000.0)
 
 # full name, short name, and aliases all work
-set_param(pop.config, "carrying_capacity", 5000.0)
-set_param(pop.config, "reproduction.eggs_per_female", 100.0)
-set_param(pop.config, "eggs_per_female", 100.0)  # alias
+draft = set_param(draft, "carrying_capacity", 5000.0)
+draft = set_param(draft, "reproduction.eggs_per_female", 100.0)
+draft = set_param(draft, "eggs_per_female", 100.0)  # alias
 ```
 
-Four internal steps:
+Key points:
 
-1. Look up the `parameters.jsonc` registry: full name -> short name -> alias
-2. Locate the config field and the array index
-3. Write in place: `config.carrying_capacity[()] = 5000.0`
-4. Equilibrium metrics (expected_competition_strength / expected_survival_rate) are derived on read — no stored copies to sync
+1. Names resolve through the `parameters.jsonc` registry: full name -> short name -> alias.
+2. Ecology scalars go through `NamedTuple._replace`, so the **return value must be rebound**; array-backed fields (custom slots, vector/tensor contents) are mutated in place and return the same draft.
+3. A draft obtained from `pop.config` is an isolated snapshot: the write lands only on that copy, and even a rebound result never reaches the running population.
+4. Equilibrium metrics (expected_competition_strength / expected_survival_rate) are derived on read — no stored copies to sync.
 
 ---
 
@@ -107,9 +109,9 @@ Rules and notes:
   out-of-bounds values raise `ValueError`, and the write is visible to the later
   stages of the same tick.
 - Vector/tensor parameters use `pop.params.tensor_write(name, values)`.
-- Writing draft arrays directly (bypassing `pop.params`) does **not** sync the
-  equilibrium automatically -- Age-structured models need a manual
-  the metrics follow automatically (derived on read).
+- Equilibrium metrics are not stored in the configuration: every read
+  (`pop.params.expected_competition_strength`, ...) is derived from the current
+  ecology, so it follows ecology writes immediately with no manual sync.
 - Declarative `Op.set_param("carrying_capacity", "K * 0.95", every=10)` is equivalent
   to running the same write chain on a schedule (no Python code), see
   [Hook System](2_hooks.md).
@@ -118,7 +120,7 @@ Rules and notes:
 
 ## 5. Custom Fields: `config.custom`
 
-A 0-d structured numpy array. Fields are registered at build time with `.custom()` and initial values, read/written with `[()]` inside hooks, and changed at runtime via `pop.update().custom()`:
+`custom` is a 0-d structured numpy array. Fields are registered at build time with `.custom()` together with initial values; read them through `pop.config.custom["name"]` (a query snapshot) and write them through `pop.update().custom()`:
 
 ```python
 # build
@@ -128,24 +130,29 @@ pop = (
     .build()
 )
 
-# inside a hook
+# inside a hook: the write joins the event transaction and commits only on success
 @nt.hook(event="early")
-def seasonal_hook(pop: TickContext) -> int:
-    temp = pop.state.config.custom['temperature'][()]
-    if int(pop.state.config.custom['season_idx'][()]) == 1:
-        pop.state.config.custom['temperature'][()] = 35.0
+def seasonal_hook(ctx: TickContext) -> int:
+    if ctx.tick == 0:
+        ctx.update().custom(temperature=35.0)
     return 0
 
-# runtime
+# outside a callback
 pop.update().custom(temperature=35.0, season_idx=1)
+print(pop.config.custom["temperature"])  # 35.0
 ```
 
-Supports `bool`, `float`, and `int`.
+`bool`, `float`, and `int` are supported, as are arrays of any rank; types and shapes are preserved.
 
-> **Note**: custom fields are not in the parameter registry, so `set_param()`,
-> `pop.params`, and `Op.set_param` cannot reach them. Use a direct array write
-> inside a hook (`config.custom["temperature"][()] = value`) or
-> `pop.update().custom(...)`.
+> **Note**: custom fields are not in the parameter route table, and callbacks have
+> **no public read path** for them: `TickContext` exposes no `config`, `ctx.state`
+> has no `config` attribute, and `ctx.params` / `Op.set_param` accept registered
+> parameters only (`Op.set_param` rejects a custom field at compile time with
+> `ValueError`). Read custom values outside callbacks through
+> `pop.config.custom["name"]`, and use callbacks for writes
+> (`ctx.update().custom(...)`). Draft-level `set_param(draft, "temperature", v)`
+> can write a custom slot, but like every `set_param` call it does not commit to a
+> running population.
 
 ---
 
@@ -184,7 +191,7 @@ print(pop.params.migration_rate.shape)  # (n_demes, S, A)
 
 ```python
 pop.deme(3).write_ecology("carrying_capacity", 8000.0)
-pop.deme(3).write_genetics("viability", new_table)
+pop.deme(3).write_genetics("viability_fitness", new_table)
 ```
 
 ### 6.3 `batch_setting`: The Single Entry Point
@@ -195,18 +202,25 @@ At build time, `batch_setting([...])` is the **only** declaration entry for per-
 
 ## 7. Underlying Mechanism
 
-All modification paths converge on the same operation:
+Runtime write entries (`pop.update()`, `pop.params`, in-hook `ctx.params` /
+`ctx.update()`, declarative `Op.set_param`) all converge on the same chain:
 
 ```
-set_param / pop.update() / pop.params / hook-side params writes / Op.set_param
-  -> config.carrying_capacity           # plain scalar
-  -> carrying_capacity[()] = 5000.0     # in-place write (atomic)
+runtime write entry
+  -> route-table name resolution + jsonc bounds validation
+  -> draft field update (ecology scalars go through NamedTuple._replace)
+  -> Rust session parameter sync + parameter snapshot log (tick, name, old, new)
   -> equilibrium metrics derived on read (no stored copies)
 ```
 
+Draft-level `set_param(draft, name, value)` performs only the draft update: it does
+not sync the session and never writes to a running population.
+
 Ecology scalars (K, eggs, sex_ratio, sperm_displacement_rate, low_density_growth_rate,
-juvenile_growth_mode, generation_time, expected_competition_strength,
-expected_survival_rate) are all plain scalars.
+juvenile_growth_mode, generation_time) are plain scalars in the runtime contract;
+equilibrium metrics (expected_competition_strength, expected_survival_rate) are
+read-only derived values read through `pop.params.<name>`; assigning to them raises
+`AttributeError`.
 
 ### `set_config()` -- Whole-Configuration Replacement
 

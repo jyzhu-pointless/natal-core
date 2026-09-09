@@ -53,15 +53,20 @@ class DrivePreset(GeneticPreset):
         )
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
-## 在 Builder 中应用 Preset
+## 在 Configurator 构建链中应用 Preset
 
 ```python
+import natal as nt
+
 pop = (
     nt.AgeStructuredPopulation
     .setup(species=species, name="DriveExperiment", stochastic=True)
-    .age_structure(n_ages=8)
+    .age_structure(n_ages=8, new_adult_age=1)
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .presets(DrivePreset(conversion_rate=0.55))
     .build()
@@ -78,7 +83,7 @@ pop = (
 2. 过滤检查：`genotype_filter` 命中范围是否符合预期
 3. 质量守恒检查：频率归一化是否成立
 4. 对照检查：与无 Preset 的 baseline 对比趋势是否合理
-5. 稳定性检查：更换随机种子后结论是否稳健
+5. 稳定性检查：在随机性模型（`stochastic=True`）下重复运行，结论是否稳健（当前没有公开的随机种子 API，见[模拟内核深度解析](4_simulation_engine.md)的随机流一节）
 
 ## 实验记录建议
 
@@ -87,7 +92,7 @@ pop = (
 - Preset 名称
 - 关键参数（如 `conversion_rate`）
 - 代码版本或 commit
-- 随机种子
+- 随机性设置（如 `stochastic`）与运行环境
 
 这样可以显著降低"结果无法复现"的风险。
 
@@ -169,6 +174,10 @@ class DebugPreset(GeneticPreset):
 
         # 创建修饰器并返回
         # ...
+        return None
+
+    def zygote_modifier(self, host):
+        return None  # 合子阶段不修饰
 ```
 
 ## 发布前检查清单

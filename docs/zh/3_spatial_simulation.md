@@ -16,7 +16,7 @@ spatial = (
 )
 ```
 
-> **提示**：`SpatialConfigurator` 是同构/异构空间种群的首选构造方式。2601 个同构 deme 的构造时间从 ~2.6s 降至 ~16ms。详见 [SpatialConfigurator 文档](spatial_builder.md)。
+> **提示**：`SpatialConfigurator` 是同构/异构空间种群的首选构造方式（构建一次模板、克隆其余 deme）。详见 [SpatialConfigurator 文档](spatial_configurator.md)。
 
 ## 两种构造路径
 
@@ -801,7 +801,7 @@ SpatialPopulation 的实际使用顺序可以记成四步：
 
 ## 相关章节
 
-- [SpatialConfigurator：批量构造](spatial_builder.md)
+- [SpatialConfigurator：空间种群批量构造](spatial_configurator.md)
 - [空间生命周期包装器](spatial_lifecycle_wrapper.md)
 - [Migration Kernel 底层实现](migration_kernel_impl.md)
 - [模拟内核深度解析](4_simulation_engine.md)

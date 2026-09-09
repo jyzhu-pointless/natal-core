@@ -1,5 +1,7 @@
 # SpatialConfigurator Heterogeneous Config Sharing Mechanism
 
+> **Implementation note**: this page describes the internal `ModelDraft._replace` sharing of large arrays during a heterogeneous build. The mechanism is still in use, but it is **not** the whole heterogeneous build — declaration freezing, signature grouping, and template cloning live in [SpatialConfigurator: Batch Construction of Spatial Populations](spatial_configurator.md).
+
 ## Problem
 
 `SpatialConfigurator._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `ModelDraft`.
@@ -147,14 +149,12 @@ With 2601 demes and only `initial_individual_count` differing:
 
 ## File Location
 
-All changes are concentrated in `src/natal/spatial_builder.py`:
+The relevant implementation lives in `src/natal/frontend/spatial/configurator.py`:
 
 | Symbol | Role |
 |---|---|
 | `_ARRAY_KWARGS` | Set of parameters requiring dict→array conversion |
-| `_KWARG_MULTI_FIELD` | Multi-field mapping (carrying_capacity variants) |
 | `_KWARG_RENAMES` | Builder kwarg → config field renames |
-| `_EQUILIBRIUM_SENSITIVE_KWARGS` | Set of parameters requiring equilibrium recalculation |
-| `SpatialConfigurator._build_heterogeneous()` | Main build logic |
+| `SpatialConfigurator._build_heterogeneous_demes()` | Main heterogeneous build flow |
 | `SpatialConfigurator._can_use_replace(sig_map, base_config)` | Determines whether `_replace` can be used |
 | `SpatialConfigurator._build_variant_config()` | Creates variant config |

@@ -95,14 +95,17 @@ class Locus(GeneticStructure['Gene']):
 
     @position.setter
     def position(self, value: Union[int, float]) -> None:
-        """Set the position. Triggers cache invalidation in parent Linkage."""
+        """Set the position and refresh the parent linkage map."""
+        parent = getattr(self, "_parent_chromosome", None)
+        old_sorted_loci = parent.loci.copy() if parent is not None else None
+        old_map = parent._recombination_map if parent is not None else None
         self._position = value
-        # Invalidate parent's cache if exists
-        if hasattr(self, '_parent_chromosome') and self._parent_chromosome is not None:
-            self._parent_chromosome.invalidate_recombination_map_cache()
+        if parent is not None:
+            parent._sorted_loci_cache = None
+            parent._update_recombination_map(old_sorted_loci, old_map, moved_locus=self)
 
     @property
-    def entity_type(self):
+    def entity_type(self) -> type[Gene]:
         """Return the entity type for this structure.
 
         Uses a lazy import to avoid circular dependencies.

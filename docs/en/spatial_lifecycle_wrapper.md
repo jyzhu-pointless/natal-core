@@ -29,20 +29,25 @@ unified migration (runtime rate column x frozen folded CSR)
 ## Migration Data Plane (slice-5)
 
 At build time `fold_migration_csr()` folds the migration configuration into the
-CSR triple (`indptr` / `dest_idx` / `weights`); at runtime it is just
+CSR (`indptr` / `dest_idx` / `weights` / `stay_after_send`); at runtime it is just
 `outbound * weight`:
 
 - **adjacency mode**: each source row stores the raw adjacency values in
-  destination-ascending order.
+  destination-ascending order and is **not row-normalized**; a row's outbound
+  total depends on the adjacency matrix itself (`build_adjacency_matrix(...)`
+  defaults to `row_normalize=False`).
 - **kernel mode**: the per-source historical row builder is reproduced in kernel
   row-major visit order; invalid (out-of-grid) offsets are dropped or wrapped;
   each emitted entry is scaled by the reciprocal of the kernel total -- or of
-  the valid-row total when `adjust_on_edge=True`.
-- Both modes end with a row normalization (a final emitted-row-sum division of
-  the already-scaled entries during the fold), so boundary demes send their full
-  outbound quota to valid destinations just like interior demes. The
-  `adjust_on_edge` switch exists for historical bit-exact parity with the old
-  pipeline, not to change the destination distribution.
+  the valid-row total when `adjust_on_edge=True`. The fold then divides the
+  already-scaled entries by their emitted-row sum, so kernel-mode rows sum to 1
+  and boundary demes send their full outbound quota to valid destinations just
+  like interior demes. The `adjust_on_edge` switch exists for historical
+  bit-exact parity with the old pipeline, not to change the destination
+  distribution.
+- `stay_after_send` distinguishes the bookkeeping order: `False` for adjacency
+  mode (deduct then send) and `True` for kernel mode (send then deduct), keeping
+  each path's deterministic operation order.
 - Migration rate and CSR are separate: the runtime `migration_rate` is a
   `(n_demes, S, A)` column (write-protected view); actual outflow =
   rate x weight.
@@ -83,3 +88,8 @@ After construction, runtime parameter writes have exactly two entries:
 `pop.params.tensor_write(...)` (bulk, recommended) and
 `deme(i).write_ecology(...)` / `write_genetics(...)` (single deme).
 **The `SpatialPopulation.update()` chain has been removed.**
+> **Note**: every access to the spatial container's `pop.params` returns a **new**
+> `SpatialParamsView`, so `pop.params.carrying_capacity = 5` writes only to that
+> temporary view and has no effect on the engine (measured: the parameter value is
+> unchanged). Spatial parameter writes must use `pop.params.tensor_write(...)` or
+> `deme(i).write_ecology(...)`.

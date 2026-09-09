@@ -146,9 +146,14 @@ pop.run(n_steps=100)
 import natal as nt
 from natal.frontend.presets import HomingDrive, ToxinAntidoteDrive
 
+# 物种需要声明预设中用到的全部等位基因
+species = nt.Species.from_dict("MultiDriveSpecies", {
+    "chr1": {"A": ["WT", "Drive", "Toxin", "Target", "Disrupted"]}
+})
+
 # 创建多个预设
-drive1 = HomingDrive("Drive1", "Drive", "WT", conversion_rate=0.95)
-drive2 = ToxinAntidoteDrive("Drive2", "Toxin", "Target", conversion_rate=0.90)
+drive1 = HomingDrive("Drive1", "Drive", "WT", drive_conversion_rate=0.95)
+drive2 = ToxinAntidoteDrive("Drive2", "Toxin", "Target", "Disrupted", conversion_rate=0.90)
 
 # 同时应用多个预设
 pop = (nt.DiscreteGenerationPopulation.setup(species, name="MultiDriveTest")

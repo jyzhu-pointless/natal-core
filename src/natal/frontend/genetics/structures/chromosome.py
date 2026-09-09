@@ -25,12 +25,14 @@ from .chromosome_map import RecombinationMap
 from .locus import Locus
 
 if TYPE_CHECKING:
+    from natal.frontend.genetics.entities.haplotype import Haplotype
+
     from ._registry import ChildStructureRegistry
     from .species import Species
 
 
 # Chromosome (structure-level) -> Haplotype (entity-level)
-class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefinedVariable]
+class Chromosome(GeneticStructure['Haplotype']):
     """
     Represents a chromosome structure with linkage information among loci.
 
@@ -187,7 +189,7 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
         return self._sex_type.sex_system
 
     @property
-    def entity_type(self):
+    def entity_type(self) -> type[Haplotype]:
         """Return the entity type for this structure.
 
         Uses a lazy import to avoid circular dependencies with the
@@ -274,16 +276,20 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
         assert isinstance(locus_or_name, (Locus, str)), \
             f"Expected Locus instance or str, got {type(locus_or_name).__name__}"
         if isinstance(locus_or_name, str):
-            # Create new Locus via base class add method with kwargs
-            created = self.add(locus_or_name, position=position, **kwargs)
+            if locus_or_name in self.child_structures:
+                return self.child_structures.get(locus_or_name)
+            # Create the child directly; ``Chromosome.add`` also invalidates
+            # the map and must not recurse through this convenience method.
+            created = self.child_structures.add(locus_or_name, position=position, **kwargs)
             assert isinstance(created, Locus), \
                 f"Expected add() to return Locus, got {type(created).__name__}"
             locus = created
         else:
             locus = locus_or_name
             # Register existing Locus if not already in registry
-            if locus.name not in self.child_structures:
-                self.child_structures.register(locus)
+            if locus.name in self.child_structures:
+                return self.child_structures.get(locus.name)
+            self.child_structures.register(locus)
 
         # Invalidate cache and update recombination map with insertion handling
         self._sorted_loci_cache = None
@@ -293,6 +299,44 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
         if self._species is not None:
             self._species.invalidate_gene_index_cache()
         return locus
+
+    def add(
+        self,
+        name_or_specs: Union[str, List[str], List[Tuple[str, Dict[str, Any]]]],
+        **kwargs: Any,
+    ) -> Union[GeneticStructure[Any], List[GeneticStructure[Any]]]:
+        """Add locus children and invalidate linkage caches.
+
+        ``GeneticStructure.add`` is part of the chainable public API. Keep
+        that path consistent with :meth:`add_locus` so direct chained adds do
+        not leave ``loci`` or ``recombination_map`` stale.
+
+        Args:
+            name_or_specs: A locus name or a list of names/specifications.
+            **kwargs: Locus constructor arguments, including custom attributes.
+
+        Returns:
+            The added locus or list of loci, using the base-class return shape
+            for compatibility with the generic structure API.
+
+        Raises:
+            AssertionError: If the input is neither a string nor a list.
+            TypeError: If a list item is not a name or a two-item specification.
+        """
+        assert isinstance(name_or_specs, (str, list)), \
+            f"Expected str, List[str], or List[Tuple[str, Dict]], got {type(name_or_specs).__name__}"
+        if isinstance(name_or_specs, str):
+            return self.add_locus(name_or_specs, **kwargs)
+        results: List[GeneticStructure[Any]] = []
+        for item in name_or_specs:
+            if isinstance(item, str):
+                results.append(self.add_locus(item, **kwargs))
+            elif len(item) == 2:
+                child_name, child_kwargs = item
+                results.append(self.add_locus(child_name, **{**kwargs, **child_kwargs}))
+            else:
+                raise TypeError(f"Invalid item in list: {item}. Expected str or (str, dict) tuple.")
+        return results
 
     def remove_locus(self, locus_or_name: Union[Locus, str]) -> None:
         """
@@ -327,6 +371,30 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
             if self._species is not None:
                 self._species.invalidate_gene_index_cache()
 
+    def remove(
+        self,
+        name_or_child: Union[str, GeneticStructure[Any], List[Union[str, GeneticStructure[Any]]]],
+    ) -> None:
+        """Remove locus children while preserving adjacent recombination rates.
+
+        Args:
+            name_or_child: A locus name, locus instance, or list of either.
+                The broader ``GeneticStructure`` annotation preserves the
+                base override contract; runtime validation narrows it to loci.
+
+        Raises:
+            TypeError: If a supplied child is not a locus name or instance.
+        """
+        if isinstance(name_or_child, list):
+            for child in name_or_child:
+                if not isinstance(child, (str, Locus)):
+                    raise TypeError("Chromosome children must be locus names or Locus instances.")
+                self.remove_locus(child)
+        else:
+            if not isinstance(name_or_child, (str, Locus)):
+                raise TypeError("Chromosome children must be locus names or Locus instances.")
+            self.remove_locus(name_or_child)
+
     def get_locus(self, name: str) -> Optional[Locus]:
         """
         Get a locus by name.
@@ -342,7 +410,8 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
         return None
 
     def _update_recombination_map(self, old_sorted_loci: Optional[List[Locus]] = None,
-                                old_map: Optional[RecombinationMap] = None) -> None:
+                                old_map: Optional[RecombinationMap] = None,
+                                moved_locus: Optional[Locus] = None) -> None:
         """Create a recombination map.
 
         If order remains the same, preserve recombination rates.
@@ -361,24 +430,24 @@ class Chromosome(GeneticStructure['Haplotype']):  # pyright: ignore[reportUndefi
             old_rates = np.array([old_map[i] for i in range(len(old_sorted_loci) - 1)], dtype=np.float64)
             self._recombination_map = RecombinationMap(loci=new_sorted_loci, rates=old_rates)
         elif old_sorted_loci and old_map and len(old_sorted_loci) == len(new_sorted_loci):
-            # Order changed, simulate removal and reinsertion of moved loci
-            # Find which loci have changed position
-            differences = 0
-            moved_locus = None
-            old_idx = -1
-
-            for old_locus, new_locus in zip(old_sorted_loci, new_sorted_loci):
-                if old_locus != new_locus:
-                    differences += 1
-                    moved_locus = new_locus
-                    # Find old index of the moved locus
-                    old_idx = old_sorted_loci.index(moved_locus)
-
-            if differences == 1 and moved_locus is not None:
-                # Single locus moved - use the encapsulated method
-                self._update_recombination_map_on_move(moved_locus, old_sorted_loci, old_map, old_idx)
+            # A single locus crossing one or more neighbors changes multiple
+            # positions in the sorted lists. Identify it by comparing each
+            # locus' old and new index, then reuse the existing remove/reinsert
+            # semantics so unaffected intervals retain their rates.
+            moved = [
+                locus for locus in old_sorted_loci
+                if old_sorted_loci.index(locus) != new_sorted_loci.index(locus)
+            ]
+            if moved_locus is None and moved:
+                moved_locus = min(moved, key=lambda locus: old_sorted_loci.index(locus))
+            if moved_locus is not None:
+                self._update_recombination_map_on_move(
+                    moved_locus,
+                    old_sorted_loci,
+                    old_map,
+                    old_sorted_loci.index(moved_locus),
+                )
             else:
-                # Multiple loci moved, create fresh map
                 self._recombination_map = RecombinationMap(loci=new_sorted_loci)
         else:
             # No old state information or different lengths, create fresh map

@@ -8,4 +8,4 @@ The `natal.backends` package holds one adapter:
 
 There is no source-code generation layer anymore: the engine is a
 precompiled native module. Deterministic semantics are locked by the test
-suite against hand-derived expectations and frozen golden values.
+suite against hand-derived expectations and reference trajectories.

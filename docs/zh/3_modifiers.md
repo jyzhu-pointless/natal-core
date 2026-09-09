@@ -44,9 +44,9 @@ Modifier 的作用就是对这两类映射进行有控制的改写。
 - 细胞质不兼容
 - 非孟德尔比例的后代重分配
 
-## 3. 推荐接入方式（Builder）
+## 3. 推荐接入方式（Configurator 构建链）
 
-在用户实践中，推荐在 Builder 阶段统一注册 Modifier：
+在用户实践中，推荐在构建阶段（Configurator 链）统一注册 Modifier：
 
 ```python
 import natal as nt
@@ -177,9 +177,10 @@ pop = (
 )
 ```
 
-没有构建后的 ``set_gamete_modifier`` API。要更换生效的修饰器集合，请重建
-种群（修饰器参与 Blueprint 冻结的遗传映射）；值层面的运行期修改走
-参数/预设通道。
+没有构建后的 ``set_gamete_modifier`` API（也没有替换/删除已注册修饰器的 API）。
+构建后仍可用 ``pop.add_gamete_modifier(...)`` / ``pop.add_zygote_modifier(...)``
+追加修饰器并立即重编译遗传映射；若要整体更换修饰器集合，请重建种群
+（修饰器参与 Blueprint 冻结的遗传映射）；值层面的运行期修改走参数/预设通道。
 
 ### 7.2 优先级
 

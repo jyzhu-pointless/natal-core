@@ -133,7 +133,7 @@ class MyCustomPreset(GeneticPreset):
         # 返回ZygoteModifier或None
         return None
 
-    def fitness_patch(self) -> PresetFitnessPatch:
+    def fitness_patch(self) -> Optional[PresetFitnessPatch]:
         """定义适应度效应"""
         # 返回适应度配置字典或None
         return None
@@ -141,8 +141,8 @@ class MyCustomPreset(GeneticPreset):
 
 实现要点：
 
-1. **所有方法都是可选的** - 可以实现 1~3 个方法
-2. **至少实现一个方法** - 否则预设不会有任何效果
+1. **`gamete_modifier` 与 `zygote_modifier` 是抽象方法** - 两者都必须实现（可以返回 `None`），否则子类无法实例化（`TypeError`）
+2. **`fitness_patch` 是可选的** - 不重写时默认返回 `None`
 3. **可以返回 None** - 表示该阶段不需要修饰
 4. **支持延迟物种绑定** - 可以在创建时不指定 `Species`
 5. **`gamete_modifier` / `zygote_modifier` 的入参是 `host`** - 它是一个统一入口（接口约定 `natal.frontend.genetics.compile.RecipeHost`）：运行时指向当前的 Population，编译阶段指向构建中的 Configurator，两种场景都可以通过它读取 `species`、`config`、`registry`、`index_registry` 四项只读信息
@@ -167,9 +167,12 @@ class PointMutation(GeneticPreset):
         ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
         return ruleset.to_gamete_modifier(host)
 
+    def zygote_modifier(self, host):
+        return None
+
     def fitness_patch(self):
         return {
-            "viability_allele": {"Mutant": 0.98}  # 轻微有害
+            "viability_per_allele": {"Mutant": 0.98}  # 轻微有害
         }
 ```
 
@@ -195,6 +198,9 @@ class BidirectionalMutation(GeneticPreset):
         ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 ## 2. 用 genotype_filter 控制规则生效范围
@@ -245,7 +251,7 @@ ruleset.add_allele_convert(
 
 ### 与模式匹配语法联动
 
-当规则条件复杂时，建议直接复用第13章的 pattern 语法，而不是手写字符串包含判断。
+当规则条件复杂时，建议直接复用模式匹配语法（见 [基因型模式匹配](2_genotype_patterns.md)），而不是手写字符串包含判断。
 
 ```python
 def build_filter_from_pattern(species, pattern: str):
@@ -300,6 +306,9 @@ class PatternBasedPreset(GeneticPreset):
             genotype_filter=pattern_filter,
         )
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 实践建议：
@@ -333,6 +342,9 @@ class ConditionalMutation(GeneticPreset):
         )
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 ### 与 Observation 保持统计口径一致
@@ -408,16 +420,24 @@ class DrivePreset(GeneticPreset):
         )
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
-### 在 Builder 中应用 Preset
+### 在 Configurator 构建链中应用 Preset
 
 ```python
+import natal as nt
+
+# 物种需要声明 DrivePreset 中用到的等位基因 W、D
+species = nt.Species.from_dict(name="DriveExpSpecies", structure={"chr1": {"A": ["W", "D"]}})
+
 pop = (
     nt.AgeStructuredPopulation
     .setup(species=species, name="DriveExperiment", stochastic=True)
-    .age_structure(n_ages=8)
-    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
+    .age_structure(n_ages=8, new_adult_age=2)
+    .initial_state({"female": {"W|W": 500}, "male": {"W|W": 500}})
     .presets(DrivePreset(conversion_rate=0.55))
     .build()
 )
@@ -433,7 +453,7 @@ pop = (
 2. 过滤检查：`genotype_filter` 命中范围是否符合预期
 3. 质量守恒检查：频率归一化是否成立
 4. 对照检查：与无 Preset 的 baseline 对比趋势是否合理
-5. 稳定性检查：更换随机种子后结论是否稳健
+5. 稳定性检查：随机性模型（`stochastic=True`）下重复运行，结论是否稳健（当前没有公开的随机种子 API）
 
 ### 实验记录建议
 
@@ -442,7 +462,7 @@ pop = (
 - Preset 名称
 - 关键参数（如 `conversion_rate`）
 - 代码版本或 commit
-- 随机种子
+- 随机性设置（如 `stochastic`）与运行环境
 
 这样可以显著降低"结果无法复现"的风险。
 

@@ -44,7 +44,7 @@ from natal import Species, HomingDrive, Op
 ```python
 # v0.2.0 — setup() 返回 Configurator，不是 Builder
 configurator = nt.DiscreteGenerationPopulation.setup(species=sp)
-print(type(configurator))  # <class 'natal.frontend.configurator.Configurator'>
+print(type(configurator))  # <class 'natal.frontend.configurator._base.Configurator'>
 ```
 
 ### 3. 运行时修改（新增）
@@ -90,5 +90,5 @@ pop = (
 1. **立即写入**：Configurator 链式方法立即写入 NumPy 数组，不再延迟到 `build()`。对大多数代码透明。
 2. **默认 `Species.unordered=True`**：`A|a` 和 `a|A` 现在产生同一个 `Genotype` 实例。如需追踪亲本起源，设置 `unordered=False`。
 3. **Hook 形态统一**：声明式（无参返回 `List[HookOp]`）、单参数回调（`TickContext`）、选择器回调（`selectors={...}`）三种；`(state, config, deme_id)` 三参数签名已不可用。
-4. **默认存活率**：年龄结构模型默认所有年龄 100% 存活（原为衰减值）。
-5. **运行时参数写入**：`pop.params` / `Op.set_param` / `set_param(config, name, value)`；每次变化记录到 `pop.params_log`。
+4. **默认存活率**：年龄结构模型默认成年年龄（`age >= new_adult_age`）100% 存活，幼体年龄默认为 0——不显式设置 `female_age0_survival` / `male_age0_survival` 会很快灭绝（离散模型默认为 `age0=1`、`age1=0`）。
+5. **运行时参数写入**：`pop.params.<name> = v` / `pop.update().<method>(...)` / `pop.params.tensor_write(...)` / `Op.set_param(...)`；每次实际变化记录到 `pop.params_log`。`set_param(draft, name, value)` 是草稿层底层函数（必须重新绑定返回值），它不写运行种群、也不记日志；完整审计用 `pop.params_log_details`。

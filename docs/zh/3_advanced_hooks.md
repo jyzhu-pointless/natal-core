@@ -170,12 +170,11 @@ def stochastic_culling_hook(pop: TickContext) -> int:
 
 Rust 原生引擎是唯一的执行后端。声明式 Op 编译为 CSR 计划，在引擎会话内执行；
 单参数 Python 回调跨桥进入会话（每个调用获得独立的上下文封装）。
-带外入口——`trigger_event` 与 finish 事件——通过 Python 侧解释器执行同一份
-CSR 计划。
+带外入口——`trigger_event` 与 finish 事件——由 Rust 侧解释器执行同一份 CSR 计划。
 
 ## 混合使用不同类型的 Hook
 
-同一事件可以混合声明式与回调形态，全部按 `priority`（值越小越先执行）排序：
+同一事件可以混合声明式与回调形态。同一事件内，声明式操作先按 `priority`（值越小越先执行）执行，随后 Python 回调按 `priority` 逐个提交：
 
 ```python
 from natal.frontend.hooks import hook, Op
@@ -211,18 +210,19 @@ pop = (
 )
 ```
 
-同一优先级的 Hook 执行顺序不确定；跨后端的优先级语义一致。
+同一优先级的 Hook 执行顺序不确定；tick 内、`trigger_event` 与 finish 事件三种入口的优先级语义一致。
 
-## 性能比较
+## 形态选择
 
-| Hook 类型 | 性能 | 灵活性 | 可读性 | 适用场景 |
-|----------|------|--------|--------|----------|
-| 声明式 Hook | 高 | 中 | 高 | 大多数常规场景 |
-| Selector-based Hook | 高（索引烘焙） | 高 | 中 | 需要基于特定目标执行逻辑的场景 |
-| 回调 Hook | 中（Python 回调） | 高 | 中 | 计算密集型、需要读写参数/自定义逻辑的场景 |
+| Hook 类型 | 灵活性 | 可读性 | 适用场景 |
+|----------|--------|--------|----------|
+| 声明式 Hook | 中 | 高 | 大多数常规场景 |
+| Selector-based Hook | 高（索引烘焙） | 中 | 需要基于特定目标执行逻辑的场景 |
+| 回调 Hook | 高 | 中 | 计算密集型、需要读写参数或自定义逻辑的场景 |
 
-声明式 Op 完全在引擎会话内执行，是性能最优路径；回调 Hook 每次触发跨一次
-Python↔Rust 边界。
+本表是定性指引，不含测量数据。声明式 Op 完全在引擎会话内执行；回调 Hook 每次
+触发跨一次 Python↔Rust 边界。实际性能取决于模型规模与回调内容，请以自己的
+工作负载实测为准。
 
 ## 运行时修改参数
 
@@ -247,9 +247,11 @@ def heatwave(pop: TickContext) -> int:
 - 每条实际变化追加到 `pop.params_log`，格式 `(tick, name, old, new)`；
 - 向量/张量参数用 `pop.params.tensor_write(name, values)`。
 
-自定义字段通过 `population.config.custom['name']` 读取，构建时用
-`.custom(temperature=25.0)` 初始化，运行时可用 `pop.update().custom(...)` 修改。
-自定义值保留 bool/int/float 类型以及任意维数数组的形状；空间模型按 deme 独立保存，并纳入检查点。自定义字段不在参数注册表中，`pop.params` 无法访问它们。
+自定义字段在回调外用 `pop.config.custom['name']` 读取（查询快照），构建时用
+`.custom(temperature=25.0)` 初始化，运行时用 `pop.update().custom(...)` 修改。
+自定义值保留 bool/int/float 类型以及任意维数数组的形状；空间模型按 deme 独立保存，并纳入检查点。
+
+回调内**没有公开的读取入口**：`TickContext` 不提供 `config`，`ctx.state` 也没有 `config` 属性，`ctx.params` 只接受注册参数。回调内可写（`ctx.update().custom(...)`，随事件事务提交），读取请在回调外进行。自定义字段不在参数路由表中，因此 `Op.set_param` 在编译期拒绝它们（`ValueError`）。
 
 Hook 内如需构建链式更新，可用 `pop.update()` 返回的 Configurator（与构建链同语法）。
 

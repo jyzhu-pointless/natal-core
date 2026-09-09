@@ -64,9 +64,12 @@ sp = nt.Species.from_dict(
 ```python
 # 查看所有可能的基因型
 all_genotypes = sp.get_all_genotypes()
-print(f"总共有 {len(all_genotypes)} 种基因型")
-# 输出: 总共有 6 种基因型
+print(f"总共有 {len(all_genotypes)} 个基因型枚举项")
+# 输出: 总共有 9 个基因型枚举项
+# 枚举按母本|父本的有序组合展开，默认 unordered=True 下会规范化，去重后为 6 种：
 # (WT|WT, WT|Drive, WT|Resistance, Drive|Drive, Drive|Resistance, Resistance|Resistance)
+print(f"去重后: {len(set(all_genotypes))} 种")
+# 输出: 去重后: 6 种
 
 # 获取特定基因型
 wt_wt = sp.get_genotype_from_str("WT|WT")
@@ -207,7 +210,7 @@ pop = (nt.DiscreteGenerationPopulation
 ```python
 pop = (nt.AgeStructuredPopulation
     .setup(species=sp, name="MyPop")
-    .age_structure(n_ages=8)
+    .age_structure(n_ages=8, new_adult_age=2)
     .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
     .fitness(viability={
         "Resistance|Resistance": {"female": 0.7},   # 抗性纯合子生存率降低
@@ -254,7 +257,7 @@ pop = (nt.AgeStructuredPopulation
 )
 ```
 
-> **💡 提示**: 对于需要高性能或复杂逻辑的高级用户，可以注册单参数回调 Hook 或选择器 Hook；两种后端都会执行同一套事件语义。详见 [Hook 系统](2_hooks.md)
+> **💡 提示**: 对于需要高性能或复杂逻辑的高级用户，可以注册单参数回调 Hook 或选择器 Hook；它们与声明式 Hook 执行同一套事件语义。详见 [Hook 系统](2_hooks.md)
 
 ---
 
@@ -381,6 +384,8 @@ pop = (nt.DiscreteGenerationPopulation
     .setup(species=sp, name="FruitFlyPop", stochastic=True)
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50, sex_ratio=0.5)
+    .competition(low_density_growth_rate=6.0, carrying_capacity=100000,
+                 juvenile_growth_mode="beverton_holt")   # 密度制约，避免种群指数爆炸
     .presets(drive)
     .hooks(release_drive)              # 注册 Hook
     .build()

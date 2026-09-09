@@ -346,6 +346,11 @@ class OutputMixin(ModifierPresetMixin):
         if self._state is None or self._registry is None:
             return {}
 
+        # A Rust-backed population marks its Python snapshot stale after a run.
+        # Read through the live-state boundary so this query observes the
+        # current session state without requiring a separate public state read.
+        state = self._live_state()
+
         # 1. Initialize counters.
         allele_counts: Dict[str, float] = {}
         locus_totals: Dict[str, float] = {}  # locus_name -> total_count
@@ -359,7 +364,7 @@ class OutputMixin(ModifierPresetMixin):
         # 2. Aggregate genotype counts.
         # individual_count shape: (n_sexes, n_ages, n_genotypes)
         # Sum over sex and age to get total count per genotype.
-        genotype_counts = self._state.individual_count.sum(axis=(0, 1))
+        genotype_counts = state.individual_count.sum(axis=(0, 1))
 
         registry = self._registry
         for z_idx, (genotype, _slab) in enumerate(registry.index_to_ztype):

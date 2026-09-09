@@ -46,19 +46,28 @@ class DrivePreset(GeneticPreset):
             return name in {"W|D", "D|W"}
 
         ruleset.add_allele_convert(
+            from_allele="W",
+            to_allele="D",
+            rate=self.conversion_rate,
+            genotype_filter=is_wd_heterozygote,
         )
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
-## Applying a Preset in the Builder
+## Applying a Preset in the Configurator chain
 
 ```python
+import natal as nt
+
 pop = (
-    nt.AgeStructuredPopulation.setup(species=species)
-    .setup(name="DriveExperiment", stochastic=True)
-    .age_structure(n_ages=8)
-    .initial_state({...})
+    nt.AgeStructuredPopulation
+    .setup(species=species, name="DriveExperiment", stochastic=True)
+    .age_structure(n_ages=8, new_adult_age=1)
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .presets(DrivePreset(conversion_rate=0.55))
     .build()
 )
@@ -74,7 +83,7 @@ Before conducting large-scale experiments, at least complete the following check
 2. Filter check: does the `genotype_filter` hit the expected scope?
 3. Conservation check: is frequency normalization valid?
 4. Control check: is the trend reasonable compared to a baseline without the Preset?
-5. Stability check: are conclusions robust when the random seed changes?
+5. Stability check: are conclusions robust across repeated runs under the stochastic model (`stochastic=True`)? (There is no public random-seed API; see the RNG section of [the Simulation Engine Deep Dive](4_simulation_engine.md).)
 
 ## Experiment Recording Recommendations
 
@@ -83,7 +92,7 @@ It is recommended to write Preset configuration into experiment metadata:
 - Preset name
 - Key parameters (e.g., `conversion_rate`)
 - Code version or commit
-- Random seed
+- Stochastic settings (e.g. `stochastic=True`) and run environment
 
 This significantly reduces the risk of "results cannot be reproduced."
 
@@ -165,6 +174,10 @@ class DebugPreset(GeneticPreset):
 
         # Create modifier and return
         # ...
+        return None
+
+    def zygote_modifier(self, host):
+        return None  # no zygote-stage modification
 ```
 
 ## Pre-release Checklist

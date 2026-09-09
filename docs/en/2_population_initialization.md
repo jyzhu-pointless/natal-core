@@ -30,6 +30,17 @@ pop = (
 )
 ```
 
+### Runtime Modification
+
+After the build completes, parameters can still be changed at any time through `pop.update()` — no rebuild needed:
+
+```python
+pop.update().competition(carrying_capacity=5000)
+pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
+```
+
+See the [Configurator API Reference](api/configurator.md).
+
 ## Configuration Flow
 
 The complete configuration flow is as follows:

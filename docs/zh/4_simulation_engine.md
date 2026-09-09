@@ -92,7 +92,7 @@ pop.run_tick()
 
 1. reproduction
   - 仅使用 age1 成体进行交配与受精。
-  - 使用临时 `temp_sperm_store` 参与当步受精，不跨 tick 保留长期精子库。
+  - 当步用临时配对/受精缓冲完成受精，不跨 tick 保留精子库（离散模型没有 `sperm_storage` 状态）。
   - 产出的后代写入 age0。
 2. survival
   - 先对 age0 做密度调节（同样支持四种 growth mode）。
@@ -137,12 +137,14 @@ Rust 原生扩展 `natal._engine_rs` 是唯一的执行引擎。它在引擎会�
 
 ## 5. 与 `state`/`config` 的关系
 
-模拟运行时，内核读写的是两个核心对象：
+运行状态与生态参数由 Rust 会话持有；Python 侧的 `pop.state` 与 `pop.config` 只是**查询快照**（每次访问重新生成，修改它们不影响引擎），详见 [PopulationState 与 ModelDraft](4_population_state_config.md)。
 
-- `state`：当前时刻的数量分布与时间步。
-- `config`：生存率、交配率、适应度、映射矩阵等规则参数。
+- `state`：当前时刻的数量分布与时间步（快照读）。
+- `config`：生存率、交配率、适应度、映射矩阵等规则参数的投影（快照读）。
 
-如果你已经阅读上一章，可以将本章理解为“`state`/`config` 如何在每个 tick 中被消费与更新”。
+运行期写入走受控通道：`pop.params.<name>` / `pop.update()`（标量）、`pop.params.tensor_write(...)`（向量与张量）。空间容器不暴露 `state`/`config` 属性，其参数写入见[空间生命周期执行](spatial_lifecycle_wrapper.md)。
+
+如果你已经阅读上一章，可以将本章理解为“这些快照如何在每个 tick 中被消费与更新”。
 
 ## 6. 历史记录机制
 
@@ -167,6 +169,7 @@ history = pop.history.individual_count
 state_flat = pop.export_state()
 # ... 保存或外部处理 ...
 pop.import_state(state_flat)
+# import_state() 同时清空该种群的历史，时间线从头开始
 ```
 
 典型场景：

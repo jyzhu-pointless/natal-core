@@ -21,13 +21,11 @@ Observation rules are configured during population setup:
 ```python
 from natal.frontend.patterns.individual_selector import IndividualSelector
 
-pop = nt.AgeStructuredPopulation.setup(
-    species=species,
-    configurator=(
-        nt.Configurator(species)
-        .with_observation({"adult_wt": IndividualSelector(ztype="WT|WT", age=[1])})
-        .record_history()
-    ),
+pop = (
+    nt.AgeStructuredPopulation.setup(species=species)
+    .with_observation({"adult_wt": IndividualSelector(ztype="WT|WT", age=[1])})
+    .record_history()
+    .build()
 )
 
 # Current state:

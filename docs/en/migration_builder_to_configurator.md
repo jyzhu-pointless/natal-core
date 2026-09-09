@@ -45,7 +45,7 @@ are in `natal.frontend.genetics`, `natal.frontend.patterns`, ...).
 ```python
 # v0.2.0 -- setup() returns a Configurator, not a Builder
 configurator = nt.DiscreteGenerationPopulation.setup(species=sp)
-print(type(configurator))  # <class 'natal.frontend.configurator.Configurator'>
+print(type(configurator))  # <class 'natal.frontend.configurator._base.Configurator'>
 ```
 
 ### 3. Runtime modification (new)
@@ -91,5 +91,5 @@ Note: there is no `SpatialPopulation.setup(...)` static method -- the entry poin
 1. **Immediate writes**: Configurator chain methods write into the NumPy arrays immediately rather than deferring to `build()`. Transparent to most code.
 2. **`Species.unordered=True` by default**: `A|a` and `a|A` now produce the same `Genotype` instance. Set `unordered=False` to track parental origin.
 3. **Unified hook shapes**: declarative (no params, returns `List[HookOp]`), single-parameter callback (`TickContext`), and selector callback (`selectors={...}`); the `(state, config, deme_id)` three-parameter signature is no longer available.
-4. **Default survival**: age-structured models default to 100% survival at all ages (previously a decay profile).
-5. **Runtime parameter writes**: `pop.params` / `Op.set_param` / `set_param(config, name, value)`; every change is recorded in `pop.params_log`.
+4. **Default survival**: age-structured models default to 100% survival at adult ages (`age >= new_adult_age`) and 0 at juvenile ages — without an explicit `female_age0_survival` / `male_age0_survival` the population dies out quickly (the discrete model defaults to `age0=1`, `age1=0`).
+5. **Runtime parameter writes**: `pop.params.<name> = v` / `pop.update().<method>(...)` / `pop.params.tensor_write(...)` / `Op.set_param(...)`; every actual change is recorded in `pop.params_log`. `set_param(draft, name, value)` is a draft-level function (rebind the return value): it neither writes a running population nor logs a row; use `pop.params_log_details` for the complete audit.

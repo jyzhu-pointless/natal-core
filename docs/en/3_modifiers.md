@@ -46,7 +46,7 @@ Typical uses:
 
 ## 3. Recommended Integration Method
 
-In practice, it is recommended to register Modifiers uniformly at the Builder stage:
+In practice, it is recommended to register Modifiers uniformly during the build stage (the Configurator chain):
 
 ```python
 import natal as nt
@@ -178,28 +178,12 @@ pop = (
 )
 ```
 
-There is no post-build ``set_gamete_modifier`` API. To change the active
-modifier set, rebuild the population (modifiers participate in the
-Blueprint-frozen inheritance maps), or use runtime parameter/preset
-channels for value-level changes.
-
-### 7.2 Priority
-
-When multiple modifiers act simultaneously, they execute in the order
-given to ``.modifiers()`` (earlier entries first):
-
-```python
-pop = (
-    nt.AgeStructuredPopulation.setup(species)
-    .modifiers(gamete_modifiers=[base_mod, drive_mod])
-    .build()
-)
-```
-
-Put "base rules" earlier and "override/correction rules" later so the
-later maps win.
-
-es.
+There is no post-build ``set_gamete_modifier`` API (and no API to replace or
+remove an already registered modifier). After the build you can still append
+modifiers with ``pop.add_gamete_modifier(...)`` / ``pop.add_zygote_modifier(...)``,
+which recompiles the inheritance maps immediately. To change the whole modifier
+set, rebuild the population (modifiers participate in the Blueprint-frozen
+inheritance maps), or use runtime parameter/preset channels for value-level changes.
 
 ### 7.2 Priority
 

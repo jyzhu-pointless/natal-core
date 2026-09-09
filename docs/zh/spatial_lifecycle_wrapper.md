@@ -22,17 +22,19 @@ Rust 原生扩展是唯一的执行引擎，所有路径共享同一套 hook 计
 
 ## 迁移数据面（slice-5）
 
-构建时 `fold_migration_csr()` 把迁移配置折叠为 CSR 三件套
-（`indptr` / `dest_idx` / `weights`），运行时只做 `outbound * weight`：
+构建时 `fold_migration_csr()` 把迁移配置折叠为 CSR
+（`indptr` / `dest_idx` / `weights` / `stay_after_send`），运行时只做 `outbound * weight`：
 
-- **adjacency 模式**：每个源行按目标升序存原始邻接值。
+- **adjacency 模式**：每个源行按目标升序存原始邻接值，**不做行归一化**；行的迁出
+  总量取决于邻接矩阵本身（`build_adjacency_matrix(..., row_normalize=False)` 是默认值）。
 - **kernel 模式**：按 kernel row-major 访问顺序复现历史 per-source 构建器；
   无效（越界）偏移丢弃或回绕；条目按 `1/kernel_total` 缩放——当
-  `adjust_on_edge=True` 时按 `1/valid_row_total` 缩放。
-- 两种模式最终都会把行归一化（折叠时对已缩放条目再做一次 emitted-row 求和除法），
-  因此**边界 deme 与内部 deme 一样把全部迁出配额送往有效目标**；
-  `adjust_on_edge` 开关的意义是保持与旧管线对位的历史位级运算顺序，而不是改变
-  目的地分布。
+  `adjust_on_edge=True` 时按 `1/valid_row_total` 缩放；折叠时再对已缩放条目做一次
+  emitted-row 求和除法，因此 kernel 模式的行权重和为 1，**边界 deme 与内部 deme 一样
+  把全部迁出配额送往有效目标**。`adjust_on_edge` 的意义是保持与旧管线对位的历史位级
+  运算顺序，而不是改变目的地分布。
+- `stay_after_send` 区分记账顺序：adjacency 模式为 `False`（先扣后发），kernel 模式为
+  `True`（先发后扣），用于保持各自的确定性运算顺序。
 - 迁移率与 CSR 分离：运行时 `migration_rate` 是 `(n_demes, S, A)` 列（写保护
   视图），实际出流量 = 率 × 权重。
 - **换拓扑 = 重建**：CSR 在构建时折叠；修改拓扑/邻接/核参数后必须重建种群
@@ -66,3 +68,8 @@ pop.params.tensor_write("migration_rate", {"F": 0.2, "M": 0.05})  # 运行时改
 构建后运行时参数写入只有两个入口：`pop.params.tensor_write(...)`（批量、
 推荐）与 `deme(i).write_ecology(...)` / `write_genetics(...)`（单 deme）。
 **`SpatialPopulation.update()` 链已删除**。
+
+> **注意**：空间容器的 `pop.params` 每次访问都返回**新的** `SpatialParamsView`。
+> 因此 `pop.params.carrying_capacity = 5` 只会写到这个临时视图上，对引擎无效
+> （实测参数值不变）。空间参数写入必须用 `pop.params.tensor_write(...)` 或
+> `deme(i).write_ecology(...)`。

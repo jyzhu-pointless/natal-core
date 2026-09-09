@@ -64,9 +64,13 @@ This separation allows the simulation to flexibly define complex genetic archite
 ```python
 # View all possible genotypes
 all_genotypes = sp.get_all_genotypes()
-print(f"There are {len(all_genotypes)} genotypes in total")
-# Output: There are 6 genotypes in total
+print(f"There are {len(all_genotypes)} genotype enumeration entries")
+# Output: There are 9 genotype enumeration entries
+# The enumeration expands ordered maternal|paternal pairs; with the default
+# unordered=True they canonicalize to 6 unique genotypes:
 # (WT|WT, WT|Drive, WT|Resistance, Drive|Drive, Drive|Resistance, Resistance|Resistance)
+print(f"After deduplication: {len(set(all_genotypes))} genotypes")
+# Output: After deduplication: 6 genotypes
 
 # Get specific genotypes
 wt_wt = sp.get_genotype_from_str("WT|WT")
@@ -207,8 +211,8 @@ If you need to configure fitness effects, you can do so in the `fitness()` metho
 ```python
 pop = (nt.AgeStructuredPopulation
     .setup(species=sp, name="MyPop")
-    .age_structure(n_ages=8)
-    .initial_state({...})
+    .age_structure(n_ages=8, new_adult_age=2)
+    .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
     .fitness(viability={
         "Resistance|Resistance": {"female": 0.7},   # Resistance homozygotes have reduced survival
         "Drive|Drive": {"female": 0.0}              # Drive homozygotes are sterile
@@ -381,6 +385,8 @@ pop = (nt.DiscreteGenerationPopulation
     .setup(species=sp, name="FruitFlyPop", stochastic=True)
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50, sex_ratio=0.5)
+    .competition(low_density_growth_rate=6.0, carrying_capacity=100000,
+                 juvenile_growth_mode="beverton_holt")   # Density dependence keeps the population bounded
     .presets(drive)
     .hooks(release_drive)              # Register Hook
     .build()
@@ -463,7 +469,7 @@ Now that you have mastered the basics! Next, you can:
 **A**: Additional dimensions used to label gametes. For example, "default" and "Cas9_deposited" can distinguish between gametes with or without Cas9 protein deposition. When calculating zygotes, both the allele and the label of the gamete are considered.
 
 ### Q: Why is initialization slow?
-**A**: During initialization, two mapping matrices need to be generated, with complexity related to the 3rd-4th power of the number of genotypes; the first build takes from a few seconds to tens of seconds depending on the genotype count. This only happens once. Each subsequent tick is fast, with the Rust backend considerably faster.
+**A**: During initialization, two mapping matrices need to be generated, with complexity related to the 3rd-4th power of the number of genotypes; the first build takes from a few seconds to tens of seconds depending on the genotype count. This only happens once. Each subsequent tick is fast.
 
 ### Q: When should I use a discrete-generation population?
 **A**: When your model does not require age structure, using `DiscreteGenerationPopulation` is simpler. It is suitable for:

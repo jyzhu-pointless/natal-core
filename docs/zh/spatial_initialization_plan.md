@@ -1,5 +1,7 @@
 # SpatialPopulation 初始化优化计划
 
+> **历史方案（Historical Design）**：本页记录 SpatialConfigurator 立项时的瓶颈分析与实施规划，**不是当前行为保证**；其中的阶段划分、性能预期和 API 设想未必都已实现。当前实现入口见 [SpatialConfigurator：空间种群批量构造](spatial_configurator.md)。
+
 ## 现状与瓶颈
 
 ### 1. 每个 deme 独立走 builder 流程

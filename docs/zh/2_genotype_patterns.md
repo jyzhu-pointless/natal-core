@@ -173,21 +173,25 @@ pattern3 = "(A1/{B1,B2}|A2/{B1,B2});(C1::C2)"
 
 ### 与 Observation 结合
 
-Observation 章节中的 `groups["genotype"]` 支持 `GenotypePattern` 解析：
+Observation 章节中 `with_observation(groups=...)` 的每个值必须是 `IndividualSelector`，其 `ztype` 字段支持 `GenotypePattern` 解析：
 
 ```python
+import natal as nt
+
 groups = {
-    "target_group": {
+    "target_group": nt.IndividualSelector(
         # 有序匹配：Maternal|Paternal
-        "genotype": "A1/B1|A2/B2; C1/D1|C2/D2",
-        "sex": "female",
-    },
-    "target_group_unordered": {
+        ztype="A1/B1|A2/B2; C1/D1|C2/D2",
+        sex="female",
+    ),
+    "target_group_unordered": nt.IndividualSelector(
         # 无序匹配：同源染色体两条拷贝可交换
-        "genotype": "A1/B1::A2/B2; C1/D1::C2/D2",
-        "sex": "female",
-    }
+        ztype="A1/B1::A2/B2; C1/D1::C2/D2",
+        sex="female",
+    ),
 }
+
+# 在构建期传入：.with_observation(groups)
 ```
 
 ### 与 Preset 结合
@@ -203,6 +207,9 @@ class PatternDrivenPreset(GeneticPreset):
 
     def _build_filter(self, species):
         return species.parse_genotype_pattern(self.target_pattern)
+
+    def zygote_modifier(self, host):
+        return None
 
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("pattern_rules")

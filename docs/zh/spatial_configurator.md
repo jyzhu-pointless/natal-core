@@ -1,6 +1,6 @@
 # SpatialConfigurator：空间种群批量构造
 
-`SpatialConfigurator` 通过「构建一次模板，克隆 N-1 次」的策略解决多 deme 初始化时的重复计算问题。2601 个同构 deme 的构造时间从 ~2.6s 降至 ~16ms。
+`SpatialConfigurator` 通过「构建一次模板，克隆 N-1 次」的策略解决多 deme 初始化时的重复计算问题。
 
 ## 快速开始
 
@@ -38,7 +38,7 @@ SpatialPopulation.builder(...)
     │
     └─► SpatialConfigurator         ← 面向用户的链式 API
            │
-           ├─ _template        ← AgeStructuredPopulationBuilder（或 DiscreteGeneration…）
+           ├─ _template        ← 单 deme 模板 Configurator（不是已删除的 Builder 类）
            │                     始终只看到一个 deme 的标量参数
            ├─ _batch_settings  ← {参数名: BatchSetting}
            │                     拦截到的跨 deme 变化参数
@@ -46,9 +46,9 @@ SpatialPopulation.builder(...)
                                  每次链式调用的完整记录
 ```
 
-`SpatialConfigurator` 不修改现有 builder 类，而是在外层包装。链式调用阶段同时做三件事：
+`SpatialConfigurator` 不新增种群类，而是在外层包装一个单 deme 模板 `Configurator`。链式调用阶段同时做三件事：
 
-1. **代理给 `_template`** — template builder 始终收到标量值，保持正确的内部状态
+1. **代理给 `_template`** — 模板 `Configurator` 始终收到标量值，保持正确的内部状态
 2. **检测 `BatchSetting`** — 拦截并存储到 `_batch_settings`，template 只拿到 `first_value()`
 3. **记录到 `_declaration_log`** — 保留原始参数（含 BatchSetting 对象），供异构场景回放
 
@@ -98,7 +98,7 @@ def _detect_and_delegate(self, method_name, kwargs):
 
 优先级：`age_1_carrying_capacity` > `old_juvenile_carrying_capacity` > `carrying_capacity`。
 
-这在 `_declaration_log` 中统一键名，确保异构回放时参数名与 template builder 签名一致。
+这在 `_declaration_log` 中统一键名，确保异构回放时参数名与模板 `Configurator` 的方法签名一致。
 
 ## 两条构建路径
 
@@ -130,7 +130,7 @@ _build_heterogeneous():
 
     4. 对每组:
        a. _build_template_for_group(sig_map)
-          # 创建新 builder，重放 _declaration_log，替换 batch 参数为组值
+          # 创建新模板 Configurator，重放 _declaration_log，替换 batch 参数为组值
        b. 组内其余 deme = _clone_deme(group_template)
 
     5. 按索引组装所有 deme，构造 SpatialPopulation
@@ -140,7 +140,8 @@ _build_heterogeneous():
 
 ```python
 def _build_template_for_group(self, sig_map):
-    builder = AgeStructuredPopulationBuilder(self._species)  # 全新的 builder
+    # 为该组新建单 deme 模板（与 SpatialConfigurator.__init__ 同一入口）
+    template = Configurator.from_species(self._species, discrete=(self._pop_type != "age_structured"))
 
     for method_name, kwargs in self._declaration_log:
         resolved = {}
@@ -152,52 +153,35 @@ def _build_template_for_group(self, sig_map):
             else:
                 resolved[key] = value           # 非 batch 参数原样传递
 
-        getattr(builder, method_name)(**resolved)
+        getattr(template, method_name)(**resolved)
 
-    return builder.build()
+    return template.build()
 ```
+
+组内第一个模板完整构建后，后续组的 variant config 通过 `ModelDraft._replace` 共享未替换字段的大数组；可替换参数的发现、平衡态重算与不支持异构的字段见 [异构 Config 共享机制](spatial_config_replace.md)。
 
 ## `_clone_deme`：零编译开销的克隆
 
-克隆用 `__new__` 创建实例，完全绕过 `__init__`，避免重复执行 hook 编译和 config 构建。
+`_clone_deme(template, config, name)` 委托给种群实例的 `_clone(name=..., config=...)`：用 `__new__` 创建实例、完全绕过 `__init__`，因此不会重复执行 Hook 编译和配置构建。
 
 ```python
 def _clone_deme(template, config, name):
-    clone = AgeStructuredPopulation.__new__(AgeStructuredPopulation)
-
-    # === 共享引用（仿真期间只读）===
-    clone._species           = template._species
-    clone.hook_entries               = template.hook_entries          # Hook entry list per event
-    clone.compiled_hook_descriptors = template.compiled_hook_descriptors  # Compiled hook descriptors
-    clone.hook_executor            = template.hook_executor           # Hook execution engine
-    clone._config            = config                        # ModelDraft（共享）
-    clone._index_registry    = template._index_registry      # 基因型查找表
-    clone._registry          = template._registry
-    clone._gamete_modifiers  = template._gamete_modifiers    # 配子修饰器
-    clone._zygote_modifiers  = template._zygote_modifiers
-    clone._genotypes_list    = template._genotypes_list
-    clone._haploid_genotypes_list = template._haploid_genotypes_list
-
-    # === 独立复制 ===
-    clone._name    = name
-    clone._history = []
-    clone._state   = State.create(...)                        # 新 state 数组
-    # `state` 返回快照（R5 之后），填充克隆必须写活容器：
-    clone._state.individual_count[:] = template._state.individual_count
-    clone._state.sperm_storage[:]     = template._state.sperm_storage
-    clone._initial_population_snapshot  = (copy of template's snapshot)
-
-    return clone
+    # config 按引用交给克隆；同构构建中所有克隆共享同一份导出配置
+    return template._clone(name=name, config=config)
 ```
 
-| 属性 | 共享/独立 | 原因 |
-|------|----------|------|
-| `compiled_hook_descriptors`, `hook_entries`, `hook_executor` | 共享引用 | 无状态，同构 deme 只读共享；子集 `set_hook` 时触发 copy-on-write |
-| `_config` | 共享引用 | 同构 deme 的 config 完全一致 |
-| `_index_registry`, `_registry` | 共享引用 | 物种相同则基因型索引相同 |
-| `_gamete_modifiers`, `_zygote_modifiers` | 浅拷贝列表 | preset 可能操作同一对象 |
-| `_state` | 独立创建 | 每个 deme 有独立的个体数量 |
-| `_history`, `snapshots` | 独立空列表/dict | 记录各自的仿真历史 |
+同构构建里，模板 deme（索引 0）保留自己的 draft，索引 1 起的克隆共享 `template.export_config()` 返回的同一份配置对象（大数组按引用共享）。
+
+`_clone` 的共享与独立关系：
+
+| 类别 | 内容 | 原因 |
+|------|------|------|
+| 共享引用 | `_species`、`_config`（同构克隆共享同一份导出配置；模板 deme 保留自己的 draft）、`_index_registry`、`_registry`、`compiled_hook_descriptors`、`hook_executor`、`_hook_runner`、`_hook_slot`、`_genotypes_list`、`_haploid_genotypes_list` | 仿真期间只读，同构 deme 完全一致 |
+| 浅拷贝列表 | `_presets`、`_manual_gamete`、`_manual_zygote`、`_gamete_modifiers`、`_zygote_modifiers` | 每个 deme 可独立增删修饰器，不影响其他 deme |
+| 独立副本 | `_state`（复制模板数值的个体/精子数组）、`_initial_population_snapshot`、`_name`、`_deme_id`、`_tick`、`_params_log`（新的原生日志）、`_reconfiguration_log`、`_run_program` | 每个 deme 有自己的运行状态与审计记录 |
+| 重置 | Rust 会话桥接字段（`_rust_lifecycle_backend = None` 等） | 克隆从无后端状态开始，首次运行时按需建立会话 |
+
+> `_config` 的共享是**构建期**的数据去重，不是运行期可写共享：修改运行中的 deme 请走 `deme(i).write_ecology(...)` / `write_genetics(...)` 或 `pop.params.tensor_write(...)`。
 
 ## `BatchSetting`：跨 deme 变化的参数
 
@@ -218,24 +202,17 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 接受 `BatchSetting` 的参数有：`carrying_capacity`、`age_1_carrying_capacity`、`eggs_per_female`、`sex_ratio`、`low_density_growth_rate`、`juvenile_growth_mode`、`expected_num_new_adult_females`。
 
-## 性能数据
+## 构造开销
 
-测试条件：2 等位基因（4 种基因型），初始每 deme 200 个体。
+同构构建只完整执行一次模板构建，其余 deme 走 `_clone`；异构构建按 config 签名分组，每组构建一个模板再克隆。首次模板构建的耗时取决于 Hook 数量与遗传规模，克隆本身只复制状态数组。
 
-| 场景 | 耗时 | 说明 |
-|------|------|------|
-| 同构 100 demes | ~400ms | 含首次模板构建与后端初始化 |
-| 同构 2601 demes | ~16ms | 克隆阶段，不含首次 template 构建 |
-| 2 组异构 4 demes | ~6ms | 每组一个 template + 各克隆 1 次 |
-| 首次 template 构建 | ~2-3ms | 后续调用复用已编译的 CSR 计划 |
-
-首次 template 构建的时间取决于 hook 数量，后续调用通常 < 5ms。
+本页不给出历史测量数字：此前表格未注明版本与测量条件，不能当作当前性能保证。需要性能结论时，请以自己的模型和工作负载实测。
 
 ## 与现有 API 的关系
 
 `SpatialConfigurator` 不修改任何现有类：
 
-- 旧的 Builder 类（`AgeStructuredPopulationBuilder` / `DiscreteGenerationPopulationBuilder`）已移除，SpatialConfigurator 是唯一的配置路径
+- 旧的 Builder 类（`AgeStructuredPopulationBuilder` / `DiscreteGenerationPopulationBuilder`）已移除，`SpatialConfigurator` 是唯一的批量配置路径
 - `SpatialPopulation.__init__` — 不变，`build()` 最终调用它，传入已构建好的 deme 列表
 - 旧的逐 deme 构造写法仍然有效
 
@@ -243,4 +220,4 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 1. **`batch_setting` 不支持 fitness / presets** — fitness 和 presets 修改的是 config 内部的 NumPy 数组（in-place），不适合通过标量值表达。需要异构 fitness 时，在 build 后手动修改对应 deme 的 config 数组
 2. **spatial kind 需要 topology** — `batch_setting(lambda topo, i: ...)` 要求 builder 传入了 topology 参数，否则 expand 时报错
-3. **同构共享同一 `_config` 引用** — 如果后续代码直接修改 `pop.demes[0]._config` 的数组字段（非 `_replace`），会同时影响所有共享该 config 的 deme。正确做法是先用 `config._replace(...)` 创建独立副本
+3. **同构 deme 共享同一 `_config` 引用** — 这是构建期的数据去重，不代表运行期可以直接写 `_config`。直接改 `pop.demes[0]._config` 的数组字段既绕过会话同步，也会影响所有共享该 config 的 deme；运行期修改单个 deme 用 `deme(i).write_ecology(...)` / `write_genetics(...)`，批量修改用 `pop.params.tensor_write(...)`

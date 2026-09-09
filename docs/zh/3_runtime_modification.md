@@ -10,7 +10,7 @@
 
 ## 1. between-tick 修改：`pop.update()`
 
-`pop.update()` 返回当前 config 的 `Configurator` 包装。链式方法和构建时完全一样，修改后立即生效：
+`pop.update()` 返回**绑定到运行种群**的 `Configurator`。链式方法语法与构建时完全一样；每次调用经参数路由表校验后提交到运行种群（draft 与 Rust 会话同步），同一 tick 的后续阶段立即可见：
 
 ```python
 import natal as nt
@@ -30,11 +30,11 @@ pop.update().competition(carrying_capacity=5000)
 # 链式多个参数
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
-# 自定义字段（Hook 可读写）
+# 自定义字段（回调内写入；回调外读 pop.config.custom）
 pop.update().custom(temperature=35.0)
 ```
 
-每次调用内部走 `set_param(config, name, value)` → 原地写 普通标量。
+每次调用都提交到运行种群，并在值实际变化时追加一条参数日志；它操作的是运行种群，不是查询快照。
 
 ## 2. between-tick 修改：`pop.params` 参数面
 
@@ -57,27 +57,29 @@ for row in pop.params_log:
 
 ---
 
-## 3. between-tick 修改：`set_param()` 底层接口
+## 3. `set_param()`：草稿层底层接口
 
-`pop.update()` 的底层实现。适合脚本、notebook：
+`set_param()` 只写你传入的 **draft（草稿）**，不会写入任何运行种群。`pop.config` 是查询快照，对它调用 `set_param()` 不会改变种群；要修改运行种群请用 `pop.update()` 或 `pop.params`。它适合纯草稿场景（脚本、notebook、离线构造配置）：
 
 ```python
 from natal.frontend.configurator import set_param
 
-set_param(pop.config, "competition.carrying_capacity", 5000.0)
+# 生态标量是 NamedTuple 槽位：必须接住返回值并重新绑定
+draft = pop.config
+draft = set_param(draft, "competition.carrying_capacity", 5000.0)
 
 # 全名、短名、别名均可
-set_param(pop.config, "carrying_capacity", 5000.0)
-set_param(pop.config, "reproduction.eggs_per_female", 100.0)
-set_param(pop.config, "eggs_per_female", 100.0)  # 别名
+draft = set_param(draft, "carrying_capacity", 5000.0)
+draft = set_param(draft, "reproduction.eggs_per_female", 100.0)
+draft = set_param(draft, "eggs_per_female", 100.0)  # 别名
 ```
 
-内部四步：
+要点：
 
-1. 查 `parameters.jsonc` 注册表：全名 → 短名 → 别名
-2. 定位 config 字段和数组索引
-3. 原地写入：`config.carrying_capacity[()] = 5000.0`
-4. 均衡指标（expected_competition_strength / expected_survival_rate）按需现算（derive），不再有存储副本需要同步
+1. 名称经 `parameters.jsonc` 注册表解析：全名 → 短名 → 别名。
+2. 生态标量走 `NamedTuple._replace`，**必须重新绑定返回值**；数组类字段（custom 槽位、向量/张量内容）原地修改并返回同一个 draft。
+3. 传入 `pop.config` 得到的是隔离快照，写入只落在该快照上；即使接住返回值也不会影响运行种群。
+4. 均衡指标（expected_competition_strength / expected_survival_rate）按需现算（derive），没有存储副本需要同步。
 
 ---
 
@@ -115,8 +117,8 @@ def heatwave(pop: TickContext) -> int:
 
 ## 5. 自定义字段 `config.custom`
 
-0-d structured numpy array。构建时通过 `.custom()` 注册字段和初始值，Hook 内
-`[()]` 读写，运行时 `pop.update().custom()` 修改：
+`custom` 是 0-d structured numpy array。构建时通过 `.custom()` 注册字段和初始值；
+读取走 `pop.config.custom["name"]`（查询快照），写入统一走 `pop.update().custom()`：
 
 ```python
 # 构建
@@ -126,23 +128,26 @@ pop = (
     .build()
 )
 
-# Hook 内
+# Hook 内：写入经事件事务提交，回调成功才生效
 @nt.hook(event="early")
-def seasonal_hook(pop: TickContext) -> int:
-    temp = pop.state.config.custom['temperature'][()]
-    if int(pop.state.config.custom['season_idx'][()]) == 1:
-        pop.state.config.custom['temperature'][()] = 35.0
+def seasonal_hook(ctx: TickContext) -> int:
+    if ctx.tick == 0:
+        ctx.update().custom(temperature=35.0)
     return 0
 
-# 运行时
+# 回调外
 pop.update().custom(temperature=35.0, season_idx=1)
+print(pop.config.custom["temperature"])  # 35.0
 ```
 
-支持 `bool`、`float`、`int`。
+支持 `bool`、`float`、`int`，也支持任意维数数组；类型与形状保留。
 
-> **注意**：自定义字段不在参数注册表中，因此 `set_param()`、`pop.params` 和
-> `Op.set_param` 无法访问它们。应在 hook 中使用直接数组写入
-> (`config.custom["temperature"][()] = value`) 或 `pop.update().custom(...)`。
+> **注意**：自定义字段不在参数路由表中。回调内**没有公开的读取入口**：
+> `TickContext` 不提供 `config`，`ctx.state` 也没有 `config` 属性，`ctx.params`
+> 与 `Op.set_param` 都只接受注册参数（`Op.set_param` 遇到自定义字段在编译期抛
+> `ValueError`）。请在回调外读取 `pop.config.custom["name"]`，回调内只做写入
+> （`ctx.update().custom(...)`）。草稿层 `set_param(draft, "temperature", v)` 能写
+> custom 槽位，但和所有 `set_param` 调用一样不提交到运行种群。
 
 ---
 
@@ -186,7 +191,7 @@ print(pop.params.migration_rate.shape)  # (n_demes, S, A)
 
 ```python
 pop.deme(3).write_ecology("carrying_capacity", 8000.0)
-pop.deme(3).write_genetics("viability", new_table)
+pop.deme(3).write_genetics("viability_fitness", new_table)
 ```
 
 ### 6.3 batch_setting 单一入口
@@ -200,17 +205,22 @@ ndarray，不适合标量表达）；`spatial` kind 的 lambda 需要 builder �
 
 ## 7. 底层机制
 
-所有修改方式最终落在同一个操作上：
+运行期写入入口（`pop.update()`、`pop.params`、hook 内 `ctx.params`/`ctx.update()`、
+声明式 `Op.set_param`）最终都落到同一条链上：
 
 ```
-set_param / pop.update() / pop.params / hook 内 params 写入 / Op.set_param
-  → config.carrying_capacity           # 普通标量
-  → carrying_capacity[()] = 5000.0     # 原地写（原子操作）
+运行期写入入口
+  → 路由表解析名称 + jsonc 边界校验
+  → draft 字段更新（生态标量走 NamedTuple._replace）
+  → Rust 会话参数同步 + 参数快照日志 (tick, name, old, new)
   → 读取时现算均衡指标（derive，无存储副本）
 ```
 
+草稿层 `set_param(draft, name, value)` 只完成其中的 draft 更新，不经过会话同步，
+也不会写入运行种群。
+
 生态标量（K、eggs、sex_ratio、sperm_displacement_rate、low_density_growth_rate、
-juvenile_growth_mode、generation_time）均为 普通标量；均衡指标
+juvenile_growth_mode、generation_time）在运行合同中均为普通标量；均衡指标
 （expected_competition_strength、expected_survival_rate）为只读派生值，经
 `pop.params.<name>` 读取（现算），直接写入会抛 AttributeError。
 

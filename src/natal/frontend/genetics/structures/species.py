@@ -171,7 +171,7 @@ class Species(
         self._somatic_labels = list(labels)
 
     @property
-    def entity_type(self):
+    def entity_type(self) -> type[HaploidGenome]:
         """Return the entity type for this structure.
 
         Uses a lazy import to avoid circular dependencies.

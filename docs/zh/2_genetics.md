@@ -103,6 +103,7 @@ sp = nt.Species.from_dict(
 
 ```python
 # 检查染色体性质
+chr_x = sp.get_chromosome("chrX")
 if chr_x.is_sex_chromosome:
     print(f"性染色体类型: {chr_x.sex_type}")  # 输出: "X"
     print(f"性染色体系统: {chr_x.sex_system}")  # 输出: "XY"
@@ -112,9 +113,9 @@ if chr_x.is_sex_chromosome:
 
 `gamete_labels` 和 `somatic_labels` 为遗传系统引入标签维度，用于标记配子和个体携带的额外信息。
 
-**配子标签**（已有）定义配子可携带的标记类型。默认值为 `["default"]`，表示不区分标记。常见用法包括标记 Cas9 蛋白沉积的配子（`"Cas9_deposited"`），配合 HomingDrive 等预设使用。
+**配子标签**（已有）定义配子可携带的标记类型。`Species.gamete_labels` 属性默认是空列表 `[]`；未声明时注册表使用单个 `"default"` 标签（即不区分标记）。常见用法包括标记 Cas9 蛋白沉积的配子（`"Cas9_deposited"`），配合 HomingDrive 等预设使用。
 
-**体细胞标签**（新增）与之对称——定义个体可携带的体细胞标记。默认值为 `["wildtype"]`，表示不区分。可用于标记个体的 Cas9 表达水平、毒素负荷等状态。
+**体细胞标签**（新增）与之对称——定义个体可携带的体细胞标记。`Species.somatic_labels` 属性同样默认 `[]`；未声明时注册表使用 `"default"`。可用于标记个体的 Cas9 表达水平、毒素负荷等状态。注意声明后注册表只使用所声明的标签，不会自动补 `"default"`。
 
 两者都在 `Species` 构建时声明，同一个物种的所有种群共享：
 
@@ -139,7 +140,7 @@ chr1.add("B").add_alleles(["B1", "B2"])
 
 # X 染色体
 chr_x = sp.add("ChrX", sex_type="X")
-chr_x.add("white").add_alleles(["w+", "w"])
+chr_x.add("white").add_alleles(["wp", "w"])
 
 # Y 染色体（仅雄性）
 chr_y = sp.add("ChrY", sex_type="Y")
@@ -173,7 +174,11 @@ chr_x = sp.get_chromosome("ChrX")
 可以从 `Species` 中删除染色体：
 
 ```python
-sp.remove_chromosome("chr1")
+removed_species = nt.Species("RemovedChromosomeExample")
+removed_chr = removed_species.add("removed_chr")
+removed_species.remove_chromosome("removed_chr")
+assert removed_species.get_chromosome("removed_chr") is None
+removed_chr.add("D", position=150.0)  # 已有对象仍可继续使用
 ```
 
 删除后，该染色体将从物种的遗传架构中移除，但该 `Chromosome` 实例将保持存在。
@@ -287,9 +292,12 @@ gene_drive = sp.get_gene("Drive")
 一般无需手动获取 `Haplotype` 实例。
 
 ```python
-# 获取染色体上所有可能的单倍型
+# 获取染色体上所有可能的单倍型：逐个单倍体基因型取该染色体的单倍型，再去重
 chr1 = sp.get_chromosome("chr1")  # 获取染色体对象
-all_haplotypes = chr1.get_all_haplotypes()
+all_haplotypes = list(dict.fromkeys(
+    hg.get_haplotype_for_chromosome(chr1)
+    for hg in sp.get_all_haploid_genotypes()
+))
 
 # 遍历所有单倍型
 for hap in all_haplotypes:
@@ -306,7 +314,7 @@ for hap in all_haplotypes:
 
 #### 从格式化字符串获取单倍体基因型
 
-**字符串解析是最灵活的方式**，支持直接从字符串获取单倍体基因型。当打印输出单倍体基因型时，也会自动转换为字符串格式，与输入的字符串格式保持一致。
+**字符串解析是最灵活的方式**，支持直接从字符串获取单倍体基因型。打印单倍体基因型时也会自动转换为字符串格式，但输出的是规范化的斜杠写法，与输入写法不一定逐字相同（例如输入 `"ABC;XY"` 输出 `"A/B/C;X/Y"`）。
 
 ```python
 sp = nt.Species.from_dict(
@@ -319,9 +327,10 @@ sp = nt.Species.from_dict(
 
 # 直接从字符串获取单倍体基因型
 hg1 = sp.get_haploid_genotype_from_str("ABC;XY")
-hg2 = sp.get_haploid_genotype_from_str("a/b/c;x/y")  # 等价写法
+hg2 = sp.get_haploid_genotype_from_str("A/B/C;X/Y")  # 等价写法
 
-print(f"单倍体基因型: {hg1}")  # 输出: ABC;XY
+print(f"单倍体基因型: {hg1}")  # 输出: A/B/C;X/Y
+print(hg1 is hg2)  # 输出: True（两种写法解析到同一实例）
 ```
 
 #### 字符串解析语法规则
@@ -338,11 +347,13 @@ print(f"单倍体基因型: {hg1}")  # 输出: ABC;XY
 hg1 = sp.get_haploid_genotype_from_str("ABC;XY")
 # 等价于：hg1 = sp.get_haploid_genotype_from_str("A/B/C;X/Y")
 
-# 示例 2：多字符基因，必须使用斜杠
-hg2 = sp.get_haploid_genotype_from_str("WT/Drive/R2;X/Y")
+# 示例 2：显式写出斜杠，得到同一个单倍体基因型
+hg2 = sp.get_haploid_genotype_from_str("A/B/C;X/Y")
+print(hg1 is hg2)  # 输出: True
 
-# 示例 3：混合单字符和多字符基因
-hg3 = sp.get_haploid_genotype_from_str("A/WT/Drive;X/Y")
+# 示例 3：全部取隐性等位基因
+hg3 = sp.get_haploid_genotype_from_str("abc;xy")
+print(hg3)  # 输出: a/b/c;x/y
 ```
 
 #### 缓存机制
@@ -367,35 +378,40 @@ print(hg1 is hg2)  # 输出: True（同一个实例）
 
 ```python
 sp = nt.Species.from_dict(
-    name="TestDrive",
-    structure={"chr1": {"loc": ["WT", "Drive"]}}
+    name="TestGenotype",
+    structure={
+        "chr1": {"A": ["A", "a"], "B": ["B", "b"], "C": ["C", "c"]},
+        "chr2": {"X": ["WT", "Drive"], "Y": ["R1", "R2"]},
+    }
 )
 
 # 直接从字符串获取基因型
-wt_wt = sp.get_genotype_from_str("WT|WT")
-wt_drive = sp.get_genotype_from_str("WT|Drive")
-drive_drive = sp.get_genotype_from_str("Drive|Drive")
+gt1 = sp.get_genotype_from_str("ABC|abc; WT/R1|Drive/R2")
+gt2 = sp.get_genotype_from_str("A/B/C|a/b/c; WT/R1|Drive/R2")
+gt3 = sp.get_genotype_from_str("abc|ABC; Drive/R2|WT/R1")
 
-print(f"基因型: {wt_drive}")  # 输出: WT|Drive（默认 unordered=True 时会规范化顺序）
+print(f"基因型: {gt1}")  # 输出: A/B/C|a/b/c;WT/R1|Drive/R2
+print(gt1 is gt2, gt1 is gt3)  # 输出: True True（写法等价、且默认 unordered=True 会规范化顺序）
 ```
 
 #### 字符串解析语法规则
 
 `Genotype` 的字符串解析语法与 `HaploidGenotype` 基本相同，增加了母本和父本的分隔：
 
-- **竖线 (|) 分隔母本和父本**：竖线左侧为母本单倍体基因型，右侧为父本单倍体基因型。**注意：** 默认 `Species.unordered=True`，系统自动规范化顺序——`A|a` 和 `a|A` 解析为同一基因型。
+- **竖线 (|) 分隔母本和父本**：每个染色体段内部用竖线分隔该染色体的母本单倍型与父本单倍型，染色体段之间仍用分号分隔，例如 `A/B/C|a/b/c; WT/R1|Drive/R2`。**注意：** 默认 `Species.unordered=True`，系统自动规范化顺序——`A|a` 和 `a|A` 解析为同一基因型。
 - **其他规则与 HaploidGenotype 相同**：包括分号分隔染色体、斜杠分隔基因、单字符基因可省略斜杠等规则
 
 ```python
-# 示例 1：单字符基因，可省略斜杠
-gt1 = sp.get_genotype_from_str("ABC|abc")
-# 等价于：gt1 = sp.get_genotype_from_str("A/B/C|a/b/c")
+# 示例 1：单字符基因，可省略斜杠（chr1 段）
+gt1 = sp.get_genotype_from_str("ABC|abc; WT/R1|Drive/R2")
+# 等价于：gt1 = sp.get_genotype_from_str("A/B/C|a/b/c; WT/R1|Drive/R2")
 
-# 示例 2：多字符基因，必须使用斜杠
-gt2 = sp.get_genotype_from_str("WT/Drive/R2|WT/Drive/R2")
+# 示例 2：多字符基因必须使用斜杠（chr2 段的 WT/Drive、R1/R2 不能省略斜杠）
+gt2 = sp.get_genotype_from_str("A/B/C|a/b/c; WT/R1|Drive/R2")
 
-# 示例 3：混合单字符和多字符基因
-gt3 = sp.get_genotype_from_str("A/WT/Drive|a/WT/Drive")
+# 示例 3：交换母本/父本并取不同等位基因
+gt3 = sp.get_genotype_from_str("abc|ABC; Drive/R2|WT/R1")
+print(gt1 is gt2, gt1 is gt3)  # 输出: True True
 ```
 
 #### 缓存机制
@@ -480,7 +496,7 @@ print(f"Haploid genotypes: {len(all_haploid)}")  # 2*3*2 = 12
 print(f"Diploid genotypes: {len(all_genotypes)}")  # 12*12 = 144
 
 # 3. 操作特定基因型
-gt = sp.get_genotype_from_str("A1|A2")
+gt = sp.get_genotype_from_str("A1/B1|A2/B2; C1|C2")
 print(f"Maternal haplotype: {gt.maternal}")
 print(f"Paternal haplotype: {gt.paternal}")
 ```
@@ -506,22 +522,30 @@ numpy 数组访问 individual_count[:, :, 5]
 ### Genotype 对象与 IndexRegistry 的配合
 
 ```python
-pop = nt.AgeStructuredPopulation(species=sp, ...)
+pop = (nt.AgeStructuredPopulation
+    .setup(species=sp, name="IndexDemo")
+    .age_structure(n_ages=4, new_adult_age=2)
+    .initial_state({
+        "female": {"A1/B1|A2/B2; C1|C2": [0, 0, 100, 0]},
+        "male": {"A1/B1|A2/B2; C1|C2": [0, 0, 100, 0]},
+    })
+    .build()
+)
 
 # 获取 IndexRegistry
-registry = pop.registry  # 或 pop._index_registry
+registry = pop.registry  # 或 pop.index_registry
 
-# Genotype → 整数索引
-gt = sp.get_genotype_from_str("A1|A2")
-gt_idx = registry.genotype_index(gt)
-print(f"Genotype index: {gt_idx}")
+# Genotype → 整数索引（ZType 索引需要同时给出体细胞标签；该物种未声明 somatic_labels，默认标签为 "default"）
+gt = sp.get_genotype_from_str("A1/B1|A2/B2; C1|C2")
+gt_idx = registry.ztype_index(gt, "default")
+print(f"ZType index: {gt_idx}")
 
-# 反向：整数索引 → Genotype
-gt_back = registry.index_to_genotype[gt_idx]
-print(f"Genotype: {gt_back}")
+# 反向：整数索引 → (Genotype, slab 标签)
+gt_back, slab_back = registry.index_to_ztype[gt_idx]
+print(f"ZType: {gt_back} @{slab_back}")
 
 # 在 numpy 数组中使用
-individual_count = pop.state.individual_count  # shape: (n_sexes, n_ages, n_genotypes)
+individual_count = pop.state.individual_count  # shape: (n_sexes, n_ages, n_ztypes)
 female_count_of_gt = individual_count[0, :, gt_idx]  # 某基因型所有年龄的雌性数量
 ```
 

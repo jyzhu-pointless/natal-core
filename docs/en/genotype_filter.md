@@ -87,6 +87,9 @@ Benefits of this approach:
 When the rule scope is complex, it is recommended to use the species' pattern parsing capability to generate `genotype_filter`, avoiding fragile string comparisons.
 
 ```python
+from natal.frontend.presets import GeneticPreset
+
+
 class PatternBasedPreset(GeneticPreset):
     def __init__(self, pattern: str, conversion_rate: float = 0.95):
         super().__init__(name="PatternBasedPreset")
@@ -106,6 +109,9 @@ class PatternBasedPreset(GeneticPreset):
             genotype_filter=pattern_filter,
         )
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 Practical advice:
@@ -117,6 +123,9 @@ Practical advice:
 ## Conditional Mutation (Genotype-Dependent)
 
 ```python
+from natal.frontend.presets import GeneticPreset
+
+
 class ConditionalMutation(GeneticPreset):
     """Conditional Mutation - only occurs in specific genetic backgrounds"""
 
@@ -139,6 +148,9 @@ class ConditionalMutation(GeneticPreset):
         )
 
         return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 ## Maintaining Consistency with Observation Statistics

@@ -1,6 +1,6 @@
 # SpatialConfigurator: Batch Construction of Spatial Populations
 
-`SpatialConfigurator` solves the redundant computation problem during multi-deme initialization using a "build template once, clone N-1 times" strategy. Construction time for 2601 homogeneous demes drops from ~2.6s to ~16ms.
+`SpatialConfigurator` solves the redundant computation problem during multi-deme initialization using a "build template once, clone N-1 times" strategy.
 
 ## Quick Start
 
@@ -38,7 +38,7 @@ SpatialPopulation.builder(...)
     │
     └─► SpatialConfigurator         ← User-facing chained API
            │
-           ├─ _template        ← AgeStructuredPopulationBuilder (or DiscreteGeneration...)
+           ├─ _template        ← single-deme template Configurator (not a removed Builder class)
            │                     Always sees scalar parameters for a single deme
            ├─ _batch_settings  ← {param_name: BatchSetting}
            │                     Intercepted cross-deme varying parameters
@@ -46,9 +46,9 @@ SpatialPopulation.builder(...)
                                   Complete record of each chained call
 ```
 
-`SpatialConfigurator` does not modify existing builder classes; instead, it wraps them externally. During the chained call phase, it performs three tasks simultaneously:
+`SpatialConfigurator` adds no population class; it wraps a single-deme template `Configurator` externally. During the chained call phase it performs three tasks simultaneously:
 
-1. **Delegates to `_template`** — the template builder always receives scalar values, maintaining correct internal state
+1. **Delegates to `_template`** — the template `Configurator` always receives scalar values, maintaining correct internal state
 2. **Detects `BatchSetting`** — intercepts and stores them in `_batch_settings`; template only sees `first_value()`
 3. **Records in `_declaration_log`** — preserves original arguments (including BatchSetting objects) for heterogeneous scenario replay
 
@@ -98,7 +98,7 @@ User passes age_1_carrying_capacity ─┘
 
 Priority: `age_1_carrying_capacity` > `old_juvenile_carrying_capacity` > `carrying_capacity`.
 
-This unifies key names in `_declaration_log`, ensuring parameter names are consistent with the template builder signature during heterogeneous replay.
+This unifies key names in `_declaration_log`, ensuring parameter names match the template `Configurator` method signatures during heterogeneous replay.
 
 ## Two Build Paths
 
@@ -130,7 +130,7 @@ _build_heterogeneous():
 
     4. For each group:
        a. _build_template_for_group(sig_map)
-          # Create new builder, replay _declaration_log, replace batch params with group values
+          # Create a new template Configurator, replay _declaration_log, replace batch params with group values
        b. Remaining demes in group = _clone_deme(group_template)
 
     5. Assemble all demes by index, construct SpatialPopulation
@@ -140,7 +140,8 @@ _build_heterogeneous():
 
 ```python
 def _build_template_for_group(self, sig_map):
-    builder = AgeStructuredPopulationBuilder(self._species)  # Fresh builder
+    # New single-deme template for this group (same entry as SpatialConfigurator.__init__)
+    template = Configurator.from_species(self._species, discrete=(self._pop_type != "age_structured"))
 
     for method_name, kwargs in self._declaration_log:
         resolved = {}
@@ -152,53 +153,36 @@ def _build_template_for_group(self, sig_map):
             else:
                 resolved[key] = value           # Non-batch parameters pass through as-is
 
-        getattr(builder, method_name)(**resolved)
+        getattr(template, method_name)(**resolved)
 
-    return builder.build()
+    return template.build()
 ```
+
+After the first template of a group is fully built, later groups' variant configs share the large arrays of unreplaced fields through `ModelDraft._replace`; parameter discovery, equilibrium recomputation, and the fields that cannot be heterogeneous live in [Heterogeneous Config Sharing](spatial_config_replace.md).
 
 ## `_clone_deme`: Zero-Compilation-Overhead Cloning
 
-Cloning creates instances via `__new__`, completely bypassing `__init__` to avoid repeated hook compilation and config construction.
+`_clone_deme(template, config, name)` delegates to the population instance's `_clone(name=..., config=...)`: instances are created via `__new__`, completely bypassing `__init__`, so hook compilation and config construction never run twice.
 
 ```python
 def _clone_deme(template, config, name):
-    clone = AgeStructuredPopulation.__new__(AgeStructuredPopulation)
-
-    # === Shared references (read-only during simulation) ===
-    clone._species           = template._species
-    clone.hook_entries               = template.hook_entries          # Hook entry list per event
-    clone.compiled_hook_descriptors = template.compiled_hook_descriptors  # Compiled hook descriptors
-    clone.hook_executor            = template.hook_executor           # Hook execution engine
-    clone._config            = config                        # ModelDraft (shared)
-    clone._index_registry    = template._index_registry      # Genotype lookup table
-    clone._registry          = template._registry
-    clone._gamete_modifiers  = template._gamete_modifiers    # Gamete modifiers
-    clone._zygote_modifiers  = template._zygote_modifiers
-    clone._genotypes_list    = template._genotypes_list
-    clone._haploid_genotypes_list = template._haploid_genotypes_list
-
-    # === Independent copies ===
-    clone._name    = name
-    clone._history = []
-    clone._state   = State.create(...)                        # New state array
-    # `state` returns snapshots (since R5); populating a clone must write
-    # the live container:
-    clone._state.individual_count[:] = template._state.individual_count
-    clone._state.sperm_storage[:]     = template._state.sperm_storage
-    clone._initial_population_snapshot  = (copy of template's snapshot)
-
-    return clone
+    # config is handed to the clone by reference; in a homogeneous build every
+    # clone shares the one exported config object
+    return template._clone(name=name, config=config)
 ```
 
-| Attribute | Shared/Independent | Reason |
-|-----------|-------------------|--------|
-| `compiled_hook_descriptors`, `hook_entries`, `hook_executor` | Shared reference | Stateless, read-only shared for homogeneous demes; subset `set_hook` triggers copy-on-write |
-| `_config` | Shared reference | Homogeneous demes have identical configs |
-| `_index_registry`, `_registry` | Shared reference | Same species means same genotype indices |
-| `_gamete_modifiers`, `_zygote_modifiers` | Shallow-copied list | Presets may operate on the same object |
-| `_state` | Independently created | Each deme has its own individual counts |
-| `_history`, `snapshots` | Independent empty list/dict | Each deme records its own simulation history |
+In a homogeneous build the template deme (index 0) keeps its own draft, while clones from index 1 on share the single config object returned by `template.export_config()` (large arrays shared by reference).
+
+How `_clone` shares and copies state:
+
+| Category | Contents | Reason |
+|-----------|------|------|
+| Shared reference | `_species`, `_config` (homogeneous clones share one exported config; the template deme keeps its own draft), `_index_registry`, `_registry`, `compiled_hook_descriptors`, `hook_executor`, `_hook_runner`, `_hook_slot`, `_genotypes_list`, `_haploid_genotypes_list` | Read-only during simulation; identical across homogeneous demes |
+| Shallow-copied lists | `_presets`, `_manual_gamete`, `_manual_zygote`, `_gamete_modifiers`, `_zygote_modifiers` | Each deme can add or remove modifiers without affecting the others |
+| Independent copies | `_state` (individual/sperm arrays copied from the template), `_initial_population_snapshot`, `_name`, `_deme_id`, `_tick`, `_params_log` (a fresh native log), `_reconfiguration_log`, `_run_program` | Each deme owns its runtime state and audit trail |
+| Reset | Rust session bridge fields (`_rust_lifecycle_backend = None`, ...) | Clones start backend-less and create a session on first run |
+
+> Sharing `_config` is a **build-time** deduplication, not a writable runtime sharing: modify a running deme through `deme(i).write_ecology(...)` / `write_genetics(...)` or `pop.params.tensor_write(...)`.
 
 ## `BatchSetting`: Cross-Deme Varying Parameters
 
@@ -219,24 +203,17 @@ All three kinds are uniformly expanded into Python lists via `expand(n_demes, to
 
 Parameters that accept `BatchSetting`: `carrying_capacity`, `age_1_carrying_capacity`, `eggs_per_female`, `sex_ratio`, `low_density_growth_rate`, `juvenile_growth_mode`, `expected_num_new_adult_females`.
 
-## Performance Data
+## Construction Cost
 
-Test conditions: 2 alleles (4 genotypes), 200 individuals per deme initially.
+A homogeneous build runs the full template build once and clones the remaining demes; a heterogeneous build groups demes by config signature, builds one template per group, then clones. First-template cost depends on the hook count and genetic scale, while cloning only copies state arrays.
 
-| Scenario | Time | Notes |
-|----------|------|-------|
-| Homogeneous 100 demes | ~400ms | Includes first template build and backend initialization |
-| Homogeneous 2601 demes | ~16ms | Clone phase only, excluding first template build |
-| 2-group heterogeneous 4 demes | ~6ms | One template per group + 1 clone each |
-| First template build | ~2-3ms | Subsequent calls reuse the compiled CSR plan |
-
-First template build time depends on the hook count; subsequent calls are typically < 5ms.
+This page reports no historical measurements: the former table carried no version or measurement conditions and cannot serve as a current performance guarantee. Measure your own model and workload for performance conclusions.
 
 ## Relationship with Existing API
 
 `SpatialConfigurator` does not modify any existing classes:
 
-- `AgeStructuredPopulationBuilder` / `DiscreteGenerationPopulationBuilder` — unchanged, `SpatialConfigurator` wraps them via composition
+- The old Builder classes (`AgeStructuredPopulationBuilder` / `DiscreteGenerationPopulationBuilder`) are removed; `SpatialConfigurator` is the only batch configuration path
 - `SpatialPopulation.__init__` — unchanged, `build()` ultimately calls it with the pre-built deme list
 - The old per-deme construction approach still works
 
@@ -244,4 +221,4 @@ First template build time depends on the hook count; subsequent calls are typica
 
 1. **`batch_setting` does not support fitness / presets** — fitness and presets modify NumPy arrays inside config (in-place), which are not well-suited for scalar value expression. For heterogeneous fitness, manually modify the corresponding deme's config arrays after build
 2. **spatial kind requires topology** — `batch_setting(lambda topo, i: ...)` requires the topology parameter to have been passed to the builder, otherwise `expand()` will raise an error
-3. **Homogeneous demes share the same `_config` reference** — if subsequent code directly modifies array fields of `pop.demes[0]._config` (not via `_replace`), it will affect all demes sharing that config. The correct approach is to create an independent copy via `config._replace(...)` first
+3. **Homogeneous demes share the same `_config` reference** — this is build-time deduplication, not writable runtime sharing. Writing array fields of `pop.demes[0]._config` directly bypasses session sync and affects every deme sharing that config; modify a single running deme with `deme(i).write_ecology(...)` / `write_genetics(...)`, or many demes with `pop.params.tensor_write(...)`

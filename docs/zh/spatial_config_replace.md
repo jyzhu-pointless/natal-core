@@ -1,5 +1,7 @@
 # SpatialConfigurator 异构 Config 共享机制
 
+> **实现说明**：本页描述异构构建中 `ModelDraft._replace` 共享大数组的内部机制。该机制仍在使用，但**不是**异构构建的全部内容——声明冻结、按签名分组与模板克隆见 [SpatialConfigurator：空间种群批量构造](spatial_configurator.md)。
+
 ## 问题
 
 `SpatialConfigurator._build_heterogeneous()` 为每个 config 等价组调用 `_build_template_for_group()`，该函数完整重放 builder 管线（`setup → … → build()`），每次都调用 `build_population_config()` 创建全新的 `ModelDraft`。
@@ -147,14 +149,12 @@ _build_heterogeneous()
 
 ## 文件位置
 
-所有改动集中在 `src/natal/spatial_builder.py`：
+相关实现集中在 `src/natal/frontend/spatial/configurator.py`：
 
 | 符号 | 作用 |
 |---|---|
 | `_ARRAY_KWARGS` | 需 dict→array 转换的参数集合 |
-| `_KWARG_MULTI_FIELD` | 多字段映射（carrying_capacity 变体） |
 | `_KWARG_RENAMES` | builder kwarg → config 字段重命名 |
-| `_EQUILIBRIUM_SENSITIVE_KWARGS` | 需重算平衡态的参数集合 |
-| `SpatialConfigurator._build_heterogeneous()` | 主构建逻辑 |
+| `SpatialConfigurator._build_heterogeneous_demes()` | 异构构建主流程 |
 | `SpatialConfigurator._can_use_replace(sig_map, base_config)` | 判断是否可用 `_replace` |
 | `SpatialConfigurator._build_variant_config()` | 创建 variant config |

@@ -38,7 +38,7 @@ Core modules and responsibilities:
 Non-spatial Configurators use:
 
 ```text
-.with_observation(groups, collapse_age=False)
+.with_observation(groups, *, collapse_age=False)
 ```
 
 The spatial Configurator additionally accepts a deme selection and processing mode:
@@ -46,6 +46,7 @@ The spatial Configurator additionally accepts a deme selection and processing mo
 ```text
 .with_observation(
     groups,
+    *,
     collapse_age=False,
     demes=None,
     deme_mode="preserve",
@@ -196,7 +197,7 @@ Changes to Observation or History recording should verify at least these numeric
 4. `collapse_age=True` is element-wise equal to the uncollapsed result summed along age.
 5. Raw History retains every deme, ZType, and applicable sperm-storage value.
 6. Post-hoc projection of raw History is element-wise equal to `Observation.apply()` at the same tick.
-7. In-engine batches and out-of-band snapshots produce identical ticks and payloads in deterministic simulations.
+7. In-engine batches and out-of-band snapshots produce identical payloads for the same tick in deterministic simulations; note that a batch record includes the tick-0 initial boundary, while an out-of-band `record_snapshot()` records the current tick.
 8. Unselected demes require no sentinel representation, and real zero counts are not confused with selection state.
 
 Assertions must compare explicit axes and coordinate values. Comparing only totals or sorted flattened arrays cannot detect axis swaps or incorrect deme ordering.

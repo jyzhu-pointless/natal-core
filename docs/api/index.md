@@ -1,6 +1,6 @@
 # API Reference Overview
 
-This section provides module-level API references, organized by the package's 17 subpackages.
+This section provides module-level API references, organized by subpackage.
 
 ## Population
 
@@ -41,6 +41,8 @@ This section provides module-level API references, organized by the package's 17
 ## Output
 
 - [State Translation](state_translation.md)
+- [History](history.md)
+- [Observation](observation.md)
 
 ## Spatial
 

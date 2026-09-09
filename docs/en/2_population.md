@@ -64,21 +64,23 @@ pop.update().competition(carrying_capacity=5000)
 # Chain multiple parameters
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
-# Custom fields — read/write in hooks via config.custom['name'][()]
+# Custom fields — write in callbacks with ctx.update().custom(...); read pop.config.custom outside
 pop.update().custom(temperature=35.0)
 ```
 
-Changes are written in-place via `set_param(config, name, value)` to 0-d ndarrays, taking effect immediately.
+Each `pop.update()` call is validated against the route table and committed to the running population (draft and Rust session stay in sync), appending one parameter-log row when the value actually changes.
 
-#### Low-Level set_param
+### Low-Level set_param (draft level)
+
+`set_param()` writes only the draft you pass in and never commits to a running population; ecology scalars go through `NamedTuple._replace`, so the return value must be rebound. Use `pop.update()` or `pop.params` to modify a running population:
 
 ```python
 from natal.frontend.configurator import set_param
 
-# Full name, short name, or alias all work
-set_param(config, "competition.carrying_capacity", 5000.0)
-set_param(config, "carrying_capacity", 5000.0)      # short name
-set_param(config, "eggs_per_female", 100.0)          # alias
+draft = pop.config                       # query snapshot
+draft = set_param(draft, "competition.carrying_capacity", 5000.0)
+draft = set_param(draft, "carrying_capacity", 5000.0)      # short name
+draft = set_param(draft, "eggs_per_female", 100.0)         # alias
 ```
 
 See [Runtime Parameter Modification](3_runtime_modification.md) for details.
@@ -254,7 +256,7 @@ pop.finish_simulation()
 
 ## Wright-Fisher Extreme Speed Mode
 
-Discrete-generation populations support a Wright-Fisher extreme speed mode: a single multinomial draw per tick replaces the step-by-step mate→fertilize→survive pipeline. Designed for effective population size modeling, 10-100× faster.
+The discrete-generation engine ships a Wright-Fisher extreme speed mode: a single multinomial draw per tick replaces the step-by-step mate→fertilize→survive pipeline, aimed at effective population size modeling.
 
 ### Sampling Modes
 
@@ -264,12 +266,47 @@ Discrete-generation populations support a Wright-Fisher extreme speed mode: a si
 | MULTINOMIAL (1) | Classic Wright-Fisher single multinomial draw |
 | POISSON (2) | Independent Poisson draws (large-N approximation) |
 
-### Enabling (preliminary API)
+### Public low-level entry
+
+The public low-level factory accepts `extreme_speed_mode` and stores it in the
+immutable `ModelDraft`. Pass that draft to the public
+`DiscreteGenerationPopulation` constructor; the Rust backend reads the flag
+when the population is created.
 
 ```python
-object.__setattr__(pop, "_config", pop.config._replace(extreme_speed_mode=3))
-pop.run(100)
+import natal as nt
+
+species = nt.Species.from_dict(
+    "WFExample",
+    {"chr1": {"L": ["WT", "Drive"]}},
+)
+base = (
+    nt.DiscreteGenerationPopulation.setup(species, stochastic=False)
+    .initial_state({"female": {"WT|WT": 50}, "male": {"Drive|Drive": 50}})
+    .build()
+)
+config = base.config
+
+engine_config = nt.build_discrete_engine_config(
+    n_genotypes=config.n_ztypes,
+    n_gtypes=config.n_gtypes,
+    n_glabs=config.n_glabs,
+    n_slabs=config.n_slabs,
+    zygotes_to_gametes_map=config.zygotes_to_gametes_map,
+    gametes_to_zygotes_map=config.gametes_to_zygotes_map,
+    stochastic=False,
+    extreme_speed_mode=3,
+)
+pop = nt.DiscreteGenerationPopulation(
+    species=species,
+    population_config=engine_config,
+    initial_individual_count={"female": {"WT|WT": 50}, "male": {"Drive|Drive": 50}},
+)
+pop.run(1)
 ```
+
+This is a low-level construction path. The regular `Configurator` build path
+does not expose an `extreme_speed_mode` chain method.
 
 ### Competition and Hooks
 

@@ -440,7 +440,7 @@ class Configurator:
         """Wrap a config for chainable modification.
 
         Args:
-            An existing ModelDraft.
+            config: An existing ModelDraft.
             species: Required for methods that need genotype resolution
                 (initial_state, presets, modifiers, fitness).  Can be
                 omitted when the Configurator is only used for scalar
@@ -713,8 +713,9 @@ class Configurator:
         # Record the Population reference for write-back
         cfg._pop_ref = pop
 
-        # Runtime custom() calls accumulate with the build-time slots:
-        # seed the accumulator from the population's current custom dict.
+        # Seed the local declaration accumulator from the current draft.
+        # Runtime ``custom()`` writes are committed by ``_make_writer``;
+        # this copy alone never changes the live population.
         cfg._custom_kwargs = dict(draft.custom)
         # Bind species and registry from the Population so recipe
         # factories and fitness() work against the live objects.

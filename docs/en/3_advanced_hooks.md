@@ -164,11 +164,11 @@ The native Rust engine is the only execution backend. Declarative Ops
 compile into a CSR plan that runs inside the engine session; single-parameter
 Python callbacks are bridged into the session (each invocation gets its own
 context wrapper). Out-of-band surfaces -- `trigger_event` and finish events --
-run the same CSR plan through the Python-side interpreter.
+run the same CSR plan through the Rust-side interpreter.
 
 ## Mixing Hook Types
 
-A single event may mix declarative and callback shapes; all run in `priority` order (lower values first):
+A single event may mix declarative and callback shapes. Within one event, declarative ops run first in `priority` order (lower values first), then Python callbacks commit one by one in `priority` order:
 
 ```python
 from natal.frontend.hooks import hook, Op
@@ -204,17 +204,20 @@ pop = (
 )
 ```
 
-The execution order of same-priority hooks is unspecified; priority semantics are consistent across entry points.
+The execution order of same-priority hooks is unspecified; priority semantics are consistent across all three entry points: in-tick, `trigger_event`, and finish events.
 
-## Performance Comparison
+## Choosing a Hook Shape
 
-| Hook type | Performance | Flexibility | Readability | Typical use |
-|----------|------|--------|--------|----------|
-| Declarative | high | medium | high | most routine scenarios |
-| Selector-based | high (baked indices) | medium | medium | scenarios targeting specific genotypes |
-| Callback | medium (Python callback) | high | medium | compute-heavy logic, parameter and custom writes |
+| Hook type | Flexibility | Readability | Typical use |
+|----------|--------|--------|----------|
+| Declarative | medium | high | most routine scenarios |
+| Selector-based | high (baked indices) | medium | scenarios targeting specific genotypes |
+| Callback | high | medium | compute-heavy logic, parameter or custom writes |
 
-On the Rust backend, declarative Ops execute entirely inside the session -- the fastest path; callback hooks cross a Python<->Rust boundary per firing.
+This table is qualitative guidance and carries no measured numbers. Declarative Ops
+execute entirely inside the engine session; callback hooks cross a Python<->Rust
+boundary per firing. Actual performance depends on model size and callback content —
+measure it on your own workload.
 
 ## Modifying Parameters at Runtime
 
@@ -239,7 +242,9 @@ Semantics (uniform across entry points):
 - Every actual change appends to `pop.params_log` as `(tick, name, old, new)`;
 - Vector/tensor parameters use `pop.params.tensor_write(name, values)`.
 
-Custom fields are read via `population.config.custom['name']`, initialized at build time with `.custom(temperature=25.0)` and changed at runtime via `pop.update().custom(...)`. Custom values preserve bool/int/float types and the shape of arrays of any rank. Spatial custom values belong to their own deme and are included in checkpoints. Custom fields are not in the parameter registry, so `pop.params` cannot reach them.
+Outside a callback, read custom fields through `pop.config.custom['name']` (a query snapshot); initialize them at build time with `.custom(temperature=25.0)` and change them at runtime with `pop.update().custom(...)`. Custom values preserve bool/int/float types and the shape of arrays of any rank. Spatial custom values belong to their own deme and are included in checkpoints.
+
+Callbacks have **no public read path** for custom fields: `TickContext` exposes no `config`, `ctx.state` has no `config` attribute, and `ctx.params` accepts registered parameters only. Callbacks can write them (`ctx.update().custom(...)`, committed with the event transaction); read them outside callbacks. Custom fields are not in the parameter route table, so `Op.set_param` rejects them at compile time with `ValueError`.
 
 For chain-style updates inside a hook, use the Configurator returned by `pop.update()` (same syntax as the build chain).
 
