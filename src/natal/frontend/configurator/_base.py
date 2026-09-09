@@ -23,7 +23,7 @@ candidate compile, preset / modifier / fitness recipes read
 the Configurator (:class:`natal.frontend.genetics.compile.RecipeHost`)
 — there is no adapter object impersonating a Population.
 
-Since slice 3 there is exactly one ``Configurator`` class: the former
+There is exactly one ``Configurator`` class: the former
 ``AgeStructuredConfigurator`` / ``DiscreteConfigurator`` split was a
 code duplication of parameter shapes, now expressed as data in the
 route table.  Discrete-specific vocabulary (``female_age0_survival``,
@@ -310,7 +310,7 @@ def _declared(
 ) -> Callable[Concatenate[Configurator, _P], Configurator]:
     """Journal one public chaining call for replayable declaration order.
 
-    Plan 5.1: the future ModelDefinition needs the semantic declaration
+    the future ModelDefinition needs the semantic declaration
     order, not just the accumulated state.  Every decorated call appends
     ``(method_name, explicitly_passed_kwargs)`` to the instance journal —
     object references are stored as-is (presets, hooks, BatchSetting),
@@ -359,8 +359,8 @@ def _declared(
                 else:
                     declared[name] = value
         # Record only AFTER the method body succeeded: a failed call must
-        # leave neither state nor journal entries behind (plan 5.1 step 5
-        # — failure does not pollute committed declarations).  The method's
+        # leave neither state nor journal entries behind (failure does not
+        # pollute committed declarations).  The method's
         # own rollback restores state; this ordering keeps the journal
         # consistent with it, so replay never re-applies a failed call.
         result = method(self, *args, **kwargs)
@@ -378,8 +378,8 @@ def replay_declarations(
 ) -> Configurator:
     """Rebuild a configurator by replaying a declaration journal.
 
-    The replay companion of the ``@_declared`` journal (plan 5.1: the
-    ordered log is the replayable source of what the user declared).
+    The replay companion of the ``@_declared`` journal (the ordered log
+    is the replayable source of what the user declared).
     Each journaled call is re-executed on a fresh configurator from
     *factory* with the explicitly-passed kwargs only, so method defaults
     re-apply exactly as they did originally.
@@ -502,7 +502,7 @@ class Configurator:
         # after construction and before backend enable.
         self._hook_calls: list[HookCall] = []
 
-        # Declaration journal (plan 5.1: ModelDefinition needs the semantic
+        # Declaration journal (ModelDefinition needs the semantic
         # declaration ORDER).  Every public chaining call records
         # ``(method_name, kwargs)`` with live object references preserved
         # (BatchSetting on the spatial side, preset/hook objects here), so
@@ -589,7 +589,7 @@ class Configurator:
 
         This is the primary factory.  Pass ``discrete=True`` for
         non-overlapping generations; otherwise an age-structured config
-        with overlapping generations is returned.  Since slice 3 both
+        with overlapping generations is returned.  Both
         granularities share this single Configurator class — the choice
         only selects the normalized draft shape.
 
@@ -1790,7 +1790,7 @@ class Configurator:
         candidate._presets = list(pop.presets)
         pop._current_definition = candidate._definition_for_compile()  # pyright: ignore[reportPrivateUsage]  # preserve recipe identity in future declarations.
 
-        # Plan 5.3: record the committed reconfiguration so the post-build
+        # Record the committed reconfiguration so the post-build
         # history is replayable next to the frozen definition.  A failed
         # transaction never reaches this point, so the log only carries
         # committed changes.
@@ -2087,8 +2087,8 @@ class Configurator:
                 name=name,
             )
 
-        # Freeze the declaration snapshot onto the population (plan 5.1
-        # slice 3): the ordered journal plus the declared identity.  The
+        # Freeze the declaration snapshot onto the population: the
+        # ordered journal plus the declared identity.  The
         # snapshot is frozen — runtime updates never rewrite it.
         pop._definition = self._definition_for_compile(build_name=name)  # pyright: ignore[reportPrivateUsage]  # one owned frozen declaration; avoid snapshotting it three times.
         pop._current_definition = pop._definition  # pyright: ignore[reportPrivateUsage]  # initial normalized declaration is the runtime compiler source.
@@ -2116,7 +2116,7 @@ class Configurator:
                 name=cast("str | None", kwargs["name"]),
             )
 
-        # The Rust engine is the ONLY execution backend (plan S6): every
+        # The Rust engine is the ONLY execution backend: every
         # population builds its session here, and a missing extension is a
         # hard error — there is no silent fallback.
         from natal.backends.rust.rust_backend import rust_backend_available

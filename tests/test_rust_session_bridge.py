@@ -134,7 +134,7 @@ def _run_age(
 ) -> PopulationState:
     """Run an explicit-state batch on the session-owned backend.
 
-    Session-owned surface (plan S2): the explicit state is installed with
+    Session-owned surface: the explicit state is installed with
     ``set_state``, the batch runs on the session, and the post-run state is
     read back through a fresh snapshot.
 

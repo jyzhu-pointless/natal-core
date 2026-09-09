@@ -44,7 +44,7 @@ const RPN_DIV: i64 = 5;
 
 /// Number of fixed ecology params addressable by ``OP_SET_PARAM``.
 /// Generated from ``src/natal/parameters.jsonc`` together with the
-/// wire column names (plan 5.4: one source, no hand-written copies).
+/// wire column names (one source, no hand-written copies).
 pub use crate::generated::ecology_parameters::ECO_PARAM_BOUNDS;
 pub use crate::generated::ecology_parameters::N_ECO_PARAMS;
 

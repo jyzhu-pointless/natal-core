@@ -1,6 +1,6 @@
 """``@hook()`` decorator — the front door of the hook system.
 
-The 26-decision hook contract recognizes three authoring shapes:
+The hook contract recognizes three authoring shapes:
 
 1. **Declarative** — function takes no parameters and returns
    ``List[HookOp]``; compiled to a CSR plan at registration.

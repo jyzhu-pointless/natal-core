@@ -9,10 +9,10 @@
 - **Genetics section** — genotype-indexed tables that scale with
   z/g: the four fitness tensors, the offspring probability tensor, the
   meiosis map, and the zygote compatibility weights.  In spatial models
-  this section moves into the variant bank (slice ⑤).
+  this section moves into the variant bank.
 
 Section membership is data, not code structure: the route table
-(slice ③) tags every parameter with its section and thereby its write
+tags every parameter with its section and thereby its write
 channel — scalars/vectors through :meth:`~natal.contracts.params.Params.apply`
 style writers, genetics tables through per-tensor writes.
 

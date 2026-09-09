@@ -1,6 +1,6 @@
-"""Slice-4 hook domain acceptance tests.
+"""hook domain acceptance tests.
 
-Covers the 26-decision hook contract end to end:
+Covers the hook contract end to end:
 
 - single-parameter Python hooks (``def hook(pop) -> int``) on all three
   backends (rust / reference python);

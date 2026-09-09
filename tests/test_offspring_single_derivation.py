@@ -3,7 +3,7 @@
 The derived tensor ``P[i,j,k] = Σ meiosis_f[i,a] · meiosis_m[j,b] ·
 fusion[a,b,k]`` used to be spelled independently at five call sites
 (writer channel, modifier refresh, registry compression, build-time
-maps, species blueprint).  Batch 6 collapses them onto one wrapper,
+maps, species blueprint).  The unification collapses them onto one wrapper,
 ``natal.frontend.data._engine.recompute_offspring_tensor``, whose
 ztype/gtype counts derive from the live table shapes.
 
@@ -486,7 +486,7 @@ class TestSingleSpellingContract:
 
         Attack: a partial revert that reintroduces
         ``compute_offspring_probability_tensor`` at any former call site
-        recreates the drift surface batch 6 collapsed.  This is the
+        recreates the drift surface the unification collapsed.  This is the
         route-scoped complement to the repo-wide ledger test.
         """
         src_root = _REPO_ROOT / "src"
@@ -1029,7 +1029,7 @@ class TestEquilibriumKernelParity:
         """A draft carrying ``age_based_reproduction_rates=None`` syncs to
         the mating-row fallback on both dispatch branches.
 
-        Attack: the Optional annotation (batch 11) exists because the
+        Attack: the Optional annotation exists because the
         runtime intermediate state can hold None — the 1102 incident.
         The Rust pre-resolution could pick the male row, clamp
         differently, or crash on the None; the Python fallback must keep

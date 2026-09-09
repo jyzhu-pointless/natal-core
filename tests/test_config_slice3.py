@@ -1,4 +1,4 @@
-"""Slice-3 strict tests: the config domain attack suite.
+"""strict tests: the config domain attack suite.
 
 Complements ``test_routes_slice3.py`` (which proves the table shapes and
 build-path contracts) with runtime-side attacks.  Every assertion proves
@@ -38,7 +38,7 @@ one numerical or identity invariant:
 8. **HookConfigWriter**: the in-hook writer talks to the session and to
    nothing else — no refresh, no rebuild, no draft, no rebuild
    scheduling — and its direct writes survive into the next ``run()``.
-9. **Slice-3 negative contracts**: frozen route records, replace-field
+9. **Negative contracts**: frozen route records, replace-field
    classification, species-context guard for pattern patches, and
    pattern strings rejected outside the last axis.
 """
@@ -1042,7 +1042,7 @@ class TestHookConfigWriterDirect:
     def test_direct_write_survives_into_the_next_run(self):
         """Session-only direct writes survive and drive the next run.
 
-        HookConfigWriter (slice-4 in-hook path) bypasses the draft on
+        HookConfigWriter (the in-hook path) bypasses the draft on
         purpose: it is the emergency push channel.  A run only flushes
         the draft at the boundary when an in-run write deferred through a
         writer — a bare session push leaves no deferral and is therefore
@@ -1177,7 +1177,7 @@ class TestParamsViewReadSurface:
         assert contract_to_draft_field("carrying_capacity") == ("carrying_capacity")
 
 
-# ── 10. slice-3 negative contracts ───────────────────────────────────────────
+# ── 10. negative contracts ───────────────────────────────────────────
 
 
 def _registry_probe_entry(

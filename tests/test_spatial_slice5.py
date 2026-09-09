@@ -1,9 +1,9 @@
-"""Slice-5 spatial contract tests: migration CSR on the Blueprint and the
+"""Spatial contract tests: migration CSR on the Blueprint and the
 migration-rate column in Params.
 
 Numerical invariants proven here:
 
-- The folded CSR reproduces the pre-slice-5 dense/adjacency semantics
+- The folded CSR reproduces the legacy dense/adjacency semantics
   exactly (deterministic trajectories of the default spatial models are
   bit-identical — enforced by ``scripts/slice5_parity_baseline.py``).
 - The migration-rate column is the single runtime write surface; the
@@ -509,7 +509,7 @@ class TestRustCsrMigration:
 
 
 # ---------------------------------------------------------------------------
-# Negative contracts: the pre-slice-5 migration surface is gone
+# Negative contracts: the legacy migration surface is gone
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""Frozen ModelDefinition snapshot contracts (plan 5.1, slice 3).
+"""Frozen ModelDefinition snapshot contracts.
 
 ``build()`` freezes the declaration journal onto the population; the
 snapshot is immutable, isolated from draft mutations, and replayable
@@ -207,7 +207,7 @@ class TestSpatialDefinitionSnapshot:
 class TestReconfigurationProvenance:
     """Post-build genetic-rule changes are recorded next to the snapshot.
 
-    Plan 5.3: the reconfiguration history must express the committed
+    the reconfiguration history must express the committed
     rebuild events; failed transactions append nothing.
     """
 

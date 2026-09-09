@@ -46,12 +46,12 @@ def equilibrium_metrics_dispatch(
 ) -> tuple[float, float]:
     """Run the Rust equilibrium kernel.
 
-    Single dispatch point for the equilibrium calibration (plan 5.2):
+    Single dispatch point for the equilibrium calibration:
     the sensitive-parameter sync path and the build-time map computation
     both funnel through here so the kernel choice cannot drift apart.
     Callers feed already-resolved reproduction vectors (the None-fallback
     to the female mating row is caller policy).  The Rust engine is the
-    only execution backend (plan S6): a missing extension propagates.
+    only execution backend: a missing extension propagates.
 
     Args:
         carrying_capacity: Carrying capacity K (age-1 total).
@@ -125,8 +125,8 @@ def recompute_offspring_tensor(
     every caller — the writer channel, the spatial variant channel, the
     modifier refresh, the registry compression, and the build-time map
     computation — funnels through this one spelling so they cannot drift
-    apart.  The numeric kernel lives in Rust (plan 5.2) and is the only
-    execution backend (plan S6).
+    apart.  The numeric kernel lives in Rust and is the only
+    execution backend.
 
     Args:
         meiosis: Meiosis table of shape ``(2, n_ztypes, n_gtypes)``.
@@ -146,8 +146,8 @@ def derive_equilibrium_metrics_from_draft(
     """Derive the equilibrium metrics from a draft's current values.
 
     Single read-side derivation shared by the sensitive-write sync and
-    the ``pop.params`` query surface (plan 5.2: one numeric source; the
-    draft's stored copies retire with slice 2).  The declared
+    the ``pop.params`` query surface (one numeric source; the draft's
+    stored copies are retired).  The declared
     distribution and Champer override are read from the draft itself,
     and the reproduction fallback (female mating row) is resolved here.
 

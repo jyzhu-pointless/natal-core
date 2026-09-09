@@ -1,5 +1,5 @@
 [
-  // Route table (slice 3): every column is data — adding a parameter is adding
+  // Route table: every column is data — adding a parameter is adding
   // a row; a new parameter *shape* means touching _routes.py.
   // Columns:
   //   method    — Configurator method that exposes the parameter

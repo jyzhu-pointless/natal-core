@@ -229,7 +229,7 @@ pub(crate) fn equilibrium_metrics(
     external_expected_eggs=None,
 ))]
 // The flat parameter table mirrors the Python reference signature
-// one-to-one (plan 5.2 parity); a params struct would decouple the
+// one-to-one; a params struct would decouple the
 // two spellings the single-source rule keeps aligned.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn equilibrium_metrics_flat(

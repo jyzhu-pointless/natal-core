@@ -356,7 +356,7 @@ class RustLifecycleBackend:
         )
 
     def set_state(self, state: PopulationState) -> None:
-        """Install a full live state into the session (plan S2).
+        """Install a full live state into the session.
 
         Args:
             state: The state whose flattened arrays and tick become the
@@ -671,7 +671,7 @@ class RustDiscreteLifecycleBackend:
         )
 
     def set_state(self, state: DiscretePopulationState) -> None:
-        """Install a full live state into the session (plan S2).
+        """Install a full live state into the session.
 
         Args:
             state: The state whose flattened counts and tick become the
@@ -803,13 +803,13 @@ class RustDiscreteLifecycleBackend:
 class RustHeterogeneousSpatialLifecycleBackend:
     """Rust backend for heterogeneous spatial runs over the variant bank.
 
-    Slice-5 stage-2 boundary: the session receives one shared blueprint,
+    Boundary: the session receives one shared blueprint,
     one columnized ecology set (per-deme ``Params`` columns), a bank of
     genetics ``TensorSet`` variants, and a per-deme variant index.  Demes
     with identical genetics share one bank entry regardless of how their
     ecology differs, so bank size scales with genetics diversity only.
 
-    Plan S3 ownership: the session also owns the stacked counts, sperm
+    Session ownership: the session also owns the stacked counts, sperm
     storage, tick, and one persistent RNG stream per deme.  ``run_tick``
     carries control parameters only (lifecycle then migration inside
     Rust); Python reads state back through :meth:`state_snapshot`.

@@ -389,7 +389,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._rust_lifecycle_backend = backend
         self._rust_backend_seed = seed
         self._rust_needs_rebuild = False
-        # The session owns the state from here on (plan S2): install the
+        # The session owns the state from here on: install the
         # live Python state so the freshly seeded RNG continues from the
         # population's current counts and tick.
         backend.set_state(state_to_install)
@@ -675,7 +675,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self.clear_history()
 
     def _refresh_state_cache_from_session(self) -> None:
-        """Pull the session-owned state into the local cache (plan S2)."""
+        """Pull the session-owned state into the local cache."""
         backend = self._rust_lifecycle_backend
         if backend is None:
             return

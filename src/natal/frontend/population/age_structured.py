@@ -454,7 +454,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                             )
 
     def _refresh_state_cache_from_session(self) -> None:
-        """Pull the session-owned state into the local cache (plan S2).
+        """Pull the session-owned state into the local cache.
 
         The Rust session owns the counts, sperm storage, and tick; the
         cache container is rebuilt from a fresh snapshot and the mirror
@@ -803,7 +803,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._rust_lifecycle_backend = backend
         self._rust_backend_seed = seed
         self._rust_needs_rebuild = False
-        # The session owns the state from here on (plan S2): install the
+        # The session owns the state from here on: install the
         # live Python state so the freshly seeded RNG continues from the
         # population's current counts and tick.
         backend.set_state(state_to_install)

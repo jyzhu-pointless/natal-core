@@ -68,13 +68,13 @@ pub struct AgeStructuredSession {
     /// drained by the Python adapter after each run so ``params_log`` and
     /// the draft stay synchronized with the session-owned columns.
     eco_journal: Vec<crate::hooks::interpreter::EcoJournalRow>,
-    /// Record-aligned full checkpoints (plan 13.1 R3): state + RNG words +
+    /// Record-aligned full checkpoints: state + RNG words +
     /// ecology, captured at every recorded tick of a raw-mode run.  The
     /// public ``restore_checkpoint`` restores from here.
     checkpoints: Vec<crate::kernels::age_structured::TickCheckpoint>,
     /// Native history shared with the Python read-only adapter.
     history_store: Option<SharedHistory>,
-    /// Session-owned live state (plan S2): flattened individual counts,
+    /// Session-owned live state: flattened individual counts,
     /// flattened sperm storage, and the authoritative tick.  ``run`` and
     /// the stage methods operate on these directly — Python passes control
     /// parameters only and reads back snapshots.
@@ -513,7 +513,7 @@ impl AgeStructuredSession {
         outcome
     }
 
-    /// Install a full live state (plan S2 state ownership).
+    /// Install a full live state.
     ///
     /// The session owns the counts, sperm storage, and tick; Python pushes
     /// a fresh state exactly when the population-level state changes
@@ -1054,7 +1054,7 @@ impl AgeStructuredSession {
         // copy the observation mask if present, run the Rust batch loop
         // directly on the session-owned state, and copy the flattened
         // history into a NumPy 2-D array.  Python passes control
-        // parameters only (plan S2: the session owns counts and tick).
+        // parameters only (the session owns counts and tick).
         let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let mask_vec = match observation_mask {
             Some(mask) => Some(

@@ -1,4 +1,4 @@
-"""Session-owned spatial state contracts (plan S3a).
+"""Session-owned spatial state contracts.
 
 The heterogeneous Rust spatial session owns the stacked counts, sperm
 storage, tick, and one persistent per-deme RNG stream.  ``run_tick``

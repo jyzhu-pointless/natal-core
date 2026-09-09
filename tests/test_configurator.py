@@ -507,12 +507,12 @@ class TestSetParamErrors:
 
 class TestFactoryMethods:
     def test_for_config_returns_unified_configurator(self, minimal_config):
-        """Slice 3: for_config wraps the draft with the single Configurator."""
+        """for_config wraps the draft with the single Configurator."""
         cfg = Configurator.for_config(minimal_config)
         assert type(cfg) is Configurator
 
     def test_for_discrete(self, species):
-        """Slice 3: for_discrete returns the unified Configurator with a
+        """for_discrete returns the unified Configurator with a
         discrete-normalized draft (the flag carries the granularity)."""
         cfg = Configurator.for_discrete(species)
         assert type(cfg) is Configurator
@@ -558,7 +558,7 @@ class TestHooks:
 
 class TestConfiguratorReturnType:
     def test_setup_returns_unified_configurator(self, species):
-        """Slice 3: setup() returns the single Configurator for both
+        """setup returns the single Configurator for both
         granularities; the draft flag carries the granularity."""
         cfg = nt.DiscreteGenerationPopulation.setup(species)
         assert type(cfg) is Configurator
@@ -938,7 +938,7 @@ class TestReconfigurePreset:
 
         The former transaction cloned the population and exercised the
         complete rebuild there before executing the same recipe a second
-        time on the real object; the unified transaction (plan 5.1)
+        time on the real object; the unified transaction
         executes the recipe once on the live population.
         """
         calls = {"n": 0}
@@ -1051,8 +1051,8 @@ class TestReconfigurePreset:
         be rolled back together with the config: a surviving mark routes
         the next ``run()`` through a full Rust session rebuild, which
         reseeds the session RNG — the failure would then change the
-        population's future stochastic trajectory (plan 5.1: neither the
-        declaration nor the session may be polluted by a failed attempt).
+        population's future stochastic trajectory (neither the declaration
+        nor the session may be polluted by a failed attempt).
         Marks that were already pending *before* the attempt (the user's
         own structural update) must survive the rollback — restore, not
         clear.
@@ -1314,9 +1314,9 @@ class TestReconfigurePreset:
     ) -> None:
         """reconfigure_preset executes on the live population, never via _clone.
 
-        The pre-5.1 transaction validated the candidate on a clone
+        The earlier transaction validated the candidate on a clone
         produced by ``pop._clone`` before re-running the recipe on the
-        real object.  Plan 5.1 deletes that path: poisoning ``_clone``
+        real object.  That path is deleted: poisoning ``_clone``
         must not affect a successful reconfigure, proving the
         clone-validation transaction is truly gone.
         """

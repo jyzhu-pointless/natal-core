@@ -1,4 +1,4 @@
-"""Session-owned state contracts (plan S2, batch 23).
+"""Session-owned state contracts.
 
 The plain-model Rust sessions own the counts, sperm storage, and tick:
 ``run`` accepts control parameters only, Python reads state back through
@@ -571,7 +571,7 @@ class TestZeroTickRun:
 
 
 class TestDirtyBridgeNegativeContracts:
-    """The retired dirty bridge is unreachable (S2 batch 24)."""
+    """The retired dirty bridge is unreachable."""
 
     def test_dirty_set_and_mirror_are_gone(self) -> None:
         """``_rust_dirty``, ``_contract_params``, and ``_sync_rust_backend`` are gone."""
@@ -626,7 +626,7 @@ class TestDirtyBridgeNegativeContracts:
 
 
 # ============================================================================
-# S2 batch 24: the run-boundary ecology flush and the rebuild-flag rollback
+# The run-boundary ecology flush and the rebuild-flag rollback
 # ============================================================================
 
 

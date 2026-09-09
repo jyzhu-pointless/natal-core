@@ -13,7 +13,7 @@ the ledgers as data and checks them mechanically:
   owning stage and asserted *still reachable* — the registry flips to
   unreachability assertions when the owning stage deletes them, so a
   silent partial deletion cannot go unnoticed.
-- ``INVARIANTS``: every verification face from plan section 12.1 maps
+- ``INVARIANTS``: every verification face maps
   to owning tests; a violated invariant can be registered as a known
   violation.  All S0 red-light repros (R1-R5) have graduated into the
   pytest suite next to their owning stage's fix, and the construction
@@ -55,7 +55,7 @@ class SurfaceEntry:
 
 MUST_EXIST: tuple[SurfaceEntry, ...] = (
     SurfaceEntry(
-        area="chained configuration API (plan 2.1 #1)",
+        area="chained configuration API",
         test_file="test_frozen_chained_api.py",
         samples=(
             "test_age_structured_full_chain_builds_and_runs",
@@ -67,7 +67,7 @@ MUST_EXIST: tuple[SurfaceEntry, ...] = (
         ),
     ),
     SurfaceEntry(
-        area="species structure registration syntax (plan 2.1 #2)",
+        area="species structure registration syntax",
         test_file="test_frozen_species_syntax.py",
         samples=(
             "test_locus_name_list_form_builds_skeleton_loci",
@@ -80,7 +80,7 @@ MUST_EXIST: tuple[SurfaceEntry, ...] = (
         ),
     ),
     SurfaceEntry(
-        area="preset rules (plan 2.1 #3)",
+        area="preset rules",
         test_file="test_frozen_preset_semantics.py",
         samples=(
             "test_bind_species_then_conflicting_rebind_raises",
@@ -93,7 +93,7 @@ MUST_EXIST: tuple[SurfaceEntry, ...] = (
         ),
     ),
     SurfaceEntry(
-        area="declarative hook format (plan 2.1 #4)",
+        area="declarative hook format",
         test_file="test_frozen_hook_format.py",
         samples=(
             "test_every_action_op_constructs_registers_and_runs",
@@ -106,7 +106,7 @@ MUST_EXIST: tuple[SurfaceEntry, ...] = (
         ),
     ),
     SurfaceEntry(
-        area="event/stop/reset/import/restore rules (plan 7.4, 8.3, 9)",
+        area="event/stop/reset/import/restore rules",
         test_file="test_frozen_lifecycle_rules.py",
         samples=(
             "test_early_stop_short_circuits_before_late_and_aging",
@@ -156,7 +156,7 @@ class RemovalEntry:
 MUST_NOT_EXIST: tuple[RemovalEntry, ...] = (
     RemovalEntry(
         item_id="output.record",
-        description="dead module natal.frontend.output.record (removed in S0 batch 1)",
+        description="dead module natal.frontend.output.record (removed)",
         owner_stage="S0",
         status="removed",
     ),
@@ -175,8 +175,8 @@ MUST_NOT_EXIST: tuple[RemovalEntry, ...] = (
     RemovalEntry(
         item_id="backend-selector",
         description=(
-            "backend= selection (removed at S6 batch A), enable/disable "
-            "facades, and their exports/stubs (facades removed at S6 batch B)"
+            "backend= selection and the enable/disable "
+            "facades, and their exports/stubs (both removed)"
         ),
         owner_stage="S6",
         status="removed",
@@ -189,7 +189,7 @@ MUST_NOT_EXIST: tuple[RemovalEntry, ...] = (
     ),
     RemovalEntry(
         item_id="rust-dirty-bridge",
-        description="_rust_dirty set and the _contract_params mirror (S2 batch 24)",
+        description="_rust_dirty set and the _contract_params mirror",
         owner_stage="S2",
         status="removed",
     ),
@@ -266,7 +266,7 @@ def _removed_probe_build_observation_row_panmictic() -> None:
 def _removed_probe_configcontext_population_clone() -> None:
     """The Population-mimicry adapter surface must stay unreachable.
 
-    Slice 6 removed the ConfigContext adapter, the
+    The retirement removed the ConfigContext adapter, the
     ``apply_preset_to_population`` dual-target helper, and the
     Configurator's ``_make_ctx`` / ``_sync_from_ctx`` write-back pair:
     build-time preset application now compiles against the Configurator
@@ -507,7 +507,7 @@ def test_pending_entries_are_registered_with_owner_stage() -> None:
 
 @dataclass(frozen=True)
 class InvariantEntry:
-    """One verification face from plan section 12.1.
+    """One verification face.
 
     Attributes:
         area: Verification face name.
@@ -566,7 +566,7 @@ INVARIANTS: tuple[InvariantEntry, ...] = (
         ),
     ),
     InvariantEntry(
-        area="hook x model x space combinations run uniformly (plan 12.2)",
+        area="hook x model x space combinations run uniformly",
         owning_tests=(
             "test_frozen_hook_format.py",
             "test_spatial_session_ownership.py",
@@ -582,15 +582,15 @@ INVARIANTS: tuple[InvariantEntry, ...] = (
 )
 
 # Audit findings recorded by the S0 reviewers (not in the plan's R/T list):
-# C1 pop.params.meiosis_map raised AttributeError — FIXED in S1 batch 4 by
+# C1 pop.params.meiosis_map raised AttributeError — FIXED by
 #     adding the meiosis_map -> zygotes_to_gametes_map rename.
 # C2 plain vs spatial discrete default growth semantics diverge — still open.
 # C3 tensor_write("meiosis_map") reached storage but not dynamics — FIXED in
-#     S1 batch 5: the write now recomputes the derived offspring tensor in
+#     the write now recomputes the derived offspring tensor in
 #     the same transaction (and rejects non-distribution rows atomically).
 # C4 deme.update().fitness(...) still writes the shared viability tables
 #     in place, leaking into every other deme (pre-existing sibling of the
-#     P2 leak closed in batch 5; needs a spec decision whether to refuse
+#     P2 leak closed; needs a spec decision whether to refuse
 #     like tensor_write or route through write_genetics).
 EXTRA_FINDINGS: tuple[InvariantEntry, ...] = (
     InvariantEntry(
@@ -621,7 +621,7 @@ KNOWN_DEFECT_IDS = {
 
 
 def test_invariant_ledger_covers_all_plan_faces() -> None:
-    """All ten verification faces of plan section 12.1 are registered.
+    """All ten verification faces are registered.
 
     The hook-combination face from section 12.2 is registered on top of
     the ten 12.1 faces, hence the lower bound.  Every face is matched by
@@ -687,7 +687,7 @@ def test_offspring_derivation_has_a_single_spelling() -> None:
 def test_graduated_defects_keep_their_promoted_tests() -> None:
     """Every graduated red-light repro has a live pytest home.
 
-    R4/R5 graduated in S2 batch 22a, R3 in batch 22b, and R1/R2 in S3
+    R4/R5, R3, and R1/R2 graduated
     (batches 95544b4 and the discrete unification).  Deleting a promoted
     file silently would otherwise go unnoticed by this ledger.
     """

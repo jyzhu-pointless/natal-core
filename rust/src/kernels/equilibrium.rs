@@ -75,7 +75,7 @@ pub fn equilibrium_metrics(bp: &Blueprint, params: &EcologyParams, deme: usize) 
     )
 }
 
-/// The pure equilibrium computation shared by every caller (plan 5.2:
+/// The pure equilibrium computation shared by every caller (the
 /// Rust owns the numeric algorithm; both the contract-column wrapper
 /// above and the flat PyO3 entry below funnel through this core).
 ///
@@ -95,7 +95,7 @@ pub fn equilibrium_metrics(bp: &Blueprint, params: &EcologyParams, deme: usize) 
 /// ## Returns
 /// ``(expected_competition_strength, expected_survival_rate)``.
 // The flat parameter table mirrors the Python reference signature
-// one-to-one (plan 5.2 parity); a params struct would decouple the
+// one-to-one; a params struct would decouple the
 // two spellings the single-source rule keeps aligned.
 #[allow(clippy::too_many_arguments)]
 #[must_use]

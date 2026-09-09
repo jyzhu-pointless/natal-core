@@ -1,4 +1,4 @@
-"""Slice-2 Rust core strict tests: write channels, dirty bridge, refresh
+"""Rust core strict tests: write channels, dirty bridge, refresh
 semantics, memory checkpoints, and GIL callbacks.
 
 Every assertion proves one numerical or identity invariant:
@@ -40,7 +40,7 @@ from natal.backends.rust.rust_backend import (
     rust_backend_available,
 )
 from natal.contracts.materialize import materialize
-from natal.frontend.configurator import Configurator  # unified since slice 3
+from natal.frontend.configurator import Configurator  # unified Configurator
 from natal.frontend.data import DiscretePopulationState, PopulationState
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.entry.declarative import Op
@@ -214,7 +214,7 @@ def _run_age(
 ) -> PopulationState:
     """Run an explicit-state batch on the session-owned backend.
 
-    Session-owned surface (plan S2): the explicit state is installed with
+    Session-owned surface: the explicit state is installed with
     ``set_state``, the batch runs on the session, and the post-run state is
     read back through a fresh snapshot.
 
@@ -698,7 +698,7 @@ def test_custom_slot_write_commits_to_draft_and_survives_run(
     """
     pop = _build_age_population(age_species, "slice2_custom_dirty")
     pop._initialize_session(seed=0)
-    pop.update().custom(slice2_probe=1.5)
+    pop.update.custom(slice2_probe=1.5)
     assert dict(pop.config.custom) == {"slice2_probe": 1.5}
     pop.run(1, record_every=0)
     assert dict(pop.config.custom) == {"slice2_probe": 1.5}

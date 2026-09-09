@@ -1,4 +1,4 @@
-"""Slice-5 spatial adversarial tests: the migration CSR data plane under attack.
+"""Spatial adversarial tests: the migration CSR data plane under attack.
 
 Every assertion here proves a numerical invariant against an independently
 written reference, not against the implementation's own readout:
@@ -23,7 +23,7 @@ written reference, not against the implementation's own readout:
   runs.
 - **Boundary semantics unification** — a boundary deme of a kernel-mode
   grid emits its full ``rate * value`` outbound over the shared CSR
-  (reference semantics), not the abandoned pre-slice-5 Rust
+  (reference semantics), not the abandoned legacy Rust
   kernel-total-scaled behavior.
 - **Negative contracts** — the deleted migration surface is
   unconstructible, not merely unused.
@@ -272,7 +272,7 @@ def _reconstruct_kernel_rows(
     include_center: bool,
     adjust_on_edge: bool,
 ) -> list[tuple[NDArray[np.int64], NDArray[np.float64]]]:
-    """Rebuild the pre-slice-5 kernel row pipeline independently.
+    """Rebuild the legacy kernel row pipeline independently.
 
     Composes the float operations in the historical order: offsets in
     kernel row-major order, reciprocal-multiply by the kernel total (or
@@ -1028,7 +1028,7 @@ class TestBoundarySemanticsUnification:
     ) -> None:
         """A 1-neighbor boundary deme sends its full ``value * rate`` outbound.
 
-        The pre-slice-5 Rust kernel scaled boundary rows by the kernel
+        The legacy Rust kernel scaled boundary rows by the kernel
         total (sending only a quarter here); the unified CSR carries the
         reference semantics instead, and the engines consume it verbatim.
         """

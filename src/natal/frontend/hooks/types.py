@@ -238,7 +238,7 @@ def _empty_meta_map() -> Dict[str, int]:
 class CompiledHookDescriptor:
     """Unified descriptor for all hook forms.
 
-    The payload is binary (26-decision): exactly one of ``plan`` (CSR
+    The payload is binary: exactly one of ``plan`` (CSR
     declarative ops) or ``callback`` (single-parameter Python callable) is
     used as the execution payload.  The legacy ``njit_fn`` / ``py_wrapper``
     payloads were removed with the njit hook-wrapper mechanism.

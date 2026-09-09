@@ -1079,7 +1079,7 @@ class SpatialDashboard:
         self._update_selected_deme()
 
     def _migration_rate_text(self, deme_idx: int) -> str:
-        """Render the slice-5 migration-rate row for one deme.
+        """Render the migration-rate row for one deme.
 
         The runtime migration surface is the ``(n_demes, n_sexes, n_ages)``
         rate column on ``pop.params``; the retired ``migration_mode`` /

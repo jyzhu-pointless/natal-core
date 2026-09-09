@@ -1,4 +1,4 @@
-"""Ownership snapshot contracts (plan 13.1 R4/R5, fixed in S2 batch 22).
+"""Ownership snapshot contracts.
 
 Promoted from the S0 red-light repros ``repro_r4`` / ``repro_r5``:
 
@@ -252,7 +252,7 @@ class TestStateSnapshotDiscipline:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Adversarial additions (batch 22b): freeze-bypass attacks, snapshot channel
+# Adversarial additions: freeze-bypass attacks, snapshot channel
 # attacks, the _live_state contract, lifecycle transitions under the
 # snapshot discipline, and frozen-write error paths.  Every test targets a
 # concrete way R4/R5 could regress silently.
@@ -768,7 +768,7 @@ class TestR5SnapshotChannelAttacks:
     def test_spatial_slice_state_is_snapshot_and_transaction_writes(self) -> None:
         """DemeSlice.state is a snapshot; a scoped callback transaction writes state.
 
-        Plan S3 contract inversion: a retained ``deme.state`` container is
+        Contract inversion: a retained ``deme.state`` container is
         an independent point-in-time copy, so mutating it must never move
         the real run (the old live write-through is retired).  The
         sanctioned write channel is ``TickContext.state``, whose payload

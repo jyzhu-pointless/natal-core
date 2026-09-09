@@ -20,7 +20,7 @@ classes:
    relocated module object.
 4. Error paths: unknown names raise the documented exception types, and a
    failed lookup leaves the lazy machinery uncorrupted.
-5. Removed numba/codegen surface (slice ④ negative contracts) unchanged.
+5. Removed numba/codegen surface (negative contracts) unchanged.
 """
 
 import importlib
@@ -448,7 +448,7 @@ def test_unknown_legacy_module_raises_module_not_found() -> None:
 
 
 # =====================================================================
-# 5. Removed njit codegen surface (slice ④ negative contract)
+# 5. Removed njit codegen surface (negative contract)
 # =====================================================================
 
 
@@ -498,7 +498,7 @@ def test_no_numba_package_remaining() -> None:
 def test_public_export_list_matches_module_all() -> None:
     """The explicit top-level export list cannot drift from module ``__all__``.
 
-    Two directions (plan S6, must-not-exist item 8): every unit listed in
+    Two directions: every unit listed in
     ``natal._PUBLIC_EXPORTS`` must still declare exactly those names in its
     literal ``__all__`` (no stale entries), and no unlisted unit with a
     non-empty ``__all__`` may exist (a new module export must be added to

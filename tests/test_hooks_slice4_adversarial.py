@@ -1,4 +1,4 @@
-"""Adversarial tests for the slice-4 hook domain and recording.
+"""Adversarial tests for the hook domain and recording.
 
 Every semantic asserted here was probed empirically on the Rust
 lifecycle backend before being locked in.  Directions covered (beyond
@@ -9,7 +9,7 @@ lifecycle backend before being locked in.  Directions covered (beyond
    non-leakage across runs.
 2. The two-layer state loan: hook writes feed subsequent engine stages;
    external tampering with ``pop._state`` between runs cannot reach the
-   session-owned engine (plan S2).
+   session-owned engine.
 3. ``metrics`` exact numeric agreement for a known allele mixture,
    including the zero-total degenerate case.
 4. Parameter snapshot completeness: no-change runs append zero rows, the
@@ -293,7 +293,7 @@ def test_hook_state_write_feeds_subsequent_engine_stages() -> None:
 def test_external_state_tampering_between_runs_rejected() -> None:
     """External state tampering between runs is contained.
 
-    The session owns the state outright (plan S2), so a tampered Python
+    The session owns the state outright, so a tampered Python
     cache simply cannot reach the engine — the next run's trajectory is
     bit-identical to an untampered twin.
     """

@@ -6,7 +6,7 @@ Python callbacks at event boundaries in one stable priority order.
 
 The njit-era registration surface (``set_hook`` / ``get_hooks`` /
 ``remove_hook``, the plain ``(state, config, deme_id)`` hook map, and the
-``hook_entries`` bookkeeping) was removed — the 26 decisions give njit
+``hook_entries`` bookkeeping) was removed — the design decisions give njit
 hooks no migration channel.
 """
 

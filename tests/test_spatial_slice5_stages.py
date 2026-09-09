@@ -1,6 +1,6 @@
-"""Slice-5 stages 2-4: ecology columnization and the genetics variant bank.
+"""Spatial ecology columnization and the genetics variant bank.
 
-Stage 2 established these invariants:
+These invariants hold:
 
 - **Genetics-only grouping** (build side): ecological batch differences
   (carrying capacity, initial state, survival) never split config groups
@@ -384,7 +384,7 @@ class TestCheckpointMigrationRate:
         sperm = np.zeros((n_ages, n_z, n_z))
 
         session = _engine_rs.EngineSession(bp, params, 0)
-        # Session-owned surface (plan S2): install the explicit state, then
+        # Session-owned surface: install the explicit state, then
         # snapshot_state captures the session-owned checkpoint in full.
         session.set_state(ind.ravel(), sperm.ravel(), 7)
         snapshot = session.snapshot_state()

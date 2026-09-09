@@ -194,7 +194,7 @@ class TestDemeSliceReadCompat:
         deme0 = pop.deme(0)
         np.testing.assert_array_equal(deme0.config.viability_fitness, pop._demes[0].config.viability_fitness)
         # DemeSlice.state returns an independent snapshot of the deme's
-        # live container (plan S3): equal by value, never the same object
+        # live container: equal by value, never the same object
         # or buffer (the public population-level state has been a
         # snapshot since R5; spatial slices now follow the same rule).
         snapshot = deme0.state
@@ -213,7 +213,7 @@ class TestDemeSliceReadCompat:
     ) -> None:
         """Slice reads hand out snapshots; scoped hook transactions write state.
 
-        Plan S3 inversion: a write through a retained ``deme.state``
+        Inversion: a write through a retained ``deme.state``
         snapshot is inert (it cannot reach the deme's live array), while
         a scoped hook transaction commits its candidate to the live state
         and every subsequent read.

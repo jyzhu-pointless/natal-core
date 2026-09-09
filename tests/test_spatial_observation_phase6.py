@@ -160,7 +160,7 @@ def _install_coordinate_counts(population: nt.SpatialPopulation) -> np.ndarray:
     """Install counts whose decimal place identifies every source axis.
 
     The counts enter through the sanctioned ``import_state`` channel:
-    since plan S3, ``deme.state`` hands out independent snapshots and
+    ``deme.state`` hands out independent snapshots and
     writes through them no longer reach the run.
 
     Args:

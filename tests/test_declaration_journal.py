@@ -1,4 +1,4 @@
-"""Declaration-journal contract tests (plan 5.1, ModelDefinition slice 1).
+"""Declaration-journal contract tests.
 
 The ``@_declared`` journal records every public chaining call of a
 Configurator with its explicitly-passed kwargs and live object
@@ -196,7 +196,7 @@ class TestDeclarationJournal:
         names = [name for name, _ in pop._definition_journal_names()] if hasattr(
             pop, "_definition_journal_names"
         ) else None
-        assert names is None  # populations do not expose a journal yet (slice 3)
+        assert names is None  # populations do not expose a journal yet
 
     def test_empty_journal_replays_to_fresh_state(self) -> None:
         """An empty journal replays to the untouched factory state."""
@@ -250,7 +250,7 @@ class TestDeclarationJournal:
 
 
 class TestSpatialJournalUnification:
-    """The spatial chain journals into ONE store (slice 1b).
+    """The spatial chain journals into ONE store.
 
     The wrapper's ``_declaration_log`` (BatchSetting values preserved) is
     the single record; the template's own journal stays empty because
@@ -331,7 +331,7 @@ class TestSpatialJournalUnification:
 
 
 class TestFailedCallsLeaveNoJournalEntry:
-    """Failed declarations stay out of the replayable journal (plan 5.1 #5).
+    """Failed declarations stay out of the replayable journal.
 
     A call that raises must leave neither state nor journal entries
     behind — otherwise ``replay_declarations`` / ``ModelDefinition``

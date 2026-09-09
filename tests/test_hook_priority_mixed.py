@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Event execution ordering and stop semantics for the slice-4 hook forms.
+"""Event execution ordering and stop semantics for the hook forms.
 
 Cross-type priority semantics: within one event, CSR declarative plans
 and single-parameter Python callbacks execute interleaved in one stable

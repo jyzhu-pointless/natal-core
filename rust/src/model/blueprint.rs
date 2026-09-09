@@ -36,7 +36,7 @@ pub struct Blueprint {
     // -- initial population --
     pub initial_individual_count: Vec<f64>,
     pub initial_sperm_storage: Vec<f64>,
-    // -- spatial domain (slice 5) --
+    // -- spatial domain --
     pub n_demes: usize,
     pub migration_indptr: Vec<i64>,
     pub migration_dest_idx: Vec<i64>,

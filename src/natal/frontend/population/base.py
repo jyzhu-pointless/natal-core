@@ -42,7 +42,7 @@ from natal.frontend.population._mixins._output import OutputMixin
 from natal.frontend.registry.index import IndexRegistry
 
 """Runtime fields pulled into the session by the run-boundary flush
-(plan S2): every ecology scalar, every vector column, the custom slots,
+every ecology scalar, every vector column, the custom slots,
 and the genetics tensors.  In-run writes (hook callbacks, deferred
 pushes) land in the draft only while the session owns its borrow; the
 flush re-materializes the contract params and pulls this whole list, so
@@ -137,11 +137,11 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     # which forks the variant first.
     _shares_genetics_draft: bool = False
 
-    # Frozen declaration snapshot (plan 5.1 slice 3), attached by
+    # Frozen declaration snapshot, attached by
     # Configurator.build(); None until then (e.g. clones built via __new__).
     _definition: ModelDefinition | None = None
 
-    # Runtime reconfiguration log (plan 5.1 slice 4 / plan 5.3): the
+    # Runtime reconfiguration log: the
     # build-time definition stays frozen; every committed preset
     # reconfiguration appends here so the post-build history of genetic
     # rule changes is replayable next to the frozen snapshot.  Annotation
@@ -306,7 +306,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
         clone = cls.__new__(cls)
 
         # --- rust dirty bridge (independent per deme) ---
-        # Session-ownership attributes (plan S2): clones start backend-less
+        # Session-ownership attributes: clones start backend-less
         # with a fresh cache flag — __new__ skips every initializer, so a
         # missing attribute here would crash reset()/state reads later.
         # object.__setattr__ matches the __new__-host idiom used above.
@@ -755,7 +755,7 @@ class BasePopulation(OutputMixin, ObservationMixin, ABC, Generic[T_State]):
     def state(self) -> T_State:
         """Return a point-in-time snapshot of the current state container.
 
-        Snapshot discipline (plan 13.1 R5): long-lived callers outside
+        Snapshot discipline: long-lived callers outside
         hooks receive copies, so writing through the returned container
         can never reach the engine's live arrays.  The in-hook writable
         loan is a separate controlled channel (:class:`TickContext`).

@@ -1,4 +1,4 @@
-"""Slice-3 strict tests: the route table, the writers, and ``pop.params``.
+"""strict tests: the route table, the writers, and ``pop.params``.
 
 Every assertion proves one numerical or identity invariant:
 
@@ -936,7 +936,7 @@ class TestWriterAtomicity:
         assert float(writer.draft.carrying_capacity) == 321.0
         assert float(writer.draft.eggs_per_female) == 33.0
         # The derived metrics follow the write via the derive surface
-        # (the stored copies retired with the slice-2 sync).
+        # (the stored copies retired with the sync removal).
         from natal.frontend.data._engine import (
             derive_equilibrium_metrics_from_draft,
         )
@@ -1186,7 +1186,7 @@ class TestDerivedMetricQueries:
     """``pop.params`` exposes freshly derived equilibrium metrics.
 
     The properties always recompute from the draft's own ecology; the
-    draft's stored copies retired with the slice-2 sync removal.
+    draft's stored copies are retired.
     """
 
     def _built_population(self, name: str):

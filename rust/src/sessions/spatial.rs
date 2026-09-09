@@ -22,13 +22,13 @@ fn map_lifecycle_error(err: String) -> PyErr {
 
 /// PyO3 session for heterogeneous spatial multi-deme runs.
 ///
-/// Slice-5 stage-2 variant bank: one shared blueprint, one columnized
+/// Variant bank: one shared blueprint, one columnized
 /// ecology set (per-deme ``EcologyParams`` columns), a bank of shared genetics
 /// [`GeneticsTensors`] variants, and a per-deme variant index.  Blueprint,
 /// ecology columns, and genetics are stored exactly once each — no
 /// per-deme contract clones.
 ///
-/// Plan S3 ownership: the session also owns the stacked counts, sperm
+/// Session ownership: the session also owns the stacked counts, sperm
 /// storage, tick, and one persistent RNG stream per deme (``seed ^ deme``,
 /// advancing across ticks instead of being rebuilt per tick).  ``run_tick``
 /// takes control parameters only; lifecycle then migration consume the
@@ -69,7 +69,7 @@ pub struct SpatialSession {
     state_tick: i64,
     execution: crate::sessions::status::ExecutionStatus,
     phase: usize,
-    /// Record-aligned restorable boundaries (plan S4 CheckpointStore).
+    /// Record-aligned restorable boundaries.
     checkpoints: Vec<SpatialTickCheckpoint>,
     /// Shared native numerical history and per-deme log cursors.
     history_store: Option<SharedHistory>,
@@ -1154,7 +1154,7 @@ impl SpatialSession {
         let code = code.map_err(map_lifecycle_error)?;
         if code != 0 {
             // A stop keeps the modifications up to the boundary and
-            // freezes the tick (plan 7.4).
+            // freezes the tick.
             return Ok(self.state_tick);
         }
         // Migration stage: the frozen CSR and the live rate column, after

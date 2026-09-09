@@ -225,7 +225,7 @@ def test_record_snapshot_appends_current_tick_once() -> None:
     pop.run(2, record_every=1)
     pop.clear_history()
 
-    # Session-owned state (plan S2): after a Rust run the Python-side state
+    # Session-owned state: after a Rust run the Python-side state
     # container is a lazily refreshed cache.  The public ``state`` read is
     # the sync point, so record_snapshot stamps the session tick and rows.
     _ = pop.state

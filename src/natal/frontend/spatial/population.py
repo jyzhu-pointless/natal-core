@@ -167,7 +167,7 @@ def _coerce_adjacency_dense(
 class DemeSlice:
     """Compatible view of one deme over the spatial SoA contract.
 
-    Slice-5 stage 3: ``spatial.deme(i)`` returns this view instead of the
+    ``spatial.deme(i)`` returns this view instead of the
     raw per-deme population.  Reads are fully compatible — every missing
     attribute (``config``, ``state``, ``registry``, ``name``, …) is
     delegated to the underlying deme object, so UI code and the ~15 test
@@ -269,7 +269,7 @@ class DemeSlice:
 
     @property
     def state(self) -> PopulationState | DiscretePopulationState:
-        """The deme's state snapshot (plan S3 snapshot discipline).
+        """The deme's state snapshot.
 
         When the container Rust backend is enabled, the session owns the
         authoritative stacked state; reading refreshes the per-deme caches
@@ -616,7 +616,7 @@ class SpatialPopulation:
     This class models spatial structure via composition: every deme is one
     already-initialized ``BasePopulation`` subclass instance.
 
-    Since slice 5 the spatial domain carries its own frozen contract pair:
+    The spatial domain carries its own frozen contract pair:
     ``blueprint`` holds the deme count and the folded migration CSR;
     ``params`` holds the ``(n_demes, n_sexes, n_ages)`` migration-rate
     column.  Runtime migration is ``rate column x fixed CSR`` — topology,
@@ -742,7 +742,7 @@ class SpatialPopulation:
         # tuple view to prevent accidental external mutation.
         self._demes: List[DemePopulation] = list(demes)
         # Frozen declaration snapshot, attached by
-        # SpatialConfigurator.build() (plan 5.1 slice 3).
+        # SpatialConfigurator.build.
         self._definition: ModelDefinition | None = None
         # Genetics draft tables start out shared by every deme; in-place
         # genetics writes would leak across demes, so the per-deme params
@@ -847,7 +847,7 @@ class SpatialPopulation:
         # Spatial hooks are local-to-deme by design, so container-level hooks
         # must always be rebuilt from all demes.
         self._hooks = self._compile_spatial_hooks_from_demes()
-        # Session structure staleness flag (plan S2/S3): set by hook
+        # Session structure staleness flag: set by hook
         # registration and consumed by the next rust run boundary.
         self._rust_needs_rebuild = False
 
@@ -860,7 +860,7 @@ class SpatialPopulation:
 
         self._name = name
         self._topology = topology
-        # -- slice-5 contract fold ------------------------------------------
+        # -- spatial contract fold ------------------------------------------
         # Topology, adjacency, kernel selection, kernel-center handling, and
         # edge normalization are resolved once here; runtime migration is the
         # frozen CSR multiplied by the Params rate column.  Nothing spatial
@@ -1301,8 +1301,8 @@ class SpatialPopulation:
             config = config._replace(**{draft_field: value})
             self._demes[deme_index].set_config(config)
 
-        # The equilibrium metrics are derived on read (slice 2 retired
-        # the stored copies), so no post-write refresh is needed here.
+        # The equilibrium metrics are derived on read (the stored copies
+        # are retired), so no post-write refresh is needed here.
 
         column = self._ecology_columns.get(field)
         if column is not None and field != "migration_rate":
@@ -2194,7 +2194,7 @@ class SpatialPopulation:
     def _refresh_spatial_hooks(self) -> None:
         """Rebuild the aggregate compiled hooks (single rebuild entrypoint)."""
         self._hooks = self._compile_spatial_hooks_from_demes()
-        # Hook structure is session state (plan S3): the changed descriptors
+        # Hook structure is session state: the changed descriptors
         # must reach the HookProgram and the callback bridges, so the live
         # session rebuilds before the next run — the container-level twin
         # of the panmictic ``_rust_needs_rebuild`` semantics.
@@ -2623,7 +2623,7 @@ class SpatialPopulation:
         # deduplicated by tensor content.  Bank size follows genetics
         # diversity only — ecological batch differences never clone
         # variants, and identical genetics never clone ecology.  Both
-        # models share this session (plan S3: one Program, per-deme RNG
+        # models share this session (one Program, per-deme RNG
         # banks, no per-config-bank execution sessions).
         deme_drafts = self._export_deme_drafts(compact=True)
         columns = ecology_columns_from_drafts(deme_drafts)
@@ -2638,7 +2638,7 @@ class SpatialPopulation:
         compiled_hooks = self._collect_compact_spatial_hooks()
         hook_program = self._build_hook_program(compiled_hooks)
         # One-time build handoff: the session owns the stacked state and
-        # the per-deme RNG streams from here on (plan S3).
+        # the per-deme RNG streams from here on.
         ind_all, sperm_all = self._stack_deme_state_arrays()
         self._rust_spatial_backend = RustHeterogeneousSpatialLifecycleBackend(
             self._blueprint,

@@ -1,4 +1,4 @@
-"""Adversarial tests for the S1 slice-6 ConfigContext retirement.
+"""Adversarial tests for the ConfigContext retirement.
 
 Every test in this module is designed around a specific way the retirement
 could be violated or the frozen build-path behavior could regress:

@@ -217,7 +217,7 @@ class TestParametersByDomain:
         assert "growth_mode" in comp
         assert "juvenile_growth_mode" in comp["growth_mode"].aliases
         assert "competition_strength" in comp
-        # The derived-cache rows retired with the slice-2 sync; the
+        # The derived-cache rows retired with the sync removal; the
         # metrics are read via the derive surface instead.
         assert "expected_competition_strength" not in comp
         assert "expected_survival_rate" not in comp
@@ -302,7 +302,7 @@ def _columns_block(text: str) -> tuple[int, list[str]]:
 
 
 class TestRustWireTables:
-    """The Rust wire tables are generated from this jsonc (plan 5.4)."""
+    """The Rust wire tables are generated from this jsonc."""
 
     def test_rust_wire_tables_fresh_against_jsonc(self) -> None:
         """``rust/src/generated/ecology_parameters.rs`` matches the jsonc exactly.
@@ -365,7 +365,7 @@ class TestRustWireTables:
         access path; any other ``const ECO_PARAM_COLUMNS/BOUNDS/N_ECO_PARAMS
         = ...`` or ``ECOLOGY_SCALAR_COLUMNS/ECOLOGY_SCALARS = ...``
         definition in rust/src would reintroduce the manual sync
-        discipline that plan 5.4 removes.
+        discipline that the single-source generation removes.
         """
         offenders: list[str] = []
         for path in sorted((REPO_ROOT / "rust" / "src").rglob("*.rs")):

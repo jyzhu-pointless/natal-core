@@ -1227,7 +1227,7 @@ def test_spatial_runtime_update_chain_removed() -> None:
 
     The spatial runtime preset reconfiguration / registration API
     (``SpatialPopulation.update`` -> ``_SpatialUpdate``) was removed with
-    the slice-5 stage-3 write-plane change.  Runtime genetics writes on
+    the write-plane change.  Runtime genetics writes on
     spatial populations go through the ``DemeSlice`` channels (see
     ``tests/test_spatial_update.py``); the removed reconfigure/presets
     runtime tests above applied exclusively to the deleted API.

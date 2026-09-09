@@ -1,4 +1,4 @@
-"""The unified modifier-map compiler (plan 5.1, slice 5).
+"""The unified modifier-map compiler.
 
 One spelling of "apply the accumulated modifier recipes to a Mendelian
 baseline": :func:`compile_modifier_maps` chains the wrapper callables

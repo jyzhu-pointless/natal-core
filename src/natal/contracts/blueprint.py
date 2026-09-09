@@ -10,7 +10,7 @@ Frozen discipline (the hard promise): no field of a ``Blueprint`` is
 mutable, and the arrays it holds are never written after build.  A
 change to any of them is a different model; the frontend rebuilds from
 the draft.  This is what makes the blueprint trivially serializable for
-disk checkpoints (slice ②+).
+disk checkpoints.
 
 The name directory gives every zygote/gamete type index a canonical
 string (``"<genotype>:<label>"``, e.g. ``"A|a:wolb"``).  Consumers
@@ -121,8 +121,8 @@ class Blueprint(NamedTuple):
     # Initial population (consumed once at state creation)
     initial_individual_count: NDArray[np.float64]
     initial_sperm_storage: NDArray[np.float64]
-    # -- spatial domain (slice 5): deme count + folded migration CSR ---------
-    # Defaults keep the panmictic contract identical to the pre-slice-5
+    # -- spatial domain: deme count + folded migration CSR ---------
+    # Defaults keep the panmictic contract identical to the legacy
     # shape: one deme, no migration edges.  The defaulted empty arrays are
     # shared class-level objects, which is safe because the frozen
     # discipline forbids writing Blueprint arrays after build.

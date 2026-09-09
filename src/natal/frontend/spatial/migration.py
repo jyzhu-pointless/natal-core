@@ -1,4 +1,4 @@
-"""Build-time migration normalization and CSR folding (slice 5).
+"""Build-time migration normalization and CSR folding.
 
 Everything spatial about migration — strategy resolution, adjacency
 coercion, kernel-bank selection, kernel-center handling, and boundary
@@ -12,7 +12,7 @@ topology or the kernel therefore means rebuilding the model, exactly
 like any other frozen Blueprint field.
 
 Bitwise-parity contract: the fold reproduces, entry for entry, the
-arithmetic order of the pre-slice-5 runtime row builders
+arithmetic order of the legacy runtime row builders
 (``_build_sparse_migration_rows`` for adjacency mode,
 ``_build_source_kernel_sparse_row`` for kernel mode), so deterministic
 trajectories are identical before and after the refactor.
@@ -57,12 +57,12 @@ class MigrationCSR(NamedTuple):
             Adjacency-mode rows carry the raw adjacency values;
             kernel-mode rows carry the historically composed final
             per-entry probability (scaled then row-normalized with the
-            same float-operation order as the pre-slice-5 pipeline).
+            same float-operation order as the legacy pipeline).
         stay_after_send: Deterministic bookkeeping order.  ``False``
             (adjacency mode) keeps the historical "stay = value -
             outbound first, then distribute" order; ``True`` (kernel
             mode) keeps "distribute first, then residual = value -
-            moved_total at source".  Both reproduce the pre-slice-5
+            moved_total at source".  Both reproduce the legacy
             arithmetic bitwise.
     """
 
@@ -255,7 +255,7 @@ def fold_migration_csr(
     Adjacency mode stores each source row in destination-ascending
     order with the raw adjacency values — the same entries, in the same
     order, the runtime sparse-row builder compacted on every call before
-    slice 5.
+    the CSR fold.
 
     Kernel mode reproduces the per-source kernel row builder exactly:
     offsets are visited in kernel row-major order, invalid (out-of-grid)
@@ -363,7 +363,7 @@ def _kernel_row_entries(
 ) -> tuple[list[int], list[float]]:
     """Emit one source deme's kernel-mode CSR entries in visit order.
 
-    Reproduces the pre-slice-5 pipeline bitwise by composing the same
+    Reproduces the legacy pipeline bitwise by composing the same
     float operations in the same order: the compact offset table sums
     positive weights in kernel row-major order; each emitted entry is
     scaled by a reciprocal multiply (kernel total, or the valid-row

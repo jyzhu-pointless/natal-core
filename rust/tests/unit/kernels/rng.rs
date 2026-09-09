@@ -41,7 +41,7 @@ fn stream_seed_xor_differs_per_deme() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Slice-2: deterministic boundary guards of the sampling helpers.
+// Deterministic boundary guards of the sampling helpers.
 // ════════════════════════════════════════════════════════════════════
 
 /// Boundary fast paths must return exact values and never consume the

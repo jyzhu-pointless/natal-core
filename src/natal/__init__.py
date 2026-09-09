@@ -50,7 +50,7 @@ def _scan_unit(module_name: str, names: list[str], allow_legacy_key: bool) -> No
         _lazy_map.setdefault(name, module_name)
 
 
-# Explicit public export list (plan S6 must-not-exist item 8).
+# Explicit public export list.
 #
 # Every public top-level name of ``natal`` is declared here, once, per
 # owning unit.  Adding a name to a module's ``__all__`` does NOT publish

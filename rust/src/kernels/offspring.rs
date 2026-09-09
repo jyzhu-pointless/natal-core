@@ -1,4 +1,4 @@
-//! The offspring-probability-tensor numeric kernel (plan 5.2: Rust owns
+//! The offspring-probability-tensor numeric kernel (Rust owns
 //! the probability-tensor computation).
 //!
 //! The loop nest and the skip-zero short-circuit mirror the reference

@@ -52,7 +52,7 @@ def _assert_sperm_migration_conserves(actual_sperm, sperm) -> None:
 
 
 def _fold_adjacency(adjacency):
-    """Fold a dense adjacency matrix into the slice-5 CSR triple."""
+    """Fold a dense adjacency matrix into the CSR triple."""
     n = adjacency.shape[0]
     csr = fold_migration_csr(
         n_demes=n,

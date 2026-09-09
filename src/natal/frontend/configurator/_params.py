@@ -343,7 +343,7 @@ def compute_expected_eggs_from_females(
 # ─────────────────────────────────────────────────────────────────────────────
 # From _base.py: _resolve_param
 # ─────────────────────────────────────────────────────────────────────────────
-# NOTE (slice 3): the former ``resolve_param()`` name lookup moved to
+# NOTE: the former ``resolve_param`` name lookup moved to
 # ``_routes.lookup()`` / ``_routes.lookup_or_none()`` — the route table
 # pre-indexes full keys, short names, and aliases at import time.
 

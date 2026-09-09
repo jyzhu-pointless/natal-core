@@ -350,7 +350,7 @@ def _genetics_route_names() -> frozenset[str]:
 def _genetics_batch_names(batch_param_names: List[str]) -> List[str]:
     """Return the batch parameter names that alter the genetics section.
 
-    Slice-5 stage-2 grouping rule: only genetics content decides whether
+    Grouping rule: only genetics content decides whether
     demes need distinct compiled configs (variant bank entries).  Ecology
     batch values (carrying capacity, survival, initial state, …) are
     filled per deme into the ecology columns instead of splitting groups.
@@ -587,7 +587,7 @@ class SpatialConfigurator:
             str, BatchSetting[Any]
         ] = {}  # Any: BatchSetting value type varies per config field
 
-        # Declaration journal (plan 5.1): the spatial twin of the plain
+        # Declaration journal: the spatial twin of the plain
         # Configurator's _declaration_log — same entry type, plus raw
         # BatchSetting values preserved for the per-group replay.  This is
         # the SINGLE store for the spatial chain: template calls bypass the
@@ -975,7 +975,7 @@ class SpatialConfigurator:
         # Delegate sanitized kwargs to the template (single store: the
         # decorator's journaling is bypassed).  The journal entry lands
         # only after the template call succeeded: a failed call must not
-        # pollute the replayable declaration log (plan 5.1 step 5).
+        # pollute the replayable declaration log.
         filtered = {k: v for k, v in concrete.items() if v is not None}
         self._call_template(method_name, **filtered)
         # Record the original call with BatchSetting objects preserved,
@@ -1011,7 +1011,7 @@ class SpatialConfigurator:
         filtered = {k: v for k, v in concrete_kwargs.items() if v is not None}
         self._call_template(method_name, *args, **filtered)
         # Journal only after the template call succeeded — failed calls
-        # stay out of the replayable declaration log (plan 5.1 step 5).
+        # stay out of the replayable declaration log.
         self._declaration_log.append((method_name, dict(kwargs)))
         return self
 
@@ -1066,7 +1066,7 @@ class SpatialConfigurator:
         }
         self._call_template("setup", **template_kwargs)  # type: ignore[arg-type]  # template_kwargs has mixed value types; setup validates at runtime
         # Journal only after the template call succeeded — failed calls
-        # stay out of the replayable declaration log (plan 5.1 step 5).
+        # stay out of the replayable declaration log.
         self._declaration_log.append(("setup", replay_kwargs))
         if compress:
             self._compress = True
@@ -1581,7 +1581,7 @@ class SpatialConfigurator:
         elif kernel is not None:
             self._migration_kernel = np.asarray(kernel, dtype=np.float64)
         # Keep the raw declaration: scalar / vector / per-sex mapping are
-        # normalized once by the SpatialPopulation constructor (slice 5).
+        # normalized once by the SpatialPopulation constructor.
         self._migration_rate = migration_rate
         self._migration_strategy = strategy
         if adjacency is not None:
@@ -1594,7 +1594,7 @@ class SpatialConfigurator:
         self._adjust_migration_on_edge = bool(adjust_migration_on_edge)
         # Keep the raw declaration in the parameter registry: the scalar /
         # dict / vector sugar is normalized once by the SpatialPopulation
-        # constructor (slice 5), not here.
+        # constructor, not here.
         self._param_values["migration.migration_rate"] = migration_rate
         return self
 
@@ -1673,7 +1673,7 @@ class SpatialConfigurator:
     def build(self) -> SpatialPopulation:
         """Build and return the configured ``SpatialPopulation``.
 
-        Single entry point (slice-5 stage 2): one build path handles both
+        Single entry point: one build path handles both
         the homogeneous and the heterogeneous case.
 
         - **No ``batch_setting``**: build ONE template deme, clone N-1
@@ -1802,7 +1802,7 @@ class SpatialConfigurator:
             name=self._spatial_name,
         )
         spatial._definition = definition  # pyright: ignore[reportPrivateUsage]  # attach the actual input consumed by this compilation.
-        # The Rust engine is the ONLY execution backend (plan S6): the
+        # The Rust engine is the ONLY execution backend: the
         # spatial population builds its session here with the default seed
         # 0, and a missing extension is a hard error — no silent fallback
         # to the Python tick orchestration.

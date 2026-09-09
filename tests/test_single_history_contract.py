@@ -279,7 +279,7 @@ def test_python_continuation_rejects_same_tick_changed_payload_atomically() -> N
     """A changed continuation boundary raises before the spatial timeline advances.
 
     Only the spatial model keeps an engine-reachable boundary probe: under
-    the session-owned Rust lifecycle (plan S2) the non-spatial ``_state``
+    the session-owned Rust lifecycle the non-spatial ``_state``
     container is a lazy cache, so a cache write no longer reaches the
     boundary check, and the sanctioned ``import_state`` clears history.
     """
@@ -291,7 +291,7 @@ def test_python_continuation_rejects_same_tick_changed_payload_atomically() -> N
     current_count = population.demes[0].state.individual_count
     current_count[0, 0, 0] += 0.5
     changed_state = current_count.copy()
-    # deme.state hands out snapshots since plan S3, so the
+    # deme.state hands out snapshots, so the
     # boundary-guard probe reaches the run through the sanctioned
     # per-deme callback transaction instead.
     set_deme_state(population, 0,

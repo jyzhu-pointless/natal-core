@@ -17,7 +17,7 @@ Usage::
 
 Parameter entries are defined declaratively in ``parameters.jsonc``
 (JSON with ``//`` comments) and loaded at import time.  The table is
-the *data authority* of slice 3: adding a parameter is adding a row.
+the *data authority*: adding a parameter is adding a row.
 Import fails immediately when a row is malformed — misconfiguration is
 never deferred to runtime.
 """

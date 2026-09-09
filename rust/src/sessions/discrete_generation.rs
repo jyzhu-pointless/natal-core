@@ -46,12 +46,12 @@ pub struct DiscreteGenerationSession {
     /// Audited set_param transitions accumulated across tick/run calls;
     /// drained by the Python adapter after each run (see ``AgeStructuredSession``).
     eco_journal: Vec<crate::hooks::interpreter::EcoJournalRow>,
-    /// Record-aligned full checkpoints (plan 13.1 R3) — the discrete twin
+    /// Record-aligned full checkpoints — the discrete twin
     /// of ``AgeStructuredSession::checkpoints``.
     checkpoints: Vec<crate::kernels::age_structured::TickCheckpoint>,
     /// Native history shared with the Python read-only adapter.
     history_store: Option<SharedHistory>,
-    /// Session-owned live state (plan S2): flattened counts plus the
+    /// Session-owned live state: flattened counts plus the
     /// authoritative tick; runs and ticks operate on these directly.
     state_ind: Vec<f64>,
     state_tick: i64,
@@ -408,7 +408,7 @@ impl DiscreteGenerationSession {
     ///
     /// ## Returns
     /// ``(tick, ind_flat, rng_words, ecology)``.
-    /// Install a full live state (plan S2 state ownership; discrete twin).
+    /// Install a full live state (session-owned state; discrete twin).
     ///
     /// ## Errors
     /// Returns ``PyValueError`` when the vector has the wrong length.
@@ -647,7 +647,7 @@ impl DiscreteGenerationSession {
     ) -> PyResult<(i64, Bound<'py, PyArray2<f64>>, bool)> {
         // Assemble the config from the owned contracts at the batch entry,
         // then run a batch of discrete or WF ticks directly on the
-        // session-owned state (plan S2: control parameters only).
+        // session-owned state (control parameters only).
         let cfg =
             DiscreteGenerationConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         let mask_vec = match observation_mask {

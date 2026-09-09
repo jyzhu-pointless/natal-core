@@ -14,7 +14,7 @@ Configurator collapses to: parse kwargs -> build a writes dict -> one
   borrow), so the write lands in the draft and the run boundary flushes
   it.  ``session=None`` degrades it to draft-only writes
   (reference-path populations).
-- :class:`HookConfigWriter` — in-hook path (slice 4 wiring).  Borrows
+- :class:`HookConfigWriter` — in-hook path.  Borrows
   the live session and writes it directly, bypassing locks and the
   draft.
 
@@ -80,7 +80,7 @@ NATIVE_SCALAR_FIELDS = frozenset({
 
 @runtime_checkable
 class SessionChannel(Protocol):
-    """The slice-2 Rust write channel (backend adapters expose it)."""
+    """The Rust write channel (backend adapters expose it)."""
 
     def refresh_params(self, fields: list[str], params_obj: Params) -> None:
         """Validate and commit all named fields as one native transaction."""
@@ -507,7 +507,7 @@ class CoreConfigWriter(_DraftWriterBase):
 class HookConfigWriter:
     """In-hook writer: direct session writes, no locks, no draft.
 
-    Slice-4 wiring hands this to hook callables that must retune the
+    Hook wiring hands this to hook callables that must retune the
     running simulation from inside a tick.  Writes go straight into the
     session-owned params using contract field names; validation is
     delegated to the Rust-side channel checks.

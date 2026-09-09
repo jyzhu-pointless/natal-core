@@ -150,7 +150,7 @@ fn fixed_is_flat_below_equilibrium_then_concave_up() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Slice-2: recruitment dynamics induced by each curve.
+// Recruitment dynamics induced by each curve.
 //
 // Applying the curve at the current competition ratio induces the
 // discrete-time recruitment map x_{t+1} = x_t * g(x_t) (for Ricker this

@@ -1,7 +1,7 @@
 """``pop.params`` — the domain-A parameter surface.
 
 A live, validated view over a population's parameters.  Design points
-(fixed in slice 3):
+:
 
 - **Ecology section**: attribute writes go through the route table with
   full bounds validation (``pop.params.carrying_capacity = 8000``) and

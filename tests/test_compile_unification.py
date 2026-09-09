@@ -1,4 +1,4 @@
-"""Cross-path parity safety net for the unified compiler (plan 5.1, slice 5).
+"""Cross-path parity safety net for the unified compiler.
 
 The two historical modifier-map rebuild paths — the population-side
 ``refresh_modifier_maps`` and the build-side ``rebuild_config_maps`` —
@@ -148,7 +148,7 @@ class TestRuntimePresetsTransaction:
     """Runtime preset registration compiles once and rolls back cleanly.
 
     The historical path deep-copied the config and replayed against the
-    copy; the converged transaction (plan 5.1) executes the recipes once
+    copy; the converged transaction executes the recipes once
     against the live population and restores from snapshots on failure —
     the same shape reconfigure_preset uses.
     """

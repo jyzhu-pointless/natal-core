@@ -1,4 +1,4 @@
-"""Adversarial tests for slice-5 stages 2-4 (spatial domain closeout).
+"""Adversarial tests for the spatial stages (domain closeout).
 
 These tests attack the stage-2/3/4 data plane beyond the coverage of
 ``test_spatial_slice5_stages.py`` and ``test_spatial_update.py``:
@@ -333,7 +333,7 @@ class TestColumnizedRefreshChannels:
             ref.params.migration_rate, dtype=np.float64
         ).ravel()
         bank, ids = genetics_variant_bank(drafts)
-        # Plan S3: the session owns the stacked state, so the manual
+        # the session owns the stacked state, so the manual
         # build hands the initial stacked arrays and tick over once.
         ind_all, sperm_all = ref._stack_deme_state_arrays()  # pyright: ignore[reportPrivateUsage]  # initial state before any run
         manual = RustHeterogeneousSpatialLifecycleBackend(
@@ -513,7 +513,7 @@ class TestColumnizedRefreshChannels:
             pop.params.migration_rate, dtype=np.float64
         ).ravel()
         bank, ids = genetics_variant_bank(drafts)
-        # Plan S3 constructor: the stacked state and tick travel with the
+        # The session constructor: the stacked state and tick travel with the
         # build handoff; the column guards below must be unchanged.
         ind_all, sperm_all = pop._stack_deme_state_arrays()  # pyright: ignore[reportPrivateUsage]
 
@@ -961,7 +961,7 @@ class TestSpatialCheckpointColumns:
         ind = np.full((2, n_ages, n_z), 10.0)
         sperm = np.zeros((n_ages, n_z, n_z))
         session = _engine_rs.EngineSession(bp, params, 0)
-        # Session-owned surface (plan S2): install the explicit state, then
+        # Session-owned surface: install the explicit state, then
         # snapshot_state captures the session-owned checkpoint in full.
         session.set_state(ind.ravel(), sperm.ravel(), 7)
         snapshot = session.snapshot_state()

@@ -1146,7 +1146,7 @@ pub fn run_tick(
 
 /// One full in-memory checkpoint captured at a record-aligned tick.
 ///
-/// The S2 record-point store (plan 13.1 R3): alongside every raw history
+/// The S2 record-point store: alongside every raw history
 /// row the session keeps a complete save — state arrays, the RNG words
 /// (continuation, not a reseed), and the ecology section — so the public
 /// ``restore_checkpoint`` rolls back everything, not just counts.

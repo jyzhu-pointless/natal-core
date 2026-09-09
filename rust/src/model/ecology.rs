@@ -1,6 +1,6 @@
 //! Every runtime-mutable ecology value, stored as per-deme columns.
 //!
-//! Slice-5 stage-2 layout (structure-of-arrays across demes):
+//! Layout (structure-of-arrays across demes):
 //!
 //! - Every ecology scalar is a `Vec<f64>` column of length `n_demes`
 //!   (a panmictic model is one deme, so its columns have length 1 and the
@@ -42,7 +42,7 @@ fn is_ecology_tensor(name: &str) -> bool {
 
 /// Every runtime-mutable *ecology* value, stored as per-deme columns.
 ///
-/// Column layout (slice-5 stage 2): scalar columns have length ``n_demes``
+/// Column layout: scalar columns have length ``n_demes``
 /// and vector columns are ``(n_demes, ...)`` flattened row-major.  A
 /// panmictic model owns one deme, so its columns have length 1 and every
 /// kernel reads entry 0 — bit-identical to the pre-columnization layout.
@@ -54,7 +54,7 @@ fn is_ecology_tensor(name: &str) -> bool {
 /// Ecology vector field names carried by a memory checkpoint.
 ///
 /// ``migration_rate`` is the spatial rate column folded into the params
-/// contract (slice 5); restoring it keeps a checkpoint a complete save of
+/// contract; restoring it keeps a checkpoint a complete save of
 /// the ecology section.
 pub(crate) const ECOLOGY_VECTORS: [&str; 7] = [
     "survival_rates",

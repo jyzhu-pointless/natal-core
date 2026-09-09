@@ -1,4 +1,4 @@
-"""Full restore_checkpoint semantics (plan 13.1 R3, fixed in S2 batch 22b).
+"""Full restore_checkpoint semantics.
 
 Promoted from the S0 red-light repro ``repro_r3``: the public restore now
 rolls back EVERYTHING the session owns — counts, sperm storage, the
@@ -250,7 +250,7 @@ class TestStateAndBookkeeping:
             pop.restore_checkpoint(1)
 
 
-# ── Adversarial strengthening pass (S2 batch 22b) ──────────────────────
+# ── Adversarial strengthening pass ──────────────────────
 #
 # Every class below attacks one seam of the record-aligned checkpoint
 # store: the RNG continuation on the age-structured path, cross-run
@@ -546,7 +546,7 @@ class TestSetParamAuditPrecedence:
         pop.restore_checkpoint(0)
         assert pop.params.carrying_capacity == 100000.0
         # Restoring a checkpoint replaces the effective timeline, including
-        # commits after its exact log cursor (plan section 9).
+        # commits after its exact log cursor.
         assert pop.params_log == ()
 
         # The rerun replays the control exactly: the same hook re-fires

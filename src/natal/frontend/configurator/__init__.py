@@ -1,7 +1,7 @@
 """Configurator subpackage — chainable ModelDraft builders.
 
 Provides the unified Configurator API for constructing and modifying
-``ModelDraft`` (slice 3 collapsed the former age-structured/discrete
+``ModelDraft`` (the former age-structured/discrete
 subclass split into one class driven by the route table):
 
 - :class:`Configurator` — chainable domain methods

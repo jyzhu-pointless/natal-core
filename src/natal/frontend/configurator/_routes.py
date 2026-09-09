@@ -1,7 +1,7 @@
 """Route table: every parameter difference is a data difference.
 
 This module is the single source of routing logic for parameter writes
-(slice 3).  At import time it reads ``parameters.jsonc`` into:
+.  At import time it reads ``parameters.jsonc`` into:
 
 - ``ROUTES`` — a flat ``{lookup_name: RouteEntry}`` index (full key
   ``"competition.carrying_capacity"``, short name, and every alias);

@@ -666,7 +666,7 @@ def test_clear_then_record_starts_fresh() -> None:
     assert len(pop.history) == 4  # ticks 0-3
     pop.clear_history()
     assert len(pop.history) == 0, "clear_history must empty history"
-    # Session-owned state (plan S2): after a Rust run the Python-side state
+    # Session-owned state: after a Rust run the Python-side state
     # container is a lazily refreshed cache.  The public ``state`` read is
     # the sync point, so record_snapshot stamps the session tick and rows.
     _ = pop.state
