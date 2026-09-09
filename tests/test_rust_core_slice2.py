@@ -698,7 +698,7 @@ def test_custom_slot_write_commits_to_draft_and_survives_run(
     """
     pop = _build_age_population(age_species, "slice2_custom_dirty")
     pop._initialize_session(seed=0)
-    pop.update.custom(slice2_probe=1.5)
+    pop.update().custom(slice2_probe=1.5)
     assert dict(pop.config.custom) == {"slice2_probe": 1.5}
     pop.run(1, record_every=0)
     assert dict(pop.config.custom) == {"slice2_probe": 1.5}
