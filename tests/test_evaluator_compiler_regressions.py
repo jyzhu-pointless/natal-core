@@ -167,17 +167,27 @@ def test_normalized_definition_recompiles_same_genetic_products(compressed: bool
         .build()
     )
     definition = pop.definition
-    exposed = definition.normalized
-    assert exposed is not None
-    exposed.settings.viability_fitness.fill(99.0)
-    exposed.fitness_base[0].fill(77.0)
-    exposed.registry.index_to_ztype.clear()
+    draft = definition.draft
+    assert draft is not None
+    draft.viability_fitness.fill(99.0)
+    definition.fitness_base[0].fill(77.0)
+    definition.registry.index_to_ztype.clear()
     compiled = compile_definition(definition)
     for field in (
         "viability_fitness", "fecundity_fitness", "offspring_tensor",
         "zygotes_to_gametes_map", "gametes_to_zygotes_map",
     ):
         np.testing.assert_array_equal(getattr(compiled.config, field), getattr(pop.config, field))
+
+
+def test_bare_definition_cannot_compile() -> None:
+    """A declaration without normalized inputs is rejected, not silently built."""
+    from natal.frontend.data.definition import ModelDefinition
+    from natal.frontend.genetics.definition_compiler import compile_definition
+    from tests.test_compile_unification import _species
+
+    with pytest.raises(ValueError, match="normalized model declarations"):
+        compile_definition(ModelDefinition(_species("BareDefinitionProbe"), False))
 
 
 def test_inline_build_hook_is_normalized_and_executed() -> None:

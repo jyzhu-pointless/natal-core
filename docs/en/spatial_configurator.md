@@ -52,9 +52,9 @@ SpatialPopulation.builder(...)
 2. **Detects `BatchSetting`** — intercepts and stores them in `_batch_settings`; template only sees `first_value()`
 3. **Records in `_declaration_log`** — preserves original arguments (including BatchSetting objects) for heterogeneous scenario replay
 
-### Normalized Compilation Inputs
+### Frozen Declaration
 
-`build()` first freezes declarations into `ModelDefinition.normalized`. Template inputs hold the single-deme settings, genetic rules, and hooks; `.spatial` stores the deme count, topology, expanded per-deme batch values, migration, spatial observation, history capacity, and compression declarations. The actual build creates an isolated compiler from these inputs and groups demes by genetic differences.
+`build()` first freezes declarations into a single `ModelDefinition`: the template inputs (single-deme settings, genetic rules, and hooks) are declaration fields, and `.spatial` stores the deme count, topology, expanded per-deme batch values, migration, spatial observation, history capacity, and compression declarations. The actual build creates an isolated compiler from this declaration and groups demes by genetic differences.
 
 Batch functions expand once when inputs are frozen, and finalization reuses cached template genetics. Cold compilation consumes frozen concrete values without reevaluating batch functions. Definition queries copy NATAL arrays and containers, so modifying a query result cannot affect a later build. User presets, hooks, and their external resources preserve their identity and do not need to support deep copying.
 

@@ -45,15 +45,15 @@ def test_cold_spatial_definition_preserves_controls_and_isolates_arrays(
     pop = builder.build()
     definition = pop.definition
     assert definition is not None
-    inputs = definition.normalized
-    assert inputs is not None and inputs.spatial is not None
-    assert inputs.spatial.observation_demes == (1, 0)
-    assert inputs.spatial.topology == nt.SquareGrid(1, 2)
-    assert inputs.spatial.compress is compress
-    assert inputs.spatial.history_mode == mode
+    spatial = definition.spatial
+    assert spatial is not None
+    assert spatial.observation_demes == (1, 0)
+    assert spatial.topology == nt.SquareGrid(1, 2)
+    assert spatial.compress is compress
+    assert spatial.history_mode == mode
     capacities[:] = 99
     adjacency[:] = 0
-    detached_adjacency = inputs.spatial.migration["adjacency"]
+    detached_adjacency = spatial.migration["adjacency"]
     assert isinstance(detached_adjacency, np.ndarray)
     detached_adjacency[:] = -1
     cold = SpatialConfigurator._build_from_definition(definition)
@@ -72,14 +72,13 @@ def test_spatial_build_consumes_normalized_controls(monkeypatch: pytest.MonkeyPa
     builder = _builder("SpatialInputsConsumed").competition(
         carrying_capacity=batch_setting([1000., 2000.]),
     )
-    definition = builder._definition_for_compile()
-    inputs = definition.normalized
-    assert inputs is not None and inputs.spatial is not None
-    inputs = replace(inputs, spatial=replace(
-        inputs.spatial, name="compiled-input-name", history_max_rows=1,
+    base = builder._definition_for_compile()
+    base_spatial = base.spatial
+    assert base_spatial is not None
+    consumed = base.with_spatial(replace(
+        base_spatial, name="compiled-input-name", history_max_rows=1,
         batch_values=(("carrying_capacity", (3000., 4000.)),),
     ))
-    consumed = ModelDefinition(definition.species, True, normalized=inputs)
     monkeypatch.setattr(builder, "_definition_for_compile", lambda: consumed)
     pop = builder.build()
     assert pop.name == "compiled-input-name"
@@ -130,8 +129,7 @@ def test_spatial_normalization_preserves_opaque_resources_and_cached_recipes(bat
     assert calls == ["fitness"]
     definition = pop.definition
     assert definition is not None
-    inputs = definition.normalized
-    assert inputs is not None and inputs.presets == (preset,)
+    assert definition.presets == (preset,)
     cold = SpatialConfigurator._build_from_definition(definition)
     assert calls == ["fitness", "fitness"]
     assert cold.demes[0].presets == [preset]
@@ -142,11 +140,8 @@ def test_spatial_compiler_rejects_incomplete_definition(template_only: bool) -> 
     """Missing spatial controls cannot fall back to an implicit builder state."""
     builder = _builder(f"SpatialInputsMissing_{template_only}")
     definition = builder._definition_for_compile()
-    normalized = definition.normalized
-    assert normalized is not None
-    incomplete = ModelDefinition(
+    incomplete = definition.with_spatial(None) if template_only else ModelDefinition(
         definition.species, True,
-        normalized=replace(normalized, spatial=None) if template_only else None,
     )
     with pytest.raises(ValueError, match="normalized spatial inputs"):
         SpatialConfigurator._build_from_definition(incomplete)

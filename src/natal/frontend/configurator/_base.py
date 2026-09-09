@@ -88,7 +88,6 @@ if TYPE_CHECKING:
     from typing import Self
 
     from natal.frontend.data.definition import ModelDefinition
-    from natal.frontend.genetics.definition_compiler import CompiledModel
     from natal.frontend.hooks.tick_context import TickContext
     from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
     from natal.frontend.patterns import IndividualSelector
@@ -469,7 +468,14 @@ class Configurator:
         self._fitness_base = tuple(getattr(config, field).copy() for field in FITNESS_FIELDS)
         self._fitness_steps: list[tuple[int, dict[str, object]]] = []
         self._compilation_key = object()
-        self._compiled_model: CompiledModel | None = None
+        # Compile-validity bookkeeping: ``_compiled_key`` records which
+        # declaration identity the products in ``_compiled_draft`` were
+        # computed from. ``_compiled_draft`` holds the last compile's
+        # (uncompressed) products even after build-time compression
+        # replaces ``_config``, so finalization and group reuse never
+        # re-execute recipes while the declaration identity matches.
+        self._compiled_draft: ModelDraft | None = None
+        self._compiled_key: object | None = None
         self._presets: list[GeneticPreset] = []
         self._manual_gamete: list[tuple[int, str | None, GameteModifier]] = []
         self._manual_zygote: list[tuple[int, str | None, ZygoteModifier]] = []
@@ -555,29 +561,6 @@ class Configurator:
     def index_registry(self) -> IndexRegistry:
         """Alias of :attr:`registry` (recipe-host protocol member)."""
         return self.registry
-
-    def _compile_candidate_maps(
-        self,
-        gamete_modifiers: list[tuple[int, str | None, GameteModifier]],
-        zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]],
-    ) -> None:
-        """Rebuild the candidate's inheritance maps via the build-side compile.
-
-        Thin wrapper so every build-path caller (``presets()``,
-        ``modifiers()``, ``build()`` compression) spells the candidate
-        compile exactly once: unified compiler over the Mendelian
-        baseline, modifier recipes chained, offspring tensor derived,
-        optional compression applied.
-        """
-        self._config, _applied = rebuild_config_maps(
-            self.species,
-            self._config,
-            self.registry,
-            gamete_modifiers=gamete_modifiers,
-            zygote_modifiers=zygote_modifiers,
-            compress=False,
-            host=self,
-        )
 
     # -- factory ---------------------------------------------------------------
 
@@ -732,11 +715,15 @@ class Configurator:
         definition = getattr(pop, "_current_definition", None)
         # Read only recipe metadata here; copying the normalized ecology and
         # initial state would duplicate the fresh native draft already obtained.
-        inputs = None if definition is None else definition._normalized  # pyright: ignore[reportPrivateUsage]  # NATAL-owned immutable declaration; mutable fields copied below.
-        if inputs is not None:
-            cfg._fitness_base = tuple(array.copy() for array in inputs.fitness_base)
-            cfg._fitness_steps = deepcopy(list(inputs.fitness_steps))
-            cfg._compilation_key = inputs.compilation_key
+        # The definition's properties already hand out detached copies.
+        if definition is not None:
+            cfg._fitness_base = definition.fitness_base
+            cfg._fitness_steps = definition.fitness_steps
+            cfg._compilation_key = (
+                definition.compilation_key
+                if definition.compilation_key is not None
+                else object()
+            )
         return cfg
 
     # -- batch writer ----------------------------------------------------------
@@ -1537,10 +1524,10 @@ class Configurator:
             step: dict[str, object] = {name: value for name, value in (("viability", viability), ("fecundity", fecundity), ("sexual_selection", sexual_selection), ("zygote_viability", zygote_viability)) if value is not None}
             step["mode"] = mode
             self._fitness_steps.append((len(self._presets), deepcopy(step)))
-            if self._compiled_model is not None:
-                from dataclasses import replace
-
-                self._compiled_model = replace(self._compiled_model, config=self._config)
+            if self._compiled_draft is not None:
+                # Fitness edits do not invalidate recipe products: the
+                # stored products stay valid for the same compilation key.
+                self._compiled_draft = self._config
             if self._pop_ref is not None:
                 self._pop_ref._current_definition = self._definition_for_compile()  # pyright: ignore[reportPrivateUsage]  # publish successful normalized runtime declarations.
         return self
@@ -1811,28 +1798,53 @@ class Configurator:
         return self
 
     def _definition_for_compile(self, *, build_name: str | None = None) -> ModelDefinition:
-        """Capture normalized inputs rather than reconstructing declarations from outputs."""
+        """Capture the full declaration rather than reconstructing it from outputs."""
         from natal.frontend.data.definition import ModelDefinition
-        from natal.frontend.genetics.definition_compiler import NormalizedModel
 
-        inputs = NormalizedModel(
-            self._config, self.registry, tuple(self._presets),
-            tuple(self._manual_gamete), tuple(self._manual_zygote),
-            self._fitness_base, tuple(self._fitness_steps), self._compilation_key,
-            tuple(self._hook_calls), self._observation_groups,
-            self._observation_collapse_age, self._record_history_mode,
-            self._record_history_max_rows, self._compress,
-            None if self._declared_zygote_types is None else cast("frozenset[str] | frozenset[int]", frozenset(self._declared_zygote_types)),
-        )
         return ModelDefinition(
             self.species, bool(self._config.discrete_generation),
-            tuple(self._declaration_log), build_name if build_name is not None else getattr(self, "_name", None), normalized=inputs,
+            tuple(self._declaration_log), build_name if build_name is not None else getattr(self, "_name", None),
+            presets=tuple(self._presets),
+            manual_gamete=tuple(self._manual_gamete),
+            manual_zygote=tuple(self._manual_zygote),
+            compilation_key=self._compilation_key,
+            observation_collapse_age=self._observation_collapse_age,
+            history_mode=self._record_history_mode,
+            history_max_rows=self._record_history_max_rows,
+            compress=self._compress,
+            declared_zygote_types=None if self._declared_zygote_types is None else cast("frozenset[str] | frozenset[int]", frozenset(self._declared_zygote_types)),
+            draft=self._config,
+            registry=self.registry,
+            fitness_base=self._fitness_base,
+            fitness_steps=tuple(self._fitness_steps),
+            hook_calls=tuple(self._hook_calls),
+            observation_groups=self._observation_groups,
         )
+
+    def _accept_products(
+        self,
+        config: ModelDraft,
+        registry: IndexRegistry | None,
+        gamete_modifiers: list[tuple[int, str | None, GameteModifier]],
+        zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]],
+    ) -> None:
+        """Accept one completed candidate compile as this builder's own state.
+
+        Single publication point for compile products: draft, registry,
+        and modifier products land together, marked valid for the current
+        compilation key. Callers pass freshly compiled or candidate-owned
+        products — never arrays that another live builder will write
+        later.
+        """
+        self._config = config
+        self._registry = registry
+        self.gamete_modifiers = list(gamete_modifiers)
+        self.zygote_modifiers = list(zygote_modifiers)
+        self._compiled_draft = config
+        self._compiled_key = self._compilation_key
 
     def _compile_specification(self, *, preserve_fitness: bool = False) -> None:
         """Expand recipes once; map-only changes preserve current fitness overrides."""
-        from dataclasses import replace
-
         from natal.frontend.genetics.definition_compiler import (
             FITNESS_FIELDS,
             compile_definition,
@@ -1841,25 +1853,20 @@ class Configurator:
         fitness = {name: getattr(self._config, name).copy() for name in FITNESS_FIELDS} if preserve_fitness else {}
         self._compilation_key = object()
         result = compile_definition(self._definition_for_compile())
-        if preserve_fitness:
-            result = replace(result, config=result.config._replace(**fitness))
-        self._config = result.config
-        self._registry = result.registry
-        self.gamete_modifiers = list(result.gamete_modifiers)
-        self.zygote_modifiers = list(result.zygote_modifiers)
-        self._compiled_model = result
+        config = result.config._replace(**fitness) if preserve_fitness else result.config
+        self._accept_products(config, result.registry, result.gamete_modifiers, result.zygote_modifiers)
 
     def _adopt_compilation(self, candidate: Configurator) -> None:
         """Publish an already validated build candidate without rerunning recipes."""
-        self._config = candidate._config
-        self._registry = candidate._registry
+        self._accept_products(
+            candidate._config, candidate._registry,  # pyright: ignore[reportPrivateUsage]  # the candidate is a controlled copy owned by this builder.
+            candidate.gamete_modifiers, candidate.zygote_modifiers,
+        )
         self._presets = list(candidate._presets)
         self._manual_gamete = list(candidate._manual_gamete)
         self._manual_zygote = list(candidate._manual_zygote)
-        self.gamete_modifiers = list(candidate.gamete_modifiers)
-        self.zygote_modifiers = list(candidate.zygote_modifiers)
-        self._compiled_model = candidate._compiled_model
         self._compilation_key = candidate._compilation_key
+        self._compiled_key = candidate._compiled_key
 
     def _genetic_candidate(self) -> Configurator:
         """Create the build compiler's isolated candidate for a runtime update."""
@@ -1971,7 +1978,10 @@ class Configurator:
             depending on whether *self._config* carries the
             discrete-generation flag.
         """
-        from natal.frontend.genetics.definition_compiler import compile_definition
+        from natal.frontend.genetics.definition_compiler import (
+            GENETIC_PRODUCT_FIELDS,
+            compile_definition,
+        )
 
         if hook_items:
             # Inline registrations have the same defaults and declaration
@@ -1979,26 +1989,30 @@ class Configurator:
             self.hooks(*hook_items)
         if self._species is not None:
             definition = self._definition_for_compile()
-            inputs = definition.normalized
-            assert inputs is not None
-            # Layout, hooks, and recording policies consume the same normalized
-            # inputs as genetic compilation; no raw journal replay is needed.
-            self._hook_calls = list(inputs.hook_calls)
-            self._observation_groups = inputs.observation_groups
-            self._observation_collapse_age = inputs.observation_collapse_age
-            self._record_history_mode = inputs.history_mode
-            self._record_history_max_rows = inputs.history_max_rows
-            self._compress = inputs.compress
-            self._declared_zygote_types = None if inputs.declared_zygote_types is None else cast("set[str] | set[int]", set(inputs.declared_zygote_types))  # homogeneous selector kind is retained by freezing.
-            compiled = compile_definition(definition, cached=self._compiled_model)
-            self._config = compiled.config
-            self._registry = compiled.registry
-            self.gamete_modifiers = list(compiled.gamete_modifiers)
-            self.zygote_modifiers = list(compiled.zygote_modifiers)
-            self._compiled_model = compiled
+            # Layout, hooks, and recording policies consume the same
+            # normalized declaration as genetic compilation; no raw journal
+            # replay is needed.
+            self._hook_calls = list(definition.hook_calls)
+            self._observation_groups = definition.observation_groups
+            self._observation_collapse_age = definition.observation_collapse_age
+            self._record_history_mode = definition.history_mode
+            self._record_history_max_rows = definition.history_max_rows
+            self._compress = definition.compress
+            self._declared_zygote_types = None if definition.declared_zygote_types is None else cast("set[str] | set[int]", set(definition.declared_zygote_types))  # homogeneous selector kind is retained by freezing.
+            if self._compiled_key is self._compilation_key and self._compiled_draft is not None:
+                # Finalization only: this exact declaration identity already
+                # ran its recipes, so re-materialize the stored products
+                # privately instead of executing them again.
+                self._config = self._config._replace(
+                    **{name: getattr(self._compiled_draft, name).copy() for name in GENETIC_PRODUCT_FIELDS}
+                )
+                self._compiled_draft = self._config
+            else:
+                result = compile_definition(definition)
+                self._accept_products(result.config, result.registry, result.gamete_modifiers, result.zygote_modifiers)
             # Compilation owns its products now. Drop the temporary input
             # snapshots before materializing another complete native contract.
-            del definition, inputs
+            del definition
         # Sync equilibrium metrics and apply index compression (if enabled).
         self.apply()
 

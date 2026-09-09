@@ -52,9 +52,9 @@ SpatialPopulation.builder(...)
 2. **检测 `BatchSetting`** — 拦截并存储到 `_batch_settings`，template 只拿到 `first_value()`
 3. **记录到 `_declaration_log`** — 保留原始参数（含 BatchSetting 对象），供异构场景回放
 
-### 归一化编译输入
+### 冻结声明
 
-`build()` 先将声明冻结为 `ModelDefinition.normalized`：单 deme 的设置、遗传规则与 Hook 位于模板输入中，`.spatial` 保存 deme 数量、拓扑、展开后的逐 deme batch 值、迁移、空间观测、历史容量和压缩声明。实际构建从这个输入创建隔离的编译器，再按遗传差异分组构建 deme。
+`build()` 先将声明冻结为单一的 `ModelDefinition`：模板输入（单 deme 的设置、遗传规则与 Hook）即声明字段，`.spatial` 保存 deme 数量、拓扑、展开后的逐 deme batch 值、迁移、空间观测、历史容量和压缩声明。实际构建从这个声明创建隔离的编译器，再按遗传差异分组构建 deme。
 
 batch 函数在冻结时展开一次；已缓存的模板遗传产物在最终构建时复用。冷编译使用冻结的具体值，不重新求值 batch 函数。定义查询复制 NATAL 的数组和容器，修改查询结果不影响以后构建；用户的 preset、Hook 及其外部资源保留身份，不要求支持深复制。
 

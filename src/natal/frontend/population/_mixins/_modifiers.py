@@ -131,10 +131,19 @@ class ModifierPresetMixin(HookManagerMixin):
         if not self._index_registry.index_to_haplo or not self._index_registry.index_to_genotype:
             return
         from natal.frontend.configurator import Configurator
+        from natal.frontend.configurator._registry_builder import rebuild_config_maps
 
         compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
         candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # isolate all user modifier effects before publication.
-        candidate._compile_candidate_maps(self._gamete_modifiers, self._zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
+        candidate._config, _applied = rebuild_config_maps(  # pyright: ignore[reportPrivateUsage]  # the isolated candidate owns its working draft.
+            candidate.species,
+            candidate._config,  # pyright: ignore[reportPrivateUsage]
+            candidate.registry,
+            gamete_modifiers=self._gamete_modifiers,
+            zygote_modifiers=self._zygote_modifiers,
+            compress=False,
+            host=candidate,
+        )
         compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
 
     def add_gamete_modifier(

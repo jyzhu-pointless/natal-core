@@ -63,7 +63,6 @@ from natal.frontend.spatial.topology import GridTopology
 if TYPE_CHECKING:
     from natal.frontend.data.definition import ModelDefinition
     from natal.frontend.genetics.compile import GameteList, ZygoteList
-    from natal.frontend.genetics.definition_compiler import CompiledModel
     from natal.frontend.presets import GeneticPreset
 
 __all__ = [
@@ -1695,20 +1694,17 @@ class SpatialConfigurator:
             A ``SpatialPopulation`` with all demes initialized.
         """
         definition = self._definition_for_compile()
-        return self._build_from_definition(definition, cached_template=self._template._compiled_model)  # pyright: ignore[reportPrivateUsage]  # avoid re-executing recipes already compiled by the chain.
+        return self._build_from_definition(definition, compiled_template=self._template)
 
     def _definition_for_compile(self) -> ModelDefinition:
         """Freeze concrete spatial controls before creating any execution session."""
-        from dataclasses import replace
-
         from natal.frontend.data.definition import (
             ModelDefinition,
             SpatialInputs,
             copy_declaration_value,
         )
 
-        inputs = self._template._definition_for_compile().normalized  # pyright: ignore[reportPrivateUsage]  # shared template compiler input.
-        assert inputs is not None
+        base = self._template._definition_for_compile()  # pyright: ignore[reportPrivateUsage]  # shared template compiler input.
         expanded = {name: tuple(batch.expand(self._n_demes, self._topology)) for name, batch in self._batch_settings.items()}
 
         def normalize(value: Any) -> Any:
@@ -1738,34 +1734,60 @@ class SpatialConfigurator:
             self._record_history_mode, self._record_history_max_rows, self._compress,
             None if self._declared_zygote_types is None else cast("frozenset[str] | frozenset[int]", frozenset(self._declared_zygote_types)),
         )
-        return ModelDefinition(self._species, self._pop_type == "discrete_generation", tuple(self._declaration_log), self._spatial_name, normalized=replace(inputs, spatial=controls))
+        return ModelDefinition(
+            self._species, self._pop_type == "discrete_generation",
+            tuple(self._declaration_log), self._spatial_name,
+            presets=base.presets, manual_gamete=base.manual_gamete,
+            manual_zygote=base.manual_zygote, compilation_key=base.compilation_key,
+            observation_collapse_age=base.observation_collapse_age,
+            history_mode=base.history_mode, history_max_rows=base.history_max_rows,
+            compress=base.compress, declared_zygote_types=base.declared_zygote_types,
+            draft=base.draft, registry=base.registry,
+            fitness_base=base.fitness_base, fitness_steps=base.fitness_steps,
+            hook_calls=base.hook_calls, observation_groups=base.observation_groups,
+            spatial=controls,
+        )
 
     @classmethod
     def _build_from_definition(
-        cls, definition: ModelDefinition, *, cached_template: CompiledModel | None = None,
+        cls, definition: ModelDefinition, *, compiled_template: Configurator | None = None,
     ) -> SpatialPopulation:
-        """Compile a detached normalized definition using the existing group compiler."""
-        inputs = definition.normalized
-        if inputs is None or inputs.spatial is None:
+        """Compile a detached declaration using the existing group compiler.
+
+        Args:
+            definition: The frozen declaration carrying the template inputs
+                and concrete spatial controls.
+            compiled_template: The builder whose already-compiled products
+                (working draft and validity marker) may be reused so group
+                compiles never re-execute the same recipes per deme.
+        """
+        controls = definition.spatial
+        if definition.draft is None or controls is None:
             raise ValueError("Spatial compilation requires normalized spatial inputs")
-        controls = inputs.spatial
         compiler = cls(definition.species, controls.n_demes, controls.topology, pop_type=controls.pop_type)
-        template = Configurator(inputs.settings, species=definition.species)
-        template._registry = inputs.registry  # pyright: ignore[reportPrivateUsage]  # initialize one isolated compiler candidate.
-        template._presets = list(inputs.presets)  # pyright: ignore[reportPrivateUsage]
-        template._manual_gamete = cast("GameteList", list(inputs.manual_gamete))  # pyright: ignore[reportPrivateUsage]
-        template._manual_zygote = cast("ZygoteList", list(inputs.manual_zygote))  # pyright: ignore[reportPrivateUsage]
-        template._fitness_base = inputs.fitness_base  # pyright: ignore[reportPrivateUsage]
-        template._fitness_steps = list(inputs.fitness_steps)  # pyright: ignore[reportPrivateUsage]
-        template._compilation_key = inputs.compilation_key  # pyright: ignore[reportPrivateUsage]
-        template._compiled_model = cached_template  # pyright: ignore[reportPrivateUsage]
-        template._hook_calls = list(inputs.hook_calls)  # pyright: ignore[reportPrivateUsage]
-        template._observation_groups = inputs.observation_groups  # pyright: ignore[reportPrivateUsage]
-        template._observation_collapse_age = inputs.observation_collapse_age  # pyright: ignore[reportPrivateUsage]
-        template._record_history_mode = inputs.history_mode  # pyright: ignore[reportPrivateUsage]
-        template._record_history_max_rows = inputs.history_max_rows  # pyright: ignore[reportPrivateUsage]
-        template._compress = inputs.compress  # pyright: ignore[reportPrivateUsage]
-        template._declared_zygote_types = None if inputs.declared_zygote_types is None else cast("set[str] | set[int]", set(inputs.declared_zygote_types))  # pyright: ignore[reportPrivateUsage]
+        template = Configurator(definition.draft, species=definition.species)
+        template._registry = definition.registry  # pyright: ignore[reportPrivateUsage]  # initialize one isolated compiler candidate.
+        template._presets = list(definition.presets)  # pyright: ignore[reportPrivateUsage]
+        template._manual_gamete = cast("GameteList", list(definition.manual_gamete))  # pyright: ignore[reportPrivateUsage]
+        template._manual_zygote = cast("ZygoteList", list(definition.manual_zygote))  # pyright: ignore[reportPrivateUsage]
+        template._fitness_base = definition.fitness_base  # pyright: ignore[reportPrivateUsage]
+        template._fitness_steps = list(definition.fitness_steps)  # pyright: ignore[reportPrivateUsage]
+        template._compilation_key = (  # pyright: ignore[reportPrivateUsage]
+            definition.compilation_key if definition.compilation_key is not None else object()
+        )
+        if compiled_template is not None:
+            # Transfer the source builder's compile products and validity
+            # marker directly: same declaration identity, so group builds
+            # finalize instead of re-running the recipes.
+            template._compiled_draft = compiled_template._compiled_draft  # pyright: ignore[reportPrivateUsage]
+            template._compiled_key = compiled_template._compiled_key  # pyright: ignore[reportPrivateUsage]
+        template._hook_calls = list(definition.hook_calls)  # pyright: ignore[reportPrivateUsage]
+        template._observation_groups = definition.observation_groups  # pyright: ignore[reportPrivateUsage]
+        template._observation_collapse_age = definition.observation_collapse_age  # pyright: ignore[reportPrivateUsage]
+        template._record_history_mode = definition.history_mode  # pyright: ignore[reportPrivateUsage]
+        template._record_history_max_rows = definition.history_max_rows  # pyright: ignore[reportPrivateUsage]
+        template._compress = definition.compress  # pyright: ignore[reportPrivateUsage]
+        template._declared_zygote_types = None if definition.declared_zygote_types is None else cast("set[str] | set[int]", set(definition.declared_zygote_types))  # pyright: ignore[reportPrivateUsage]
         compiler._template = template
         compiler._batch_settings = {name: BatchSetting(values) for name, values in controls.batch_values}
         compiler._declaration_log = list(controls.group_calls)
@@ -2210,7 +2232,8 @@ class SpatialConfigurator:
             result = template_cfg.build(name=f"{self._spatial_name}_group")
             # A cold compile creates products once; subsequent ecology groups
             # and the post-BFS build can reuse them under the same input key.
-            self._template._compiled_model = template_cfg._compiled_model  # pyright: ignore[reportPrivateUsage]
+            self._template._compiled_draft = template_cfg._compiled_draft  # pyright: ignore[reportPrivateUsage]
+            self._template._compiled_key = template_cfg._compiled_key  # pyright: ignore[reportPrivateUsage]
             return result
         if self._pop_type == "age_structured":
             template_cfg = Configurator.for_age_structured(self._species)

@@ -505,7 +505,7 @@ def build_discrete_engine_config(
     continuous_sampling_val = bool(kwargs.pop("continuous_sampling", False))
     equilibrium_val = kwargs.pop("equilibrium_individual_distribution", None)
 
-    m = build_config_maps(
+    return build_config_maps(
         n_genotypes=n_genotypes,
         n_gtypes=n_gtypes,
         n_sexes=2,
@@ -550,60 +550,10 @@ def build_discrete_engine_config(
         equilibrium_individual_distribution=equilibrium_val,
         external_expected_eggs=kwargs.pop("external_expected_eggs", None),
         pre_expanded=zygotes_to_gametes_map.shape[1] > n_genotypes,
-    )
-
-    extreme_speed = int(kwargs.pop("extreme_speed_mode", 0))
-    resolved_z_names = kwargs.pop("ztype_names", None)
-    resolved_g_names = kwargs.pop("gtype_names", None)
-    if resolved_z_names is None:
-        resolved_z_names = tuple(f"ztype_{i}" for i in range(m.n_g_compressed))
-    if resolved_g_names is None:
-        resolved_g_names = tuple(f"gtype_{i}" for i in range(m.n_gtypes))
-
-    return ModelDraft(
-        stochastic=stochastic_val,
-        continuous_sampling=continuous_sampling_val,
-        n_sexes=m.n_sexes,
-        n_ages=m.n_ages,
-        n_ztypes=m.n_g_compressed,
-        n_gtypes=m.n_gtypes,
-        n_glabs=m.n_glabs,
-        n_slabs=m.n_slabs,
-        new_adult_age=m.new_adult_age,
-        adult_ages=m.adult_ages.copy(),
-        extreme_speed_mode=extreme_speed,
-        ztype_names=resolved_z_names,
-        gtype_names=resolved_g_names,
-        age_based_survival_rates=m.survival,
-        age_based_mating_rates=m.mating,
-        age_based_reproduction_rates=m.reproduction,
-        female_age_based_fertility=m.female_fertility,
-        age_based_relative_competition_strength=m.competition,
-        carrying_capacity=m.carrying_capacity,
-        eggs_per_female=m.eggs_per_female,
-        sex_ratio=m.sex_ratio,
-        sperm_displacement_rate=m.sperm_displacement_rate,
-        low_density_growth_rate=m.low_density_growth_rate,
-        juvenile_growth_mode=int(m.juvenile_growth_mode),
+        extreme_speed_mode=int(kwargs.pop("extreme_speed_mode", 0)),
         generation_time=0.0,
-        viability_fitness=m.viability,
-        fecundity_fitness=m.fecundity,
-        sexual_selection_fitness=m.sexual,
-        zygote_viability_fitness=m.zygote,
-        zygotes_to_gametes_map=np.stack([m.meiosis_f, m.meiosis_m], axis=0),
-        gametes_to_zygotes_map=m.zygote_map,
-        offspring_tensor=m.offspring_tensor,
-        female_ztype_compatibility=m.female_ztype_compatibility,
-        male_ztype_compatibility=m.male_ztype_compatibility,
-        female_only_by_sex_chrom=m.female_only_by_sex_chrom,
-        male_only_by_sex_chrom=m.male_only_by_sex_chrom,
-        initial_individual_count=m.initial_individual_count,
-        initial_sperm_storage=m.initial_sperm_storage,
-        equilibrium_individual_distribution=equilibrium_val,
-        custom={},
-        fixed_egg_count=m.fixed_egg_count,
-        has_sex_chromosomes=m.has_sex_chromosomes,
-        external_expected_eggs=None,
+        ztype_names=kwargs.pop("ztype_names", None),
+        gtype_names=kwargs.pop("gtype_names", None),
         discrete_generation=True,
     )
 

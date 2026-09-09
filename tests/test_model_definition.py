@@ -311,13 +311,12 @@ def test_inline_build_hooks_are_normalized_with_dispatch_defaults() -> None:
 
     descriptor = nt.hook(event="early")(callback)
     pop = Configurator.for_discrete(_species()).build(hook_items=[descriptor])
-    inputs = pop.definition.normalized
-    assert inputs is not None
-    assert inputs.hook_calls[0][0] == (descriptor,)
+    definition = pop.definition
+    assert definition.hook_calls[0][0] == (descriptor,)
     pop.run(2)
     assert len(calls) == 2
-    inputs.hook_calls[0][1]["priority"] = 999
-    assert pop.definition.normalized.hook_calls[0][1]["priority"] == 0
+    definition.hook_calls[0][1]["priority"] = 999
+    assert pop.definition.hook_calls[0][1]["priority"] == 0
 
 
 def test_failed_modifier_registration_leaves_declarations_and_products_unchanged() -> None:

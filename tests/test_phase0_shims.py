@@ -603,3 +603,35 @@ def test_p2_retired_exports_stay_removed() -> None:
 
     entry = ALL_PARAMETERS["competition.carrying_capacity"]
     assert entry.contract_field == "carrying_capacity"
+
+
+def test_p3_retired_exports_stay_removed() -> None:
+    """Negative contract: names retired by the P3 build-state unification.
+
+    ``NormalizedModel`` (merged into ``ModelDefinition``) and
+    ``CompiledModel`` (replaced by the builder's own product state) must be
+    unreachable through the lazy top level and their defining module, and
+    the intermediate ``.normalized`` accessor is gone from
+    ``ModelDefinition``. The unified declaration and the draft stay
+    exported under their public names.
+    """
+    import importlib
+
+    for name in ("NormalizedModel", "CompiledModel"):
+        assert not hasattr(natal, name), f"retired export {name!r} is back"
+
+    compiler = importlib.import_module("natal.frontend.genetics.definition_compiler")
+    for name in ("NormalizedModel", "CompiledModel", "snapshot_inputs"):
+        assert not hasattr(compiler, name), f"retired export {name!r} is back"
+
+    definition_mod = importlib.import_module("natal.frontend.data.definition")
+    assert not hasattr(definition_mod.ModelDefinition, "normalized"), (
+        "the retired .normalized intermediate accessor is back"
+    )
+    assert not hasattr(definition_mod, "_ComputedMaps")
+
+    # The surviving public surface keeps its canonical export paths.
+    assert getattr(natal, "ModelDefinition") is definition_mod.ModelDefinition
+    config_mod = importlib.import_module("natal.frontend.data.config")
+    assert config_mod.ModelDraft is not None
+    assert hasattr(natal, "ModelDraft")

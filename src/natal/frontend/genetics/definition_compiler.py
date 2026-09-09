@@ -1,73 +1,45 @@
-"""Compile normalized declarations into isolated, reusable model products."""
+"""Compile declarations into isolated, reusable model products.
+
+The compiler is a set of plain functions with explicit inputs: it never
+constructs a builder and never writes builder state. Products travel back
+to the caller as a transient ``CompiledProducts`` package; the receiving
+builder accepts them in one internal operation.
+"""
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Mapping
+from typing import TYPE_CHECKING, Mapping, NamedTuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from natal.frontend.data.config import ModelDraft
-    from natal.frontend.data.definition import ModelDefinition, SpatialInputs
+    from natal.frontend.data.definition import ModelDefinition
     from natal.frontend.genetics.compile import GameteList, ZygoteList
-    from natal.frontend.patterns import IndividualSelector
-    from natal.frontend.presets import GeneticPreset
+    from natal.frontend.genetics.structures.species import Species
     from natal.frontend.registry.index import IndexRegistry
 
 FITNESS_FIELDS = (
     "viability_fitness", "fecundity_fitness",
     "sexual_selection_fitness", "zygote_viability_fitness",
 )
+# Derived genetic products a compile (re)produces; everything else on the
+# draft is declaration input that a finalize step must not recompute.
+GENETIC_PRODUCT_FIELDS = (
+    *FITNESS_FIELDS, "zygotes_to_gametes_map", "gametes_to_zygotes_map", "offspring_tensor",
+)
 
 
-@dataclass(frozen=True)
-class NormalizedModel:
-    """Normalized inputs, separate from the cached products of genetic recipes.
+class CompiledProducts(NamedTuple):
+    """One completed candidate compile, returned to its accepting builder.
 
-    Attributes:
-        settings: Ecological declarations, initial state, switches, and shapes.
-        registry: Explicit active type layout.
-        presets: Registered user recipes; opaque resources remain caller-owned.
-        manual_gamete: Explicit gamete modifier declarations.
-        manual_zygote: Explicit zygote modifier declarations.
-        fitness_base: Initial fitness arrays, before any user recipe or patch.
-        fitness_steps: Ordered explicit fitness patches, including their modes.
-        compilation_key: Identity token connecting a declaration to its products.
-        hook_calls: Event registrations and their default dispatch options.
-        observation_groups: Named selectors projected by the observation compiler.
-        observation_collapse_age: Whether projections sum the age axis.
-        history_mode: Raw-state or observation recording policy.
-        history_max_rows: Retention bound, or the population default.
-        compress: Whether to prune unreachable active genetic types.
-        declared_zygote_types: Explicit types retained during pruning.
+    A transient return package, not long-lived state: the builder that
+    accepts it publishes ``config``/``registry``/modifier products as its
+    own build state in one internal operation.
     """
 
-    settings: ModelDraft
-    registry: IndexRegistry
-    presets: tuple[GeneticPreset, ...]
-    manual_gamete: tuple[tuple[int, str | None, object], ...]
-    manual_zygote: tuple[tuple[int, str | None, object], ...]
-    fitness_base: tuple[NDArray[np.float64], ...]
-    fitness_steps: tuple[tuple[int, dict[str, object]], ...]
-    compilation_key: object
-    hook_calls: tuple[tuple[tuple[object, ...], dict[str, object]], ...] = ()
-    observation_groups: Mapping[str, IndividualSelector] | None = None
-    observation_collapse_age: bool = False
-    history_mode: Literal["raw", "observation"] = "raw"
-    history_max_rows: int | None = None
-    compress: bool = False
-    declared_zygote_types: frozenset[str] | frozenset[int] | None = None
-    spatial: SpatialInputs | None = None
-
-
-@dataclass(frozen=True)
-class CompiledModel:
-    """One completed candidate; its products are reused when build finalizes it."""
-
     config: ModelDraft
-    compilation_key: object
     registry: IndexRegistry
     gamete_modifiers: GameteList
     zygote_modifiers: ZygoteList
@@ -87,89 +59,143 @@ def copy_registry(registry: IndexRegistry) -> IndexRegistry:
     return result
 
 
-def snapshot_inputs(inputs: NormalizedModel) -> NormalizedModel:
-    """Detach NATAL-owned inputs without copying user recipe resources."""
-    from natal.frontend.data.definition import snapshot_spatial_inputs
+def detach_draft(draft: ModelDraft) -> ModelDraft:
+    """Copy owned draft arrays and custom slots without touching opaque resources.
 
-    return NormalizedModel(
-        inputs.settings._replace(
-            **{name: value.copy() for name, value in inputs.settings._asdict().items() if isinstance(value, np.ndarray)},
-            custom=deepcopy(inputs.settings.custom),
-        ), copy_registry(inputs.registry), inputs.presets,
-        inputs.manual_gamete, inputs.manual_zygote,
-        tuple(array.copy() for array in inputs.fitness_base),
-        deepcopy(inputs.fitness_steps), inputs.compilation_key,
-        tuple((tuple(items), dict(options)) for items, options in inputs.hook_calls),
-        None if inputs.observation_groups is None else dict(inputs.observation_groups),
-        inputs.observation_collapse_age, inputs.history_mode, inputs.history_max_rows,
-        inputs.compress, inputs.declared_zygote_types,
-        None if inputs.spatial is None else snapshot_spatial_inputs(inputs.spatial),
+    The copy detaches a draft from every previous holder so later in-place
+    writes cannot alias; recipes, callables, and other user resources are
+    never copied.
+    """
+    return draft._replace(
+        **{name: value.copy() for name, value in draft._asdict().items() if isinstance(value, np.ndarray)},
+        custom=deepcopy(draft.custom),
     )
 
 
-def compile_definition(
-    definition: ModelDefinition, *, cached: CompiledModel | None = None,
-) -> CompiledModel:
-    """Compile one isolated declaration, or finalize its already compiled products.
+class _CompileHost:
+    """Read surface handed to recipes while a candidate compile runs.
+
+    The compile function owns the working draft; this view only exposes
+    the :class:`~natal.frontend.genetics.compile.RecipeHost` protocol so
+    user recipes cannot tell which host drives the compilation.
+    """
+
+    def __init__(
+        self, species: Species, registry: IndexRegistry, draft: ModelDraft,
+    ) -> None:
+        """Bind the host to the candidate's isolated working state."""
+        self._species = species
+        self._registry = registry
+        self.draft = draft  # mutated by the compile loop as steps replace the draft
+
+    @property
+    def species(self) -> Species:
+        """The species whose architecture the candidate compiles against."""
+        return self._species
+
+    @property
+    def config(self) -> ModelDraft:
+        """The candidate's current working draft."""
+        return self.draft
+
+    @property
+    def registry(self) -> IndexRegistry:
+        """The candidate's index registry."""
+        return self._registry
+
+    @property
+    def index_registry(self) -> IndexRegistry:
+        """Alias of :attr:`registry` (recipe-host protocol member)."""
+        return self._registry
+
+
+def _apply_fitness_step(host: _CompileHost, step: Mapping[str, object]) -> None:
+    """Re-apply one declared explicit fitness patch to the working draft.
+
+    Uses the same route-table writer spelling as the ``fitness()`` chain
+    method, so a cold rebuild resolves patterns exactly as the original
+    declaration did.
+    """
+    from natal.frontend.configurator._writers import DraftWriter
+
+    writes = {name: value for name, value in step.items() if name != "mode"}
+    if not writes:
+        return
+    mode = cast("str", step.get("mode", "replace"))
+    writer = DraftWriter(
+        host.draft, on_replace=None, species=host.species, registry=host.registry,
+    )
+    writer.apply(writes, mode=mode)
+    host.draft = writer.draft
+
+
+def compile_definition(definition: ModelDefinition) -> CompiledProducts:
+    """Compile one isolated declaration into its genetic products.
+
+    The recipes expand once against an isolated working copy of the
+    declaration's inputs: fitness arrays are re-seeded from the raw
+    baseline, explicit fitness patches and preset recipes apply in their
+    declared order, manual modifiers are appended, and the inheritance
+    maps rebuild from the Mendelian baseline. The declaration and its
+    owner are never mutated; a failed compile publishes nothing and
+    restores preset species bindings.
 
     Args:
-        definition: Normalized model inputs and the ordered user declarations.
-        cached: Products from the same prepared declaration. Build uses this
-            cache so finalization never repeats opaque recipe execution.
+        definition: The full frozen declaration to compile.
 
     Returns:
-        Fully compiled candidate data, ready for validation and one native commit.
+        Fully compiled candidate products, ready for validation and one
+        native commit.
+
+    Raises:
+        ValueError: If the declaration carries no normalized draft.
     """
-    from typing import cast
+    from natal.frontend.fitness import apply_preset_fitness_patch
 
-    from natal.frontend.configurator import Configurator
-
-    inputs = definition.normalized
-    if inputs is None:
+    draft = definition.draft
+    registry = definition.registry
+    if draft is None or registry is None:
         raise ValueError("Compilation requires normalized model declarations.")
-    if cached is not None:
-        if cached.compilation_key is not inputs.compilation_key:
-            raise ValueError("Compiled products belong to a different declaration.")
-        genetic_fields = (*FITNESS_FIELDS, "zygotes_to_gametes_map", "gametes_to_zygotes_map", "offspring_tensor")
-        config = inputs.settings._replace(**{name: getattr(cached.config, name).copy() for name in genetic_fields})
-        return CompiledModel(
-            config, inputs.compilation_key, inputs.registry,
-            list(cached.gamete_modifiers), list(cached.zygote_modifiers),
-        )
-    candidate = Configurator(inputs.settings, species=definition.species)
-    candidate._registry = inputs.registry  # pyright: ignore[reportPrivateUsage]  # the compiler owns this isolated candidate.
-    for name, base in zip(FITNESS_FIELDS, inputs.fitness_base):
-        target: NDArray[np.float64] = getattr(candidate.config, name)
+    species = definition.species
+    host = _CompileHost(species, registry, draft)
+    for name, base in zip(FITNESS_FIELDS, definition.fitness_base):
+        target: NDArray[np.float64] = getattr(host.draft, name)
         target[...] = base if base.shape == target.shape else np.ones_like(target)
     gametes: GameteList = []
     zygotes: ZygoteList = []
-    bindings = [(preset, preset._bound_species) for preset in inputs.presets]  # pyright: ignore[reportPrivateUsage]  # restore user bindings if compilation fails.
+    presets = definition.presets
+    fitness_steps = definition.fitness_steps
+    bindings = [(preset, preset._bound_species) for preset in presets]  # pyright: ignore[reportPrivateUsage]  # restore user bindings if compilation fails.
     try:
-        from natal.frontend.fitness import apply_preset_fitness_patch
-
-        ordered = sorted(inputs.presets, key=lambda item: item.priority)
+        ordered = sorted(presets, key=lambda item: item.priority)
         for position in range(len(ordered) + 1):
-            for before, step in inputs.fitness_steps:
+            for before, step in fitness_steps:
                 if min(before, len(ordered)) == position:
-                    candidate.fitness(**step)  # pyright: ignore[reportArgumentType]  # normalized validated fitness keyword arguments.
+                    _apply_fitness_step(host, step)  # normalized validated fitness keyword arguments.
             if position == len(ordered):
                 break
             preset = ordered[position]
-            preset.bind_species(definition.species)
-            gamete = preset.gamete_modifier(candidate)
-            zygote = preset.zygote_modifier(candidate)
+            preset.bind_species(species)
+            gamete = preset.gamete_modifier(host)
+            zygote = preset.zygote_modifier(host)
             if gamete is not None:
                 gametes.append((len(gametes), f"{preset.name}/gamete", gamete))
             if zygote is not None:
                 zygotes.append((len(zygotes), f"{preset.name}/zygote", zygote))
             patch = preset.fitness_patch()
             if patch:
-                apply_preset_fitness_patch(candidate, patch)
-        gametes.extend(cast("GameteList", list(inputs.manual_gamete)))
-        zygotes.extend(cast("ZygoteList", list(inputs.manual_zygote)))
-        candidate._compile_candidate_maps(gametes, zygotes)  # pyright: ignore[reportPrivateUsage]  # apply every collected modifier exactly once.
+                apply_preset_fitness_patch(host, patch)
+        gametes.extend(cast("GameteList", list(definition.manual_gamete)))
+        zygotes.extend(cast("ZygoteList", list(definition.manual_zygote)))
+        from natal.frontend.configurator._registry_builder import rebuild_config_maps
+
+        host.draft, _applied = rebuild_config_maps(
+            species, host.draft, registry,
+            gamete_modifiers=gametes, zygote_modifiers=zygotes,
+            compress=False, host=host,
+        )  # apply every collected modifier exactly once.
     except BaseException:
         for preset, binding in bindings:
             preset._bound_species = binding  # pyright: ignore[reportPrivateUsage]  # failed compilation publishes no NATAL binding changes.
         raise
-    return CompiledModel(candidate.config, inputs.compilation_key, inputs.registry, gametes, zygotes)
+    return CompiledProducts(host.draft, registry, gametes, zygotes)
