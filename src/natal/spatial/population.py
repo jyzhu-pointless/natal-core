@@ -785,12 +785,21 @@ class SpatialPopulation:
             # Default adjacency:
             # - no topology: identity matrix (no migration unless diagonal used)
             # - with topology: topology-derived neighborhood matrix
-            if topology is None:
-                adjacency = np.eye(n_demes, dtype=np.float64)
+            #
+            # Kernel mode does not read the dense adjacency at runtime; avoid
+            # allocating an O(D^2) matrix for large grids.
+            if migration_mode == "kernel":
+                adjacency_dense = np.zeros((1, 1), dtype=np.float64)
             else:
-                adjacency = build_adjacency_matrix(topology)
-
-        adjacency_dense = _coerce_adjacency_dense(adjacency, n_demes=n_demes)
+                if topology is None:
+                    adjacency = np.eye(n_demes, dtype=np.float64)
+                else:
+                    adjacency = build_adjacency_matrix(topology)
+                adjacency_dense = _coerce_adjacency_dense(
+                    adjacency, n_demes=n_demes
+                )
+        else:
+            adjacency_dense = _coerce_adjacency_dense(adjacency, n_demes=n_demes)
 
         normalized_kernel_bank: tuple[NDArray[np.float64], ...] | None = None
         if kernel_bank is not None:
