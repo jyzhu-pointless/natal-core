@@ -34,6 +34,7 @@ from natal.frontend.patterns import IndividualSelector
 if TYPE_CHECKING:
     from natal.backends.rust.rust_backend import RustLifecycleBackend
     from natal.frontend.data import ModelDraft
+    from natal.frontend.population._params_view import ParamsView
     from natal.frontend.population.age_structured import AgeStructuredPopulation
     from natal.frontend.population.discrete_generation import (
         DiscreteGenerationPopulation,
@@ -558,3 +559,148 @@ def test_observe_values_stable_across_runs() -> None:
     assert second.tick == pop.tick == first.tick + 2
     np.testing.assert_array_equal(second.values, _reference_projection(pop))
     assert first.values.sum() < second.values.sum()
+
+
+# ── evaluator strengthening: exhaustive and boundary coverage ─────────────────
+
+
+def _expected_snapshot_value(snapshot: ModelDraft, entry: Any) -> Any:
+    """The snapshot-path value one route entry must reproduce."""
+    field = getattr(snapshot, entry.config_field)
+    if entry.kind == "bool":
+        return bool(field)
+    if entry.kind in ("scalar", "mode_enum", "slot"):
+        if isinstance(field, np.ndarray):
+            raw = field[entry.config_path] if entry.config_path else field[()]
+            return int(raw) if entry.dtype is int else float(raw)
+        if field is None:
+            return None
+        return float(field)
+    if entry.kind == "age_vec":
+        return None if field is None else field.copy()
+    if entry.kind == "sex_row":
+        if not entry.config_path:
+            return None if field is None else field.copy()
+        return field[entry.config_path].copy()
+    return np.asarray(field)
+
+
+def _assert_read_matches_snapshot(params: ParamsView, snapshot: ModelDraft, entry: Any) -> None:
+    """Compare one field-level read against the snapshot-path value."""
+    got = getattr(params, entry.name)
+    expected = _expected_snapshot_value(snapshot, entry)
+    if isinstance(expected, np.ndarray) or isinstance(got, np.ndarray):
+        if expected is None or got is None:
+            assert (got is None) == (expected is None)
+        else:
+            got_arr, exp_arr = np.asarray(got), np.asarray(expected)
+            assert got_arr.shape == exp_arr.shape, (entry.name, got_arr.shape, exp_arr.shape)
+            assert np.array_equal(got_arr, exp_arr), entry.name
+    else:
+        assert got == expected, (entry.name, got, expected)
+        assert (got is None) == (expected is None)
+
+
+@pytest.mark.parametrize(
+    "builder", [_build_age, _build_discrete], ids=["age_structured", "discrete"]
+)
+def test_every_route_read_equals_the_snapshot_path(builder: AnyBuilder) -> None:
+    """Every route entry resolves natively to the snapshot-path value.
+
+    The shipped equivalence tests sample representative kinds; this sweep
+    pins all of them, so a future route-table row whose contract field is
+    misclassified (unreadable natively, or shape-mismatched after a
+    rename) fails here instead of surfacing as a user-facing KeyError or
+    a silently stale draft read. Checked after build and again after a
+    run (committed-state reads).
+    """
+    from natal.frontend.configurator._routes import ROUTES
+
+    pop = builder("QLWAllRoutes")
+    for phase in ("fresh", "after-run"):
+        snapshot = pop.config
+        params = pop.params
+        for name, entry in ROUTES.items():
+            if entry.config_field is None:
+                # Spatial-only rows reject reads by contract.
+                with pytest.raises(AttributeError):
+                    getattr(params, name)
+                continue
+            _assert_read_matches_snapshot(params, snapshot, entry)
+        if phase == "fresh":
+            pop.run(1, record_every=0)
+
+
+def test_native_counts_bit_exact_through_the_recursive_split() -> None:
+    """Counts stay bit-identical to numpy sums when the plane exceeds 128.
+
+    The pairwise reduction splits recursively only above NumPy's 128-wide
+    block; small fixtures never reach that branch against real NumPy
+    (the Rust unit reference is the same algorithm, not independent).
+    This test imports a crafted 240-element per-sex plane with
+    magnitude-mixed counts (huge and small cells interleaved, an
+    order-sensitive payload for pairwise summation — verified by a
+    reversed-order numpy sum differing bitwise) and asserts the native
+    per-sex and total counts equal the real ``numpy`` reductions exactly.
+    """
+    n_ages = 80
+    rng = np.random.default_rng(777)
+    flat = np.empty(2 * n_ages * 3, dtype=np.float64)
+    flat[0::2] = 1e15 * (1.0 + 1e-7 * rng.random(flat[0::2].size))
+    flat[1::2] = 1e4 * (1.0 + 1e-3 * rng.random(flat[1::2].size))
+    ic = flat.reshape(2, n_ages, 3)
+    # Data precheck: summation order is observable on this payload.
+    assert float(ic.sum()) != float(ic.reshape(-1)[::-1].sum())
+
+    pop = (
+        nt.AgeStructuredPopulation.setup(species=_species("QLWBigPlaneCounts"), stochastic=False)
+        .age_structure(n_ages=n_ages, new_adult_age=1)
+        .initial_state(
+            individual_count={"female": {"WT|WT": [10.0] * n_ages}, "male": {"WT|WT": [10.0] * n_ages}}
+        )
+        .survival(female_age_based_survival=[1.0] * n_ages, male_age_based_survival=[1.0] * n_ages)
+        .reproduction(eggs_per_female=6, sex_ratio=0.5)
+        .competition(juvenile_growth_mode=0, carrying_capacity=8000.0)
+        .build()
+    )
+    pop.run(1, record_every=0)  # the session owns the state
+    imported = pop.state._replace(individual_count=ic)  # pyright: ignore[reportAttributeAccessIssue]  # NamedTuple state container
+    pop.import_state(imported)
+    np.testing.assert_array_equal(pop.state.individual_count, ic)
+    plane = int(ic.shape[1]) * int(ic.shape[2])
+    assert plane > 128, "fixture must exercise the recursive split branch"
+    assert pop.get_total_count() == float(ic.sum())
+    assert pop.get_female_count() == float(ic[0].sum())
+    assert pop.get_male_count() == float(ic[1].sum())
+
+
+@pytest.mark.parametrize(
+    "builder", [_build_age, _build_discrete], ids=["age_structured", "discrete"]
+)
+def test_bare_params_read_in_callback_matches_config_projection(builder: AnyBuilder) -> None:
+    """A held ``pop.params`` view read inside a callback stays in sync.
+
+    The mid-run draft fallback skips the lazy transaction projection, so
+    it must still return the values the full ``pop.config`` projection
+    returns at the same moment — including a change committed by an
+    earlier callback in the same run (the draft-sync invariant the
+    fallback relies on).
+    """
+    pop = builder("QLWHeldViewInHook")
+    observed: list[tuple[float, float]] = []
+
+    def first_hook(ctx: TickContext) -> int:
+        ctx.update().competition(carrying_capacity=650.0)
+        return 0
+
+    def held_view_hook(ctx: TickContext) -> int:
+        # Bare view (no ctx binding), read before anything prepares the
+        # callback's candidate projection.
+        observed.append((pop.params.carrying_capacity, pop.config.carrying_capacity))
+        return 0
+
+    pop.register_hooks(first_hook, event="first")
+    pop.register_hooks(held_view_hook, event="first")
+    pop.run(1, record_every=0)
+    assert observed == [(650.0, 650.0)]
+    assert pop.params.carrying_capacity == 650.0
