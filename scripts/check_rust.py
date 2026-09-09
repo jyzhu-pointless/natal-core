@@ -289,13 +289,24 @@ def main() -> int:
     env = _cargo_env()
     # Unit tests (curve-contract property tests etc.) build without the
     # extension-module feature, so the test binary must locate libpython at
-    # runtime.  Fallback (not override) keeps system dylibs resolving first.
+    # runtime.  Appending the system defaults matters: setting
+    # DYLD_FALLBACK_LIBRARY_PATH replaces dyld's built-in fallback set, so
+    # without them system dylibs (e.g. /usr/lib/libiconv) stop resolving.
     prefix = sysconfig.get_config_var("prefix")
     if prefix:
         fallback = env.get("DYLD_FALLBACK_LIBRARY_PATH", "")
-        env["DYLD_FALLBACK_LIBRARY_PATH"] = (
-            f"{Path(prefix) / 'lib'}{os.pathsep}{fallback}" if fallback else str(Path(prefix) / "lib")
+        env["DYLD_FALLBACK_LIBRARY_PATH"] = os.pathsep.join(
+            [
+                str(Path(prefix) / "lib"),
+                "/usr/local/lib",
+                "/usr/lib",
+                *([fallback] if fallback else []),
+            ]
         )
+        # Unit tests that initialize the embedded interpreter (callback
+        # slot pairing) also need the stdlib home: a freestanding test
+        # binary cannot infer it from its own executable path.
+        env.setdefault("PYTHONHOME", prefix)
     failures: list[str] = []
     for command in (
         ["cargo", "fmt", "--", "--check"],
