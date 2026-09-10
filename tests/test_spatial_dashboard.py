@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from natal.frontend.spatial.topology import HexGrid, SquareGrid
 from natal.frontend.ui.spatial_dashboard import SpatialDashboard
@@ -161,3 +162,46 @@ def test_large_landscape_mode_threshold_and_click_fallback() -> None:
     event = SimpleNamespace(args={"points": [{"x": 3, "y": 4}]})
     dashboard._on_landscape_click(event)
     assert clicked == [dashboard.pop.topology.to_index((4, 3))]
+
+
+def test_landscape_metric_genotype_and_allele_values_use_slot_queries() -> None:
+    """Genotype/allele landscape metrics resolve through the aligned surface.
+
+    The genotype branch reads the registry through the slice's
+    ``index_registry``; the allele branch is a container query that reads
+    per-deme frequencies through the raw slot (``_deme_object``), because
+    the aligned slice carries no ``compute_allele_frequencies``.
+    """
+    from types import SimpleNamespace
+
+    import natal as nt
+
+    dashboard = SpatialDashboard.__new__(SpatialDashboard)
+    species = nt.Species.from_dict(
+        name="__dash_metrics__", structure={"chr1": {"loc1": ["WT", "Dr"]}}
+    )
+    dashboard.pop = (
+        nt.SpatialPopulation.builder(
+            species, n_demes=2, topology=SquareGrid(1, 2), pop_type="discrete_generation"
+        )
+        .setup(name="dash_metrics", stochastic=False)
+        .initial_state(
+            individual_count={"female": {"WT|WT": 30, "Dr|WT": 10}, "male": {"WT|WT": 30}}
+        )
+        .reproduction(eggs_per_female=2)
+        .competition(carrying_capacity=10000.0)
+        .build()
+    )
+    dashboard.selected_deme_idx = 0
+
+    dashboard.landscape_metric = SimpleNamespace(value="genotype")
+    dashboard.landscape_target = SimpleNamespace(value="WT|WT")
+    # WT|WT share: (30 F + 30 M) / (30 + 10 + 30) = 6/7 per deme.
+    vals = dashboard._get_landscape_values()
+    assert vals == [pytest.approx(6.0 / 7.0), pytest.approx(6.0 / 7.0)]
+
+    dashboard.landscape_metric = SimpleNamespace(value="allele")
+    dashboard.landscape_target = SimpleNamespace(value="WT")
+    # WT allele share: (2*60 + 10) / (2*70) = 13/14 per deme.
+    allele_vals = dashboard._get_landscape_values()
+    assert allele_vals == [pytest.approx(13.0 / 14.0), pytest.approx(13.0 / 14.0)]

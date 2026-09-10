@@ -1219,6 +1219,37 @@ class TestDemeSliceAlignedSurface:
         )
 
 
+def test_sessionless_ecology_write_is_visible_to_derived_reads() -> None:
+    """A single-deme write before the session handoff must read back.
+
+    Requirement: docs/en(/zh)/3_runtime_modification.md 6.1-6.2 — with no
+    session, ``pop.params`` derives the columns "from the deme drafts", and
+    ``write_ecology`` "writes ... that deme's draft declaration ... so every
+    execution path ... sees the same value".  A directly constructed
+    container (documented flow, ``SpatialPopulation(demes, ...)``) has no
+    session until the first run, so the derived column read must reflect a
+    ``write_ecology`` issued in that window (the pre-P8 column mirror did).
+    """
+    species = nt.Species.from_dict(
+        name="__aligned_sessionless_write__", structure={"auto": {"A": ["WT"]}}
+    )
+    demes = [
+        (
+            nt.DiscreteGenerationPopulation.setup(species=species, stochastic=False)
+            .initial_state(individual_count={"female": {"WT|WT": 10}, "male": {"WT|WT": 10}})
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=222.0)
+            .build()
+        )
+        for _ in range(2)
+    ]
+    pop = SpatialPopulation(demes, migration_rate=0.0)
+    assert pop._rust_spatial_session() is None  # pyright: ignore[reportPrivateUsage]  # session-less write window
+    pop.deme(0).write_ecology("carrying_capacity", 4242.0)
+    assert float(pop.params.carrying_capacity[0]) == 4242.0
+    assert float(pop.params.carrying_capacity[1]) == 222.0
+
+
 def test_discrete_deme_counts_round_per_deme() -> None:
     """Discrete deme counts round per deme before the container sum."""
     species = nt.Species.from_dict(
@@ -1238,3 +1269,156 @@ def test_discrete_deme_counts_round_per_deme() -> None:
         counts = pop.deme(i).state.individual_count
         assert per_deme[i] == int(round(float(counts.sum())))
     assert pop.get_total_count() == int(sum(per_deme))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Session-less fallbacks and derived-read boundaries (P8 evaluator review)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _sessionless_age_container(name: str) -> SpatialPopulation:
+    """Build a directly constructed age-structured container (no session yet).
+
+    The builder initializes the owning session at build time; the direct
+    constructor leaves the container session-less until the first
+    run/observe/record, which is the window the fallback branches serve.
+    """
+    species = nt.Species.from_dict(
+        name=f"__{name}__", structure={"auto": {"A": ["WT"]}}
+    )
+    demes = [
+        (
+            nt.AgeStructuredPopulation.setup(species=species, name=f"{name}_d{i}", stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": {1: 10 + i}},
+                    "male": {"WT|WT": {1: 5 + i}},
+                }
+            )
+            .survival(female_age_based_survival=[1.0, 1.0], male_age_based_survival=[1.0, 1.0])
+            .reproduction(
+                female_age_based_mating_rate=[0.0, 0.0],
+                male_age_based_mating_rate=[0.0, 0.0],
+                eggs_per_female=0.0,
+            )
+            .competition(carrying_capacity=100000.0, low_density_growth_rate=0.0)
+            .build()
+        )
+        for i in range(2)
+    ]
+    return SpatialPopulation(demes, migration_rate=0.0)
+
+
+def test_sessionless_slice_sex_counts_and_vector_columns_derive_from_caches() -> None:
+    """Without a session the per-deme sex counts and vector columns fall back.
+
+    The slice count queries and the container aggregation must degrade to
+    the deme slots' own (cache-based) reads, and vector ecology columns
+    must derive from the drafts reshaped to ``(n_demes, *per_deme)``.
+    """
+    pop = _sessionless_age_container("sessionless_fallbacks")
+    assert pop._rust_spatial_session() is None  # pyright: ignore[reportPrivateUsage]  # fallback branch
+    assert pop.deme(1).get_total_count() == 17.0
+    assert pop.deme(1).get_female_count() == 11.0
+    assert pop.deme(1).get_male_count() == 6.0
+    assert pop.get_total_count() == 32
+    assert pop.get_female_count() == 21
+    assert pop.get_male_count() == 11
+    survival = pop.params.survival_rates
+    assert survival.shape == (2, 2, 2)  # (n_demes, n_sexes, n_ages)
+    np.testing.assert_array_equal(survival[1], [[1.0, 1.0], [1.0, 1.0]])
+
+
+def test_derived_column_read_raises_keyerror_when_no_contract_is_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A contract-less deme slot surfaces as KeyError, not a silent value.
+
+    The derived column read gathers per-deme declaration drafts; when a
+    slot carries none the container has no column authority, and the
+    read must fail loudly instead of fabricating values.
+    """
+    pop = _sessionless_age_container("contractless_slot")
+    monkeypatch.setattr(pop._deme_object(1), "_config", None)  # pyright: ignore[reportPrivateUsage]  # malformed-slot read guard; the declaration draft is the column authority
+    with pytest.raises(KeyError, match="not materialized"):
+        _ = pop.params.survival_rates
+
+
+def test_deme_state_reader_reuses_fresh_cache_and_degrades_inside_run() -> None:
+    """The per-deme state projection is lazy in both directions.
+
+    A second read while the cache is fresh must not re-query the session;
+    a read inside a container run (cache stale from the previous run)
+    must degrade to the last-published cache instead of borrowing the
+    session; after the run the same read is fresh again.
+    """
+    observed: list[int] = []
+    holder: dict[str, SpatialPopulation] = {}
+
+    @nt.hook(event="first", priority=0, deme=0)
+    def read_sibling(pop: object) -> int:
+        observed.append(int(holder["state_window"].deme(1).state.n_tick))
+        return 0
+
+    pop = _build_two_allele_discrete("state_window", hook_calls=[((read_sibling,), {})])
+    holder["state_window"] = pop
+    pop.run(1, record_every=0)
+    first = pop.deme(1).state  # refresh from the session plane (cache stale)
+    assert first.n_tick == 1
+    second = pop.deme(1).state  # cache is fresh: the reader returns early
+    assert second.n_tick == first.n_tick
+    assert not np.shares_memory(first.individual_count, second.individual_count)
+    pop.run(1, record_every=0)  # invalidates; the hook fires with a stale cache
+    # First firing (tick 0): build-fresh cache; second (tick 1): the cache
+    # was just refreshed, so both degrade via the fresh-cache early return.
+    assert observed == [0, 1]
+    # Third run without an intermediate read: the cache is stale from run 2's
+    # invalidation, so the in-run refresh must stop at the run-window guard.
+    pop.run(1, record_every=0)
+    assert observed == [0, 1, 1]
+    assert pop.deme(1).state.n_tick == 3  # fresh again after the run
+
+
+def test_session_equilibrium_column_keeps_flat_layout() -> None:
+    """The declared-equilibrium column reads flat from the session authority."""
+    species = nt.Species.from_dict(
+        name="__aligned_eq_column__", structure={"auto": {"A": ["WT"]}}
+    )
+    pop = (
+        SpatialPopulation.builder(species, n_demes=2, pop_type="age_structured")
+        .setup(name="aligned_eq_column", stochastic=False)
+        .age_structure(n_ages=4, new_adult_age=1)
+        .initial_state(
+            individual_count={
+                "female": {"WT|WT": [0, 50, 0, 0]},
+                "male": {"WT|WT": [0, 50, 0, 0]},
+            }
+        )
+        .survival(
+            female_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+            male_age_based_survival=[1.0, 0.9, 0.7, 0.0],
+        )
+        .reproduction(
+            female_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+            male_age_based_mating_rate=[0.0, 1.0, 1.0, 0.0],
+            eggs_per_female=10.0,
+        )
+        .competition(
+            carrying_capacity=100.0,
+            equilibrium_distribution=nt.batch_setting(
+                [np.array([[0.0, 25.0, 0.0, 0.0], [0.0, 25.0, 0.0, 0.0]])] * 2
+            ),
+        )
+        .build()
+    )
+    declared = pop.params.equilibrium_declared
+    assert declared.tolist() == [1, 1]
+    distribution = pop.params.equilibrium_distribution
+    # Flat session layout: the two demes' flattened (n_sexes, n_ages)
+    # declarations concatenate into one 1-D column.
+    assert distribution.shape == (16,)
+    np.testing.assert_array_equal(
+        distribution,
+        [0.0, 25.0, 0.0, 0.0, 0.0, 25.0, 0.0, 0.0] * 2,
+    )

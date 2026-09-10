@@ -75,8 +75,8 @@ def test_spatial_reinitialization_rejects_missing_export_before_replacing_sessio
     seed = owner._rust_spatial_seed
     before = [deme.export_state().copy() for deme in owner.demes]
     with monkeypatch.context() as patch:
-        patch.setattr(owner._deme_object(1), "export_config", None)  # pyright: ignore[reportPrivateUsage]  # malformed-slot handoff guard
-        with pytest.raises(TypeError, match=r"deme\[1\].*export_config"):
+        patch.setattr(owner._deme_object(1), "_config", None)  # pyright: ignore[reportPrivateUsage]  # malformed-slot handoff guard; the declaration draft is the handoff authority
+        with pytest.raises(TypeError, match=r"deme\[1\].*declaration draft"):
             owner._initialize_session(seed=19)
     assert owner._rust_spatial_backend is backend
     assert owner._rust_spatial_seed == seed

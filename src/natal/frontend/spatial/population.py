@@ -970,10 +970,15 @@ class SpatialPopulation:
         return cast(ModelDraft, export_fn())
 
     def _export_deme_drafts(self, *, compact: bool = False) -> list[ModelDraft]:
-        """Export every deme's draft, in deme order.
+        """Export every deme's declaration draft, in deme order.
 
         Used by the Rust backend wiring: the columnized ecology and the
-        genetics variant bank are gathered from the per-deme drafts.
+        genetics variant bank are gathered from the per-deme drafts.  The
+        declaration draft is the authority here — NOT ``export_config()``,
+        whose projection routes through each deme's pre-container
+        standalone backend and would mask session-less ``write_ecology``
+        writes (the draft is the declared value the next materialization
+        must install).
 
         Args:
             compact: Share identical detached arrays only within this returned
@@ -983,25 +988,30 @@ class SpatialPopulation:
             One ``ModelDraft`` per deme.
 
         Raises:
-            TypeError: If any deme does not implement ``export_config``.
+            TypeError: If any deme does not carry a declaration draft.
         """
         drafts: list[ModelDraft] = []
         shared_arrays: dict[tuple[str, tuple[int, ...], bytes], NDArray[np.generic]] = {}
         for idx, deme in enumerate(self._demes):
-            export_fn = getattr(deme, "export_config", None)
-            if not callable(export_fn):
-                raise TypeError(f"deme[{idx}] does not implement export_config()")
-            draft = cast(ModelDraft, export_fn())
-            if compact:
-                # Compact as snapshots arrive, before retaining D copies of
-                # identical genetics merely to deduplicate the variant bank.
-                replacements: dict[str, object] = {}
-                for name, value in zip(draft._fields, draft, strict=True):
-                    if isinstance(value, np.ndarray):
-                        array = np.asarray(value)
+            draft = getattr(deme, "_config", None)  # pyright: ignore[reportPrivateUsage]  # declaration-side authority of a managed deme
+            if not isinstance(draft, ModelDraft):
+                raise TypeError(f"deme[{idx}] does not carry a declaration draft")
+            # Detach every array: exports never alias the deme's live draft
+            # (compact dedups identical contents into one shared copy).
+            replacements: dict[str, object] = {}
+            for name, value in zip(draft._fields, draft, strict=True):
+                if isinstance(value, np.ndarray):
+                    array = np.asarray(value)
+                    if compact:
                         key = (array.dtype.str, array.shape, array.tobytes())
-                        replacements[name] = shared_arrays.setdefault(key, array)
-                draft = draft._replace(**replacements)
+                        shared = shared_arrays.get(key)
+                        if shared is None:
+                            shared = array.copy()
+                            shared_arrays[key] = shared
+                        replacements[name] = shared
+                    else:
+                        replacements[name] = array.copy()
+            draft = draft._replace(**replacements)
             drafts.append(draft)
         return drafts
 
@@ -1862,11 +1872,12 @@ class SpatialPopulation:
         counts = backend_obj.counts(deme_index)
         if self._session_model == "discrete_generation":
             # Discrete deme queries round to whole individuals per deme
-            # before any cross-deme summation (historical contract).
+            # before any cross-deme summation (historical contract).  The
+            # int type matches the discrete population's own query surface.
             return (
-                float(int(round(counts[0]))),
-                float(int(round(counts[1]))),
-                float(int(round(counts[2]))),
+                int(round(counts[0])),
+                int(round(counts[1])),
+                int(round(counts[2])),
             )
         return counts
 
