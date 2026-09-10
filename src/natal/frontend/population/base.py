@@ -83,12 +83,12 @@ T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationStat
 if TYPE_CHECKING:
     from typing import Self
 
-    from natal.frontend.configurator import Configurator
-    from natal.frontend.configurator._writers import SessionChannel
+    from natal.frontend.configurator import RuntimeUpdater
+    from natal.frontend.configurator._writers import AuditValue, SessionChannel
     from natal.frontend.hooks import (
         CompiledHookDescriptor,
     )
-    from natal.frontend.hooks.tick_context import HookRunner
+    from natal.frontend.hooks.tick_context import HookRunner, TickContext
     from natal.frontend.output._recording import RecordingPlan
     from natal.frontend.output.history import History
     from natal.frontend.output.observation import Observation, ObservationResult
@@ -163,6 +163,12 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     _runtime_state_reader: Callable[[], None] | None = None
     _current_definition: ModelDefinition | None = None
     _runtime_parameter_writer: SessionChannel | None = None
+    # The active callback's event scope, registered by the native bridge
+    # for the duration of one callback invocation.  Parameter reads and
+    # writes resolve their transaction, candidate, pending log, and
+    # metadata from it; no population field is ever swapped for a
+    # callback.  ``None`` outside callbacks.
+    _active_event: TickContext | None = None
 
     def __init__(
         self,
@@ -548,9 +554,13 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
             raise AttributeError("Population config has not been initialized.")
         from copy import deepcopy
 
-        prepare = getattr(self, "_event_prepare_config", None)
-        if prepare is not None:
-            prepare()
+        event = self._active_event
+        if event is not None:
+            # Inside a callback the committed answer is the event's
+            # candidate; materialize it lazily and hand out a copy.
+            candidate = event.materialize_candidate()
+            if candidate is not None:
+                return deepcopy(candidate)
         reader = getattr(self, "_runtime_config_reader", None)
         if reader is not None and not getattr(self, "_rust_run_active", False):
             return reader(self._config)
@@ -585,15 +595,53 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         """Replace this population's configuration."""
         self._config = config
 
-    def _create_configurator(self) -> Configurator:
-        """Create a ``Configurator`` wired back to this population.
+    def _event_candidate(self) -> ModelDraft | None:
+        """Return the active callback's candidate, materializing it lazily.
 
-        Subclass ``update()`` methods call this helper so concrete return types
-        do not need ``cast()``.
+        Returns:
+            The event candidate draft, or ``None`` when no callback is
+            active or the callback has no native transaction.
         """
-        from natal.frontend.configurator import Configurator
+        event = self._active_event
+        if event is None:
+            return None
+        return event.materialize_candidate()
 
-        return Configurator.for_population(self)
+    def _prepared_event_candidate(self) -> ModelDraft | None:
+        """Return the active callback's candidate only if already prepared.
+
+        Never materializes anything, so bare (context-free) reads stay
+        lazy inside a callback.
+
+        Returns:
+            The prepared candidate draft, or ``None``.
+        """
+        event = self._active_event
+        if event is None:
+            return None
+        return event.prepared_candidate()
+
+    def _param_audit_sink(self) -> Callable[[str, AuditValue, AuditValue], None]:
+        """Return the typed audit sink for runtime parameter writes.
+
+        Returns:
+            The active callback's pending-log sink during a callback, or
+            the population's own :meth:`log_param_value` otherwise.
+        """
+        event = self._active_event
+        if event is not None:
+            return event.audit_sink()
+        return self.log_param_value
+
+    def _create_updater(self) -> RuntimeUpdater:
+        """Create the idle-session runtime updater for this population.
+
+        Subclass ``update()`` methods call this helper so concrete return
+        types do not need ``cast()``.
+        """
+        from natal.frontend.configurator import RuntimeUpdater
+
+        return RuntimeUpdater(self)
 
     @property
     def params(self) -> ParamsView:
@@ -689,12 +737,15 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         return list(self._zygote_modifiers)
 
     @abstractmethod
-    def update(self) -> Configurator:
-        """Return a ``Configurator`` for modifying this population's config.
+    def update(self) -> RuntimeUpdater:
+        """Return a ``RuntimeUpdater`` for modifying this population.
 
-        All chainable methods (``.competition()``, ``.reproduction()``, …)
-        write changes immediately — no ``.apply()`` or ``.freeze()`` needed
-        for simple parameter updates.
+        All chainable domain methods (``.competition()``,
+        ``.reproduction()``, …) write changes immediately — no ``.apply()``
+        or ``.freeze()`` needed for simple parameter updates.  The updater
+        holds only its commit target and resolves every value against the
+        live session at operation time; build-only methods (``.build()``,
+        ``.setup()``, ``.hooks()``, …) do not exist on it.
 
         Examples:
 

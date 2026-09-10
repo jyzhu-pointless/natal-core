@@ -1234,7 +1234,11 @@ def test_spatial_runtime_update_chain_removed() -> None:
     """
     assert not hasattr(nt.SpatialPopulation, "update")
     assert not hasattr(nt.SpatialPopulation, "update_deme")
-    # The panmictic configurator channel is untouched.
-    from natal.frontend.configurator import Configurator
+    # The panmictic runtime channel is the RuntimeUpdater handle: the
+    # for_population factory and the runtime-handle configurator are gone.
+    from natal.frontend.configurator import Configurator, RuntimeUpdater
 
-    assert hasattr(Configurator, "for_population")
+    assert not hasattr(Configurator, "for_population")
+    assert not hasattr(Configurator, "_genetic_candidate")
+    assert not hasattr(Configurator, "_commit_genetic_candidate")
+    assert nt.RuntimeUpdater is RuntimeUpdater

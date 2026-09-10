@@ -185,9 +185,9 @@ class TestDeclarationJournal:
         """build()/apply()/reconfigure_preset() never enter the journal."""
         species = _species()
         pop = _typical_chain(Configurator.for_age_structured(species)).build()
-        # for_population wraps an existing population — its writes are
+        # pop.update() returns the runtime updater — its writes are
         # runtime updates, not declarations.
-        cfg = Configurator.for_population(pop)
+        cfg = pop.update()
         cfg.competition(carrying_capacity=4321.0)
         # The journal is per-configurator; the update configurator's own
         # journal records its calls (they are that configurator's

@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 import natal as nt
+from natal.frontend.configurator import RuntimeUpdater
 from natal.frontend.hooks.tick_context import TickContext
 from natal.frontend.population._params_view import ParamsView
 
@@ -224,7 +225,7 @@ def test_retained_callback_context_cannot_mutate_later(operation: str) -> None:
     contexts: list[TickContext] = []
     samplers: list[RandomSampler] = []
     parameter_handles: list[ParamsView] = []
-    configurators: list[nt.Configurator] = []
+    configurators: list[RuntimeUpdater] = []
 
     def retain(ctx: TickContext) -> int:
         """Retain both the context and its sampler for the lifetime attack."""

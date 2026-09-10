@@ -502,7 +502,7 @@ def release_drive_carriers():
 
 ## 小结
 
-链式 API（`Configurator`）将种群参数组织为可链式配置的流程。每个方法立即写入 `ModelDraft`，`build()` 执行 sync 并创建 `Population` 对象。同一 API 同时服务于构建时和运行时（`pop.update()`）。
+链式 API（`Configurator`）将种群参数组织为可链式配置的流程。每个方法立即写入 `ModelDraft`，`build()` 执行 sync 并创建 `Population` 对象。运行期修改使用 `pop.update()` 返回的专用 `RuntimeUpdater`——域方法语法相同，但不携带任何构建能力。
 
 
 ## 相关章节

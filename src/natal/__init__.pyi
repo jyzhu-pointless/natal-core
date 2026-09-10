@@ -21,6 +21,7 @@ from .frontend.configurator import (
     ConfigWriter,
     CoreConfigWriter,
     DraftWriter,
+    RuntimeUpdater,
     dispatch,
     set_param,
 )
@@ -342,6 +343,7 @@ __all__ = [
     "ROUTES",
     "ROUTES_BY_METHOD",
     "RecombinationMap",
+    "RuntimeUpdater",
     "Sex",
     "SexChromosomeType",
     "SpatialConfigurator",

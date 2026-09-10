@@ -4,26 +4,24 @@ State and parameter edits become visible together when the callback succeeds.
 An exception discards the candidate, including random draws. The controlled RNG
 uses the owning Rust stream, and retained parameter, update, and RNG handles
 reject access after the callback returns. Public population snapshots remain
-isolated from the writable callback candidate.
+isolated from the writable callback candidate: the candidate config, the
+pending metadata, the pending parameter log, and the rollback actions live on
+the :class:`TickContext` — the population is never re-dressed for a callback.
 """
 
 from __future__ import annotations
 
-import copy
 import re
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.hooks._transaction import (
-    EventTransaction,
-    GuardedConfigurator,
-    HookRng,
-)
+from natal.frontend.hooks._transaction import EventTransaction, HookRng
 from natal.frontend.hooks.types import RESULT_STOP
 
 if TYPE_CHECKING:
+    from natal.frontend.configurator import RuntimeUpdater
     from natal.frontend.data import ModelDraft
     from natal.frontend.genetics import Species
     from natal.frontend.population._params_view import ParamsView
@@ -31,6 +29,16 @@ if TYPE_CHECKING:
     from natal.frontend.registry.index import IndexRegistry
 
 __all__ = ["BlueprintView", "TickContext", "TickMetrics"]
+
+# Recipe-metadata attributes a runtime genetic update publishes inside an
+# event.  The event scope keeps shallow working copies of these so a failed
+# callback leaves the population's committed metadata untouched; on success
+# the working copies are adopted wholesale.  ``_current_definition`` is held
+# by reference (definitions are frozen snapshots).
+_EVENT_METADATA_NAMES: tuple[str, ...] = (
+    "_current_definition", "_presets", "_manual_gamete", "_manual_zygote",
+    "_gamete_modifiers", "_zygote_modifiers", "_reconfiguration_log",
+)
 
 
 class BlueprintView:
@@ -276,6 +284,14 @@ class TickContext:
 
     Constructed fresh for every callback invocation by the hook runner;
     hooks must not retain a context beyond their own execution.
+
+    The context also owns the event's write scope: the native
+    transaction, the lazily materialized candidate configuration, the
+    pending recipe metadata, the pending parameter log, and the rollback
+    actions.  Runtime updates requested through :meth:`update` and
+    parameter writes through :attr:`params` stage into this scope and
+    adopt atomically when the callback succeeds; the population's
+    committed fields are never swapped for the duration of a callback.
     """
 
     def __init__(
@@ -298,6 +314,8 @@ class TickContext:
             state: The writable state view for this callback.
             hook_index: Position of this hook within its event; folds into
                 the RNG stream so same-tick hooks get independent draws.
+            transaction: The callback's owned native transaction, when the
+                event runs inside a native session.
         """
         self._active = True
         self._transaction = transaction
@@ -310,8 +328,27 @@ class TickContext:
         self._stop_requested = False
         self._metrics: Optional[TickMetrics] = None
         self._blueprint: Optional[BlueprintView] = None
+        # Event write scope — every field below materializes lazily on the
+        # first parameter/update access, so read-only callbacks never copy
+        # a candidate.
+        self._prepared = False
+        self._candidate: Optional[ModelDraft] = None
+        self._metadata_original: dict[str, object] = {}
+        self._metadata_working: dict[str, object] = {}
+        self._pending_log: object | None = None
+        self._rollback_actions: Optional[List[Callable[[], None]]] = None
 
     # -- read-only coordinates -------------------------------------------------
+
+    @property
+    def population(self) -> BasePopulation[Any]:
+        """The owning population."""
+        return self._pop
+
+    @property
+    def transaction(self) -> EventTransaction | None:
+        """The callback's native transaction (``None`` without a session)."""
+        return self._transaction
 
     @property
     def tick(self) -> int:
@@ -336,13 +373,15 @@ class TickContext:
     def params(self) -> ParamsView:
         """Writable parameter surface (same writer stack as ``pop.params``).
 
-        Attribute writes are bounds-validated, reach the draft, the live
-        Rust session (when present), and the parameter snapshot log.
+        Attribute writes are bounds-validated, stage into this event's
+        candidate and its native transaction, and commit with the
+        callback.  The transaction is handed to the view explicitly — no
+        attribute on the population carries it.
         """
         from natal.frontend.population._params_view import ParamsView
 
         self.ensure_active()
-        return ParamsView(self._pop, self._prepare_parameters)
+        return ParamsView(self._pop, self._prepare_parameters, channel=self._transaction)
 
     @property
     def state(self) -> Any:
@@ -367,16 +406,18 @@ class TickContext:
 
     # -- actions ----------------------------------------------------------------
 
-    def update(self) -> GuardedConfigurator:
-        """Return a runtime ``Configurator`` (same syntax as the build chain).
+    def update(self) -> RuntimeUpdater:
+        """Return an event-bound runtime updater (build-chain syntax).
 
         Returns:
-            A configurator bound to the owning population.
+            A :class:`~natal.frontend.configurator.RuntimeUpdater` whose
+            writes stage into this event's transaction and adopt when the
+            callback succeeds.
         """
+        from natal.frontend.configurator import RuntimeUpdater
+
         self._prepare_parameters()
-        cfg = self._pop.update()
-        cfg._hook_context = self  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # event-bound configurator marker
-        return GuardedConfigurator(cfg, self.ensure_active)
+        return RuntimeUpdater(self._pop, context=self)
 
     def stop(self) -> None:
         """Request termination of the current run at the event boundary."""
@@ -396,9 +437,35 @@ class TickContext:
     def _prepare_parameters(self) -> None:
         """Materialize the isolated parameter candidate only when requested."""
         self.ensure_active()
-        prepare = getattr(self._pop, "_event_prepare_config", None)
-        if prepare is not None:
-            prepare()
+        if self._prepared:
+            return
+        if self._transaction is None:
+            # No native transaction (manually constructed context): reads
+            # fall through to the population's committed draft, exactly
+            # like a scope without a prepared candidate.
+            self._prepared = True
+            return
+        from natal.backends.rust.rust_backend import config_snapshot_from_session
+
+        base = self._pop._config  # pyright: ignore[reportPrivateUsage]  # declaration shell; the transaction supplies live values
+        assert base is not None
+        self._candidate = config_snapshot_from_session(self._transaction, base)
+        # Shallow working copies of the recipe metadata a runtime genetic
+        # update may publish; ``_current_definition`` is frozen and shared.
+        for name in _EVENT_METADATA_NAMES:
+            if hasattr(self._pop, name):
+                original: object = getattr(self._pop, name)
+                self._metadata_original[name] = original
+                self._metadata_working[name] = (
+                    original if name == "_current_definition" else _copy_working(original)
+                )
+        from natal._engine_rs import ParameterLog
+
+        original_log = self._pop._params_log  # pyright: ignore[reportPrivateUsage]  # same-package pending-log allocation
+        assert isinstance(original_log, ParameterLog)
+        self._pending_log = type(original_log)()  # allocate a log only for accessed parameter candidates
+        self._rollback_actions = []
+        self._prepared = True
 
     def invalidate(self) -> None:
         """Detach every writer and sampler when this callback ends."""
@@ -416,6 +483,162 @@ class TickContext:
                 raise RuntimeError("This event has no native RNG transaction")
             self._rng = HookRng(self._transaction, self.ensure_active)
         return self._rng
+
+    # -- event write scope (consumed by the updater targets and reads) ----------
+
+    def materialize_candidate(self) -> Optional[ModelDraft]:
+        """Prepare the scope and return the isolated candidate draft.
+
+        Returns:
+            The candidate, or ``None`` when this event has no native
+            transaction (reads then fall back to the committed draft).
+        """
+        self._prepare_parameters()
+        return self._candidate
+
+    def prepared_candidate(self) -> Optional[ModelDraft]:
+        """Return the candidate only when the scope is already prepared.
+
+        Never materializes anything: bare (context-free) parameter reads
+        use this to stay lazy.
+        """
+        return self._candidate if self._prepared else None
+
+    def adopt_candidate(self, draft: ModelDraft) -> None:
+        """Replace the event's working candidate with a committed draft.
+
+        Args:
+            draft: The validated post-write draft.
+        """
+        self._candidate = draft
+
+    def audit_sink(self) -> Callable[..., None]:
+        """Return the typed audit sink for this event's writes.
+
+        Returns:
+            A callable appending into the pending log with the event's
+            tick and deme; the population's own sink when this event has
+            no native transaction.
+        """
+        self._prepare_parameters()
+        pending = self._pending_log
+        pop = self._pop
+        if pending is None:
+            return pop.log_param_value
+        tick = int(self._tick)
+        deme = int(self._deme_id)
+
+        def sink(name: str, old: object, new: object, event: str = "update") -> None:
+            """Append one typed change to the event's pending log."""
+            log = cast("Any", pending)
+            log.append_value(tick, name, old, new, event, deme)
+
+        return sink
+
+    def metadata_value(self, name: str) -> object:
+        """Read one recipe-metadata attribute at operation time.
+
+        Args:
+            name: The attribute name (e.g. ``"_presets"``).
+
+        Returns:
+            This event's working value once prepared, otherwise the
+            population's committed value.
+        """
+        if self._prepared:
+            return self._metadata_working.get(name)
+        return getattr(self._pop, name, None)
+
+    def publish_metadata(self, name: str, value: object) -> None:
+        """Publish one recipe-metadata attribute into the working copies.
+
+        Args:
+            name: The attribute name.
+            value: The committed value; adopted onto the population only
+                when the whole callback succeeds.
+        """
+        self._metadata_working[name] = value
+
+    def append_reconfiguration(self, preset_name: str, changes: dict[str, object]) -> None:
+        """Record one committed preset reconfiguration in the pending log.
+
+        Args:
+            preset_name: The reconfigured preset's name.
+            changes: The applied attribute changes.
+        """
+        existing = self.metadata_value("_reconfiguration_log")
+        if isinstance(existing, list):
+            log = cast("list[tuple[int, str, dict[str, object]]]", existing)
+        else:
+            log = []
+        log.append((int(self._tick), preset_name, dict(changes)))
+        self.publish_metadata("_reconfiguration_log", log)
+
+    def add_rollback(self, action: Callable[[], None]) -> None:
+        """Join one undo action to this event's rollback sequence.
+
+        Args:
+            action: Called, in reverse registration order, only when the
+                callback fails after this action was registered.
+        """
+        self._prepare_parameters()
+        if self._rollback_actions is not None:
+            self._rollback_actions.append(action)
+
+    def commit(self, event_name: str) -> None:
+        """Adopt the prepared scope into the population (callback success).
+
+        The pending parameter log merges into the population's log with
+        the event's provenance, then the candidate configuration and the
+        working metadata copies become the population's committed state.
+
+        Args:
+            event_name: The native event name recorded on merged log rows.
+        """
+        if not self._prepared:
+            return
+        pending = self._pending_log
+        if pending is not None:
+            for change_tick, _event, _deme, name, old, new in cast("Any", pending).details():
+                self._pop._params_log.append_value(  # pyright: ignore[reportPrivateUsage]  # the merge is the population log's append boundary
+                    change_tick, name, old, new, event_name, int(self._deme_id)
+                )
+        candidate = self._candidate
+        if candidate is not None:
+            self._pop.set_config(candidate)
+        for name, value in self._metadata_working.items():
+            setattr(self._pop, name, value)
+
+    def discard(self) -> None:
+        """Undo prepared scope work (callback failure).
+
+        Runs the registered rollback actions in reverse registration
+        order and restores the population's recipe metadata; the
+        population's committed configuration was never touched.
+        """
+        for rollback in reversed(self._rollback_actions or ()):
+            rollback()
+        if not self._prepared:
+            return
+        # Nothing was attached to the population during the callback — the
+        # working copies lived here — so restoration is a plain revert.
+        for name, original in self._metadata_original.items():
+            setattr(self._pop, name, original)
+
+
+def _copy_working(value: object) -> object:
+    """Shallow-copy list metadata for event-scoped working state.
+
+    Args:
+        value: The committed metadata container (a list, or the frozen
+            definition which passes through by reference).
+
+    Returns:
+        A shallow list copy; other objects pass through unchanged.
+    """
+    if isinstance(value, list):
+        return list(cast("list[object]", value))
+    return value
 
 
 def _build_blueprint(pop: BasePopulation[Any]) -> BlueprintView:
@@ -585,7 +808,7 @@ class HookRunner:
         tick: int,
         deme_id: int,
         state: Any,
-        transaction: EventTransaction | None = None,
+        context: TickContext,
         only_index: int | None = None,
     ) -> int:
         """Run one event's callbacks in priority order.
@@ -595,6 +818,9 @@ class HookRunner:
             tick: Current tick.
             deme_id: Deme index for selector filtering.
             state: The state view handed to every callback.
+            context: The bridge-built context owning the event's write
+                scope; callbacks receive it directly.
+            only_index: When set, run only this callback index.
 
         Returns:
             ``0`` to continue, ``1`` when a callback returned nonzero or
@@ -605,14 +831,6 @@ class HookRunner:
         ):
             if (only_index is not None and hook_index != only_index) or not self._matches(selector, deme_id):
                 continue
-            context = TickContext(
-                self._pop,
-                tick=tick,
-                deme_id=deme_id,
-                state=state,
-                hook_index=hook_index,
-                transaction=transaction,
-            )
             try:
                 result = callback(context)
             finally:
@@ -636,8 +854,12 @@ class HookRunner:
         """Build the Rust-bridge callback for one event, or ``None``.
 
         The native ABI passes two empty state placeholders, event coordinates,
-        and an owned transaction. State arrays materialize only when requested
-        through the context; they commit together with other candidates.
+        and an owned transaction. The bridge registers its :class:`TickContext`
+        as the population's single active event scope — the transaction, the
+        candidate configuration, the pending metadata, the pending parameter
+        log, and the rollback actions all live on that context — so state
+        arrays and parameter candidates materialize only when the callback
+        requests them, and nothing on the population is swapped.
         """
         entries = self._callbacks.get(event_id, [])
         if not entries:
@@ -652,75 +874,49 @@ class HookRunner:
         ) -> int:
             """Adapt the Rust callback ABI to :meth:`run_event`."""
             pop = self._pop
-            original = pop._config  # pyright: ignore[reportPrivateUsage]  # candidate scope owns this temporary binding
-            metadata_names = (
-                "_current_definition", "_presets", "_manual_gamete", "_manual_zygote",
-                "_gamete_modifiers", "_zygote_modifiers", "_reconfiguration_log",
-            )
-            original_metadata: dict[str, object] = {}
-            original_log = pop._params_log  # pyright: ignore[reportPrivateUsage]  # failed event logs are rolled back
+            from natal.frontend.hooks.types import EVENT_NAMES
+
+            original_tick = pop._tick  # pyright: ignore[reportPrivateUsage]  # event logs and pop.tick read the native tick
+            pop._tick = int(tick)  # pyright: ignore[reportPrivateUsage]
             original_active = getattr(pop, "_rust_run_active", False)
             pop._rust_run_active = True  # pyright: ignore[reportAttributeAccessIssue]  # native callback holds the session borrow
-            original_tick = pop._tick  # pyright: ignore[reportPrivateUsage]
-            pop._tick = tick  # pyright: ignore[reportPrivateUsage]  # event logs use the actual native tick
-            pop._event_transaction = transaction  # pyright: ignore[reportAttributeAccessIssue]  # event-local native candidate
-            prepared = False
-            rollback_actions: list[Callable[[], None]] | None = None
+            previous_event = getattr(pop, "_active_event", None)
 
-            def prepare_config() -> None:
-                """Defer Python configuration ownership until a callback needs it."""
-                nonlocal prepared, rollback_actions
-                if prepared:
-                    return
-                from natal.backends.rust.rust_backend import (
-                    config_snapshot_from_session,
-                )
+            def state_factory() -> Any:
+                # Any: the two model-specific state NamedTuples share this lazy boundary.
+                ind_values, sperm_values = transaction.state_arrays()
+                return state_view_for(pop, tick=int(tick), ind_flat=ind_values, sperm_flat=sperm_values if sperm_values.size else None)
 
-                assert original is not None
-                candidate = config_snapshot_from_session(transaction, original)
-                for name in metadata_names:
-                    if hasattr(pop, name):
-                        original_metadata[name] = getattr(pop, name)
-                        setattr(pop, name, copy.copy(original_metadata[name]) if name != "_current_definition" else original_metadata[name])
-                pop._params_log = type(original_log)()  # pyright: ignore[reportPrivateUsage]  # allocate a log only for accessed parameter candidates
-                pop._config = candidate  # pyright: ignore[reportPrivateUsage]
-                rollback_actions = []
-                pop._event_rollback_actions = rollback_actions  # pyright: ignore[reportAttributeAccessIssue]  # NATAL-managed recipe updates join this event's rollback.
-                prepared = True
-
-            pop._event_prepare_config = prepare_config  # pyright: ignore[reportAttributeAccessIssue]  # callback-local lazy projection used by public config reads
+            context = TickContext(
+                pop,
+                tick=int(tick),
+                deme_id=int(deme_id),
+                state=state_factory,
+                hook_index=only_index if only_index is not None else 0,
+                transaction=transaction,
+            )
+            pop._active_event = context  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]  # single scoped registration; no field redress
             try:
-                def state_factory() -> Any:
-                    # Any: the two model-specific state NamedTuples share this lazy boundary.
-                    ind_values, sperm_values = transaction.state_arrays()
-                    return state_view_for(pop, tick=int(tick), ind_flat=ind_values, sperm_flat=sperm_values if sperm_values.size else None)
-
-                result = self.run_event(event_id, tick=int(tick), deme_id=int(deme_id), state=state_factory, transaction=transaction, only_index=only_index)
+                result = self.run_event(
+                    event_id,
+                    tick=int(tick),
+                    deme_id=int(deme_id),
+                    state=state_factory,
+                    context=context,
+                    only_index=only_index,
+                )
                 transaction.validate_state()
                 # Every validated writer has already submitted its changed fields
                 # to the native candidate. Read-only callbacks need no return trip.
-                if prepared:
-                    from natal.frontend.hooks.types import EVENT_NAMES
-                    for change_tick, _event, _deme, name, old, new in pop._params_log.details():  # pyright: ignore[reportPrivateUsage]
-                        original_log.append_value(change_tick, name, old, new, EVENT_NAMES[event_id], int(deme_id))
+                context.commit(EVENT_NAMES[event_id])
                 return result
             except BaseException:
-                for rollback in reversed(rollback_actions or ()):
-                    rollback()
-                pop._config = original  # pyright: ignore[reportPrivateUsage]
-                for name in metadata_names if prepared else ():
-                    if name in original_metadata:
-                        setattr(pop, name, original_metadata[name])
-                    elif hasattr(pop, name):
-                        delattr(pop, name)
+                context.discard()
                 raise
             finally:
-                pop._params_log = original_log  # pyright: ignore[reportPrivateUsage]
+                pop._active_event = previous_event  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
                 pop._rust_run_active = original_active  # pyright: ignore[reportAttributeAccessIssue]
                 pop._tick = original_tick  # pyright: ignore[reportPrivateUsage]
-                pop._event_rollback_actions = None  # pyright: ignore[reportAttributeAccessIssue]
-                pop._event_transaction = None  # pyright: ignore[reportAttributeAccessIssue]
-                pop._event_prepare_config = None  # pyright: ignore[reportAttributeAccessIssue]
 
         bridge.__natal_transaction__ = True  # pyright: ignore[reportFunctionMemberAccess]  # native bridge ABI discriminator
 

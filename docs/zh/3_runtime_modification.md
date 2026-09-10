@@ -10,7 +10,7 @@
 
 ## 1. between-tick 修改：`pop.update()`
 
-`pop.update()` 返回**绑定到运行种群**的 `Configurator`。链式方法语法与构建时完全一样；每次调用经参数路由表校验后提交到运行种群（draft 与 Rust 会话同步），同一 tick 的后续阶段立即可见：
+`pop.update()` 返回**绑定到运行种群**的 `RuntimeUpdater`。域方法语法与构建时完全一样；每次调用经参数路由表校验后提交到运行种群（draft 与 Rust 会话同步），同一 tick 的后续阶段立即可见：
 
 ```python
 import natal as nt

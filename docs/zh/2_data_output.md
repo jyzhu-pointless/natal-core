@@ -644,8 +644,8 @@ for i, tick in enumerate(observed.ticks):
 
 ### 构建 Population 后还能修改录制规则吗？
 不能。canonical observation 和 History schema 都在 `build()` 时冻结。
-`pop.update().with_observation(...)` 与 `pop.update().record_history(...)` 会抛出
-`RuntimeError`。运行时只读取 `pop.observation`、调用 `pop.observe()`，或在
+`pop.update()` 返回的运行时更新句柄上不存在 `with_observation()` 与 `record_history()`（访问即抛出
+`AttributeError`）。运行时只读取 `pop.observation`、调用 `pop.observe()`，或在
 raw History 上调用 `pop.history.observe(pop.observation)`。
 
 ### `record_history()` 和 `with_observation()` 有什么区别？

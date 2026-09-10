@@ -571,11 +571,6 @@ class SpatialConfigurator:
         self._record_history_mode: Literal["raw", "observation"] = "raw"
         self._record_history_max_rows: int | None = None
 
-        # Runtime population reference (None at build time; set by for_population).
-        self._pop_ref: Optional[Any] = (
-            None  # Any: stores a Population reference; concrete type varies
-        )
-
         # Create the template configurator (new path).  The unified
         # Configurator serves both granularities — the flag only picks the
         # normalized draft shape.
@@ -1497,16 +1492,10 @@ class SpatialConfigurator:
             SpatialConfigurator: Self for chaining.
 
         Raises:
-            RuntimeError: When called on a runtime Configurator.
             TypeError: If groups is not a mapping of selectors.
             ValueError: If groups, a group label, the deme mode, or the deme
                 selection is invalid.
         """
-        if self._pop_ref is not None:
-            raise RuntimeError(
-                "with_observation() is only valid during the build phase. "
-                "Observation rules cannot change after the Population has been built."
-            )
         self._observation_groups = normalize_observation_groups(groups)
         self._observation_collapse_age = collapse_age
         if deme_mode not in ("preserve", "aggregate"):
@@ -1536,8 +1525,7 @@ class SpatialConfigurator:
     ) -> SpatialConfigurator:
         """Set the recording mode and capacity for spatial population history.
 
-        Must be called during the build phase.  Calling this on a runtime
-        Configurator raises ``RuntimeError``.
+        Must be called during the build phase.
 
         When ``mode="observation"`` and no ``.with_observation()`` has been
         called, an identity observation (one group per ZType) is
@@ -1552,15 +1540,8 @@ class SpatialConfigurator:
             Self for chaining.
 
         Raises:
-            RuntimeError: When called on a runtime Configurator.
             ValueError: When mode is invalid or ``max_rows`` is less than one.
         """
-        if self._pop_ref is not None:
-            raise RuntimeError(
-                "record_history() is only valid during the build phase. "
-                "Recording settings cannot change after the Population has "
-                "been built."
-            )
         if mode not in ("raw", "observation"):
             raise ValueError(f"mode must be 'raw' or 'observation', got {mode!r}")
         if max_rows is not None and max_rows < 1:

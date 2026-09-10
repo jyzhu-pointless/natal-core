@@ -266,14 +266,18 @@ def test_observation_and_history_configuration_order_is_irrelevant() -> None:
 
 
 def test_runtime_configurator_rejects_output_schema_mutation() -> None:
-    """A built Population cannot replace Observation or History policy."""
+    """A built Population cannot replace Observation or History policy.
+
+    The runtime updater carries no output-schema vocabulary at all: the
+    build-only methods are absent (``AttributeError``), not rejected.
+    """
     population = _build_population("contract_runtime_mutation")
 
-    with pytest.raises(RuntimeError, match="build phase"):
+    with pytest.raises(AttributeError):
         population.update().with_observation(
             groups={"all": IndividualSelector()}
         )
-    with pytest.raises(RuntimeError, match="build phase"):
+    with pytest.raises(AttributeError):
         population.update().record_history(mode="observation")
 
 

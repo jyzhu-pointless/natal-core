@@ -16,7 +16,7 @@ Callback hooks let you write code that operates on the simulation state directly
 | `pop.blueprint` | Read-only dimensions, name catalogs, and engine switches (`n_sexes`, `n_ages`, `n_ztypes`, `discrete`, `stochastic`, `continuous_sampling`, `extreme_speed_mode`, `ztype_names`, `gtype_names`). |
 | `pop.metrics` | On-demand metrics view (recomputed on every access). |
 | `pop.rng` | Controlled sampler of the persistent Rust RNG stream for this deme; never touches global `numpy.random`. |
-| `pop.update()` | Returns a runtime `Configurator` bound to the owning population (same syntax as the build chain). |
+| `pop.update()` | Returns a runtime `RuntimeUpdater` bound to the owning population (same domain-method syntax as the build chain). |
 | `pop.stop()` / `pop.stop_requested` | Request/query run termination at the event boundary. |
 
 Parameter candidates are copied into Python only when the callback accesses parameters or configuration. Callbacks that only count visits, inspect state, or draw random numbers do not transfer parameter tensors. Validated writes update the native transaction directly, and an exception discards that callback's candidate.
@@ -246,7 +246,7 @@ Outside a callback, read custom fields through `pop.config.custom['name']` (a qu
 
 Callbacks have **no public read path** for custom fields: `TickContext` exposes no `config`, `ctx.state` has no `config` attribute, and `ctx.params` accepts registered parameters only. Callbacks can write them (`ctx.update().custom(...)`, committed with the event transaction); read them outside callbacks. Custom fields are not in the parameter route table, so `Op.set_param` rejects them at compile time with `ValueError`.
 
-For chain-style updates inside a hook, use the Configurator returned by `pop.update()` (same syntax as the build chain).
+For chain-style updates inside a hook, use the `RuntimeUpdater` returned by `pop.update()` (same domain-method syntax as the build chain).
 
 ## Event transactions
 

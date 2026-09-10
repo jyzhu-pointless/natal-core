@@ -176,15 +176,17 @@ def test_base_population_requires_installed_history_and_observation() -> None:
         _ = population.observation
 
 
-def test_spatial_runtime_rejects_output_schema_mutation() -> None:
-    """Runtime SpatialConfigurator cannot replace frozen output policies."""
-    configurator = SpatialConfigurator(_species("spatial_runtime"), n_demes=1)
-    configurator._pop_ref = object()  # type: ignore[reportPrivateUsage]  # emulate runtime binding
+def test_spatial_configurator_has_no_runtime_binding() -> None:
+    """Output policies are frozen because no runtime SpatialConfigurator exists.
 
-    with pytest.raises(RuntimeError, match="build phase"):
-        configurator.with_observation(groups={"all": IndividualSelector()})
-    with pytest.raises(RuntimeError, match="build phase"):
-        configurator.record_history(mode="observation")
+    The runtime-binding seam (``_pop_ref`` / ``for_population``) was removed
+    with the P5 three-split; spatial output policies can therefore only be
+    declared during the build chain.
+    """
+    configurator = SpatialConfigurator(_species("spatial_runtime"), n_demes=1)
+
+    assert not hasattr(configurator, "_pop_ref")
+    assert not hasattr(SpatialConfigurator, "for_population")
 
 
 def test_spatial_configurator_rejects_invalid_groups_and_mode() -> None:

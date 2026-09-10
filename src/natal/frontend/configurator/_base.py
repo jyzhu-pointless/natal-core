@@ -3,21 +3,22 @@
 Provides read/write access to draft fields through a chainable API,
 registration of custom named parameters stored as structured numpy arrays,
 and shallow-copy via ``_replace`` (cheap — all
-ndarray fields are shared by reference).  When wired to a live Population
-through ``for_population()``, config mutations propagate back to the
-Population automatically through ``set_config()`` and the live Rust
-session (when present) receives the same values immediately.
+ndarray fields are shared by reference).  This is the build-side chain:
+writes land on the owned draft through the declarative route table and
+are materialized via ``build()``.  Runtime updates use
+:class:`~natal.frontend.configurator.RuntimeUpdater` — the handle
+returned by ``pop.update()`` / ``ctx.update()`` — which shares this
+module's parse functions and commits to a native session or event
+transaction instead.
 
 ``ModelDraft`` is an immutable NamedTuple whose fields cannot be
-replaced once created.  During
-simulation setup and inside hooks at runtime, however, parameters need
-real-time adjustment.  The ``Configurator`` provides a mutable layer on
-top: all modifications route through the declarative route table
-(:mod:`natal.frontend.configurator._routes`) via batch writers
-(:mod:`natal.frontend.configurator._writers`), and the
-final draft is materialized via ``build()``.
+replaced once created.  During simulation setup, however, parameters
+need real-time adjustment.  The ``Configurator`` provides a mutable
+layer on top: all modifications route through the declarative route
+table (:mod:`natal.frontend.configurator._routes`) via batch writers
+(:mod:`natal.frontend.configurator._writers`).
 
-The Configurator itself doubles as the build-side recipe host: during a
+The Configurator also doubles as the build-side recipe host: during a
 candidate compile, preset / modifier / fitness recipes read
 ``species`` / ``config`` / ``registry`` / ``index_registry`` directly off
 the Configurator (:class:`natal.frontend.genetics.compile.RecipeHost`)
@@ -58,7 +59,6 @@ from natal.contracts.materialize import (
     ztype_names_from_registry,
 )
 from natal.frontend.configurator._params import (
-    compute_expected_eggs_from_females,
     resolve_age_structured_initial_individual_count,
     resolve_age_structured_initial_sperm_storage,
     resolve_discrete_initial_individual_count,
@@ -71,10 +71,14 @@ from natal.frontend.configurator._routes import (
     dispatch,
     lookup_or_none,
 )
+from natal.frontend.configurator._runtime import (
+    competition_writes,
+    expected_females_eggs,
+    fitness_writes,
+    reproduction_writes,
+    survival_writes,
+)
 from natal.frontend.configurator._writers import (
-    NATIVE_SCALAR_FIELDS,
-    ConfigWriter,
-    CoreConfigWriter,
     DraftWriter,
 )
 from natal.frontend.data import (
@@ -89,11 +93,9 @@ if TYPE_CHECKING:
 
     from natal.frontend.data.definition import ModelDefinition
     from natal.frontend.hooks import CompiledHookDescriptor
-    from natal.frontend.hooks.tick_context import TickContext
     from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
     from natal.frontend.patterns import IndividualSelector
     from natal.frontend.population.age_structured import AgeStructuredPopulation
-    from natal.frontend.population.base import BasePopulation
     from natal.frontend.population.discrete_generation import (
         DiscreteGenerationPopulation,
     )
@@ -416,12 +418,14 @@ def replay_declarations(
 
 
 class Configurator:
-    """Parameter configurator — unified API for build-time and runtime use.
+    """Parameter configurator — the build-side chainable API.
 
     Wraps a ModelDraft and provides chainable domain methods
     (``.competition()``, ``.reproduction()``, etc.) that immediately write
     parameters via :func:`set_param`.  Presets, modifiers, and fitness
-    are applied immediately — no deferred execution.
+    are applied immediately — no deferred execution.  Runtime updates
+    (``pop.update()``) do not create a Configurator; they return a
+    :class:`~natal.frontend.configurator.RuntimeUpdater`.
 
     Usage::
 
@@ -429,12 +433,7 @@ class Configurator:
         cfg = Configurator(blank_config)
         cfg.competition(carrying_capacity=10000).reproduction(eggs_per_female=50)
         cfg.presets(drive).apply()
-
-        # Runtime (modify an existing config)
-        Configurator(pop.config).competition(carrying_capacity=5000)
     """
-
-    _hook_context: TickContext | None = None
 
     def __init__(
         self,
@@ -486,9 +485,6 @@ class Configurator:
         # the values are (re)applied to the draft.
         self._custom_kwargs: dict[str, object] = {}
 
-        # optional backref for writing config updates back to a Population when created via for_population()
-        self._pop_ref: BasePopulation[Any] | None = None
-
         # Discrete-specific scalar overrides (stored here so build() can
         # (discrete scalars now normalize into the unified draft vectors
         # at write time — no end-of-build extraction exists anymore).
@@ -528,8 +524,8 @@ class Configurator:
 
     @property
     def config(self) -> ModelDraft:
-        """Read the current runtime snapshot, or the owned build draft."""
-        return self._pop_ref.config if self._pop_ref is not None else self._config
+        """Read the owned build draft."""
+        return self._config
 
     # -- recipe-host surface (build-side candidate compile) ------------------
     # These three read-only properties complete the RecipeHost protocol
@@ -682,123 +678,28 @@ class Configurator:
         """
         return Configurator(config)
 
-    @staticmethod
-    def for_population(pop: BasePopulation[Any]) -> Configurator:
-        """Create a Configurator wired to *pop* for runtime updates.
-
-        Binds ``_pop_ref``, ``_species``, and ``_registry`` from the
-        Population so that all chain methods work without further
-        setup. This is the single entry point for ``pop.update()`` paths.
-
-        Args:
-            pop: The population to wire to.
-
-        Returns:
-            A ``Configurator`` ready for further chaining.
-        """
-        # A runtime updater is a handle. Its actual write and query paths read
-        # the session when used, including when the caller retains this handle.
-        draft = pop._config  # pyright: ignore[reportPrivateUsage]  # immutable declaration metadata only; never an authoritative parameter read.
-        if draft is None:
-            raise RuntimeError("Population configuration is not initialized.")
-        cfg = Configurator.for_config(draft)
-
-        # Record the Population reference for write-back
-        cfg._pop_ref = pop
-
-        # Seed the local declaration accumulator from the current draft.
-        # Runtime ``custom()`` writes are committed by ``_make_writer``;
-        # this copy alone never changes the live population.
-        cfg._custom_kwargs = dict(draft.custom)
-        # Bind species and registry from the Population so recipe
-        # factories and fitness() work against the live objects.
-        cfg._species = pop.species
-        cfg._registry = pop.index_registry
-
-        cfg._presets = list(pop.presets)
-        cfg._manual_gamete = list(pop._manual_gamete)  # pyright: ignore[reportPrivateUsage]  # runtime declaration source.
-        cfg._manual_zygote = list(pop._manual_zygote)  # pyright: ignore[reportPrivateUsage]
-        definition = getattr(pop, "_current_definition", None)
-        # Read only recipe metadata here; copying the normalized ecology and
-        # initial state would duplicate the fresh native draft already obtained.
-        # The definition's properties already hand out detached copies.
-        if definition is not None:
-            cfg._fitness_base = definition.fitness_base
-            cfg._fitness_steps = definition.fitness_steps
-            cfg._compilation_key = (
-                definition.compilation_key
-                if definition.compilation_key is not None
-                else object()
-            )
-        return cfg
-
     # -- batch writer ----------------------------------------------------------
 
-    def _make_writer(self, writes: Mapping[str, object] | None = None) -> ConfigWriter:
-        """Create a batch writer bound to the current draft state.
+    def _make_writer(self, writes: Mapping[str, object] | None = None) -> DraftWriter:
+        """Create the build-path batch writer bound to the current draft.
 
-        Build path (no live population): a :class:`DraftWriter` writing
-        the draft through the route table.  Runtime path: a
-        :class:`CoreConfigWriter` which also pushes the committed
-        values straight into the live Rust session when one exists,
-        with method-level validation and atomic native publication.
+        The build side always writes the owned draft through the route
+        table (:class:`DraftWriter`); the runtime path's writer selection
+        lives in :func:`natal.frontend.configurator._runtime.runtime_writer`.
 
         Args:
-            writes: Known method writes; scalar batches query only their
-                current native fields before staging an atomic candidate.
+            writes: Known method writes; accepted for call-shape parity
+                with the runtime writer (unused on the build path).
 
         Returns:
-            A fresh :class:`ConfigWriter` bound to this instance.
+            A fresh :class:`DraftWriter` bound to this instance.
         """
 
         def _publish(draft: ModelDraft) -> None:
             # ``_replace`` writes swap the draft identity: keep the
-            # Configurator's view and the live Population in sync.
+            # Configurator's view in sync.
             self._config = draft
-            if self._pop_ref is not None:
-                self._pop_ref.set_config(draft)
 
-        if self._pop_ref is not None:
-            backend: object = None
-            if self._hook_context is not None:
-                self._hook_context.ensure_active()
-                backend = getattr(self._pop_ref, "_event_transaction", None)
-            elif getattr(self._pop_ref, "_running", False) or getattr(self._pop_ref, "_rust_run_active", False):
-                raise RuntimeError("External parameter writes are forbidden during run")
-            else:
-                backend = getattr(self._pop_ref, "_runtime_parameter_writer", None)
-                if backend is None:
-                    backend = getattr(self._pop_ref, "_rust_lifecycle_backend", None)
-            entries = [lookup_or_none(name) for name in writes] if writes else []
-            read_scalar = getattr(backend, "get_scalar", None)
-            if entries and read_scalar is not None and all(
-                entry is not None and entry.contract_field in NATIVE_SCALAR_FIELDS
-                for entry in entries
-            ):
-                # Unchanged fields are declaration metadata, never runtime input.
-                # Read touched old values from Rust for validation and exact logs,
-                # including updates through a previously retained Configurator.
-                draft = self._pop_ref._config  # pyright: ignore[reportPrivateUsage]
-                assert draft is not None
-                current: dict[str, object] = {}
-                for entry in entries:
-                    assert entry is not None and entry.config_field is not None
-                    value = float(read_scalar(entry.contract_field))
-                    current[entry.config_field] = (
-                        None if entry.contract_field == "external_expected_eggs" and value < 0
-                        else int(value) if entry.contract_field == "growth_mode" else value
-                    )
-                self._config = draft._replace(**current)
-            else:
-                self._config = self._pop_ref.config
-            return CoreConfigWriter(
-                self._config,
-                backend,
-                on_replace=_publish,
-                species=self._species,
-                registry=self._registry,
-                param_value_log=self._pop_ref.log_param_value,
-            )
         return DraftWriter(
             self._config,
             on_replace=_publish,
@@ -885,11 +786,6 @@ class Configurator:
             overrides["fixed_egg_count"] = fixed_egg_count
         if overrides:
             self._config = self._config._replace(**overrides)
-            if self._pop_ref is not None:
-                self._pop_ref.set_config(self._config)
-                # Execution flags live on the frozen Blueprint contract, so
-                # a live session must be rebuilt, not value-refreshed.
-                getattr(self._pop_ref, "_mark_rust_dirty", lambda: None)()
         return self
 
     # -- domain methods --------------------------------------------------------
@@ -1022,37 +918,20 @@ class Configurator:
             Self for chaining.
         """
         self._has_domain_params = True
-        mode_value = (
-            juvenile_growth_mode if juvenile_growth_mode is not None else growth_mode
-        )
         # ---- carrying capacity (K) fallback chain ----
-        k_value = carrying_capacity
-        if k_value is None and age_1_carrying_capacity is not None:
-            k_value = age_1_carrying_capacity
-        if k_value is None and old_juvenile_carrying_capacity is not None:
-            k_value = old_juvenile_carrying_capacity
         # Only auto-detect K during initial build (no live Population).
-        if k_value is None and self._pop_ref is None:
-            init_ind = self._config.initial_individual_count
-            if init_ind.size > 0 and init_ind.ndim >= 2 and init_ind.shape[1] >= 2:
-                age_1_count = float(init_ind[:, 1, :].sum())
-                if age_1_count >= 0.5:
-                    k_value = age_1_count
-                else:
-                    total = float(init_ind.sum())
-                    if total >= 0.5:
-                        k_value = total
-        writes: dict[str, object] = {}
-        if k_value is not None:
-            writes["carrying_capacity"] = k_value
-        if low_density_growth_rate is not None:
-            writes["low_density_growth_rate"] = low_density_growth_rate
-        if mode_value is not None:
-            writes["growth_mode"] = mode_value
-        if competition_strength is not None:
-            writes["competition_strength"] = competition_strength
-        if equilibrium_distribution is not None:
-            writes["equilibrium_distribution"] = equilibrium_distribution
+        writes = competition_writes(
+            carrying_capacity=carrying_capacity,
+            low_density_growth_rate=low_density_growth_rate,
+            juvenile_growth_mode=juvenile_growth_mode,
+            growth_mode=growth_mode,
+            competition_strength=competition_strength,
+            equilibrium_distribution=equilibrium_distribution,
+            age_1_carrying_capacity=age_1_carrying_capacity,
+            old_juvenile_carrying_capacity=old_juvenile_carrying_capacity,
+            draft=self._config,
+            allow_initial_k_detection=True,
+        )
         if writes:
             writer = self._make_writer(writes)
             writer.apply(writes)
@@ -1071,19 +950,10 @@ class Configurator:
                 ``external_expected_eggs`` route (a sensitive write, so
                 the equilibrium caches refresh).
         """
-        cfg = self.config
-        eggs = compute_expected_eggs_from_females(
-            expected_num_new_adult_females=target_females,
-            eggs_per_female=float(cfg.eggs_per_female),
-            age_based_survival_rates=cfg.age_based_survival_rates,
-            age_based_reproduction_rates=cfg.age_based_reproduction_rates,
-            female_age_based_fertility=cfg.female_age_based_fertility,
-            sex_ratio=float(cfg.sex_ratio),
-            new_adult_age=int(cfg.new_adult_age),
-            n_ages=int(cfg.n_ages),
-        )
-        writer = self._make_writer({"external_expected_eggs": eggs})
-        writer.apply({"external_expected_eggs": eggs})
+        eggs = expected_females_eggs(self.config, target_females)
+        writes: dict[str, object] = {"external_expected_eggs": eggs}
+        writer = self._make_writer(writes)
+        writer.apply(writes)
         self._config = writer.draft
 
     @_declared
@@ -1148,42 +1018,19 @@ class Configurator:
                 instead).
         """
         self._has_domain_params = True
-        # Discrete drafts are normalized to 2 ages where age-0 does not
-        # mate: per-age flexible specs are meaningless there and keep the
-        # historical rejection of the former DiscreteConfigurator.
-        if self._config.discrete_generation and (
-            female_age_based_mating_rate is not None
-            or male_age_based_mating_rate is not None
-            or age_based_reproduction_rate is not None
-            or female_age_based_fertility is not None
-        ):
-            raise TypeError(
-                "reproduction() rejects per-age parameters on "
-                "discrete-generation populations; use the discrete "
-                "vocabulary (eggs_per_female, sex_ratio, "
-                "female_adult_mating_rate, male_adult_mating_rate)"
-            )
-        writes: dict[str, object] = {}
-        if eggs_per_female is not None:
-            writes["eggs_per_female"] = eggs_per_female
-        if sex_ratio is not None:
-            writes["sex_ratio"] = sex_ratio
-        if sperm_displacement_rate is not None:
-            writes["sperm_displacement_rate"] = sperm_displacement_rate
-        if female_age_based_mating_rate is not None:
-            writes["female_age_based_mating_rate"] = female_age_based_mating_rate
-        if male_age_based_mating_rate is not None:
-            writes["male_age_based_mating_rate"] = male_age_based_mating_rate
-        if age_based_reproduction_rate is not None:
-            writes["age_based_reproduction_rate"] = age_based_reproduction_rate
-        if female_age_based_fertility is not None:
-            writes["female_age_based_fertility"] = female_age_based_fertility
-        if female_adult_mating_rate is not None:
-            writes["female_adult_mating_rate"] = female_adult_mating_rate
-        if male_adult_mating_rate is not None:
-            writes["male_adult_mating_rate"] = male_adult_mating_rate
-        if fixed_egg_count is not None:
-            writes["fixed_egg_count"] = fixed_egg_count
+        writes = reproduction_writes(
+            discrete_generation=self._config.discrete_generation,
+            eggs_per_female=eggs_per_female,
+            sex_ratio=sex_ratio,
+            sperm_displacement_rate=sperm_displacement_rate,
+            female_age_based_mating_rate=female_age_based_mating_rate,
+            male_age_based_mating_rate=male_age_based_mating_rate,
+            age_based_reproduction_rate=age_based_reproduction_rate,
+            female_age_based_fertility=female_age_based_fertility,
+            female_adult_mating_rate=female_adult_mating_rate,
+            male_adult_mating_rate=male_adult_mating_rate,
+            fixed_egg_count=fixed_egg_count,
+        )
         if writes:
             writer = self._make_writer(writes)
             writer.apply(writes)
@@ -1225,15 +1072,12 @@ class Configurator:
             Self for chaining.
         """
         self._has_domain_params = True
-        writes: dict[str, object] = {}
-        if female_age_based_survival is not None:
-            writes["female_age_based_survival"] = female_age_based_survival
-        if male_age_based_survival is not None:
-            writes["male_age_based_survival"] = male_age_based_survival
-        if female_age0_survival is not None:
-            writes["female_age0_survival"] = female_age0_survival
-        if male_age0_survival is not None:
-            writes["male_age0_survival"] = male_age0_survival
+        writes = survival_writes(
+            female_age_based_survival=female_age_based_survival,
+            male_age_based_survival=male_age_based_survival,
+            female_age0_survival=female_age0_survival,
+            male_age0_survival=male_age0_survival,
+        )
         if writes:
             writer = self._make_writer(writes)
             writer.apply(writes)
@@ -1337,10 +1181,6 @@ class Configurator:
 
         Multiple calls accumulate — ``.custom(a=1).custom(b=2)`` stores both.
 
-        Runtime updates validate the complete candidate and commit native
-        custom slots before publishing snapshots and typed audit entries.
-        A failed update leaves both state and audit history unchanged.
-
         Args:
             **kwargs: Name-value pairs for custom slots.  Values must be
                 ``bool``, ``int``, ``float``, or ``NDArray[np.float64]``.
@@ -1350,30 +1190,11 @@ class Configurator:
         """
         from natal.frontend.data import build_custom_slots
 
-        if self._hook_context is not None:
-            self._hook_context.ensure_active()  # pyright: ignore[reportPrivateUsage]  # callback lifetime guards every mutation entry.
-        pop = self._pop_ref
-        if pop is not None and self._hook_context is None and getattr(pop, "_rust_run_active", False):
-            raise RuntimeError("External parameter writes are forbidden during run")
-        current = pop.config if pop is not None else self._config
-        merged = dict(current.custom)
+        merged = dict(self._config.custom)
         merged.update(kwargs)
         normalized = build_custom_slots(merged)
-        if pop is not None:
-            backend = getattr(pop, "_event_transaction", None) if self._hook_context is not None else getattr(pop, "_runtime_parameter_writer", None)
-            if backend is None:
-                backend = getattr(pop, "_rust_lifecycle_backend", None)
-            if backend is not None:
-                from natal.contracts.materialize import materialize_params
-
-                candidate = current._replace(custom=normalized)
-                backend.refresh_params(["custom_slots"], materialize_params(candidate))
         self._custom_kwargs = dict(normalized)
-        self._config = current._replace(custom=normalized)
-        if pop is not None:
-            pop.set_config(self._config)
-            for name in sorted(set(current.custom) | set(normalized)):
-                pop.log_param_value(f"custom.{name}", current.custom.get(name), normalized.get(name))
+        self._config = self._config._replace(custom=normalized)
         return self
 
     # -- presets / modifiers / fitness (immediate — applied directly to config) --
@@ -1387,11 +1208,11 @@ class Configurator:
         Modifier lists are accumulated — calling ``presets()`` again
         appends additional modifiers rather than replacing existing ones.
 
-        When wired to a Population (via ``for_population()``), presets are
-        applied directly to the Population.  Otherwise the recipes run
-        against this Configurator as the build-side candidate (RecipeHost
-        protocol), isolated on a deepcopy of the draft that is published
-        only when every new preset has succeeded.
+        Recipes run against this Configurator as the build-side candidate
+        (RecipeHost protocol), isolated on a deepcopy of the draft that is
+        published only when every new preset has succeeded.  Runtime
+        preset application goes through
+        :meth:`~natal.frontend.configurator.RuntimeUpdater.presets`.
 
         Args:
             *presets: One or more ``GeneticPreset`` instances
@@ -1400,12 +1221,6 @@ class Configurator:
         Returns:
             Self for chaining.
         """
-        if self._pop_ref is not None:
-            candidate = self._genetic_candidate()
-            candidate.presets(*presets)
-            self._commit_genetic_candidate(candidate)
-            return self
-
         new_presets = [preset for preset in presets if not any(item is preset for item in self._presets)]
         if not new_presets:
             return self
@@ -1435,12 +1250,6 @@ class Configurator:
         Returns:
             Self for chaining.
         """
-        if self._pop_ref is not None:
-            candidate = self._genetic_candidate()
-            candidate.modifiers(gamete_modifiers, zygote_modifiers)
-            self._commit_genetic_candidate(candidate)
-            return self
-
         from natal.frontend.genetics.compile import next_modifier_id
 
         candidate = copy(self)
@@ -1495,7 +1304,7 @@ class Configurator:
             RuntimeError: If ``_species`` is ``None`` — fitness resolution
                 requires genotype information from the Species.
         """
-        # Species guard — works for both from_species and for_population paths.
+        # Species guard.
         if self._species is None:
             raise RuntimeError(
                 "fitness() requires a Species. "
@@ -1504,23 +1313,8 @@ class Configurator:
         if self._registry is None:
             self._registry = build_registry(self._species)
 
-        writes: dict[str, object] = {}
-        for patch_name, patch_dict in [
-            ("viability", viability),
-            ("fecundity", fecundity),
-            ("sexual_selection", sexual_selection),
-            ("zygote_viability", zygote_viability),
-        ]:
-            if patch_dict is not None:
-                writes[patch_name] = patch_dict
+        writes = fitness_writes(viability, fecundity, sexual_selection, zygote_viability)
         if writes:
-            if self._pop_ref is not None:
-                current = Configurator.for_population(self._pop_ref)
-                self._fitness_base = current._fitness_base
-                self._fitness_steps = list(current._fitness_steps)
-                self._presets = list(current._presets)
-                self._manual_gamete = list(current._manual_gamete)
-                self._manual_zygote = list(current._manual_zygote)
             # geno_tensor kind: pattern dicts delegate to
             # write_fitness_field inside the writer; the writer also
             # pushes the whole tensors to the live Rust session.
@@ -1534,8 +1328,6 @@ class Configurator:
                 # Fitness edits do not invalidate recipe products: the
                 # stored products stay valid for the same compilation key.
                 self._compiled_draft = self._config
-            if self._pop_ref is not None:
-                self._pop_ref._current_definition = self._definition_for_compile()  # pyright: ignore[reportPrivateUsage]  # publish successful normalized runtime declarations.
         return self
 
     # -- deprecated compression methods (use setup(compress=True)) ----------------
@@ -1607,19 +1399,10 @@ class Configurator:
             Self for chaining.
 
         Raises:
-            RuntimeError: When called on a runtime (update) Configurator;
-                hook plans are frozen at build time.
             TypeError: If an item has an unsupported shape (including the
                 removed ``(state, config, deme_id)`` signature).
             ValueError: If an event name is unknown or cannot be resolved.
         """
-        if self._pop_ref is not None:
-            raise RuntimeError(
-                "hooks() is only valid during the build phase. Hook plans "
-                "are compiled once at build() and cannot change after the "
-                "Population has been built; declare hooks before .build() "
-                "and trigger events at runtime."
-            )
         self._hook_calls.append(
             (
                 hook_items,
@@ -1644,9 +1427,6 @@ class Configurator:
     ) -> Self:
         """Register observation groups, applied at ``build()`` time.
 
-        Only valid during the build phase (``_pop_ref is None``).
-        Calling this on a runtime Configurator raises ``RuntimeError``.
-
         Args:
             groups: Non-empty ordered mapping from labels to selectors.
             collapse_age: Whether to collapse the age axis in exports.
@@ -1655,15 +1435,9 @@ class Configurator:
             Self for chaining.
 
         Raises:
-            RuntimeError: When called on a runtime Configurator.
             TypeError: If groups is not a mapping of selectors.
             ValueError: If groups or a group label is empty.
         """
-        if self._pop_ref is not None:
-            raise RuntimeError(
-                "with_observation() is only valid during the build phase. "
-                "Observation rules cannot change after the Population has been built."
-            )
         self._observation_groups = normalize_observation_groups(groups)
         self._observation_collapse_age = collapse_age
         return self
@@ -1676,9 +1450,6 @@ class Configurator:
         max_rows: Optional[int] = None,
     ) -> Self:
         """Set the recording mode and capacity for this population's history.
-
-        Must be called during the build phase.  Calling this on a runtime
-        Configurator raises ``RuntimeError``.
 
         When ``mode="observation"`` and no ``.with_observation()`` has been
         called, an identity observation (one group per ZType) is
@@ -1695,119 +1466,14 @@ class Configurator:
             Self for chaining.
 
         Raises:
-            RuntimeError: When called on a runtime Configurator.
             ValueError: When mode is invalid or ``max_rows`` is less than one.
         """
-        if self._pop_ref is not None:
-            raise RuntimeError(
-                "record_history() is only valid during the build phase. "
-                "Recording settings cannot change after the Population has "
-                "been built. Use pop.clear_history() to reset."
-            )
         if mode not in ("raw", "observation"):
             raise ValueError(f"mode must be 'raw' or 'observation', got {mode!r}")
         if max_rows is not None and max_rows < 1:
             raise ValueError(f"max_rows must be >= 1 or None, got {max_rows}")
         self._record_history_mode = mode
         self._record_history_max_rows: Optional[int] = max_rows
-        return self
-
-    # -- preset reconfiguration -------------------------------------------------
-
-    def reconfigure_preset(self, preset: GeneticPreset, **changes: object) -> Self:
-        """Modify a registered preset parameter and re-apply.
-
-        Because ``presets()`` appends modifiers cumulatively, calling it
-        again after changing a preset attribute would double-apply.  This
-        method clears the modifier lists first, then re-applies the preset
-        so it writes onto a clean slate.
-
-        Validation happens entirely before any mutation: if the preset is
-        not registered or an attribute name is invalid, the exception is
-        raised and the preset object is left unchanged (error-path state
-        invariant).
-
-        Args:
-            preset: A preset previously registered via :meth:`presets`.
-            **changes: Attribute name / value pairs to update on *preset*.
-
-        Returns:
-            Self for chaining.
-
-        Raises:
-            ValueError: If *preset* is not registered on this population.
-            AttributeError: If any key in *changes* is not an attribute of
-                *preset*.
-            TypeError: If a changed value is incompatible with the preset.
-            RuntimeError: If called without a live Population backref.
-        """
-        # ── Validate phase (zero side effects) ──
-        if self._pop_ref is None:
-            raise RuntimeError(
-                "reconfigure_preset() requires a live Population. "
-                "Use pop.update().reconfigure_preset(...) or "
-                "Configurator.for_population(pop).reconfigure_preset(...)."
-            )
-        pop = self._pop_ref
-        if preset not in pop._presets:  # pyright: ignore[reportPrivateUsage]
-            raise ValueError(
-                f"Preset {preset.name!r} is not registered on this "
-                f"population. Use presets() to register it first."
-            )
-        for attr in changes:
-            if not hasattr(preset, attr):
-                raise AttributeError(
-                    f"{type(preset).__name__} {preset.name!r} has no "
-                    f"attribute {attr!r}. Cannot reconfigure a non-existent "
-                    f"parameter — this would silently create a stray attribute "
-                    f"on the preset object."
-                )
-
-        updated = copy(preset)
-        for attr, value in changes.items():
-            setattr(updated, attr, value)
-        candidate = self._genetic_candidate()
-        candidate._presets = [updated if item is preset else item for item in candidate._presets]
-        # Reconfiguration explicitly resets manual fitness under the frozen
-        # preset contract; ordinary refresh preserves the ordered declarations.
-        candidate._fitness_base = tuple(np.ones_like(array) for array in candidate._fitness_base)
-        candidate._fitness_steps = []
-        candidate._compile_specification()
-        self._commit_genetic_candidate(candidate, publish_definition=False)
-        rollback_actions = getattr(pop, "_event_rollback_actions", None)
-        if rollback_actions is not None:
-            # Preserve the external preset's identity while allowing the whole
-            # callback to fail after this individual reconfiguration succeeds.
-            previous = {attr: getattr(preset, attr) for attr in changes}
-
-            def restore_preset() -> None:
-                for attr, value in previous.items():
-                    setattr(preset, attr, value)
-
-            rollback_actions.append(restore_preset)
-        for attr, value in changes.items():
-            setattr(preset, attr, value)
-        pop._presets = [preset if item is updated else item for item in pop._presets]  # pyright: ignore[reportPrivateUsage]  # preserve registration identity after successful commit.
-
-        candidate._presets = list(pop.presets)
-        pop._current_definition = candidate._definition_for_compile()  # pyright: ignore[reportPrivateUsage]  # preserve recipe identity in future declarations.
-
-        # Record the committed reconfiguration so the post-build
-        # history is replayable next to the frozen definition.  A failed
-        # transaction never reaches this point, so the log only carries
-        # committed changes.
-        # Per-instance lazy provenance storage (the class carries only
-        # the annotation; a class-level list default would be shared by
-        # every population).
-        # object: the lazily-attached provenance list's element type is
-        # narrowed by the isinstance check below.
-        existing: object = pop.__dict__.get("_reconfiguration_log")
-        if not isinstance(existing, list):
-            existing = []
-            pop._reconfiguration_log = existing  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]  # the sanctioned runtime provenance attach
-        log = cast("list[tuple[int, str, dict[str, object]]]", existing)
-        log.append((int(pop.tick), preset.name, dict(changes)))
-
         return self
 
     def _definition_for_compile(self, *, build_name: str | None = None) -> ModelDefinition:
@@ -1880,68 +1546,6 @@ class Configurator:
         self._manual_zygote = list(candidate._manual_zygote)
         self._compilation_key = candidate._compilation_key
         self._compiled_key = candidate._compiled_key
-
-    def _genetic_candidate(self) -> Configurator:
-        """Create the build compiler's isolated candidate for a runtime update."""
-        pop = self._pop_ref
-        if pop is None:
-            raise RuntimeError("A runtime candidate requires a population.")
-        from natal.frontend.genetics.definition_compiler import copy_registry
-
-        candidate = Configurator.for_population(pop)
-        candidate._config = pop.config
-        candidate._pop_ref = None
-        candidate._registry = copy_registry(candidate.registry)
-        candidate.gamete_modifiers = list(pop.gamete_modifiers)
-        candidate.zygote_modifiers = list(pop.zygote_modifiers)
-        return candidate
-
-    def _commit_genetic_candidate(self, candidate: Configurator, *, publish_definition: bool = True) -> None:
-        """Commit products; reconfiguration publishes its final recipe identities later."""
-        from natal.contracts.materialize import materialize_params
-
-        pop = self._pop_ref
-        if pop is None:
-            raise RuntimeError("A runtime commit requires a population.")
-        old = pop.config
-        new = candidate._config
-        if old.n_ztypes != new.n_ztypes or old.n_gtypes != new.n_gtypes or old.ztype_names != new.ztype_names or old.gtype_names != new.gtype_names:
-            raise ValueError("Runtime genetic updates cannot change the active type layout.")
-        fields = [
-            "viability_fitness", "fecundity_fitness", "sexual_selection_fitness",
-            "zygote_viability_fitness", "offspring_tensor", "meiosis_map",
-            "female_ztype_compatibility", "male_ztype_compatibility",
-        ]
-        if self._hook_context is not None:
-            self._hook_context.ensure_active()
-            backend = getattr(pop, "_event_transaction", None)
-        elif getattr(pop, "_running", False) or getattr(pop, "_rust_run_active", False):
-            raise RuntimeError("External genetic writes are forbidden during run")
-        else:
-            backend = getattr(pop, "_runtime_parameter_writer", None)
-            if backend is None:
-                backend = getattr(pop, "_rust_lifecycle_backend", None)
-        if backend is None:
-            raise RuntimeError("A runtime genetic commit requires a native session")
-        backend.refresh_params(fields, materialize_params(new))
-        pop.set_config(new)
-        pop._manual_gamete = list(candidate._manual_gamete)  # pyright: ignore[reportPrivateUsage]  # publish successful declaration metadata.
-        pop._manual_zygote = list(candidate._manual_zygote)  # pyright: ignore[reportPrivateUsage]
-        pop._presets = list(candidate._presets)  # pyright: ignore[reportPrivateUsage]  # compiled candidate metadata commits with its tensors.
-        pop._gamete_modifiers = list(candidate.gamete_modifiers)  # pyright: ignore[reportPrivateUsage]
-        pop._zygote_modifiers = list(candidate.zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
-        if publish_definition:
-            pop._current_definition = candidate._definition_for_compile()  # pyright: ignore[reportPrivateUsage]  # committed declarations follow their validated products.
-        self._config = new
-        from natal.frontend.configurator._writers import contract_to_draft_field
-
-        for field in fields:
-            name = contract_to_draft_field(field)
-            pop.log_param_value(
-                field, np.array(getattr(old, name), dtype=np.float64, copy=True),
-                np.array(getattr(new, name), dtype=np.float64, copy=True),
-                event="genetics",
-            )
 
     # -- apply / build ---------------------------------------------------------
 

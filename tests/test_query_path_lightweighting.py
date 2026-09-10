@@ -460,18 +460,23 @@ def test_uninitialized_config_still_raises_canonical_error(
         _ = pop.params.n_ages
 
 
-def test_transaction_without_tensor_reads_degrades_to_draft(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A transaction-like object without tensor reads falls back safely.
+def test_transaction_without_tensor_reads_degrades_to_draft() -> None:
+    """An event channel without tensor reads falls back safely.
 
     Catches an unconditional attribute access on the event channel that
-    would crash instead of degrading to the draft path.
+    would crash instead of degrading to the draft path.  The channel is
+    now handed to the view explicitly, so the degraded double binds
+    directly to a :class:`ParamsView`.
     """
+    from natal.frontend.population._params_view import ParamsView
+
     pop = _build_age("QLWDegradedChannel")
     expected = pop.config.carrying_capacity
-    monkeypatch.setattr(pop, "_event_transaction", object(), raising=False)
-    assert pop.params.carrying_capacity == expected
+    view = ParamsView(pop, validate=lambda: None, channel=object())
+    assert view.carrying_capacity == expected
+    assert view.female_age0_survival == float(
+        pop.config.age_based_survival_rates[0, 0]
+    )
 
 
 def test_context_without_transaction_reads_the_draft() -> None:

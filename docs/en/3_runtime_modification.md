@@ -11,7 +11,7 @@ This chapter covers three scenarios:
 
 ## 1. Between-Tick Modification: `pop.update()`
 
-`pop.update()` returns a `Configurator` **bound to the running population**. Chained methods have the same syntax as the build chain; every call is validated against the parameter route table and committed to the running population (draft and Rust session stay in sync), so later stages of the same tick see the new value:
+`pop.update()` returns a `RuntimeUpdater` **bound to the running population**. Domain methods have the same syntax as the build chain; every call is validated against the parameter route table and committed to the running population (draft and Rust session stay in sync), so later stages of the same tick see the new value:
 
 ```python
 import natal as nt

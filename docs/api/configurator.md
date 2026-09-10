@@ -161,16 +161,17 @@ Every built Population, including `SpatialPopulation`, has an immutable
 `pop.observation`. If `with_observation()` is omitted, `build()` installs an
 identity observation with one lossless group per ZType.
 
-> **Build-time only:** Calling `with_observation()` on a live Population via
-> `pop.update().with_observation(...)` raises `RuntimeError`. Observation rules
-> cannot change after `build()`.
+> **Build-time only:** The runtime updater returned by `pop.update()` carries no
+> `with_observation()` at all (accessing it raises `AttributeError`). Observation
+> rules cannot change after `build()`.
 
 ### `record_history(*, mode="raw", max_rows=None)`
 ```python
 cfg.record_history(mode="observation", max_rows=5000)
 ```
 Set the recording mode and capacity for the population's history. Must be called
-during the build phase — calling on a runtime Configurator raises `RuntimeError`.
+during the build phase — the runtime updater returned by `pop.update()` has no
+`record_history()` at all (accessing it raises `AttributeError`).
 
 `with_observation()` and `record_history()` are **independent** — chain order
 does not matter. A `with_observation()` call defines which groups to observe;
@@ -235,7 +236,8 @@ cfg.hooks(my_hook)
 Declare event hooks. Declarations are stored on the chain and compiled once
 against the final registry when `build()` runs; the compiled plan is injected
 into the Population at construction. There is no post-construction
-registration: `pop.update().hooks(...)` raises `RuntimeError`.
+registration: `pop.update()` has no `hooks()` at all (accessing it raises
+`AttributeError`).
 
 ### `build(name=None, hook_items=None)`
 ```python
@@ -357,7 +359,9 @@ intention is to modify a running population.
 
 ## Configurator Ownership
 
-`Configurator` is one implementation for both model kinds. Construction keeps
-model declarations; `pop.update()` binds it to runtime parameter updates.
-`pop.config` is a query snapshot, so mutation through that snapshot cannot
-replace the explicit runtime write path.
+`Configurator` is the build-side chain for both model kinds: construction keeps
+model declarations and compiles them in `build()`. Runtime updates do not
+create a Configurator — `pop.update()` returns a `RuntimeUpdater` whose method
+face is exactly the eight domain methods, committed to the live session or the
+callback's event transaction. `pop.config` is a query snapshot, so mutation
+through that snapshot cannot replace the explicit runtime write path.

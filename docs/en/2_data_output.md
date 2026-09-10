@@ -671,8 +671,8 @@ Observation rules themselves do not affect simulation performance, but frequent 
 
 ### Can I change recording rules after building the Population?
 No. The canonical observation and History schema are frozen by `build()`.
-Both `pop.update().with_observation(...)` and
-`pop.update().record_history(...)` raise `RuntimeError`. At runtime, read
+`pop.update()` has neither `with_observation()` nor `record_history()`
+(accessing them raises `AttributeError`). At runtime, read
 `pop.observation`, call `pop.observe()`, or call
 `pop.history.observe(pop.observation)` on raw History.
 

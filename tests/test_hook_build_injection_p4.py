@@ -113,18 +113,24 @@ class TestDeletedRegistrationSurfaces:
         assert tuple(pop.compiled_hook_descriptors) == ()
         assert int(pop._hook_program.n_hooks) == 0  # noqa: SLF001
 
-    def test_update_entry_hooks_rejected_like_with_observation(self) -> None:
-        """``pop.update().hooks(...)`` raises like every build-only method."""
+    def test_update_entry_build_methods_are_absent(self) -> None:
+        """Build-only vocabulary does not exist on the runtime updater.
+
+        The update entry offers no ``.hooks()`` / ``.with_observation()``
+        at all — absence (``AttributeError``), not a deep rejection.
+        """
         pop = _build("neg_update_hooks")
 
         def cb(ctx: TickContext) -> int:
             _ = ctx
             return 0
 
-        with pytest.raises(RuntimeError, match="build phase"):
-            pop.update().hooks(cb)
-        with pytest.raises(RuntimeError, match="build phase"):
-            pop.update().with_observation(groups={"g": "WT|WT"})
+        assert not hasattr(pop.update(), "hooks")
+        assert not hasattr(pop.update(), "with_observation")
+        with pytest.raises(AttributeError):
+            pop.update().hooks(cb)  # type: ignore[attr-defined]  # negative contract: the attribute must not exist
+        with pytest.raises(AttributeError):
+            pop.update().with_observation(groups={"g": "WT|WT"})  # type: ignore[attr-defined]  # negative contract
 
     def test_hook_context_update_hooks_rejected(self) -> None:
         """A ctx.update() handle cannot reach .hooks() inside the callback."""
@@ -137,8 +143,8 @@ class TestDeletedRegistrationSurfaces:
         @nt.hook(event="first")
         def capture(ctx: TickContext) -> int:
             try:
-                ctx.update().hooks(cb)
-            except RuntimeError as exc:
+                ctx.update().hooks(cb)  # type: ignore[attr-defined]  # negative contract: the attribute must not exist
+            except AttributeError as exc:
                 rejections.append(str(exc))
             return 0
 
@@ -146,7 +152,7 @@ class TestDeletedRegistrationSurfaces:
         pop.run(n_steps=1)
 
         assert len(rejections) == 1
-        assert "build phase" in rejections[0]
+        assert "hooks" in rejections[0]
 
     def test_spatial_container_and_deme_registration_removed(self) -> None:
         from natal.frontend.spatial.configurator import SpatialConfigurator

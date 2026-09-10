@@ -507,7 +507,7 @@ The chainable API is powered by a `Configurator` object. Each chain method write
 
 ## Summary
 
-The `Configurator` chainable API writes parameters immediately to `ModelDraft` arrays. `build()` creates the `Population` object. The same API serves both build-time and runtime (`pop.update()`) modification.
+The `Configurator` chainable API writes parameters immediately to `ModelDraft` arrays. `build()` creates the `Population` object. Runtime modification uses the dedicated `RuntimeUpdater` returned by `pop.update()` — same domain-method syntax, no build capability.
 
 ## Related Chapters
 

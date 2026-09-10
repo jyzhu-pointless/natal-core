@@ -11,7 +11,6 @@ from typing import (
     Any,
     Optional,
     Sequence,
-    Tuple,
     cast,
 )
 
@@ -48,21 +47,24 @@ class ModifierPresetMixin(HookManagerMixin):
     _manual_zygote: list[tuple[int, Optional[str], Any]]  # type: ignore[assignment]
     _index_registry: Any  # type: ignore[assignment]
 
+    def _session_target(self) -> Any:
+        """Resolve the idle-session commit target for this population.
+
+        Returns:
+            The resolved ``_UpdateTarget`` (typed ``Any`` here: the
+            runtime target classes are internal to the configurator
+            package and the host mixin only forwards them).
+
+        Raises:
+            RuntimeError: If a run holds the session borrow.
+        """
+        from natal.frontend.configurator._runtime import idle_session_target
+
+        return idle_session_target(cast("BasePopulation[Any]", self))
+
     # ========================================================================
     # Modifier management
     # ========================================================================
-    def _next_modifier_id(self, modifiers: Sequence[Tuple[int, Optional[str], Any]]) -> int:
-        """Return the next auto-assigned modifier id."""
-        # Keep compatibility with legacy in-memory lists that may contain None ids.
-        ids = [mid for mid, _, _ in modifiers]
-        return (max(ids) + 1) if ids else 0
-
-    def _resolve_modifier_id(self, modifier_id: Optional[int], modifiers: Sequence[Tuple[int, Optional[str], Any]]) -> int:
-        """Normalize optional modifier_id into a concrete integer id."""
-        if modifier_id is not None:
-            return int(modifier_id)
-        return self._next_modifier_id(modifiers)
-
     def reapply_preset_fitness(self) -> None:
         """Reset fitness tensors to 1.0 and re-apply all preset fitness patches.
 
@@ -71,18 +73,11 @@ class ModifierPresetMixin(HookManagerMixin):
         fitness values set directly via ``pop.update().fitness()`` will be
         overwritten. This explicit reset clears stored manual-fitness patches.
         """
-        import numpy as np
-
-        from natal.frontend.configurator import Configurator
+        from natal.frontend.configurator._runtime import reset_preset_fitness
 
         if self._config is None:
             return
-        compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
-        candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # compile an isolated reset declaration.
-        candidate._fitness_base = tuple(np.ones_like(array) for array in candidate._fitness_base)  # pyright: ignore[reportPrivateUsage]
-        candidate._fitness_steps = []  # pyright: ignore[reportPrivateUsage]
-        candidate._compile_specification()  # pyright: ignore[reportPrivateUsage]
-        compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
+        reset_preset_fitness(self._session_target())
 
     def refresh_modifiers(self, rebuild_maps: bool = True) -> None:
         """Rebuild derived modifier lists and maps from _presets + _manual_*.
@@ -93,21 +88,32 @@ class ModifierPresetMixin(HookManagerMixin):
         combined list.
 
         Args:
-            rebuild_maps: If ``True`` (default), also call
-                :meth:`refresh_modifier_maps`.  Set to ``False`` when the
-                caller plans to batch multiple modifier registrations and
-                will call :meth:`refresh_modifier_maps` once afterward.
+            rebuild_maps: If ``True`` (default), also commit the rebuilt
+                maps.  Set to ``False`` when the caller plans to batch
+                multiple modifier registrations and will commit once
+                afterward.
         """
-        from natal.frontend.configurator import Configurator
+        from natal.frontend.configurator._runtime import (
+            commit_genetic_update,
+            compile_runtime_candidate,
+            read_declaration,
+        )
 
-        compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
-        candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # all runtime recipes use the isolated build compiler.
-        candidate._compile_specification(preserve_fitness=True)  # pyright: ignore[reportPrivateUsage]  # map-only updates preserve current native fitness.
+        target = self._session_target()
+        declaration = read_declaration(target)
+        old = target.live_draft()
+        # map-only updates preserve current native fitness.
+        products = compile_runtime_candidate(
+            target.species, old, target.registry, declaration, preserve_fitness=True,
+        )
         if rebuild_maps:
-            compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
+            commit_genetic_update(
+                target, old, products.config, declaration,
+                products.gamete_modifiers, products.zygote_modifiers,
+            )
         else:
-            self._gamete_modifiers = list(candidate.gamete_modifiers)
-            self._zygote_modifiers = list(candidate.zygote_modifiers)
+            self._gamete_modifiers = list(products.gamete_modifiers)
+            self._zygote_modifiers = list(products.zygote_modifiers)
 
     def refresh_modifier_maps(self) -> None:
         """Rebuild the three modifier maps from current modifier lists.
@@ -126,25 +132,13 @@ class ModifierPresetMixin(HookManagerMixin):
             and by individual ``add_gamete_modifier`` /
             ``add_zygote_modifier`` when ``refresh=True``.
         """
+        from natal.frontend.configurator._runtime import recompile_modifier_maps
+
         if self._config is None or self._index_registry is None:
             return
         if not self._index_registry.index_to_haplo or not self._index_registry.index_to_genotype:
             return
-        from natal.frontend.configurator import Configurator
-        from natal.frontend.configurator._registry_builder import rebuild_config_maps
-
-        compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
-        candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # isolate all user modifier effects before publication.
-        candidate._config, _applied = rebuild_config_maps(  # pyright: ignore[reportPrivateUsage]  # the isolated candidate owns its working draft.
-            candidate.species,
-            candidate._config,  # pyright: ignore[reportPrivateUsage]
-            candidate.registry,
-            gamete_modifiers=self._gamete_modifiers,
-            zygote_modifiers=self._zygote_modifiers,
-            compress=False,
-            host=candidate,
-        )
-        compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
+        recompile_modifier_maps(self._session_target())
 
     def add_gamete_modifier(
         self,
@@ -164,20 +158,12 @@ class ModifierPresetMixin(HookManagerMixin):
                 call :meth:`refresh_modifiers` or
                 :meth:`refresh_modifier_maps` afterward to apply all at once.
         """
-        from natal.frontend.configurator import Configurator
+        from natal.frontend.configurator._runtime import add_manual_modifier
 
-        compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
-        candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # registration is published only after compilation succeeds.
-        declarations = candidate._manual_gamete  # pyright: ignore[reportPrivateUsage]
-        resolved_id = self._resolve_modifier_id(modifier_id, declarations)
-        declarations.append((resolved_id, name, modifier))
-        declarations.sort(key=lambda item: item[0])
-        if refresh:
-            candidate._compile_specification(preserve_fitness=True)  # pyright: ignore[reportPrivateUsage]
-            compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
-        else:
-            self._manual_gamete = list(declarations)
-            self._gamete_modifiers = [*self._gamete_modifiers, (resolved_id, name, modifier)]
+        add_manual_modifier(
+            self._session_target(), "gamete", modifier, name, modifier_id,
+            refresh=refresh,
+        )
 
     def add_zygote_modifier(
         self,
@@ -197,20 +183,12 @@ class ModifierPresetMixin(HookManagerMixin):
                 call :meth:`refresh_modifiers` or
                 :meth:`refresh_modifier_maps` afterward to apply all at once.
         """
-        from natal.frontend.configurator import Configurator
+        from natal.frontend.configurator._runtime import add_manual_modifier
 
-        compiler = Configurator.for_population(cast("BasePopulation[Any]", self))
-        candidate = compiler._genetic_candidate()  # pyright: ignore[reportPrivateUsage]  # registration is published only after compilation succeeds.
-        declarations = candidate._manual_zygote  # pyright: ignore[reportPrivateUsage]
-        resolved_id = self._resolve_modifier_id(modifier_id, declarations)
-        declarations.append((resolved_id, name, modifier))
-        declarations.sort(key=lambda item: item[0])
-        if refresh:
-            candidate._compile_specification(preserve_fitness=True)  # pyright: ignore[reportPrivateUsage]
-            compiler._commit_genetic_candidate(candidate)  # pyright: ignore[reportPrivateUsage]
-        else:
-            self._manual_zygote = list(declarations)
-            self._zygote_modifiers = [*self._zygote_modifiers, (resolved_id, name, modifier)]
+        add_manual_modifier(
+            self._session_target(), "zygote", modifier, name, modifier_id,
+            refresh=refresh,
+        )
 
     def add_preset(self, preset: GeneticPreset) -> None:
         """Add a preset to this population.
@@ -253,9 +231,11 @@ class ModifierPresetMixin(HookManagerMixin):
 :class:`natal.frontend.presets.GeneticPreset` - Base class for creating custom presets
 :class:`natal.frontend.presets.HomingDrive` - Built-in gene drive preset
         """
-        from natal.frontend.configurator import Configurator
+        from natal.frontend.configurator._runtime import (
+            apply_runtime_presets,
+        )
 
-        Configurator.for_population(cast("BasePopulation[Any]", self)).presets(preset)
+        apply_runtime_presets(self._session_target(), (preset,))
 
     @classmethod
     def builder(cls, species: Species) -> Any:

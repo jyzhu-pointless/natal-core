@@ -74,7 +74,7 @@ pop.run(n_steps=200, record_every=10)
 
 四个生命周期事件（`first`、`early`、`late` 和 `finish`）全部由 Rust native session 执行。旧的 Python CSR 执行器、采样器和低层执行导出已删除；当前只保留编译后的 `HookProgram` 数据和 Python 回调桥接。
 
-`.hooks()` 是声明 Hook 的唯一入口，且只存在于构建链式 API 中：Hook 计划在 `build()` 时基于最终 registry 一次性编译并注入种群。构建完成后不存在任何注册通道——`pop.update().hooks(...)` 不受支持并抛出 `RuntimeError`。如需在运行期改变行为，请在构建时声明 Hook（可用 `when` 条件或回调内的 tick 判断控制触发），并在需要时手动触发同一事件。
+`.hooks()` 是声明 Hook 的唯一入口，且只存在于构建链式 API 中：Hook 计划在 `build()` 时基于最终 registry 一次性编译并注入种群。构建完成后不存在任何注册通道——`pop.update()` 返回的运行时更新句柄上根本没有 `hooks()`（访问即抛出 `AttributeError`）。如需在运行期改变行为，请在构建时声明 Hook（可用 `when` 条件或回调内的 tick 判断控制触发），并在需要时手动触发同一事件。
 
 ## `Op` 操作
 

@@ -188,14 +188,25 @@ class ParamsView:
     commit with that candidate when the callback succeeds.
     """
 
-    def __init__(self, pop: BasePopulation[Any], validate: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        pop: BasePopulation[Any],
+        validate: Callable[[], None] | None = None,
+        channel: object | None = None,
+    ) -> None:
         """Bind the view to *pop*.
 
         Args:
             pop: The population whose parameters are exposed.
+            validate: Lifetime guard invoked before every access (the
+                owning callback's guard on ``ctx.params``).
+            channel: The event transaction to read and write through,
+                handed over explicitly by the context; ``None`` resolves
+                the population's own channel at operation time.
         """
         self._pop = pop
         self._validate = validate
+        self._channel = channel
 
     # -- derived equilibrium metrics (read-only, always fresh) ----------------
 
@@ -227,12 +238,14 @@ class ParamsView:
 
     @property
     def _draft(self) -> ModelDraft:
-        """The population's current draft."""
+        """The population's current draft (the event candidate in a callback)."""
         if self._validate is not None:
             self._validate()
-            candidate = self._pop._config  # pyright: ignore[reportPrivateUsage]  # callback owns the temporary candidate
-            assert candidate is not None
-            return candidate
+            candidate = self._pop._event_candidate()  # pyright: ignore[reportPrivateUsage]  # the callback's isolated candidate
+            if candidate is not None:
+                return candidate
+            assert self._pop._config is not None  # pyright: ignore[reportPrivateUsage]  # population config property raises the canonical error otherwise
+            return self._pop._config  # pyright: ignore[reportPrivateUsage]  # callback owns the committed draft when no candidate exists
         return self._pop.config
 
     def _static_draft(self) -> ModelDraft:
@@ -241,8 +254,13 @@ class ParamsView:
         Structural fields (layout dimensions, blueprint flags,
         initial-state tables) never change inside the session, so reading
         them from the live draft is value-identical to the full-snapshot
-        path while skipping the session pull and the draft deepcopy.
+        path while skipping the session pull and the draft deepcopy.  An
+        active callback's prepared candidate is preferred: it carries the
+        pending writes of the same callback, like the candidate path.
         """
+        candidate = self._pop._prepared_event_candidate()  # pyright: ignore[reportPrivateUsage]  # lazy: never materializes
+        if candidate is not None:
+            return candidate
         draft = self._pop._config  # pyright: ignore[reportPrivateUsage]  # metadata source; the full pull stays on pop.config
         if draft is None:
             # Delegate to the public property: it raises the canonical
@@ -253,22 +271,22 @@ class ParamsView:
     def _native_read_channel(self) -> Any | None:
         """Resolve the field-level native read channel, or ``None``.
 
-        In-hook reads go through the event transaction: its getters
-        return the staged candidate values — the exact source the lazy
-        candidate projection materializes from — so transaction reads are
-        value-identical to the old full-projection path.  Outside
-        callbacks the deme channel or the panmictic session adapter
-        serves field reads directly; while a run holds the session
-        borrow (``_rust_run_active``), the channel is withheld and reads
-        fall back to the draft, matching ``pop.config``.
+        In-hook reads go through the event transaction handed over by the
+        context: its getters return the staged candidate values — the
+        exact source the lazy candidate projection materializes from — so
+        transaction reads are value-identical to the old full-projection
+        path.  Outside callbacks the deme channel or the panmictic session
+        adapter serves field reads directly; while a callback or run holds
+        the session borrow, the channel is withheld and reads fall back to
+        the draft, matching ``pop.config``.
         """
         pop = self._pop
         if self._validate is not None:
-            transaction = getattr(pop, "_event_transaction", None)
-            if transaction is not None and hasattr(transaction, "get_tensor"):
-                return transaction
+            self._validate()
+            if self._channel is not None and hasattr(self._channel, "get_tensor"):
+                return self._channel
             return None
-        if getattr(pop, "_rust_run_active", False):
+        if pop._active_event is not None or getattr(pop, "_rust_run_active", False):  # pyright: ignore[reportPrivateUsage]  # callback scope withholds the session channel
             return None
         writer = getattr(pop, "_runtime_parameter_writer", None)
         if writer is not None and hasattr(writer, "get_tensor"):
@@ -311,12 +329,20 @@ class ParamsView:
         """A fresh runtime writer bound to the population."""
 
         def _publish(draft: ModelDraft) -> None:
-            self._pop.set_config(draft)
+            event = self._pop._active_event  # pyright: ignore[reportPrivateUsage]  # event writes adopt into the callback scope
+            if self._validate is not None and event is not None:
+                event.adopt_candidate(draft)
+            else:
+                self._pop.set_config(draft)
 
         if self._validate is not None:
             self._validate()
-            backend: object = getattr(self._pop, "_event_transaction", None)
-        elif getattr(self._pop, "_running", False) or getattr(self._pop, "_rust_run_active", False):
+            backend: object = self._channel
+        elif (
+            getattr(self._pop, "_running", False)
+            or getattr(self._pop, "_rust_run_active", False)
+            or self._pop._active_event is not None  # pyright: ignore[reportPrivateUsage]  # bare writes inside a callback are rejected
+        ):
             raise RuntimeError("External parameter writes are forbidden during run")
         else:
             backend = getattr(self._pop, "_runtime_parameter_writer", None)
@@ -328,7 +354,7 @@ class ParamsView:
             on_replace=_publish,
             species=self._species(),
             registry=self._registry(),
-            param_value_log=self._pop.log_param_value,
+            param_value_log=self._pop._param_audit_sink(),  # pyright: ignore[reportPrivateUsage]  # routes to the event's pending log inside a callback
         )
 
     # -- attribute surface -----------------------------------------------------

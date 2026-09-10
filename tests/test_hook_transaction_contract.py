@@ -561,7 +561,7 @@ def test_callbacks_materialize_parameters_only_when_requested(access: str, monke
     original_snapshot = backend_module.config_snapshot_from_session
     projected: list[int] = []
     def snapshot(session: object, draft: object) -> object:
-        if getattr(pop, "_event_transaction", None) is not None:
+        if getattr(pop, "_active_event", None) is not None:
             projected.append(1)
         return original_snapshot(session, draft)
     monkeypatch.setattr(backend_module, "config_snapshot_from_session", snapshot)

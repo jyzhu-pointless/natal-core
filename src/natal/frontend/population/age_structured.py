@@ -32,7 +32,7 @@ from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
     from natal.backends.rust.rust_backend import RustLifecycleBackend
-    from natal.frontend.configurator import Configurator
+    from natal.frontend.configurator import Configurator, RuntimeUpdater
     from natal.frontend.hooks import CompiledHookDescriptor
 
 __all__ = ["AgeStructuredPopulation"]
@@ -1035,9 +1035,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 present.add(genotype)
         return present
 
-    def update(self) -> Configurator:
-        """Return a ``Configurator`` for modifying this population's config."""
-        return self._create_configurator()
+    def update(self) -> RuntimeUpdater:
+        """Return a ``RuntimeUpdater`` for modifying this population's parameters."""
+        return self._create_updater()
 
     def __repr__(self) -> str:
         """Return a compact string representation of the population."""

@@ -74,7 +74,7 @@ The legacy `(state, config, deme_id)` three-parameter signature is explicitly re
 
 All four lifecycle events (`first`, `early`, `late`, and `finish`) execute in the native Rust session. The former Python CSR executor, samplers, and low-level execution exports are removed; only compiled `HookProgram` data and Python callback bridges remain.
 
-`.hooks()` is the single declaration entry point, and it exists only in the build chain: hook plans are compiled once against the final registry when `build()` runs and injected into the population. There is no post-construction registration — `pop.update().hooks(...)` is not supported and raises `RuntimeError`. To change runtime behavior, declare the hook at build (optionally gated by a `when` condition or a tick check inside the callback) and trigger the same events manually where needed.
+`.hooks()` is the single declaration entry point, and it exists only in the build chain: hook plans are compiled once against the final registry when `build()` runs and injected into the population. There is no post-construction registration — `pop.update()` has no `hooks()` at all (accessing it raises `AttributeError`). To change runtime behavior, declare the hook at build (optionally gated by a `when` condition or a tick check inside the callback) and trigger the same events manually where needed.
 
 ## `Op` Operations
 

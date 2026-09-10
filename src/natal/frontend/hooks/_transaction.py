@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -107,24 +107,3 @@ class HookRng:
             return np.asarray(sampled, dtype=np.int64).reshape(n_values.shape)
         result = self._draw("binomial", float(n), float(p), size)
         return result.astype(np.int64) if isinstance(result, np.ndarray) else int(result)
-
-
-class GuardedConfigurator:
-    """Keep every retained chain method tied to its original callback."""
-
-    def __init__(self, configurator: object, validate: Callable[[], None]) -> None:
-        """Bind a heterogeneous Configurator facade and its lifetime guard."""
-        self._configurator = configurator
-        self._validate = validate
-
-    def __getattr__(self, name: str) -> Callable[..., GuardedConfigurator]:
-        """Wrap an arbitrary builder method without changing its call syntax."""
-        self._validate()
-        # Any is required here because Configurator methods have heterogeneous
-        # keyword signatures; the facade forwards them without interpreting them.
-        def invoke(*args: Any, **kwargs: Any) -> GuardedConfigurator:
-            """Check lifetime at invocation, including a previously saved method."""
-            self._validate()
-            getattr(self._configurator, name)(*args, **kwargs)
-            return self
-        return invoke

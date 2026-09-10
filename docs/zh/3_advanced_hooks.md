@@ -18,7 +18,7 @@
 | `pop.blueprint` | 只读维度、名称目录与引擎开关（`n_sexes`、`n_ages`、`n_ztypes`、`discrete`、`stochastic`、`continuous_sampling`、`extreme_speed_mode`、`ztype_names`、`gtype_names`）。 |
 | `pop.metrics` | 按需计算的指标视图（每次访问重新计算）。 |
 | `pop.rng` | 该 deme 持久 Rust 随机流的受控采样器；从不触碰全局 `numpy.random`。 |
-| `pop.update()` | 返回绑定到所属种群的运行时 `Configurator`（与构建链同语法）。 |
+| `pop.update()` | 返回绑定到所属种群的运行时 `RuntimeUpdater`（域方法与构建链同语法）。 |
 | `pop.stop()` / `pop.stop_requested` | 在事件边界请求/查询终止当前 run。 |
 
 只有回调访问参数或配置时，参数候选才会复制到 Python。仅统计调用次数、查看状态或抽取随机数的回调不会传输参数张量。经过校验的写入直接更新原生事务；回调抛出异常时，该回调的候选会被丢弃。
@@ -253,7 +253,7 @@ def heatwave(pop: TickContext) -> int:
 
 回调内**没有公开的读取入口**：`TickContext` 不提供 `config`，`ctx.state` 也没有 `config` 属性，`ctx.params` 只接受注册参数。回调内可写（`ctx.update().custom(...)`，随事件事务提交），读取请在回调外进行。自定义字段不在参数路由表中，因此 `Op.set_param` 在编译期拒绝它们（`ValueError`）。
 
-Hook 内如需构建链式更新，可用 `pop.update()` 返回的 Configurator（与构建链同语法）。
+Hook 内如需链式更新，可用 `pop.update()` 返回的 `RuntimeUpdater`（域方法与构建链同语法）。
 
 ## 事件事务
 

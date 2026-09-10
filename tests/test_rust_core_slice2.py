@@ -40,7 +40,8 @@ from natal.backends.rust.rust_backend import (
     rust_backend_available,
 )
 from natal.contracts.materialize import materialize
-from natal.frontend.configurator import Configurator  # unified Configurator
+from natal.frontend.configurator import Configurator  # unified build-side chain
+from natal.frontend.configurator import RuntimeUpdater  # runtime update handle
 from natal.frontend.data import DiscretePopulationState, PopulationState
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.entry.declarative import Op
@@ -454,7 +455,16 @@ def test_from_parts_rejects_wrong_size_blueprint(age_species: Species) -> None:
 # ── 2. runtime channels: value pushes vs. rebuild scheduling ────────────────
 
 
-_AGE_WRITE_CASES: list[tuple[str, Callable[[Configurator], None], str, str]] = [
+def _set_stochastic_flag(updater: RuntimeUpdater) -> None:
+    """Flip the stochastic execution flag through the params bool channel.
+
+    Runtime execution-flag changes live on ``pop.params`` (the update
+    handle carries no build vocabulary); the write schedules the same
+    session-structure rebuild the retired ``update().setup()`` path ran.
+    """
+    updater._pop.params.stochastic = True
+
+_AGE_WRITE_CASES: list[tuple[str, Callable[[RuntimeUpdater], None], str, str]] = [
     (
         "competition_k",
         lambda cfg: cfg.competition(carrying_capacity=321.0),
@@ -535,7 +545,7 @@ _AGE_WRITE_CASES: list[tuple[str, Callable[[Configurator], None], str, str]] = [
     ),
     (
         "blueprint_flag",
-        lambda cfg: cfg.setup(stochastic=True),
+        _set_stochastic_flag,
         "",  # no contract field: the write is session structure
         "structure",  # execution flags update the existing session
     ),
@@ -550,7 +560,7 @@ _AGE_WRITE_CASES: list[tuple[str, Callable[[Configurator], None], str, str]] = [
 def test_age_write_reaches_session_per_write_path(
     age_species: Species,
     case_name: str,
-    action: Callable[[Configurator], None],
+    action: Callable[[RuntimeUpdater], None],
     contract_field: str,
     kind: str,
 ) -> None:
