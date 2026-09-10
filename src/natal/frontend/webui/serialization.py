@@ -467,7 +467,6 @@ class ConfigScalars(TypedDict):
     expected_survival_rate: float
     generation_time: float
     fixed_egg_count: bool
-    hook_slot: int
     juvenile_growth_mode: GrowthModeInfo
 
 
@@ -512,13 +511,13 @@ class ConfigPayload(TypedDict):
 
 def _growth_mode_name(mode: int) -> str:
     """Map a numeric growth mode constant to its name."""
-    from natal.frontend.data import CONCAVE, FIXED, LINEAR, NO_COMPETITION
+    from natal.frontend.data import BEVERTON_HOLT, FIXED, LINEAR, NO_COMPETITION
 
     mapping = {
         NO_COMPETITION: "NO_COMPETITION",
         FIXED: "FIXED",
-        LINEAR: "LINEAR",
-        CONCAVE: "CONCAVE",
+        LINEAR: "LOGISTIC",
+        BEVERTON_HOLT: "BEVERTON_HOLT",
     }
     return mapping.get(int(mode), f"UNKNOWN_{mode}")
 
@@ -550,10 +549,15 @@ def to_jsonable(value: object) -> object:  # object: accepts arbitrary config-dr
 
 def config_payload(population: GeneticStructureLike) -> ConfigPayload:
     """Serialize scalar parameters, fitness tables, and preset summary."""
+    from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
+
     config = population.config
     registry = population.registry
     genotypes = registry.index_to_genotype
     growth_mode = int(config.juvenile_growth_mode)
+    expected_competition_strength, expected_survival_rate = (
+        derive_equilibrium_metrics_from_draft(config)
+    )
 
     scalars = ConfigScalars(
         population_name=population.name,
@@ -573,11 +577,10 @@ def config_payload(population: GeneticStructureLike) -> ConfigPayload:
         sex_ratio=float(config.sex_ratio),
         sperm_displacement_rate=float(config.sperm_displacement_rate),
         low_density_growth_rate=float(config.low_density_growth_rate),
-        expected_competition_strength=float(config.expected_competition_strength),
-        expected_survival_rate=float(config.expected_survival_rate),
+        expected_competition_strength=float(expected_competition_strength),
+        expected_survival_rate=float(expected_survival_rate),
         generation_time=float(config.generation_time),
         fixed_egg_count=bool(config.fixed_egg_count),
-        hook_slot=int(config.hook_slot),
         juvenile_growth_mode=GrowthModeInfo(
             code=growth_mode, name=_growth_mode_name(growth_mode)
         ),

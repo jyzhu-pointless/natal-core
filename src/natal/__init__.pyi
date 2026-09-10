@@ -232,6 +232,7 @@ from .frontend.utils import (
     resolve_sex_label,
     validate_name,
 )
+from .frontend.webui import launch_vue
 
 __all__ = [
     "ALL_PARAMETERS",
@@ -398,6 +399,7 @@ __all__ = [
     "launch",
     "launch_population",
     "launch_spatial",
+    "launch_vue",
     "materialize",
     "parse_condition",
     "parse_flattened_discrete_state",

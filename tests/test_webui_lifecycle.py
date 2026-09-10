@@ -43,8 +43,8 @@ def _species(name: str) -> nt.Species:
     )
 
 
-def _build_population(name: str) -> DiscreteGenerationPopulation:
-    """Deterministic discrete population with no hooks."""
+def _population_builder(name: str) -> nt.PopulationBuilder:
+    """Deterministic discrete build chain, pre-build (callers declare hooks)."""
     return (
         nt.DiscreteGenerationPopulation.setup(
             species=_species(name), name=name, stochastic=False
@@ -57,8 +57,12 @@ def _build_population(name: str) -> DiscreteGenerationPopulation:
         )
         .reproduction(eggs_per_female=4)
         .competition(carrying_capacity=10_000, juvenile_growth_mode="fixed")
-        .build()
     )
+
+
+def _build_population(name: str) -> DiscreteGenerationPopulation:
+    """Deterministic discrete population with no hooks."""
+    return _population_builder(name).build()
 
 
 def _build_age_population(name: str) -> nt.AgeStructuredPopulation:
@@ -97,7 +101,7 @@ def _build_age_population(name: str) -> nt.AgeStructuredPopulation:
 
 def _build_finishing_population(name: str) -> DiscreteGenerationPopulation:
     """Population that finishes (extinction stop) after one tick."""
-    pop = (
+    return (
         nt.DiscreteGenerationPopulation.setup(
             species=_species(name), name=name, stochastic=False
         )
@@ -106,14 +110,13 @@ def _build_finishing_population(name: str) -> DiscreteGenerationPopulation:
         )
         .reproduction(eggs_per_female=2)
         .competition(carrying_capacity=10_000)
+        .hooks(
+            nt.Op.add(genotypes="WT|WT", ages=1, sex="both", delta=-10_000),
+            nt.Op.stop_if_extinction(),
+            event="first",
+        )
         .build()
     )
-    pop.register_hooks(
-        nt.Op.add(genotypes="WT|WT", ages=1, sex="both", delta=-10_000),
-        event="first",
-    )
-    pop.register_hooks(nt.Op.stop_if_extinction(), event="first")
-    return pop
 
 
 def _build_broken_population(name: str) -> DiscreteGenerationPopulation:
@@ -122,9 +125,7 @@ def _build_broken_population(name: str) -> DiscreteGenerationPopulation:
     def boom(tick_context: object) -> int:  # object: hook ABI passes an opaque TickContext
         raise RuntimeError("boom from hook")
 
-    pop = _build_population(name)
-    pop.register_hooks(boom, event="first")
-    return pop
+    return _population_builder(name).hooks(boom, event="first").build()
 
 
 
@@ -400,10 +401,12 @@ def test_restore_then_run_to_tick_stops_at_target() -> None:
 
 def test_age_structured_snapshot_includes_sperm_storage() -> None:
     pop = _build_age_population("age_sperm")
-    # Inject a nonzero sperm entry (state arrays are writable in place).
+    # Inject a nonzero sperm entry through the state-import channel
+    # (pop.state is a read snapshot under the Rust-owned runtime).
     state = pop.state
     assert isinstance(state, PopulationState)
     state.sperm_storage[2, 0, 1] = 55.0
+    pop.import_state(state)
     app = create_app(pop, title="age sperm")
     with TestClient(app) as client:
         snapshot = client.get("/api/state").json()
@@ -437,20 +440,24 @@ def test_age_structured_snapshot_includes_sperm_storage() -> None:
 
 
 def test_hooks_payload_covers_declarative_and_callback() -> None:
-    pop = _build_population("hooks_payload")
-    pop.register_hooks(
-        nt.Op.add(genotypes="WT|WT", ages=1, sex="male", delta=10.0),
-        event="first",
-    )
-    pop.register_hooks(
-        nt.Op.scale(genotypes=["WT|WT", "WT|Dr"], ages=[1, 2], sex="both", factor=0.5),
-        event="early",
-    )
-
     def watcher(tick_context: object) -> int:  # object: hook ABI passes an opaque TickContext
         return 0
 
-    pop.register_hooks(watcher, event="late")
+    pop = (
+        _population_builder("hooks_payload")
+        .hooks(
+            nt.Op.add(genotypes="WT|WT", ages=1, sex="male", delta=10.0),
+            event="first",
+        )
+        .hooks(
+            nt.Op.scale(
+                genotypes=["WT|WT", "WT|Dr"], ages=[1, 2], sex="both", factor=0.5
+            ),
+            event="early",
+        )
+        .hooks(watcher, event="late")
+        .build()
+    )
 
     app = create_app(pop, title="hooks")
     with TestClient(app) as client:

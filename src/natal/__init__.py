@@ -162,6 +162,9 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "Sex", "Age", "GameteLabel", "resolve_sex_label", "validate_name",
         "ALL_PARAMETERS", "PARAM_IDS", "PARAMETERS_BY_DOMAIN", "ParamDescriptor",
     ],
+    "frontend.webui": [
+        "launch_vue",
+    ],
 }
 
 # Build the lazy index from the explicit list (deterministic first-wins

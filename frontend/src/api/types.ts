@@ -116,7 +116,6 @@ export interface ConfigScalars {
   expected_survival_rate: number;
   generation_time: number;
   fixed_egg_count: boolean;
-  hook_slot: number;
   juvenile_growth_mode: GrowthModeInfo;
 }
 
