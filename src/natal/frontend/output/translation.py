@@ -8,7 +8,7 @@ or serialize for downstream tooling.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 import numpy as np
@@ -21,7 +21,8 @@ from natal.frontend.data import (
 )
 
 if TYPE_CHECKING:
-    from natal.frontend.output.observation import GroupsInput, Observation
+    from natal.frontend.output.observation import Observation
+    from natal.frontend.patterns.individual_selector import IndividualSelector
     from natal.frontend.population.base import BasePopulation
     from natal.frontend.registry.index import IndexRegistry
     from natal.frontend.spatial.population import SpatialPopulation
@@ -536,7 +537,7 @@ def _get_population_observation_payload(
     population: BasePopulation[Any],  # Any: duck-typed — accepts any BasePopulation subtype
     *,
     observation: Optional[Observation],
-    groups: Optional[GroupsInput],
+    groups: Optional[Mapping[str, IndividualSelector]],
     collapse_age: bool,
     include_zero_counts: bool,
 ) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
@@ -550,7 +551,8 @@ def _get_population_observation_payload(
         population: Population instance to observe.
         observation: Pre-built ``Observation``. When given, ``groups`` and
             ``collapse_age`` are ignored.
-        groups: Group specs passed to ``ObservationFilter.build_filter``.
+        groups: Label → :class:`IndividualSelector` groups compiled against
+            the population's registry.
         collapse_age: Whether to collapse the age axis.
         include_zero_counts: Whether to keep zero-valued entries.
 
@@ -737,7 +739,7 @@ def spatial_population_to_readable_json(
 def spatial_population_to_observation_dict(
     spatial_population: SpatialPopulation,
     *,
-    groups: Optional[GroupsInput] = None,
+    groups: Optional[Mapping[str, IndividualSelector]] = None,
     collapse_age: bool = False,
     include_zero_counts: bool = False,
 ) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
@@ -748,7 +750,7 @@ def spatial_population_to_observation_dict(
 
     Args:
         spatial_population: Spatial population container.
-        groups: Observation groups passed to underlying observation filter.
+        groups: Label → :class:`IndividualSelector` observation groups.
         collapse_age: Whether observation collapses age axis.
         include_zero_counts: Whether to keep zero-valued entries.
 
@@ -805,7 +807,7 @@ def spatial_population_to_observation_dict(
 def spatial_population_to_observation_json(
     spatial_population: SpatialPopulation,
     *,
-    groups: Optional[GroupsInput] = None,
+    groups: Optional[Mapping[str, IndividualSelector]] = None,
     collapse_age: bool = False,
     include_zero_counts: bool = False,
     indent: int = 2,
@@ -817,7 +819,8 @@ def spatial_population_to_observation_json(
 
     Args:
         spatial_population: Spatial population container.
-        groups: Observation group specs passed to each deme's observation.
+        groups: Label → :class:`IndividualSelector` observation groups
+            passed to each deme's observation.
         collapse_age: Whether observation collapses age axis.
         include_zero_counts: Whether to keep zero-valued entries.
         indent: JSON indentation level.

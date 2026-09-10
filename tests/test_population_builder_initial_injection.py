@@ -5,11 +5,13 @@ import uuid
 
 import numpy as np
 
-from natal.frontend.builder._params import (
-    resolve_age_param,
+from natal.frontend.model.initial_state import (
     resolve_age_structured_initial_individual_count,
     resolve_age_structured_initial_sperm_storage,
     resolve_discrete_initial_individual_count,
+)
+from natal.frontend.builder._params import (
+    resolve_age_param,
 )
 from natal.frontend.genetics import Species
 from natal.frontend.utils.types import Sex

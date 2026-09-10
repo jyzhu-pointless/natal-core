@@ -662,13 +662,13 @@ def test_offspring_derivation_has_a_single_spelling() -> None:
 
     ``compute_offspring_probability_tensor`` is the numeric kernel; it
     may be called only from the shared wrapper
-    (:func:`natal.frontend.data._engine.recompute_offspring_tensor`).
+    (:func:`natal.frontend.genetics.matrices.recompute_offspring_tensor`).
     Any second call site reintroduces the four-way drift the S1
     batches collapsed (writer channel, modifier refresh, registry
     compression, species blueprint, build-time maps).
     """
     allowed = {
-        "natal/frontend/data/_engine.py",  # single wrapper (Rust kernel)
+        "natal/frontend/genetics/matrices.py",  # single wrapper (Rust kernel)
     }
     src_root = REPO_ROOT / "src"
     offenders: list[str] = []

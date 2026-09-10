@@ -445,7 +445,7 @@ class TestBuildFromSelectors:
     def test_selector_mask_equals_dict_mask_wt(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Selector-based mask ≡ equivalent dict-based mask for 'WT|WT'."""
+        """Selector-based mask ≡ dict spelling routed through the boundary."""
         compiler = ObservationFilter(phase2_registry)
         n_sexes, n_ages, n_ztypes = 2, 2, 3
 
@@ -458,14 +458,16 @@ class TestBuildFromSelectors:
             collapse_age=False,
         )
 
-        # Via legacy specs
-        mask_legacy = compiler.build_mask_from_specs(
+        # Via the legacy dict spelling (normalized to selectors at the
+        # build_filter boundary, mask rebuilt for the same dimensions)
+        obs_legacy = compiler.build_filter(
+            groups={"g0": {"genotype": ["WT|WT"]}},
             n_sexes=n_sexes,
             n_ages=n_ages,
             n_ztypes=n_ztypes,
-            specs=(("g0", {"genotype": ["WT|WT"]}),),
             collapse_age=False,
         )
+        mask_legacy = obs_legacy.build_mask(n_sexes, n_ages, n_ztypes)
 
         # Invariant: masks are element-for-element identical
         np.testing.assert_array_equal(mask_sel, mask_legacy)
@@ -476,7 +478,7 @@ class TestBuildFromSelectors:
     def test_selector_mask_equals_dict_mask_star_drive(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Selector '*|Dr' ≡ dict {'genotype': ['*|Dr']}."""
+        """Selector '*|Dr' ≡ dict {'genotype': ['*|Dr']} via the boundary."""
         compiler = ObservationFilter(phase2_registry)
         n_sexes, n_ages, n_ztypes = 2, 2, 3
 
@@ -488,13 +490,14 @@ class TestBuildFromSelectors:
             collapse_age=False,
         )
 
-        mask_legacy = compiler.build_mask_from_specs(
+        obs_legacy = compiler.build_filter(
+            groups={"dr": {"genotype": ["*|Dr"]}},
             n_sexes=n_sexes,
             n_ages=n_ages,
             n_ztypes=n_ztypes,
-            specs=(("dr", {"genotype": ["*|Dr"]}),),
             collapse_age=False,
         )
+        mask_legacy = obs_legacy.build_mask(n_sexes, n_ages, n_ztypes)
 
         np.testing.assert_array_equal(mask_sel, mask_legacy)
 
@@ -1045,10 +1048,10 @@ class TestBackwardCompatibility:
         assert obs.mask is not None
         assert obs.mask.shape == (1, 2, 2, 3)
 
-    def test_specs_field_accessible(
+    def test_build_filter_stores_unified_selectors(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Observation.specs is accessible for backward compat."""
+        """build_filter stores the unified IndividualSelector representation."""
         compiler = ObservationFilter(phase2_registry)
         obs = compiler.build_filter(
             groups={"g0": {"genotype": ["WT|WT"]}},
@@ -1057,8 +1060,10 @@ class TestBackwardCompatibility:
             n_ztypes=3,
             collapse_age=False,
         )
-        # specs should be populated by build_filter (legacy path)
-        assert obs.specs is not None
+        # The legacy dict spelling is normalized to selectors at the boundary.
+        assert obs._selectors is not None  # pyright: ignore[reportPrivateUsage]  # unified representation pinned against regression
+        assert len(obs._selectors) == 1  # pyright: ignore[reportPrivateUsage]
+        assert obs._selectors[0].n_atoms == 1  # pyright: ignore[reportPrivateUsage]
 
     def test_legacy_mask_applied_correctly(
         self, phase2_registry: IndexRegistry
@@ -1238,10 +1243,15 @@ class TestBackwardCompatibility:
         assert obs.n_groups == 2
         assert obs.mask.shape == (2, 2, 2, 3)
 
-    def test_selectors_stored_in_backward_compat(
+    def test_legacy_specs_storage_stays_removed(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """_selectors field is None for legacy (build_filter) observations."""
+        """The duplicated legacy ``specs`` storage is gone after unification.
+
+        Legacy dict spellings normalize to ``IndividualSelector`` values at
+        the ``build_filter`` boundary; the parallel spec storage that the
+        pre-unification compiler required no longer exists.
+        """
         compiler = ObservationFilter(phase2_registry)
         obs = compiler.build_filter(
             groups={"g0": {"genotype": ["WT|WT"]}},
@@ -1249,8 +1259,8 @@ class TestBackwardCompatibility:
             n_ages=2,
             n_ztypes=3,
         )
-        # Legacy path does not populate _selectors
-        assert obs._selectors is None
+        assert not hasattr(obs, "specs")
+        assert obs._selectors is not None  # pyright: ignore[reportPrivateUsage]  # unified representation storage
 
 
 # ══════════════════════════════════════════════════════════════════════════════

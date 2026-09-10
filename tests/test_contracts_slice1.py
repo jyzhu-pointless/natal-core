@@ -47,7 +47,7 @@ from natal.contracts import (
     ztype_names_from_registry,
 )
 from natal.contracts.params import EcologySnapshot
-from natal.frontend.data import ModelDraft, compress_config
+from natal.frontend.model import ModelDraft, compress_config
 from natal.frontend.population.discrete_generation import (
     _require_discrete_config,
 )

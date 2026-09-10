@@ -89,7 +89,6 @@ def compile_recording_plan(
         HistorySchema,
         ObservationMetadata,
         PopulationLayout,
-        SpatialHistoryLayout,
     )
 
     state = population.state
@@ -116,22 +115,11 @@ def compile_recording_plan(
         obs_meta = ObservationMetadata(
             labels=observation.labels,
             collapse_age=observation.collapse_age,
-            n_groups=len(observation.labels),
             deme_indices=observation.deme_indices,
             deme_mode=observation.deme_mode,
         )
         observation_mask = observation.build_mask(
             n_sexes=n_sexes, n_ages=n_ages, n_ztypes=n_ztypes,
-        )
-
-    spatial_layout = None
-    if kind.startswith("spatial_"):
-        ind_size = n_sexes * n_ages * n_ztypes
-        sperm_size = n_ages * n_ztypes * n_ztypes if has_sperm_storage else 0
-        spatial_layout = SpatialHistoryLayout(
-            n_demes=n_demes,
-            ind_per_deme=ind_size,
-            sperm_per_deme=sperm_size,
         )
 
     if mode == "observation":
@@ -161,7 +149,6 @@ def compile_recording_plan(
         population=layout,
         row_size=row_size,
         observation=obs_meta,
-        spatial_layout=spatial_layout,
     )
 
     return RecordingPlan(

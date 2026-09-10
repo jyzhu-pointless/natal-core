@@ -25,8 +25,8 @@ from typing import (
 import numpy as np
 
 if TYPE_CHECKING:
-    from natal.frontend.data import ModelDraft
     from natal.frontend.genetics import Species
+    from natal.frontend.model import ModelDraft
     from natal.frontend.registry.index import IndexRegistry
 
 

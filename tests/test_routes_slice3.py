@@ -46,7 +46,7 @@ from natal.frontend.builder._writers import (
     CoreConfigWriter,
     DraftWriter,
 )
-from natal.frontend.data import ModelDraft
+from natal.frontend.model import ModelDraft
 from natal.frontend.utils.parameters import _build_registry
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ def discrete_species() -> nt.Species:
 
 def _age_draft() -> ModelDraft:
     """A minimal age-structured draft with known demographics."""
-    from natal.frontend.data import build_population_config
+    from natal.frontend.model import build_population_config
 
     return build_population_config(
         n_genotypes=4, n_gtypes=4, n_glabs=1, n_ages=3, new_adult_age=1,
@@ -167,7 +167,7 @@ class TestModeEnumShape:
                 CONCAVE,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
             )
         with pytest.raises(ImportError):
-            from natal.frontend.data.constants import (
+            from natal.frontend.model.constants import (
                 CONCAVE,  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
             )
         assert not hasattr(nt, "CONCAVE")
@@ -762,7 +762,7 @@ class TestMeiosisDerivedRecompute:
         leave build-path writes stale — the einsum identity must hold
         without any session push.
         """
-        from natal.frontend.data import build_population_config
+        from natal.frontend.model import build_population_config
 
         draft: ModelDraft = build_population_config(
             n_genotypes=3, n_gtypes=2, n_glabs=1, n_ages=3, new_adult_age=1,
@@ -936,7 +936,7 @@ class TestWriterAtomicity:
         assert float(writer.draft.eggs_per_female) == 33.0
         # The derived metrics follow the write via the derive surface
         # (the stored copies retired with the sync removal).
-        from natal.frontend.data._engine import (
+        from natal.frontend.model.ecology import (
             derive_equilibrium_metrics_from_draft,
         )
 
@@ -1228,7 +1228,7 @@ class TestDerivedMetricQueries:
         (e.g. a hardcoded constant) cannot pass.
         """
         pop = self._built_population("__slice3_derived_q2__")
-        from natal.frontend.data._engine import (
+        from natal.frontend.model.ecology import (
             derive_equilibrium_metrics_from_draft,
         )
 

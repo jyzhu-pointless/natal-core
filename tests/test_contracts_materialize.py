@@ -38,7 +38,7 @@ from natal.contracts import (
     ztype_names_from_registry,
 )
 from natal.contracts.materialize import materialize_params
-from natal.frontend.data import ModelDraft
+from natal.frontend.model import ModelDraft
 
 materialize_module = import_module("natal.contracts.materialize")
 

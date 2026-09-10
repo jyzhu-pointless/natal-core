@@ -25,10 +25,12 @@ from numpy.typing import NDArray
 
 from natal.frontend.data import (
     DiscretePopulationState,
-    ModelDraft,
     parse_flattened_discrete_state,
 )
 from natal.frontend.genetics import Genotype, Species
+from natal.frontend.model import (
+    ModelDraft,
+)
 from natal.frontend.population.base import BasePopulation
 from natal.frontend.registry.index import IndexRegistry
 from natal.frontend.utils.types import Sex

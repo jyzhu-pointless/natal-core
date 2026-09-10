@@ -164,6 +164,10 @@ class PopulationLayout:
 class SpatialHistoryLayout:
     """Per-deme layout parameters for spatial raw history rows.
 
+    Instances are derived from the co-located
+    :class:`PopulationLayout`; the per-deme sizes are pure functions of
+    its dimensions and are never stored independently.
+
     Attributes:
         n_demes: Total number of demes.
         ind_per_deme: Float64 values per deme for individual counts.
@@ -175,6 +179,27 @@ class SpatialHistoryLayout:
     ind_per_deme: int
     sperm_per_deme: int
 
+    @classmethod
+    def from_population(cls, population: PopulationLayout) -> SpatialHistoryLayout:
+        """Derive the per-deme row layout from a spatial population layout.
+
+        Args:
+            population: Population layout whose ``kind`` is spatial.
+
+        Returns:
+            A derived ``SpatialHistoryLayout``.
+        """
+        sperm_per_deme = (
+            population.n_ages * population.n_ztypes * population.n_ztypes
+            if population.has_sperm_storage
+            else 0
+        )
+        return cls(
+            n_demes=population.n_demes,
+            ind_per_deme=population.n_sexes * population.n_ages * population.n_ztypes,
+            sperm_per_deme=sperm_per_deme,
+        )
+
 
 @dataclass(frozen=True)
 class ObservationMetadata:
@@ -183,7 +208,6 @@ class ObservationMetadata:
     Attributes:
         labels: Observation group labels.
         collapse_age: Whether the age axis was collapsed.
-        n_groups: Number of observation groups.
         deme_indices: Ordered selected spatial demes, or ``None`` for
             non-spatial observations.
         deme_mode: Whether a spatial observation preserves or aggregates the
@@ -192,9 +216,13 @@ class ObservationMetadata:
 
     labels: Tuple[str, ...]
     collapse_age: bool
-    n_groups: int
     deme_indices: Optional[Tuple[int, ...]] = None
     deme_mode: Literal["preserve", "aggregate"] = "preserve"
+
+    @property
+    def n_groups(self) -> int:
+        """Number of observation groups (derived from the labels)."""
+        return len(self.labels)
 
 
 @dataclass(frozen=True)
@@ -206,14 +234,12 @@ class HistorySchema:
         population: Population layout defining array dimensions.
         row_size: Float64 values per history row (including tick).
         observation: Observation metadata (``None`` for raw mode).
-        spatial_layout: Spatial layout parameters (``None`` for panmictic).
     """
 
     mode: Literal["raw", "observation"]
     population: PopulationLayout
     row_size: int
     observation: Optional[ObservationMetadata] = None
-    spatial_layout: Optional[SpatialHistoryLayout] = None
 
     def __post_init__(self) -> None:
         """Validate that the storage mode and metadata agree.
@@ -228,6 +254,18 @@ class HistorySchema:
             raise ValueError("raw-mode schema must not have ObservationMetadata")
         if self.row_size <= 0:
             raise ValueError(f"row_size must be positive, got {self.row_size}")
+
+    @property
+    def spatial_layout(self) -> Optional[SpatialHistoryLayout]:
+        """Per-deme layout for spatial raw rows, derived from the population.
+
+        ``None`` for panmictic layouts and for observation-mode schemas —
+        observation rows are never spatial raw rows regardless of the
+        population kind.
+        """
+        if self.mode == "raw" and self.population.kind.startswith("spatial_"):
+            return SpatialHistoryLayout.from_population(self.population)
+        return None
 
 
 @dataclass(frozen=True)
@@ -620,7 +658,6 @@ class History:
         obs_meta = ObservationMetadata(
             labels=observation.labels,
             collapse_age=observation.collapse_age,
-            n_groups=n_groups,
             deme_indices=observation.deme_indices,
             deme_mode=observation.deme_mode,
         )
@@ -629,7 +666,6 @@ class History:
             population=pop,
             row_size=obs_row_size,
             observation=obs_meta,
-            spatial_layout=None,
         )
         obs_history = History(obs_schema)
 

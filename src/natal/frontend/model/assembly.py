@@ -1,22 +1,24 @@
-"""Config building logic — shared computation and ModelDraft factory.
+"""Model assembly: raw declaration inputs to a complete ModelDraft.
 
-This private module contains the shared computation engine
-``build_config_maps`` — one assembly point from raw declaration inputs to a
-complete :class:`ModelDraft` — and the public ``build_population_config``
-wrapper.  Both granularities consume the same engine; their real
-differences (discrete defaults, generation-time derivation) live in the
-callers.
+This module contains the shared assembly engine ``build_config_maps`` —
+one assembly point from raw declaration inputs to a complete
+:class:`ModelDraft` — the public ``build_population_config`` wrapper,
+the discrete-generation factory, custom-slot validation, and the
+Z-axis draft compression.  Both granularities consume the same engine;
+their real differences (discrete defaults, generation-time derivation)
+live in the callers.
 """
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Mapping
+from typing import Any, Callable, Optional
 
 import numpy as np
 from numpy.typing import NDArray
 
-from .config import ModelDraft
 from .constants import LOGISTIC
+from .draft import ModelDraft
 
 # Compatibility-gate tolerance: the same 1e-10 threshold the numeric
 # kernels use to decide whether a probability column is "reachable".
@@ -245,7 +247,7 @@ def build_config_maps(
     # Offspring probability tensor — via the single shared derivation
     # (counts resolve from the table shapes, which are already the
     # compressed/effective axes at this point).
-    from natal.frontend.data._engine import recompute_offspring_tensor
+    from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
     offspring_tensor = recompute_offspring_tensor(z2g_expanded, g2z)
 
@@ -473,3 +475,224 @@ def build_population_config(
         # assembled demographics; the engine leaves it at 0.0 otherwise.
         draft = draft._replace(generation_time=draft.compute_generation_time())
     return draft
+
+
+def build_discrete_engine_config(
+    *,
+    n_genotypes: int,
+    n_gtypes: int,
+    n_glabs: int,
+    n_slabs: int = 1,
+    gamete_labels: Optional[list[str]] = None,
+    somatic_labels: Optional[list[str]] = None,
+    zygotes_to_gametes_map: NDArray[np.float64],
+    gametes_to_zygotes_map: NDArray[np.float64],
+    carrying_capacity: float | None = None,
+    has_sex_chromosomes: bool = False,
+    **kwargs: Any,
+) -> ModelDraft:
+    """Build a discrete-generation :class:`ModelDraft`.
+
+    Discrete-specific defaults (juvenile survival=1.0, adult survival=0.0,
+    new_adult_age=1) are applied before the shared computation runs, and
+    the result stays in the unified ``(2, n_ages)`` vector schema — no
+    decomposition into discrete-only scalars or per-sex views.
+
+    Args:
+        n_genotypes: Diploid genotype count before slab expansion.
+        n_gtypes: Total gamete types (haplotypes x gamete labels).
+        n_glabs: Gamete-label variants per haplotype.
+        n_slabs: Somatic-label variants per genotype.
+        gamete_labels: Registered gamete label strings (unused here;
+            kept for signature parity with the age-structured factory).
+        somatic_labels: Registered somatic label strings (as above).
+        zygotes_to_gametes_map: (2, z, g) meiosis probabilities.
+        gametes_to_zygotes_map: (hl, hl, z) gamete pair mapping.
+        carrying_capacity: Environment capacity K.
+        has_sex_chromosomes: Sex-chromosome constraints active.
+        **kwargs: Remaining shared parameters (survival/mating vectors
+            are discrete-fixed; see body).
+
+    Returns:
+        A unified ``ModelDraft`` in the discrete normalization.
+    """
+    # Discrete-generation defaults.
+    n_ages = int(kwargs.pop("n_ages", 2))
+    new_adult_age = int(kwargs.pop("new_adult_age", 1))
+
+    # Survival: juveniles survive to adult (1.0), adults replaced every tick (0.0).
+    survival = np.ones((2, n_ages), dtype=np.float64)
+    survival[:, 0] = 1.0
+    survival[:, 1] = 0.0
+
+    # Mating / reproduction: only adults (age 1) participate.
+    mating = np.ones((2, n_ages), dtype=np.float64)
+    mating[:, 0] = 0.0
+    reproduction = np.ones(n_ages, dtype=np.float64)
+    reproduction[0] = 0.0
+    fertility = np.ones(n_ages, dtype=np.float64)
+    fertility[0] = 0.0
+
+    # Pop stochastic / continuous_sampling once into locals; both
+    # build_config_maps and the ModelDraft constructor need them, and a
+    # double kwargs.pop would silently fall back to the default on the
+    # second read (a pre-existing bug that gave stochastic=True even
+    # when the caller passed False).
+    stochastic_val = bool(kwargs.pop("stochastic", True))
+    continuous_sampling_val = bool(kwargs.pop("continuous_sampling", False))
+    equilibrium_val = kwargs.pop("equilibrium_individual_distribution", None)
+
+    return build_config_maps(
+        n_genotypes=n_genotypes,
+        n_gtypes=n_gtypes,
+        n_sexes=2,
+        n_ages=n_ages,
+        n_glabs=n_glabs,
+        n_slabs=n_slabs,
+        gamete_labels=gamete_labels,
+        somatic_labels=somatic_labels,
+        new_adult_age=new_adult_age,
+        stochastic=stochastic_val,
+        continuous_sampling=continuous_sampling_val,
+        age_based_mating_rates=mating,
+        age_based_reproduction_rates=reproduction,
+        age_based_survival_rates=survival,
+        female_age_based_fertility=fertility,
+        viability_fitness=kwargs.pop("viability_fitness", None),
+        fecundity_fitness=kwargs.pop("fecundity_fitness", None),
+        sexual_selection_fitness=kwargs.pop("sexual_selection_fitness", None),
+        zygote_viability_fitness=kwargs.pop("zygote_viability_fitness", None),
+        age_based_relative_competition_strength=kwargs.pop(
+            "age_based_relative_competition_strength", None
+        ),
+        sperm_displacement_rate=float(kwargs.pop("sperm_displacement_rate", 0.05)),
+        eggs_per_female=float(kwargs.pop("eggs_per_female", 100.0)),
+        fixed_egg_count=bool(kwargs.pop("fixed_egg_count", False)),
+        carrying_capacity=carrying_capacity or 1000.0,
+        sex_ratio=float(kwargs.pop("sex_ratio", 0.5)),
+        low_density_growth_rate=float(kwargs.pop("low_density_growth_rate", 6.0)),
+        juvenile_growth_mode=int(kwargs.pop("juvenile_growth_mode", 0)),  # LOGISTIC
+        has_sex_chromosomes=has_sex_chromosomes,
+        zygotes_to_gametes_map=zygotes_to_gametes_map,
+        gametes_to_zygotes_map=gametes_to_zygotes_map,
+        initial_individual_count=kwargs.pop("initial_individual_count", None),
+        initial_sperm_storage=kwargs.pop("initial_sperm_storage", None),
+        age_1_carrying_capacity=kwargs.pop("age_1_carrying_capacity", None),
+        old_juvenile_carrying_capacity=kwargs.pop(
+            "old_juvenile_carrying_capacity", None
+        ),
+        infer_capacity_from_initial_state=bool(
+            kwargs.pop("infer_capacity_from_initial_state", True)
+        ),
+        equilibrium_individual_distribution=equilibrium_val,
+        external_expected_eggs=kwargs.pop("external_expected_eggs", None),
+        pre_expanded=zygotes_to_gametes_map.shape[1] > n_genotypes,
+        extreme_speed_mode=int(kwargs.pop("extreme_speed_mode", 0)),
+        generation_time=0.0,
+        ztype_names=kwargs.pop("ztype_names", None),
+        gtype_names=kwargs.pop("gtype_names", None),
+        discrete_generation=True,
+    )
+
+
+def build_custom_slots(
+    specs: Mapping[str, object],
+) -> dict[str, bool | int | float | NDArray[np.float64]]:
+    """Validate and normalize user custom slot values.
+
+    Called by :meth:`PopulationBuilder.custom` and the legacy
+    ``PopulationBuilderBase.custom``.  The draft's ``custom`` field is a
+    plain ``{name: value}`` dict (the runtime ``Params.custom_slots``
+    contract); this helper is the single validation point for what may
+    enter it.
+
+    Normalization per entry:
+
+    - NumPy scalars (``np.generic``) → native Python values via ``item()``
+      (``np.bool_`` → ``bool``, ``np.integer`` → ``int``, ``np.floating``
+      → ``float``).
+    - Native ``bool`` / ``int`` / ``float`` pass through unchanged.
+    - ``np.ndarray`` of any rank → fresh float64 C-contiguous copy (the draft
+      owns its arrays; callers never share storage with user input).
+
+    Args:
+        specs: ``{name: value}`` mapping of custom field names to values.
+
+    Returns:
+        A fresh normalized ``{name: value}`` mapping.
+
+    Raises:
+        TypeError: If a value has an unsupported type.
+    """
+    slots: dict[str, bool | int | float | NDArray[np.float64]] = {}
+    for name, val in specs.items():
+        if isinstance(val, np.ndarray):
+            slots[str(name)] = np.array(val, dtype=np.float64, order="C")
+        elif isinstance(val, np.generic):
+            # NumPy scalar → native Python value via .item() (np.bool_ →
+            # bool, np.integer → int, np.floating → float).
+            slots[str(name)] = val.item()
+        elif isinstance(val, (bool, int, float)):
+            # Native Python values pass through unchanged.  bool is a
+            # subclass of int, but the value is stored as given, so the
+            # runtime type is preserved either way.
+            slots[str(name)] = val
+        else:
+            raise TypeError(
+                f"custom field '{name}' has unsupported type {type(val).__name__!r}. "
+                f"Supported types: bool, int, float (including NumPy scalars), "
+                f"or np.ndarray."
+            )
+    return slots
+
+
+def compress_config(
+    config: ModelDraft,
+    ztype_mask: NDArray[np.int32],
+) -> ModelDraft:
+    """Subslice the Z-axis fitness/state fields and the name directory.
+
+    Pure function — returns a new draft via ``_replace`` without mutating
+    the original.
+
+    Scope note: only the fields listed in the body are subsliced.  The
+    meiosis/gamete maps and ``offspring_tensor`` are intentionally NOT
+    touched here — the build pipeline (``rebuild_config_maps``) slices
+    and recomputes them from the modifier maps before calling this.
+    Calling this function standalone therefore leaves those maps at the
+    pre-compression axis size.
+
+    Args:
+        config: Draft to compress.
+        ztype_mask: ``(n_ztypes,)`` int32 array — -1 = pruned.
+
+    Returns:
+        A new draft with the Z-axis fitness/state fields compressed.
+    """
+    _z_active = ztype_mask >= 0
+    n_g = int(_z_active.sum())
+
+    overrides: dict[str, Any] = {
+        "n_ztypes": n_g,
+        "initial_individual_count": config.initial_individual_count[:, :, _z_active],
+        "viability_fitness": config.viability_fitness[:, :, _z_active],
+        "fecundity_fitness": config.fecundity_fitness[:, _z_active],
+        "sexual_selection_fitness": config.sexual_selection_fitness[_z_active, :][
+            :, _z_active
+        ],
+        "zygote_viability_fitness": config.zygote_viability_fitness[:, _z_active],
+        "female_ztype_compatibility": config.female_ztype_compatibility[_z_active],
+        "male_ztype_compatibility": config.male_ztype_compatibility[_z_active],
+        "female_only_by_sex_chrom": config.female_only_by_sex_chrom[_z_active],
+        "male_only_by_sex_chrom": config.male_only_by_sex_chrom[_z_active],
+        "initial_sperm_storage": config.initial_sperm_storage[:, _z_active, :][
+            :, :, _z_active
+        ],
+        "ztype_names": tuple(
+            name
+            for name, active in zip(config.ztype_names, _z_active.tolist())
+            if active
+        ),
+    }
+
+    return config._replace(**overrides)

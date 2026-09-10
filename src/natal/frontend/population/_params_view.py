@@ -33,8 +33,8 @@ from natal.frontend.builder._writers import NATIVE_SCALAR_FIELDS, CoreConfigWrit
 from natal.frontend.utils.parameters import ParamDescriptor
 
 if TYPE_CHECKING:
-    from natal.frontend.data import ModelDraft
     from natal.frontend.genetics import Species
+    from natal.frontend.model import ModelDraft
     from natal.frontend.population.base import BasePopulation
     from natal.frontend.registry.index import IndexRegistry
 
@@ -218,7 +218,7 @@ class ParamsView:
         cached copy), so runtime parameter writes are reflected
         immediately.
         """
-        from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
+        from natal.frontend.model.ecology import derive_equilibrium_metrics_from_draft
 
         return derive_equilibrium_metrics_from_draft(self._draft)[0]
 
@@ -230,7 +230,7 @@ class ParamsView:
         cached copy), so runtime parameter writes are reflected
         immediately.
         """
-        from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
+        from natal.frontend.model.ecology import derive_equilibrium_metrics_from_draft
 
         return derive_equilibrium_metrics_from_draft(self._draft)[1]
 

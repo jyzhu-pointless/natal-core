@@ -14,10 +14,10 @@ import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
-    from natal.frontend.data.config import ModelDraft
-    from natal.frontend.data.definition import ModelDefinition
     from natal.frontend.genetics.compile import GameteList, ZygoteList
     from natal.frontend.genetics.structures.species import Species
+    from natal.frontend.model.definition import ModelDefinition
+    from natal.frontend.model.draft import ModelDraft
     from natal.frontend.registry.index import IndexRegistry
 
 FITNESS_FIELDS = (

@@ -12,6 +12,7 @@ the :class:`TickContext` — the population is never re-dressed for a callback.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple, cast
 
 import numpy as np
@@ -22,8 +23,8 @@ from natal.frontend.hooks.types import RESULT_STOP
 
 if TYPE_CHECKING:
     from natal.frontend.builder import RuntimeUpdater
-    from natal.frontend.data import ModelDraft
     from natal.frontend.genetics import Species
+    from natal.frontend.model import ModelDraft
     from natal.frontend.population._params_view import ParamsView
     from natal.frontend.population.base import BasePopulation
     from natal.frontend.registry.index import IndexRegistry
@@ -41,77 +42,37 @@ _EVENT_METADATA_NAMES: tuple[str, ...] = (
 )
 
 
+@dataclass(frozen=True)
 class BlueprintView:
-    """Read-only blueprint: dimensions, name catalogs, and switches."""
+    """Read-only blueprint: dimensions, name catalogs, and switches.
 
-    def __init__(
-        self,
-        *,
-        n_sexes: int,
-        n_ages: int,
-        n_ztypes: int,
-        discrete: bool,
-        stochastic: bool,
-        continuous_sampling: bool,
-        extreme_speed_mode: int,
-        ztype_names: Tuple[str, ...],
-        gtype_names: Tuple[str, ...],
-    ) -> None:
-        """Bind the immutable blueprint fields."""
-        self._n_sexes = n_sexes
-        self._n_ages = n_ages
-        self._n_ztypes = n_ztypes
-        self._discrete = discrete
-        self._stochastic = stochastic
-        self._continuous_sampling = continuous_sampling
-        self._extreme_speed_mode = extreme_speed_mode
-        self._ztype_names = ztype_names
-        self._gtype_names = gtype_names
+    A frozen dataclass, so every field is a read-only attribute; the
+    restricted blueprint meaning (no lifecycle, no parameter access)
+    is unchanged.
 
-    @property
-    def n_sexes(self) -> int:
-        """Number of sexes (state axis 0)."""
-        return self._n_sexes
+    Attributes:
+        n_sexes: Number of sexes (state axis 0).
+        n_ages: Number of age classes (state axis 1).
+        n_ztypes: Number of zygote types after slab expansion (state axis 2).
+        discrete: Whether the population uses the discrete-generation model.
+        stochastic: Whether stochastic sampling is enabled.
+        continuous_sampling: Whether continuous (Beta/Dirichlet) sampling
+            is enabled.
+        extreme_speed_mode: Wright-Fisher fused-tick mode (0 = staged
+            lifecycle).
+        ztype_names: Zygote-type name catalog indexed by ztype id.
+        gtype_names: Genotype name catalog indexed by gtype id.
+    """
 
-    @property
-    def n_ages(self) -> int:
-        """Number of age classes (state axis 1)."""
-        return self._n_ages
-
-    @property
-    def n_ztypes(self) -> int:
-        """Number of zygote types after slab expansion (state axis 2)."""
-        return self._n_ztypes
-
-    @property
-    def discrete(self) -> bool:
-        """Whether the population uses the discrete-generation model."""
-        return self._discrete
-
-    @property
-    def stochastic(self) -> bool:
-        """Whether stochastic sampling is enabled."""
-        return self._stochastic
-
-    @property
-    def continuous_sampling(self) -> bool:
-        """Whether continuous (Beta/Dirichlet) sampling is enabled."""
-        return self._continuous_sampling
-
-    @property
-    def extreme_speed_mode(self) -> int:
-        """Wright-Fisher fused-tick mode (0 = staged lifecycle)."""
-        return self._extreme_speed_mode
-
-    @property
-    def ztype_names(self) -> Tuple[str, ...]:
-        """Zygote-type name catalog indexed by ztype id."""
-        return self._ztype_names
-
-    @property
-    def gtype_names(self) -> Tuple[str, ...]:
-        """Genotype name catalog indexed by gtype id."""
-        return self._gtype_names
+    n_sexes: int
+    n_ages: int
+    n_ztypes: int
+    discrete: bool
+    stochastic: bool
+    continuous_sampling: bool
+    extreme_speed_mode: int
+    ztype_names: Tuple[str, ...]
+    gtype_names: Tuple[str, ...]
 
 
 class TickMetrics:
@@ -250,7 +211,7 @@ class TickMetrics:
 
     def _equilibrium_metrics(self) -> tuple[float, float]:
         """Compute the (C*, s*) pair from the current sex-age totals."""
-        from natal.frontend.data._engine import equilibrium_metrics_dispatch
+        from natal.frontend.model.ecology import equilibrium_metrics_dispatch
 
         config = self._config()
         ic = self._state.individual_count

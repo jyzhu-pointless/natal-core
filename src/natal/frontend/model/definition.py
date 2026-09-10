@@ -21,8 +21,8 @@ from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from natal.frontend.builder import PopulationBuilder
-    from natal.frontend.data.config import ModelDraft
     from natal.frontend.genetics import Species
+    from natal.frontend.model.draft import ModelDraft
     from natal.frontend.patterns import IndividualSelector
     from natal.frontend.presets import GeneticPreset
     from natal.frontend.registry.index import IndexRegistry

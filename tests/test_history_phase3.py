@@ -320,7 +320,7 @@ class TestReadOnlyCachedArrays:
         from natal.frontend.output.history import ObservationMetadata
 
         layout = _minimal_layout(n_ztypes=3)
-        om = ObservationMetadata(labels=("g0",), collapse_age=False, n_groups=1)
+        om = ObservationMetadata(labels=("g0",), collapse_age=False)
         obs_schema = HistorySchema(
             mode="observation", population=layout, row_size=5, observation=om
         )
@@ -339,7 +339,7 @@ class TestReadOnlyCachedArrays:
 
         layout = _minimal_layout(n_sexes=n_sexes, n_ages=n_ages, n_ztypes=3)
         om = ObservationMetadata(
-            labels=("g0", "g1"), collapse_age=False, n_groups=n_groups
+            labels=("g0", "g1"), collapse_age=False
         )
         obs_schema = HistorySchema(
             mode="observation",
@@ -366,7 +366,7 @@ class TestReadOnlyCachedArrays:
         row_size = 1 + n_groups * n_sexes * n_ages
 
         layout = _minimal_layout(n_sexes=n_sexes, n_ages=n_ages, n_ztypes=3)
-        om = ObservationMetadata(labels=("g0",), collapse_age=False, n_groups=1)
+        om = ObservationMetadata(labels=("g0",), collapse_age=False)
         obs_schema = HistorySchema(
             mode="observation",
             population=layout,
@@ -390,7 +390,7 @@ class TestReadOnlyCachedArrays:
 
         row_size = 1 + 1 * 2 * 2  # 5
         layout = _minimal_layout(n_sexes=2, n_ages=2, n_ztypes=3)
-        om = ObservationMetadata(labels=("g0",), collapse_age=False, n_groups=1)
+        om = ObservationMetadata(labels=("g0",), collapse_age=False)
         obs_schema = HistorySchema(
             mode="observation",
             population=layout,
@@ -540,7 +540,7 @@ class TestReadOnlyCachedArrays:
         from natal.frontend.output.history import ObservationMetadata
 
         layout = _minimal_layout(n_sexes=2, n_ages=2, n_ztypes=3, has_sperm_storage=True)
-        om = ObservationMetadata(labels=("g0",), collapse_age=False, n_groups=1)
+        om = ObservationMetadata(labels=("g0",), collapse_age=False)
         obs_schema = HistorySchema(
             mode="observation", population=layout, row_size=5, observation=om
         )
@@ -816,7 +816,7 @@ class TestRestoreState:
         from natal.frontend.output.history import ObservationMetadata
 
         layout = _minimal_layout(n_ztypes=3)
-        om = ObservationMetadata(labels=("g0",), collapse_age=False, n_groups=1)
+        om = ObservationMetadata(labels=("g0",), collapse_age=False)
         obs_schema = HistorySchema(
             mode="observation", population=layout, row_size=5, observation=om
         )
@@ -1251,7 +1251,7 @@ class TestCacheInvalidationAfterClear:
 
         row_size = 1 + 1 * 2 * 2  # 5
         layout = _minimal_layout(n_sexes=2, n_ages=2, n_ztypes=3)
-        om = ObservationMetadata(labels=("g0",), collapse_age=False, n_groups=1)
+        om = ObservationMetadata(labels=("g0",), collapse_age=False)
         obs_schema = HistorySchema(
             mode="observation",
             population=layout,

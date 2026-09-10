@@ -1,12 +1,9 @@
 import numpy as np
 
 import natal as nt
-from natal.frontend.data import (
-    NO_COMPETITION,
-    build_discrete_engine_config,
-    initialize_gamete_map,
-    initialize_zygote_map,
-)
+from natal.frontend.model import NO_COMPETITION, build_discrete_engine_config
+from natal.frontend.genetics import initialize_gamete_map, initialize_zygote_map
+
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
 
 

@@ -4,7 +4,7 @@ import pytest  # type: ignore
 
 import natal as nt
 from natal.frontend.genetics import SexChromosomeType
-from natal.frontend.data import extract_gamete_frequencies, initialize_gamete_map
+from natal.frontend.genetics import extract_gamete_frequencies, initialize_gamete_map
 from natal.frontend.utils.types import Sex
 
 

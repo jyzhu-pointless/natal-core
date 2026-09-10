@@ -496,7 +496,7 @@ class TestModifierRegression:
             .presets(nt.Wolbachia(name="wMel", viability_scaling=1.0))
             .build()
         )
-        from natal.frontend.data._engine import recompute_offspring_tensor
+        from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
         cfg = pop.config
         recomputed = recompute_offspring_tensor(

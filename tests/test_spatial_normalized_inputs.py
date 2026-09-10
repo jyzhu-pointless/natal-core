@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.data.definition import ModelDefinition
+from natal.frontend.model.definition import ModelDefinition
 from natal.frontend.spatial.builder import SpatialPopulationBuilder, batch_setting
 from tests.test_evaluator_compiler_regressions import _OpaqueResourcePreset
 

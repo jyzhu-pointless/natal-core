@@ -1,7 +1,7 @@
 """Materialization: build-time draft -> contract data.
 
 ``build()`` calls :func:`materialize` once to turn the build-time draft
-(:class:`~natal.frontend.data.config.ModelDraft`) into the two runtime
+(:class:`~natal.frontend.model.draft.ModelDraft`) into the two runtime
 artefacts:
 
 - a :class:`~natal.contracts.blueprint.Blueprint` holding the frozen
@@ -27,7 +27,7 @@ from numpy.typing import NDArray
 
 from natal.contracts.blueprint import Blueprint, format_type_name, frozen
 from natal.contracts.params import CustomValue, Params
-from natal.frontend.data.config import ModelDraft
+from natal.frontend.model.draft import ModelDraft
 
 __all__ = ["Materialized", "SpatialMigration", "materialize", "materialize_params"]
 

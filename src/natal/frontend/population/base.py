@@ -32,8 +32,6 @@ from numpy.typing import NDArray
 
 from natal.frontend.data import (
     DiscretePopulationState,
-    ModelDefinition,
-    ModelDraft,
     PopulationState,
 )
 from natal.frontend.genetics import Genotype, HaploidGenotype, Species
@@ -43,6 +41,10 @@ from natal.frontend.hooks.types import (
     RESULT_CONTINUE,
     CompiledHookDescriptor,
     HookProgram,
+)
+from natal.frontend.model import (
+    ModelDefinition,
+    ModelDraft,
 )
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 from natal.frontend.registry.index import IndexRegistry
@@ -1322,7 +1324,7 @@ class BasePopulation(ABC, Generic[T_State]):
         overrides: dict[str, float | NDArray[np.float64] | None] = {}
         custom = ecology.get("custom_slots")
         if isinstance(custom, dict) and self._config is not None:
-            from natal.frontend.data import build_custom_slots
+            from natal.frontend.model import build_custom_slots
 
             self._config = self._config._replace(custom=build_custom_slots(cast("Mapping[str, object]", custom)))
         for name, value in ecology.items():
@@ -1419,7 +1421,6 @@ class BasePopulation(ABC, Generic[T_State]):
             population=layout,
             row_size=row_size,
             observation=None,
-            spatial_layout=None,
         )
         self._history_obj = History(schema, max_rows=self.max_history)
 

@@ -1,8 +1,8 @@
 """Contract tests for the post-shim Phase-0/6 relocation state.
 
-The 16 legacy top-level forwarding shims (``natal.<mod>`` for every relocated
+The legacy top-level forwarding shims (``natal.<mod>`` for every relocated
 frontend package plus ``natal.engine``) were removed when the Phase-0
-reorganization completed.  The real package tree is now
+reorganization completed; the package set grew by ``model`` in P9.  The real package tree is now
 ``natal.frontend.*``, ``natal.backends.*``, and ``natal.contracts``
 (plus the compiled ``natal._engine_rs`` extension).  These tests pin the
 "API surface unchanged, legacy paths gone" promise through five invariant
@@ -14,7 +14,7 @@ classes:
    cycle is broken by PEP 562 deferral, so a clean interpreter must be able
    to import the involved modules in ANY order.
 3. Lazy-map completeness (axis combination): every name in the top-level
-   ``natal._lazy_map`` (209 names across 16 real owning modules) resolves
+   ``natal._lazy_map`` (210 names across 17 real owning modules) resolves
    through ``getattr(natal, name)`` to the very object its owning module
    exports, and legacy package keys (``natal.hooks`` etc.) resolve to the
    relocated module object.
@@ -37,11 +37,12 @@ import natal
 # Data tables: legacy paths that must NOT exist anymore.
 # =====================================================================
 
-# The 14 relocated legacy packages: natal.<mod> used to be a forwarding shim
+# The relocated legacy packages: natal.<mod> used to be a forwarding shim
 # of natal.frontend.<mod>.  ``engine`` is covered by ENGINE_LEGACY_PATHS
 # below (its shim exported no ``__all__`` names).  ``configurator`` lost its
 # legacy key to the P5 ``builder`` rename and is covered by the P5 negative
-# contract at the end of this module.
+# contract at the end of this module; ``model`` joined with the P9 package
+# split (``natal.model`` resolves to ``natal.frontend.model``).
 _RELOCATED_PACKAGES: Tuple[str, ...] = (
     "patterns",
     "registry",
@@ -51,6 +52,7 @@ _RELOCATED_PACKAGES: Tuple[str, ...] = (
     "modifiers",
     "output",
     "data",
+    "model",
     "builder",
     "population",
     "spatial",
@@ -374,9 +376,9 @@ def test_lazy_map_every_name_resolves_to_owner_export() -> None:
 
 
 def test_lazy_map_owner_axes_and_size() -> None:
-    """The lazy map is built from exactly the 16 expected owning modules.
+    """The lazy map is built from exactly the 17 expected owning modules.
 
-    Invariant (axis combination): the owner set of the index must be the 15
+    Invariant (axis combination): the owner set of the index must be the 16
     relocated frontend packages plus ``contracts`` — the legacy shims are
     gone and no ``backends.*`` unit joined (their ``__all__`` is empty).
     """
@@ -627,7 +629,7 @@ def test_p3_retired_exports_stay_removed() -> None:
     for name in ("NormalizedModel", "CompiledModel", "snapshot_inputs"):
         assert not hasattr(compiler, name), f"retired export {name!r} is back"
 
-    definition_mod = importlib.import_module("natal.frontend.data.definition")
+    definition_mod = importlib.import_module("natal.frontend.model.definition")
     assert not hasattr(definition_mod.ModelDefinition, "normalized"), (
         "the retired .normalized intermediate accessor is back"
     )
@@ -635,7 +637,7 @@ def test_p3_retired_exports_stay_removed() -> None:
 
     # The surviving public surface keeps its canonical export paths.
     assert getattr(natal, "ModelDefinition") is definition_mod.ModelDefinition
-    config_mod = importlib.import_module("natal.frontend.data.config")
+    config_mod = importlib.import_module("natal.frontend.model.draft")
     assert config_mod.ModelDraft is not None
     assert hasattr(natal, "ModelDraft")
 
@@ -719,3 +721,54 @@ def test_p5_retired_configurator_surface_stays_removed() -> None:
 
     chain = DiscreteGenerationPopulation.setup(species)
     assert type(chain) is natal.PopulationBuilder
+
+
+def _spec_is_none_p9(module: str) -> bool:
+    """Whether *module* has no importable spec (missing parents count as gone)."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(module) is None
+    except ModuleNotFoundError:
+        return True
+
+
+def test_p9_retired_data_module_paths_stay_removed() -> None:
+    """Negative contract: module paths retired by the P9 directory split.
+
+    The ``data`` package keeps only the state snapshot types; declaration
+    and draft assembly moved to ``natal.frontend.model``, and the genetic
+    matrix computation moved to ``natal.frontend.genetics.matrices``.  The
+    former module paths must be gone, while the moved names stay exported
+    at the top level under their new owning units.
+    """
+    for module in (
+        "natal.frontend.data._builders",
+        "natal.frontend.data._config",
+        "natal.frontend.data._engine",
+        "natal.frontend.data._extract",
+        "natal.frontend.data.config",
+        "natal.frontend.data.constants",
+        "natal.frontend.data.definition",
+    ):
+        assert _spec_is_none_p9(module), f"retired module {module!r} is importable"
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module)
+
+    # The shrunken data package still owns the state snapshot surface.
+    data_pkg = importlib.import_module("natal.frontend.data")
+    assert data_pkg.PopulationState is natal.PopulationState
+    assert data_pkg.DiscretePopulationState is natal.DiscretePopulationState
+
+    # The new model unit publishes the moved declaration/draft names, and
+    # the genetics unit the moved matrix constructors.
+    model_pkg = importlib.import_module("natal.frontend.model")
+    assert model_pkg.ModelDefinition is natal.ModelDefinition
+    assert model_pkg.ModelDraft is natal.ModelDraft
+    genetics_pkg = importlib.import_module("natal.frontend.genetics")
+    assert genetics_pkg.initialize_zygote_map is natal.initialize_zygote_map
+    assert genetics_pkg.compress_hl is natal.compress_hl
+    matrices_mod = importlib.import_module("natal.frontend.genetics.matrices")
+    assert matrices_mod.recompute_offspring_tensor.__module__ == (
+        "natal.frontend.genetics.matrices"
+    )

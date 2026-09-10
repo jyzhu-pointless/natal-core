@@ -24,8 +24,9 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.data import ModelDraft, PopulationState
+from natal.frontend.data import PopulationState
 from natal.frontend.genetics import Genotype, Species
+from natal.frontend.model import ModelDraft
 from natal.frontend.population.base import BasePopulation
 from natal.frontend.registry.index import IndexRegistry
 from natal.frontend.utils.types import Sex

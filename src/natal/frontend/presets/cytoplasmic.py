@@ -10,8 +10,11 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.data import extract_gamete_frequencies_by_glab
-from natal.frontend.genetics import Genotype, Species
+from natal.frontend.genetics import (
+    Genotype,
+    Species,
+    extract_gamete_frequencies_by_glab,
+)
 from natal.frontend.modifiers.gamete_conversion import (
     GameteConversionRuleSet,
     _build_single_rule_matrix,

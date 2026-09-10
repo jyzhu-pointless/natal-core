@@ -36,8 +36,12 @@ from typing import (
     Union,
 )
 
-from natal.frontend.data import initialize_zygote_map
-from natal.frontend.genetics import Gene, Genotype, HaploidGenotype
+from natal.frontend.genetics import (
+    Gene,
+    Genotype,
+    HaploidGenotype,
+    initialize_zygote_map,
+)
 from natal.frontend.modifiers.conditions import Condition
 from natal.frontend.modifiers.module import (
     GenotypeFilter,

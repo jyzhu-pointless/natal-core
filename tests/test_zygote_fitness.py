@@ -8,7 +8,7 @@ import uuid
 import numpy as np
 
 import natal as nt
-from natal.frontend.data import build_population_config
+from natal.frontend.model import build_population_config
 from natal.frontend.genetics import Species
 
 

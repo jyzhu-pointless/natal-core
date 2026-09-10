@@ -18,11 +18,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from natal.frontend.data import (
+from natal.frontend.genetics import Species, build_compression_mask
+from natal.frontend.model import (
     ModelDraft,
     compress_config,
 )
-from natal.frontend.genetics import Species, build_compression_mask
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
@@ -118,11 +118,11 @@ def rebuild_config_maps(
         whether compression ran.  The input *config* is never mutated;
         *registry* is compressed in place when compression applies.
     """
-    from natal.frontend.data._engine import recompute_offspring_tensor
     from natal.frontend.genetics.compile import (
         compile_modifier_maps,
         project_mendelian_maps,
     )
+    from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
     # ---- resolve genotype/haplotype lists from the registry ----
     haploid_genotypes = registry.index_to_haplo

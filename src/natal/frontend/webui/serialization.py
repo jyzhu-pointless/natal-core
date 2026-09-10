@@ -26,9 +26,9 @@ import numpy as np
 from numpy.typing import NDArray
 from typing_extensions import TypedDict
 
-from natal.frontend.data.config import ModelDraft
 from natal.frontend.data.state import DiscretePopulationState, PopulationState
 from natal.frontend.genetics.structures.species import Species
+from natal.frontend.model.draft import ModelDraft
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 from natal.frontend.output.history import History
 from natal.frontend.population.age_structured import AgeStructuredPopulation
@@ -511,7 +511,7 @@ class ConfigPayload(TypedDict):
 
 def _growth_mode_name(mode: int) -> str:
     """Map a numeric growth mode constant to its name."""
-    from natal.frontend.data import BEVERTON_HOLT, FIXED, LINEAR, NO_COMPETITION
+    from natal.frontend.model import BEVERTON_HOLT, FIXED, LINEAR, NO_COMPETITION
 
     mapping = {
         NO_COMPETITION: "NO_COMPETITION",
@@ -549,7 +549,7 @@ def to_jsonable(value: object) -> object:  # object: accepts arbitrary config-dr
 
 def config_payload(population: GeneticStructureLike) -> ConfigPayload:
     """Serialize scalar parameters, fitness tables, and preset summary."""
-    from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
+    from natal.frontend.model.ecology import derive_equilibrium_metrics_from_draft
 
     config = population.config
     registry = population.registry
@@ -1145,7 +1145,9 @@ def apply_observation(
 
     Group spec keys mirror the legacy observation panel: ``genotype``
     (list of labels or ``"*"`` pattern), ``sex`` (``"female"``/``"male"``,
-    omitted for both), and ``age`` (``[start, end]`` inclusive).
+    omitted for both), and ``age`` (``[start, end]`` inclusive).  The
+    legacy spellings are normalized to :class:`IndividualSelector` values
+    at the observation-filter boundary.
     """
     from natal.frontend.output.observation import ObservationFilter
 

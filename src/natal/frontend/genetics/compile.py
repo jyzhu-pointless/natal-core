@@ -16,11 +16,11 @@ from typing import TYPE_CHECKING, Optional, Protocol, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.data._engine import recompute_offspring_tensor
+from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
 if TYPE_CHECKING:
-    from natal.frontend.data.config import ModelDraft
     from natal.frontend.genetics.structures.species import Species
+    from natal.frontend.model.draft import ModelDraft
     from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
     from natal.frontend.registry.index import IndexRegistry
 
