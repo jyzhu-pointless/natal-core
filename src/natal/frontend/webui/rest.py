@@ -13,6 +13,7 @@ from typing import Literal, cast
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
+from natal.frontend.patterns import PatternParseError
 from natal.frontend.spatial.population import SpatialPopulation
 
 from .serialization import (
@@ -215,7 +216,7 @@ async def _post_observation(
     with _session(request).engine_lock:
         try:
             return apply_observation(population, groups, body.collapse_age)
-        except (ValueError, TypeError) as err:
+        except (ValueError, TypeError, PatternParseError) as err:
             # Client-supplied group specs: boundary validation failures are
             # request errors (same convention as _int_query/_get_diff).
             raise HTTPException(status_code=422, detail=str(err)) from err

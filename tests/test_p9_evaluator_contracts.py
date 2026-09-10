@@ -565,3 +565,192 @@ def test_blueprint_view_stays_read_only() -> None:
         "n_sexes", "n_ages", "n_ztypes", "discrete", "stochastic",
         "continuous_sampling", "extreme_speed_mode", "ztype_names", "gtype_names",
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Round 2 (6f51b24 repairs): adopted-decision consistency and error routing
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [
+        pytest.param({"g": {"genotype": []}}, id="genotype-empty-list"),
+        pytest.param({"g": {"genotype": ()}}, id="genotype-empty-tuple"),
+        pytest.param({"g": {"genotype": set()}}, id="genotype-empty-set"),
+        pytest.param({"g": {"sex": frozenset()}}, id="sex-empty-frozenset"),
+        pytest.param({"g": {"sex": np.array([])}}, id="sex-empty-ndarray"),
+    ],
+)
+def test_every_explicit_empty_selector_raises_not_wildcards(groups: Any) -> None:
+    """Adopted decision #2: an explicit empty selector raises ``ValueError``.
+
+    ``{"genotypes": []}``, ``{"sex": []}`` and ``{"age": []}`` already raise
+    with wildcard guidance.  The primary ``"genotype"`` key does not: the
+    boundary reads ``source.get("genotype") or source.get("genotypes")`` and
+    an empty container is falsy, so ``{"genotype": []}`` silently widens to
+    every ZType.  Empty non-list sex iterables (frozenset, ndarray) take the
+    ``Iterable`` branch, which lacks the empty guard the age branch has.
+    """
+    registry = _registry("p9_eval_r2_empty")
+    with pytest.raises(ValueError, match="selects no"):
+        ObservationFilter(registry).build_filter(
+            groups=groups, n_sexes=2, n_ages=3, n_ztypes=registry.n_ztypes
+        )
+
+
+@pytest.mark.parametrize("zero", [0, np.int64(0)], ids=["int", "numpy"])
+def test_bare_genotype_index_zero_selects_genotype_zero(zero: Any) -> None:
+    """A bare integer genotype selector is a registry index, including ``0``.
+
+    ``_genotype_patterns`` documents a bare integer as "an integer registry
+    genotype index" and ``{"genotype": 1}`` selects genotype 1, but the
+    ``or``-based key lookup treats the falsy ``0`` as absent and silently
+    selects every ZType.  P9 introduced bare-integer acceptance (the legacy
+    compiler rejected bare ints), so the inconsistency is new.
+    """
+    registry = _registry("p9_eval_r2_zero")
+    bare = _mask(registry, {"g": {"genotype": zero}})
+    listed = _mask(registry, {"g": {"genotype": [0]}})
+    np.testing.assert_array_equal(bare, listed)
+    assert sorted(int(z) for z in np.nonzero(bare[0, 0, 0, :])[0]) == [0]
+
+
+def test_dashboard_apply_reports_inverted_window_as_error_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An inverted panel window must surface through the panel's error label.
+
+    ``_selector_from_panel_state`` now raises ``ValueError`` for
+    ``age_start > age_end`` (round-1 repair), but ``_apply`` builds the
+    selector mapping *before* its ``try`` block, so the exception escapes
+    the NiceGUI event handler instead of rendering ``"Error: …"`` like every
+    other group failure.
+    """
+    from natal.frontend.ui import dashboard_helpers
+
+    registry = _registry("p9_eval_r2_dashboard")
+    fake_ui = _FakeUI()
+    monkeypatch.setattr(dashboard_helpers, "ui", fake_ui)
+    monkeypatch.setattr(
+        dashboard_helpers,
+        "render_observation_results",
+        lambda obs, state: obs.build_mask(2, 3, registry.n_ztypes),
+    )
+    panel = object.__new__(dashboard_helpers.ObservationPanel)
+    panel._results_container = fake_ui  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]  # test double for the NiceGUI column
+    panel._collapse_age = None  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
+    panel._get_registry = lambda: registry  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
+    panel._get_state = lambda: None  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
+    panel._observation = None  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
+    panel._group_specs = [  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
+        {"genotype": None, "sex": "both", "age_start": 2, "age_end": 1},
+    ]
+
+    panel._apply()  # pyright: ignore[reportPrivateUsage]  # must not raise
+
+    assert any(
+        label.startswith("Error:") and "selects no ages" in label
+        for label in fake_ui.labels
+    ), fake_ui.labels
+    assert panel._observation is None  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
+
+
+def test_webui_malformed_pattern_is_a_client_error() -> None:
+    """A syntactically invalid genotype pattern is a 422, not a 500.
+
+    The round-1 repair maps ``ValueError``/``TypeError`` from the boundary
+    to 422 as "client-supplied group spec validation failures".
+    ``PatternParseError`` (raised for a pattern without a ``|``/``::``
+    separator, e.g. the bare label ``"WT"``) derives from ``Exception``
+    only, so the most common typo in the free-text pattern box still
+    produces an unhandled 500.
+    """
+    app = create_app(_build_age_population("p9_eval_r2_webui_parse"), title="p9")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/api/observation",
+            json={"groups": [{"genotype": ["WT"]}], "collapse_age": True},
+        )
+    assert response.status_code == 422, response.text
+    assert "detail" in response.json()
+
+
+@pytest.mark.parametrize(
+    ("groups", "match"),
+    [
+        pytest.param({"g": {"genotypes": []}}, "no genotypes", id="genotypes-plural-empty"),
+        pytest.param({"g": {"sex": []}}, "no sexes", id="sex-empty-list"),
+        pytest.param({"g": {"sex": ()}}, "no sexes", id="sex-empty-tuple"),
+        pytest.param({"g": {"age": []}}, "no ages", id="age-empty-list"),
+        pytest.param({"g": {"age": set()}}, "no ages", id="age-empty-set"),
+        pytest.param({"g": {"age": range(5, 3)}}, "no ages", id="age-empty-range"),
+        pytest.param({"g": {"age": np.array([])}}, "no ages", id="age-empty-ndarray"),
+        pytest.param({"g": {"age": [[]]}}, "no ages", id="age-nested-empty"),
+    ],
+)
+def test_adopted_empty_selector_contract_raises_with_wildcard_guidance(
+    groups: Any, match: str
+) -> None:
+    """Adopted decision #2 (6f51b24): explicit empties raise, ``None`` is the wildcard.
+
+    Pins the spellings the repair already handles so the guidance message
+    and the exception type stay stable; the falsy ``"genotype"`` key case
+    is the separate failing target above.
+    """
+    registry = _registry("p9_eval_r2_empty_ok")
+    with pytest.raises(ValueError, match=match) as excinfo:
+        ObservationFilter(registry).build_filter(
+            groups=groups, n_sexes=2, n_ages=3, n_ztypes=registry.n_ztypes
+        )
+    assert "None" in str(excinfo.value)  # wildcard guidance is part of the message
+    wildcard = _mask(registry, {"g": dict.fromkeys(next(iter(groups.values())), None)})
+    assert wildcard[0].all()
+
+
+def test_bool_inside_age_pair_is_rejected_before_integral_narrowing() -> None:
+    """``(True, 2)`` must not parse as the inclusive range ``1..2``.
+
+    ``bool`` registers as ``numbers.Integral`` at runtime; the pair branch
+    guards it explicitly so the ``numpy``-friendly widening cannot alias
+    ``True`` to age 1.
+    """
+    registry = _registry("p9_eval_r2_pair_bool")
+    for pair in ((True, 2), [0, False]):
+        with pytest.raises(TypeError, match="age selector"):
+            ObservationFilter(registry).build_filter(
+                groups={"g": {"age": pair}}, n_sexes=2, n_ages=3,
+                n_ztypes=registry.n_ztypes,
+            )
+    numeric = _mask(registry, {"g": {"age": (np.int64(1), np.int64(2))}})
+    assert sorted(int(a) for a in np.nonzero(numeric[0, 0, :, 0])[0]) == [1, 2]
+
+
+def test_dashboard_wildcard_alternative_short_circuits_to_every_ztype() -> None:
+    """Adopted decision #3: a ``"*"`` alternative widens to every ZType.
+
+    Restores the legacy compiler's short-circuit for a mixed panel list
+    such as ``["WT|WT", "*"]`` instead of silently dropping the ``"*"``
+    and narrowing to the remaining pattern.
+    """
+    from natal.frontend.ui.dashboard_helpers import ObservationPanel
+
+    registry = _registry("p9_eval_r2_dashboard_star")
+    panel = object.__new__(ObservationPanel)
+    mixed = panel._selector_from_panel_state(  # pyright: ignore[reportPrivateUsage]  # migrated UI seam under review
+        {"genotype": ["WT|WT", "*"], "sex": "female"}
+    )
+    mask = ObservationFilter(registry).build_mask_from_selectors(
+        n_sexes=2, n_ages=3, n_ztypes=registry.n_ztypes,
+        selectors=(mixed,), collapse_age=False,
+    )
+    assert mask[0, int(Sex.FEMALE)].all()
+    assert not mask[0, int(Sex.MALE)].any()
+    only = panel._selector_from_panel_state(  # pyright: ignore[reportPrivateUsage]
+        {"genotype": ["WT|WT"], "sex": "female"}
+    )
+    narrow = ObservationFilter(registry).build_mask_from_selectors(
+        n_sexes=2, n_ages=3, n_ztypes=registry.n_ztypes,
+        selectors=(only,), collapse_age=False,
+    )
+    assert narrow[0, int(Sex.FEMALE)].sum() < mask[0, int(Sex.FEMALE)].sum()

@@ -615,6 +615,10 @@ class ObservationFilter:
             flat: List[Union[str, int]] = []
             for item in values:
                 flat.extend(ObservationFilter._flatten_sex_values(item))
+            if not flat:
+                raise ValueError(
+                    "sex selector selects no sexes (use None for a wildcard)"
+                )
             return flat
         raise TypeError(f"Unsupported sex selector: {value!r}")
 
@@ -722,8 +726,12 @@ class ObservationFilter:
             return spec
         if isinstance(spec, Mapping):
             # Legacy dict spelling: keyed by the documented selector names.
+            # ``is None`` (not ``or``) so falsy values — the empty container
+            # and the bare genotype index 0 — reach their selector branches.
             source = cast("Mapping[str, object]", spec)
-            genotype = source.get("genotype") or source.get("genotypes")
+            genotype = source.get("genotype")
+            if genotype is None:
+                genotype = source.get("genotypes")
             sex = source.get("sex")
             age = source.get("age")
         elif hasattr(spec, "genotype") or hasattr(spec, "age") or hasattr(spec, "sex"):

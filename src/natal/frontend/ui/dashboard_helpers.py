@@ -541,12 +541,11 @@ class ObservationPanel:
                 ui.label("No observation groups defined.").classes("text-gray-500 italic")
             return
 
-        groups: dict[str, Any] = {
-            f"group_{i}": self._selector_from_panel_state(spec)
-            for i, spec in enumerate(self._group_specs)
-        }
-
         try:
+            groups: dict[str, Any] = {
+                f"group_{i}": self._selector_from_panel_state(spec)
+                for i, spec in enumerate(self._group_specs)
+            }
             registry = self._get_registry()
             obs_filter = ObservationFilter(registry)
             obs = obs_filter.build_from_selectors(
