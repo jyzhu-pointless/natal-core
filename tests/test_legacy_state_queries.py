@@ -301,6 +301,12 @@ class TestConstructorDictAndSpermForms:
             def run_tick(self) -> Any:
                 return self
 
+            def run(self, n_steps: int, record_every: int = 1, finish: bool = False) -> Any:
+                return self
+
+            def reset(self) -> None:
+                return None
+
             def update(self) -> Any:
                 return self
 

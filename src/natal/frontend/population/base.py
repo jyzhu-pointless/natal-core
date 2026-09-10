@@ -15,6 +15,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from typing import (
     TYPE_CHECKING,
+    Any,
+    Dict,
     Generic,
     List,
     Mapping,
@@ -36,9 +38,13 @@ from natal.frontend.data import (
 )
 from natal.frontend.genetics import Genotype, HaploidGenotype, Species
 from natal.frontend.hooks._compile import build_hook_program
-from natal.frontend.hooks.types import HookProgram
+from natal.frontend.hooks.types import (
+    EVENT_ID_MAP,
+    RESULT_CONTINUE,
+    CompiledHookDescriptor,
+    HookProgram,
+)
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
-from natal.frontend.population._mixins._output import OutputMixin
 from natal.frontend.registry.index import IndexRegistry
 
 """Runtime fields pulled into the session by the run-boundary flush
@@ -81,13 +87,10 @@ RUNTIME_FLUSH_FIELDS: tuple[str, ...] = (
 T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationState])
 
 if TYPE_CHECKING:
-    from typing import Self
+    from typing import Protocol, Self
 
     from natal.frontend.builder import RuntimeUpdater
     from natal.frontend.builder._writers import AuditValue, SessionChannel
-    from natal.frontend.hooks import (
-        CompiledHookDescriptor,
-    )
     from natal.frontend.hooks.tick_context import HookRunner, TickContext
     from natal.frontend.output._recording import RecordingPlan
     from natal.frontend.output.history import History
@@ -95,10 +98,23 @@ if TYPE_CHECKING:
     from natal.frontend.population._params_view import ParamsView
     from natal.frontend.presets import GeneticPreset
 
+    class _CallbackBridge(Protocol):
+        """Structural type of the Rust backend adapter's callback channel."""
+
+        def set_python_callbacks(
+            self,
+            first: List[Callable[..., int]],
+            early: List[Callable[..., int]],
+            late: List[Callable[..., int]],
+            finish: List[Callable[..., int]] | None = None,
+        ) -> None:
+            """Register per-event callback lists."""
+            ...
+
 # A parameter snapshot row: (tick, parameter name, old value, new value).
 ParamChange = Tuple[int, str, float, float]
 
-class BasePopulation(OutputMixin, ABC, Generic[T_State]):
+class BasePopulation(ABC, Generic[T_State]):
     """Abstract base class for population models.
 
     The base class unifies common behavior for different population model
@@ -169,6 +185,21 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     # metadata from it; no population field is ever swapped for a
     # callback.  ``None`` outside callbacks.
     _active_event: TickContext | None = None
+
+    # Failure marker owned by the run lifecycle: set when a run aborts
+    # or a checkpoint restore observes a Failed execution status, and
+    # cleared by reset()/restore.  Annotation only — the attribute is
+    # created lazily by the owning lifecycle paths, so readers probe it
+    # with ``getattr(..., False)``.
+    _failed: bool
+
+    # Subclass-owned native session factory (each model creates its own
+    # Rust session type there); the base recording and manual-event
+    # paths call it lazily.  Annotation only — duck-typed hosts without
+    # a session never declare it, so readers probe via ``getattr``.
+    # ``Callable[..., object]`` because each model returns its own
+    # concrete population type.
+    _initialize_session: Callable[..., object]
 
     def __init__(
         self,
@@ -433,6 +464,18 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         return clone
 
     # ========================================================================
+    # Lifecycle ownership
+    # ========================================================================
+
+    def _require_standalone_owner(self, operation: str) -> None:
+        """Reject independent lifecycle control after transfer to a spatial owner."""
+        if getattr(self, "_runtime_parameter_writer", None) is not None:
+            raise RuntimeError(
+                f"A managed deme cannot {operation} independently; "
+                "use the owning SpatialPopulation for lifecycle and history control."
+            )
+
+    # ========================================================================
     # Registry and Genotype Initialization
     # ========================================================================
 
@@ -506,22 +549,22 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         return self._species
 
     @property
-    def name(self) -> str:  # type: ignore[reportIncompatibleVariableOverride]  # property override from mixin
+    def name(self) -> str:
         """The human-readable name of the population."""
         return self._name
 
     @name.setter
-    def name(self, value: str) -> None:  # type: ignore[reportIncompatibleVariableOverride]  # property override from mixin
+    def name(self, value: str) -> None:
         """Set the population name."""
         self._name = value
 
     @property
-    def tick(self) -> int:  # type: ignore[reportIncompatibleVariableOverride]  # property override from mixin
+    def tick(self) -> int:
         """The current simulation tick or generation index (read-only)."""
         return self._tick
 
     @tick.setter
-    def tick(self, value: int) -> None:  # type: ignore[reportIncompatibleVariableOverride]  # property override from mixin
+    def tick(self, value: int) -> None:
         """Reject clock changes outside an owning lifecycle operation."""
         self._require_standalone_owner("set tick")
         raise RuntimeError(
@@ -720,6 +763,251 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         """
         if old != new:
             self._params_log.append_detail((int(self._tick), name, float(old), float(new)), "update", self._deme_id)
+
+    # ========================================================================
+    # Modifier and preset management
+    # ========================================================================
+
+    def _session_target(self) -> Any:
+        """Resolve the idle-session commit target for this population.
+
+        Returns:
+            The resolved ``_UpdateTarget`` (typed ``Any`` here: the
+            runtime target classes are internal to the builder
+            package and the population only forwards them).
+
+        Raises:
+            RuntimeError: If a run holds the session borrow.
+        """
+        from natal.frontend.builder._runtime import idle_session_target
+
+        return idle_session_target(self)
+
+    def reapply_preset_fitness(self) -> None:
+        """Reset fitness tensors to 1.0 and re-apply all preset fitness patches.
+
+        Called after structural changes to presets (addition, removal, or
+        reconfiguration).  Only preset-derived fitness is restored — any
+        fitness values set directly via ``pop.update().fitness()`` will be
+        overwritten. This explicit reset clears stored manual-fitness patches.
+        """
+        from natal.frontend.builder._runtime import reset_preset_fitness
+
+        if self._config is None:
+            return
+        reset_preset_fitness(self._session_target())
+
+    def refresh_modifiers(self, rebuild_maps: bool = True) -> None:
+        """Rebuild derived modifier lists and maps from _presets + _manual_*.
+
+        Presets are applied in priority order, then manual modifiers are
+        appended.  Modifier maps (zygotes_to_gametes_map,
+        gametes_to_zygotes_map, offspring_tensor) are rebuilt from the
+        combined list.
+
+        Args:
+            rebuild_maps: If ``True`` (default), also commit the rebuilt
+                maps.  Set to ``False`` when the caller plans to batch
+                multiple modifier registrations and will commit once
+                afterward.
+        """
+        from natal.frontend.builder._runtime import (
+            commit_genetic_update,
+            compile_runtime_candidate,
+            read_declaration,
+        )
+
+        target = self._session_target()
+        declaration = read_declaration(target)
+        old = target.live_draft()
+        # map-only updates preserve current native fitness.
+        products = compile_runtime_candidate(
+            target.species, old, target.registry, declaration, preserve_fitness=True,
+        )
+        if rebuild_maps:
+            commit_genetic_update(
+                target, old, products.config, declaration,
+                products.gamete_modifiers, products.zygote_modifiers,
+            )
+        else:
+            self._gamete_modifiers = list(products.gamete_modifiers)
+            self._zygote_modifiers = list(products.zygote_modifiers)
+
+    def refresh_modifier_maps(self) -> None:
+        """Rebuild the three modifier maps from current modifier lists.
+
+        Recomputes ``zygotes_to_gametes_map``,
+        ``gametes_to_zygotes_map``, and the derived ``offspring_tensor``
+        through the unified compiler
+        (:func:`natal.frontend.genetics.compile.compile_modifier_maps`)
+        — the same spelling the build path uses, so the two entry
+        points cannot drift (pinned bit-for-bit by the parity safety
+        net).
+
+        .. note::
+
+            This method is called automatically by :meth:`refresh_modifiers`
+            and by individual ``add_gamete_modifier`` /
+            ``add_zygote_modifier`` when ``refresh=True``.
+        """
+        from natal.frontend.builder._runtime import recompile_modifier_maps
+
+        if self._config is None or self._index_registry is None:
+            return
+        if not self._index_registry.index_to_haplo or not self._index_registry.index_to_genotype:
+            return
+        recompile_modifier_maps(self._session_target())
+
+    def add_gamete_modifier(
+        self,
+        modifier: GameteModifier,
+        name: Optional[str] = None,
+        modifier_id: Optional[int] = None,
+        refresh: bool = True,
+    ) -> None:
+        """Register a gamete-level modifier.
+
+        Args:
+            modifier: A ``GameteModifier`` callable or object.
+            name: Optional human-readable name for debugging.
+            modifier_id: Optional numeric priority used for ordering.
+            refresh: If True (default), immediately rebuild modifier maps.
+                Set to False when adding multiple modifiers in a batch;
+                call :meth:`refresh_modifiers` or
+                :meth:`refresh_modifier_maps` afterward to apply all at once.
+        """
+        from natal.frontend.builder._runtime import add_manual_modifier
+
+        add_manual_modifier(
+            self._session_target(), "gamete", modifier, name, modifier_id,
+            refresh=refresh,
+        )
+
+    def add_zygote_modifier(
+        self,
+        modifier: ZygoteModifier,
+        name: Optional[str] = None,
+        modifier_id: Optional[int] = None,
+        refresh: bool = True,
+    ) -> None:
+        """Register a zygote-level modifier.
+
+        Args:
+            modifier: A ``ZygoteModifier`` callable or object.
+            name: Optional human-readable name for debugging.
+            modifier_id: Optional numeric priority used for ordering.
+            refresh: If True (default), immediately rebuild modifier maps.
+                Set to False when adding multiple modifiers in a batch;
+                call :meth:`refresh_modifiers` or
+                :meth:`refresh_modifier_maps` afterward to apply all at once.
+        """
+        from natal.frontend.builder._runtime import add_manual_modifier
+
+        add_manual_modifier(
+            self._session_target(), "zygote", modifier, name, modifier_id,
+            refresh=refresh,
+        )
+
+    def add_preset(self, preset: GeneticPreset) -> None:
+        """Add a preset to this population.
+
+        Registration is idempotent by object identity: if the exact same
+        preset instance is already in ``_presets``, this is a no-op.
+        This prevents double-registration when ``presets(drive)`` is
+        called twice — the alternative (appending twice) would cause
+        ``refresh_modifiers()`` to build two copies of the preset's
+        gamete/zygote modifier, double-applying its effect in the
+        offspring tensor.
+
+        Args:
+            preset: A GeneticPreset instance (e.g., HomingDrive or custom preset).
+        """
+        if not any(p is preset for p in self._presets):
+            self._presets.append(preset)
+
+    def apply_preset(self, preset: GeneticPreset) -> None:
+        """Apply a genetic preset to this population.
+
+        This is the preferred API for registering presets. The preset's
+        gamete modifiers, zygote modifiers, and fitness effects are
+        registered in the correct order.
+
+        Args:
+            preset: A GeneticPreset instance (e.g., HomingDrive or custom preset).
+
+        Examples:
+            >>> from natal.frontend.presets import HomingDrive
+            >>> drive = HomingDrive(
+            ...     name="MyDrive",
+            ...     drive_allele="Drive",
+            ...     target_allele="WT",
+            ...     drive_conversion_rate=0.95
+            ... )
+            >>> population.apply_preset(drive)
+
+        See Also:
+            :class:`natal.frontend.presets.GeneticPreset` - Base class for creating custom presets
+            :class:`natal.frontend.presets.HomingDrive` - Built-in gene drive preset
+        """
+        from natal.frontend.builder._runtime import (
+            apply_runtime_presets,
+        )
+
+        apply_runtime_presets(self._session_target(), (preset,))
+
+    @classmethod
+    def builder(cls, species: Species) -> Any:
+        """Create a builder for this population type.
+
+        This is the recommended way to construct populations with presets.
+
+        Args:
+            species: Genetic architecture for the population.
+
+        Returns:
+            A builder instance for this population type (typed ``Any``:
+            each concrete population class finalizes the builder type).
+
+        Raises:
+            NotImplementedError: Always — concrete population classes
+                override this with their own builder entry point.
+
+        Examples:
+            >>> pop = (AgeStructuredPopulation.builder(species)
+            ...     .set_age_structure(n_ages=10)
+            ...     .add_preset(HomingModificationDrive(...))
+            ...     .build())
+        """
+        raise NotImplementedError(f"{cls.__name__} must implement builder()")
+
+    def register_gamete_labels(self, labels: Optional[Sequence[str]]) -> None:
+        """
+        Register gamete labels in the IndexRegistry.
+
+        Args:
+            labels: Sequence of string labels to register. Labels must be
+                unique in the provided sequence. Existing labels are ignored.
+        """
+        if not hasattr(self, "_index_registry") or self._index_registry is None:
+            raise RuntimeError("IndexRegistry not initialized; cannot register gamete labels")
+
+        if labels is None:
+            return
+
+        # Normalize and validate input
+        try:
+            seq = list(labels)
+        except Exception as e:
+            raise TypeError("labels must be a sequence of strings") from e
+
+        # Ensure provided labels are unique
+        if len(set(seq)) != len(seq):
+            raise ValueError("labels must be unique")
+
+        # Register each string label if not already present
+        for lab in seq:
+            if lab not in self._index_registry.glab_labels:
+                self._index_registry.glab_labels.append(lab)
 
     @property
     def presets(self) -> List[GeneticPreset]:
@@ -1014,6 +1302,136 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         self._history_obj = History(schema, max_rows=self.max_history)
 
     # ========================================================================
+    # History recording and checkpoint restore
+    # ========================================================================
+
+    def _record_current_snapshot(self, *, allow_existing: bool) -> None:
+        """Commit the current state to the unique History container.
+
+        Args:
+            allow_existing: Whether an automatic run boundary may reuse the
+                already-recorded current tick without writing a second row.
+
+        Raises:
+            RuntimeError: If History, Population state, or Observation is not
+                initialized.
+            ValueError: If a strict snapshot repeats or precedes the latest
+                tick, or an automatic boundary is stale or has a different
+                payload.
+        """
+        history_obj = self._history_obj
+        if history_obj is None:
+            raise RuntimeError("History is not initialized for this population.")
+        if self._state is None:
+            raise RuntimeError("Population state is not initialized.")
+        if history_obj.schema.mode == "observation" and self._observation is None:
+            raise RuntimeError("Observation is not initialized for this population.")
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is None:
+            # Directly constructed populations initialize the same native
+            # owner lazily; recording never creates a second state store.
+            self._initialize_session()
+            backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is None:
+            # Unreachable with the model implementations: their
+            # _initialize_session either installs the backend or raises.
+            raise RuntimeError("Population session initialization failed.")
+        observation = self._observation
+        if history_obj.schema.mode == "observation" and observation is not None:
+            history_obj._configure_observation(observation)  # pyright: ignore[reportPrivateUsage]  # Population binds its recording selector
+        backend.bind_history(history_obj._store, self._params_log)  # pyright: ignore[reportPrivateUsage]  # share native ownership
+        history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+        backend.record_history(allow_existing)
+
+    def clear_history(self) -> None:
+        """Remove all rows while preserving the frozen History schema.
+
+        Session-side record checkpoints are dropped with the rows so a
+        later ``restore_checkpoint`` cannot resurrect cleared ticks.
+        """
+        self._require_standalone_owner("clear_history")
+        if self._history_obj is not None:
+            self._history_obj.clear()
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None:
+            backend.clear_checkpoints()
+
+    def record_snapshot(self) -> None:
+        """Record the current stable state into history.
+
+        Must only be called when the engine is not running (between
+        ``run()`` calls). Duplicate ticks are rejected.
+
+        Raises:
+            RuntimeError: If the population is currently running.
+            ValueError: If the current tick is already recorded.
+        """
+        self._require_standalone_owner("record_snapshot")
+        if getattr(self, "_running", False):
+            raise RuntimeError(
+                "Cannot record snapshot while the population is running."
+            )
+        self._record_current_snapshot(allow_existing=False)
+
+    def restore_checkpoint(self, tick: int) -> None:
+        """Restore the population to its recorded state at *tick*.
+
+        Only valid for raw-mode history. The Rust session
+        rolls back its record-aligned checkpoint in full — counts, sperm
+        storage, the ecology parameters (so a post-record parameter change
+        like ``update().competition(...)`` is undone), and the RNG stream
+        (a restore continues the exact stream rather than reseeding).
+        The recorded execution status and phase are restored as well.
+        Future history and parameter logs are truncated to the checkpoint.
+
+        Args:
+            tick: Exact tick to restore.
+
+        Raises:
+            ValueError: If mode is not ``"raw"`` or tick is not found.
+        """
+        self._require_standalone_owner("restore_checkpoint")
+        history_obj = getattr(self, "_history_obj", None)
+        if history_obj is None or history_obj.is_empty:
+            raise ValueError("No history available for checkpoint restore.")
+        if history_obj.schema.mode != "raw":
+            raise ValueError(
+                "Cannot restore population state from observation-mode "
+                "history.  Record raw history to enable checkpoint "
+                "restoration."
+            )
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None:
+            result = backend.restore_from_checkpoint(tick)
+            if result is None:
+                # Frozen-surface message: checkpoints are record-aligned with the
+                # history rows, so the frozen "not found in history" wording stays.
+                raise ValueError(f"Tick {tick} not found in history.")
+            restored_tick, ecology = result
+            self._restore_ecology_to_draft(ecology)
+            self._tick = restored_tick
+            self._mark_state_cache_stale()
+            backend.truncate_checkpoints(tick)
+            history_obj.truncate(retain_until_tick=tick)
+            status, _ = backend.execution_state()
+            self._finished = status == "Stopped"
+            self._failed = status == "Failed"
+            return
+        restored_tick, ic, ss = history_obj.restore_state(tick)
+        state = self._state
+        if state is None:
+            raise RuntimeError("Population state is not initialized.")
+        state.individual_count[:] = ic.reshape(state.individual_count.shape)
+        # sperm_storage only exists on PopulationState (age-structured), not
+        # on DiscretePopulationState — use getattr for type-safe access.
+        sperm = getattr(state, "sperm_storage", None)
+        if ss is not None and sperm is not None:
+            sperm[:] = ss.reshape(sperm.shape)
+        self._state = state._replace(n_tick=restored_tick)
+        self._tick = restored_tick
+        history_obj.truncate(retain_until_tick=tick)
+
+    # ========================================================================
     # Core methods
     # ========================================================================
 
@@ -1045,6 +1463,37 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     def step(self) -> BasePopulation[T_State]:
         """Alias for `BasePopulation.run_tick()`"""
         return self.run_tick()
+
+    @abstractmethod
+    def run(
+        self,
+        n_steps: int,
+        record_every: Optional[int] = None,
+        finish: bool = False,
+    ) -> BasePopulation[T_State]:
+        """Run multi-step evolution for *n_steps* ticks.
+
+        Concrete population classes implement the batch execution against
+        their native session.
+
+        Args:
+            n_steps: Number of ticks to simulate.
+            record_every: Snapshot interval; ``None`` uses the
+                population's configured ``record_every``, ``0`` disables
+                recording.
+            finish: Whether to mark the population as finished afterwards.
+
+        Returns:
+            Self for chaining.
+
+        Raises:
+            RuntimeError: If the population is finished, failed, or
+                already running.
+        """
+
+    @abstractmethod
+    def reset(self) -> None:
+        """Reset the population to its initial state."""
 
     @abstractmethod
     def get_total_count(self) -> float:
@@ -1106,6 +1555,127 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
             raise RuntimeError("Population state has no individual_count.")
         return obs.project(ic, tick=self._tick)
 
+    # ========================================================================
+    # Hook dispatch and introspection
+    # ========================================================================
+    # The hook plan is compiled once by the builder and injected at
+    # construction: the descriptor tuple and the packed CSR program are
+    # fixed for the population's lifetime.  The population owns only the
+    # execution and introspection side — native Rust sessions execute
+    # declarative plans and bridge Python callbacks at event boundaries
+    # in one stable priority order.  There is no runtime registration
+    # channel.
+
+    def trigger_event(self, event_name: str, deme_id: int = 0) -> int:
+        """Trigger an event and execute the hooks declared for it.
+
+        Execution order per event: CSR declarative plans and Python
+        callbacks interleaved by one stable ascending-priority order
+        (each callback receives a fresh
+        :class:`~natal.frontend.hooks.tick_context.TickContext`).
+
+        Args:
+            event_name: Event name to trigger.
+            deme_id: Deme index the hooks execute as.  0 for panmictic
+                populations; the live deme index when the population is
+                managed by a SpatialPopulation.
+
+        Returns:
+            int: ``RESULT_CONTINUE`` (0) to continue, ``RESULT_STOP`` (1)
+            to stop.
+        """
+        native = getattr(self, "_runtime_parameter_writer", None)
+        if native is None:
+            native = getattr(self, "_rust_lifecycle_backend", None)
+        if native is None:
+            # Directly constructed standalone populations do not create a
+            # session until the first operation that needs native execution.
+            # Managed spatial demes have a runtime writer and therefore stay
+            # owned by their SpatialPopulation container.
+            initialize = getattr(self, "_initialize_session", None)
+            if callable(initialize):
+                initialize(seed=int(getattr(self, "_rust_backend_seed", 0) or 0))
+                native = getattr(self, "_rust_lifecycle_backend", None)
+        if native is not None and hasattr(native, "trigger_event"):
+            event_id = EVENT_ID_MAP.get(event_name)
+            if event_id is None:
+                return RESULT_CONTINUE
+            # Refresh the installed program without replacing session
+            # state/RNG (manual events use the same native log as run
+            # checkpoints).
+            if getattr(self, "_runtime_parameter_writer", None) is None:
+                native.bind_history(self.history._store, self._params_log)  # pyright: ignore[reportPrivateUsage]  # manual events use the same native log as run checkpoints.
+                self.history._bind_checkpoint_pruner(native.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+                native.configure_program(self._hook_program, self.config)
+                self._register_rust_callbacks(native)
+            if getattr(self, "_runtime_parameter_writer", None) is None:
+                result = int(native.trigger_event(event_id, deme_id))
+            else:
+                result = int(native.trigger_event(event_id))
+            self._mark_state_cache_stale()
+            return result
+        raise RuntimeError(
+            "Native hook execution is unavailable; initialize a Rust session "
+            "before triggering events."
+        )
+
+    def get_compiled_hooks(
+        self, event: Optional[str] = None
+    ) -> List[CompiledHookDescriptor]:
+        """Get compiled hook descriptors, optionally filtered by event.
+
+        Args:
+            event: Optional event name to filter by.
+
+        Returns:
+            List of ``CompiledHookDescriptor`` sorted by priority.
+        """
+        hooks = list(self.compiled_hook_descriptors)
+        if event is not None:
+            hooks = [h for h in hooks if h.event == event]
+        return sorted(hooks, key=lambda h: h.priority)
+
+    def has_python_callbacks(self) -> bool:
+        """Return whether the injected plan contains a Python callback."""
+        return any(desc.callback is not None for desc in self.compiled_hook_descriptors)
+
+    def has_python_hooks(self) -> bool:
+        """Back-compatible alias for :meth:`has_python_callbacks`."""
+        return self.has_python_callbacks()
+
+    def _ensure_hook_runner(self) -> HookRunner:
+        """Return the callback runner, building it on first use."""
+        if self._hook_runner is None:
+            from natal.frontend.hooks.tick_context import HookRunner
+
+            self._hook_runner = HookRunner(self)
+        runner: HookRunner = self._hook_runner
+        return runner
+
+    def _register_rust_callbacks(self, backend: _CallbackBridge) -> None:
+        """Bridge Python callbacks into a Rust session.
+
+        One adapter per in-tick event (first/early/late); each adapter has
+        the Rust ``(ind, sperm, tick, deme_id) -> int`` signature and runs
+        every callback of its event in priority order.  Events without
+        callbacks register an empty list so Rust kernels skip the GIL
+        boundary entirely.
+        """
+        from natal.frontend.hooks.types import (
+            EVENT_EARLY,
+            EVENT_FINISH,
+            EVENT_FIRST,
+            EVENT_LATE,
+        )
+
+        runner = self._ensure_hook_runner()
+        backend.set_python_callbacks(
+            runner.rust_callbacks(EVENT_FIRST),
+            runner.rust_callbacks(EVENT_EARLY),
+            runner.rust_callbacks(EVENT_LATE),
+            runner.rust_callbacks(EVENT_FINISH),
+        )
+
     @abstractmethod
     def get_female_count(self) -> float:
         """Return the total number of female individuals."""
@@ -1115,6 +1685,130 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     def get_male_count(self) -> float:
         """Return the total number of male individuals."""
         pass
+
+    # ========================================================================
+    # Population queries (count aliases)
+    # ========================================================================
+
+    @property
+    def total_population_size(self) -> float:
+        """Total population size (alias of ``get_total_count``)."""
+        return self.get_total_count()
+
+    @property
+    def total_females(self) -> float:
+        """Total number of females (alias of ``get_female_count``)."""
+        return self.get_female_count()
+
+    @property
+    def total_males(self) -> float:
+        """Total number of males (alias of ``get_male_count``)."""
+        return self.get_male_count()
+
+    @property
+    def sex_ratio(self) -> float:
+        """Return the female-to-male ratio, or ``np.inf`` when male count is zero."""
+        males = self.get_male_count()
+        return self.get_female_count() / males if males > 0 else np.inf
+
+    # ========================================================================
+    # Simulation lifecycle status
+    # ========================================================================
+
+    @property
+    def is_finished(self) -> bool:
+        """Whether the population is marked as finished (``finish=True``)."""
+        return self._finished
+
+    def finish_simulation(self) -> None:
+        """
+        End simulation, trigger the ``finish`` event, and lock the population.
+
+        This method may be called by hooks for early termination.
+        After calling it, ``step()``, ``run_tick()``, and ``run()`` cannot run again.
+
+        Raises:
+            RuntimeError: If the population is already finished.
+
+        Examples:
+            >>> builder = nt.DiscreteGenerationPopulation.setup(species, name="demo")
+            >>> def check_extinction(pop):
+            ...     if pop.get_total_count() == 0:
+            ...         print("Population extinct, finishing simulation.")
+            ...         pop.finish_simulation()
+            >>> pop = builder.hooks(check_extinction, event='late').build()
+        """
+        self._require_standalone_owner("finish_simulation")
+        if self._finished:
+            raise RuntimeError(
+                f"Population '{self.name}' has already finished."
+            )
+
+        self._finished = True
+        self.trigger_event("finish", deme_id=self._deme_id)
+
+    # ========================================================================
+    # Allele frequency computation
+    # ========================================================================
+
+    def compute_allele_frequencies(self) -> Dict[str, float]:
+        """
+        Compute frequencies of all alleles in the population, normalized per locus.
+
+        Returns:
+            Dict[str, float]: Mapping ``{allele_name: frequency}``.
+            Frequencies are per-locus proportions in the range ``[0.0, 1.0]``.
+        """
+        if self._state is None or self._index_registry is None:
+            return {}
+
+        # A Rust-backed population marks its Python snapshot stale after a run.
+        # Read through the live-state boundary so this query observes the
+        # current session state without requiring a separate public state read.
+        state = self._live_state()
+
+        # 1. Initialize counters.
+        allele_counts: Dict[str, float] = {}
+        locus_totals: Dict[str, float] = {}  # locus_name -> total_count
+
+        for chromosome in self.species.chromosomes:
+            for locus in chromosome.loci:
+                locus_totals[locus.name] = 0.0
+                for gene in locus.alleles:
+                    allele_counts[gene.name] = 0.0
+
+        # 2. Aggregate genotype counts.
+        # individual_count shape: (n_sexes, n_ages, n_genotypes)
+        # Sum over sex and age to get total count per genotype.
+        genotype_counts = state.individual_count.sum(axis=(0, 1))
+
+        registry = self._index_registry
+        for z_idx, (genotype, _slab) in enumerate(registry.index_to_ztype):
+            count = genotype_counts[z_idx]
+            if count <= 0:
+                continue
+
+            for chrom in self.species.chromosomes:
+                for locus in chrom.loci:
+                    mat, pat = genotype.get_alleles_at_locus(locus)
+                    for allele in (mat, pat):
+                        if allele is not None:
+                            allele_counts[allele.name] += count
+                            locus_totals[locus.name] += count
+
+        # 3. Compute frequencies.
+        frequencies: Dict[str, float] = {}
+        for allele_name, count in allele_counts.items():
+            # Lookup the locus total for this allele.
+            # We do not keep a direct fast gene->locus reverse index here,
+            # so we safely resolve via species.gene_index.
+            gene = self.species.gene_index.get(allele_name)
+            if gene and locus_totals[gene.locus.name] > 0:
+                frequencies[allele_name] = count / locus_totals[gene.locus.name]
+            else:
+                frequencies[allele_name] = 0.0
+
+        return frequencies
 
     def __repr__(self) -> str:
         """Return a string summary of the population state."""  # noqa: D400

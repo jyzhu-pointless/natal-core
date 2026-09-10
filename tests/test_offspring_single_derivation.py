@@ -477,17 +477,18 @@ class TestSingleSpellingContract:
         "natal/frontend/builder/_registry_builder.py",
         "natal/frontend/data/_config.py",
         "natal/frontend/genetics/structures/_mapping.py",
-        "natal/frontend/population/_mixins/_modifiers.py",
         "natal/frontend/spatial/population.py",
     )
 
     def test_replaced_call_sites_do_not_spell_the_kernel(self) -> None:
-        """None of the four replaced call sites names the kernel directly.
+        """None of the replaced call sites names the kernel directly.
 
         Attack: a partial revert that reintroduces
         ``compute_offspring_probability_tensor`` at any former call site
         recreates the drift surface the unification collapsed.  This is the
-        route-scoped complement to the repo-wide ledger test.
+        route-scoped complement to the repo-wide ledger test.  (The former
+        ``population/_mixins/_modifiers.py`` site left the list with the P6
+        mixin removal; the repo-wide scan below still covers it.)
         """
         src_root = _REPO_ROOT / "src"
         for rel in self._FRONTEND_MODULES_THAT_MUST_NOT_SPELL_KERNEL:

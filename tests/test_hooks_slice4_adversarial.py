@@ -731,7 +731,7 @@ def test_hook_rng_does_not_touch_numpy_global_stream() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5b. Registration error paths and identity rules (HookManagerMixin)
+# 5b. Registration error paths and identity rules (BasePopulation hook surface)
 # ---------------------------------------------------------------------------
 
 

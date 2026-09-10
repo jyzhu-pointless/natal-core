@@ -2301,7 +2301,7 @@ class SpatialPopulation:
             deme._runtime_state_reader = self._ensure_rust_states_fresh  # pyright: ignore[reportPrivateUsage]  # retained deme objects share the owning session's lazy read boundary
             deme._runtime_config_reader = channel.config_snapshot  # pyright: ignore[reportPrivateUsage]  # owning container binds the native read projection
             deme._runtime_parameter_writer = channel  # pyright: ignore[reportPrivateUsage]  # owning container binds the native write channel
-            deme._rust_lifecycle_backend = None  # pyright: ignore[reportPrivateUsage]  # ownership was transferred; no second standalone session may remain
+            deme._rust_lifecycle_backend = None  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # ownership was transferred; no second standalone session may remain. The backend attribute is subclass-owned (no base declaration), so this lone None write needs the access rule.
         self._rust_spatial_seed = seed
         self._rust_states_dirty = False
         self._rust_needs_rebuild = False
