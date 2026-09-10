@@ -332,6 +332,24 @@ launch(pop, port=8080, title="My Simulation")
 
 Once launched, open <http://localhost:8080> in your browser to view dynamic charts of population counts, genotype frequencies, etc.
 
+### Using the Vue Visualization Dashboard (Optional)
+
+`launch_vue` is the next-generation dashboard entry point built on a Vue 3 frontend with a FastAPI backend, coexisting with the NiceGUI dashboard above:
+
+```python
+import natal as nt
+from natal import launch_vue
+
+# ... define genetic architecture, build population ...
+
+# Launch the dashboard
+launch_vue(pop, port=8000, title="My Simulation")
+```
+
+Once launched, open <http://localhost:8000>. The dashboard provides live charts, per-genotype inspection, hooks/genetics panels, and a Debug tab (event log, parameter audit, tick-to-tick state diff, raw state arrays). The simulation loop runs server-side — closing the browser does not stop the simulation; reopen the page to catch up.
+
+When developing the dashboard frontend itself, run `corepack pnpm dev` inside `frontend/` to start the Vite dev server (which proxies the API); for production, `launch_vue` serves the built `frontend/dist` directly.
+
 ---
 
 ## Deep Dive: The "Compilation" Process During Initialization

@@ -55,6 +55,7 @@ _RELOCATED_PACKAGES: Tuple[str, ...] = (
     "population",
     "spatial",
     "ui",
+    "webui",
     "hooks",
     "utils",
 )

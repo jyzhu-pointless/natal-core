@@ -55,6 +55,9 @@ pop = (nt.DiscreteGenerationPopulation
         carrying_capacity=100000,
         juvenile_growth_mode="beverton_holt"
     )
+    # The decorated function must be passed explicitly: @nt.hook only tags
+    # the callable, it does not register it with any population.
+    .hooks(release_drive_carriers)
     .presets(drive).fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}}).build())
 
 # 5. Launch interactive WebUI and run simulation

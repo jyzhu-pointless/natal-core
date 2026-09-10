@@ -331,6 +331,24 @@ launch(pop, port=8080, title="My Simulation")
 
 启动后，在浏览器中打开 <http://localhost:8080> 即可查看种群数量变化、基因型频率等动态图表。
 
+### 🎛️ 使用 Vue 可视化面板（可选）
+
+`launch_vue` 是基于 Vue 3 前端 + FastAPI 后端的新一代面板入口，与上面的 NiceGUI 面板并存：
+
+```python
+import natal as nt
+from natal import launch_vue
+
+# ... 定义遗传架构、构建种群 ...
+
+# 启动面板
+launch_vue(pop, port=8000, title="My Simulation")
+```
+
+启动后在浏览器打开 <http://localhost:8000>。面板提供实时曲线、逐基因型检视、hooks/遗传矩阵面板，以及 Debug 标签页（事件日志、参数审计、tick 间状态对比、原始状态数组）。模拟循环运行在服务端——关闭浏览器后模拟继续，重新打开即可查看。
+
+开发面板前端时，在 `frontend/` 目录运行 `corepack pnpm dev` 启动 Vite 开发服务器（自动代理 API），生产部署则由 `launch_vue` 直接托管 `frontend/dist` 构建产物。
+
 ---
 
 ## 深入理解：初始化时的“编译”过程
