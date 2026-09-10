@@ -34,11 +34,20 @@ def test_setup_chain_accepts_extreme_speed_mode() -> None:
 
 
 def test_setup_chain_extreme_speed_mode_age_structured() -> None:
-    """The age-structured entry forwards the same parameter."""
+    """The age-structured entry rejects non-zero modes instead of ignoring them.
+
+    The speed kernels are a discrete-generation (Wright-Fisher) facility;
+    silently accepting a non-zero value on the age-structured entry would
+    imply an effect the engine does not have.
+    """
     builder = nt.AgeStructuredPopulation.setup(
-        _species(), stochastic=False, extreme_speed_mode=1
+        _species(), stochastic=False, extreme_speed_mode=0
     )
-    assert builder.config.extreme_speed_mode == 1
+    assert builder.config.extreme_speed_mode == 0
+    with pytest.raises(ValueError, match="discrete-generation engine"):
+        nt.AgeStructuredPopulation.setup(
+            _species(), stochastic=False, extreme_speed_mode=1
+        )
 
 
 def test_setup_chain_rejects_unknown_extreme_speed_mode() -> None:

@@ -208,9 +208,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 appear later via hooks or runtime presets.
             declared_genotypes: Deprecated alias for
                 *declared_zygote_types*.
-            extreme_speed_mode: Optional speed/precision kernel selection
-                (0 off, 1 multinomial, 2 poisson, 3 both). Defaults to the
-                draft default when omitted.
+            extreme_speed_mode: Speed/precision kernel selection — only the
+                discrete-generation engine implements it; a non-zero value
+                raises here instead of being silently ignored.
 
         Returns:
             A ``PopulationBuilder`` ready for domain-method chaining.
@@ -223,6 +223,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         from natal.frontend.builder import PopulationBuilder
 
+        if extreme_speed_mode not in (None, 0):
+            # The speed kernels are a discrete-generation (Wright-Fisher)
+            # facility; the age-structured engine has no such mode. Accepting
+            # a non-zero value here would silently do nothing.
+            raise ValueError(
+                "extreme_speed_mode is only supported by the "
+                "discrete-generation engine; the age-structured "
+                f"engine ignores it (got {extreme_speed_mode!r})"
+            )
         if declared_genotypes is not None:
             if declared_zygote_types is not None:
                 raise ValueError(
