@@ -20,6 +20,7 @@ only because the draft *was* the runtime carrier.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import NamedTuple, Sequence
 
 import numpy as np
@@ -29,7 +30,13 @@ from natal.contracts.blueprint import Blueprint, format_type_name, frozen
 from natal.contracts.params import CustomValue, Params
 from natal.frontend.model.draft import ModelDraft
 
-__all__ = ["Materialized", "SpatialMigration", "materialize", "materialize_params"]
+__all__ = [
+    "Materialized",
+    "SpatialMigration",
+    "contract_field_source",
+    "materialize",
+    "materialize_params",
+]
 
 
 class Materialized(NamedTuple):
@@ -250,6 +257,83 @@ def materialize_params(
         A fully owned ``Params`` instance.
     """
     return _params(draft, _copy_migration_rate(draft, migration_rate))
+
+
+# Contract field name -> (draft attribute, value kind).  The kinds match
+# the conversions ``_params`` applies so a light source and a full
+# materialization hand the engine bit-identical values; the equivalence
+# is pinned by tests.  ``migration_rate`` is absent on purpose: column
+# writes for it go through the dedicated session channel, never through
+# a params-source pull.
+_FIELD_SOURCES: dict[str, tuple[str, str]] = {
+    "carrying_capacity": ("carrying_capacity", "f64"),
+    "eggs_per_female": ("eggs_per_female", "f64"),
+    "sex_ratio": ("sex_ratio", "f64"),
+    "sperm_displacement_rate": ("sperm_displacement_rate", "f64"),
+    "low_density_growth_rate": ("low_density_growth_rate", "f64"),
+    "growth_mode": ("juvenile_growth_mode", "f64"),
+    "external_expected_eggs": ("external_expected_eggs", "optional_f64"),
+    "survival_rates": ("age_based_survival_rates", "tensor"),
+    "mating_rates": ("age_based_mating_rates", "tensor"),
+    "reproduction_rates": ("age_based_reproduction_rates", "tensor"),
+    "fertility": ("female_age_based_fertility", "tensor"),
+    "competition_weights": ("age_based_relative_competition_strength", "tensor"),
+    "equilibrium_distribution": ("equilibrium_individual_distribution", "optional_tensor"),
+    "viability_fitness": ("viability_fitness", "tensor"),
+    "fecundity_fitness": ("fecundity_fitness", "tensor"),
+    "sexual_selection_fitness": ("sexual_selection_fitness", "tensor"),
+    "zygote_viability_fitness": ("zygote_viability_fitness", "tensor"),
+    "offspring_tensor": ("offspring_tensor", "tensor"),
+    "meiosis_map": ("zygotes_to_gametes_map", "tensor"),
+    "female_ztype_compatibility": ("female_ztype_compatibility", "tensor"),
+    "male_ztype_compatibility": ("male_ztype_compatibility", "tensor"),
+}
+
+
+def contract_field_source(draft: ModelDraft, names: Sequence[str]) -> SimpleNamespace:
+    """Build a duck-typed params source carrying only the named fields.
+
+    The Rust refresh channels pull values by ``getattr`` on the contract
+    field name, so a one-field runtime write does not need the fully
+    materialized contract — :func:`materialize` copies every genetics
+    table and rebuilds the blueprint just to have most of it ignored.
+    Each attribute follows the exact conversion ``_params`` applies
+    (float coercion, ``None`` sentinels, C-order float64 views), so the
+    engine reads the same values either way.
+
+    Args:
+        draft: The current declaration draft the write landed on.
+        names: Contract field names the engine will pull.
+
+    Returns:
+        A namespace object exposing exactly *names* as attributes.
+
+    Raises:
+        KeyError: If a name has no draft mapping.
+    """
+    source = SimpleNamespace()
+    for name in names:
+        try:
+            draft_attr, kind = _FIELD_SOURCES[name]
+        except KeyError:
+            raise KeyError(f"{name!r} has no contract field source mapping") from None
+        value = getattr(draft, draft_attr)
+        if kind == "tensor":
+            converted: object = np.ascontiguousarray(
+                np.asarray(value, dtype=np.float64)
+            )
+        elif kind == "optional_tensor":
+            converted = (
+                np.zeros((0, 0), dtype=np.float64)
+                if value is None
+                else np.ascontiguousarray(np.asarray(value, dtype=np.float64))
+            )
+        elif kind == "optional_f64":
+            converted = -1.0 if value is None else float(value)
+        else:
+            converted = float(value)
+        setattr(source, name, converted)
+    return source
 
 
 def _copy_migration_rate(

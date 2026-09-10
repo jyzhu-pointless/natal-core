@@ -1332,12 +1332,15 @@ class SpatialPopulation:
 
         backend = self._rust_spatial_session()
         if backend is not None and field != "migration_rate":
-            from natal.contracts.materialize import materialize
+            from natal.contracts.materialize import contract_field_source
 
-            contracts = materialize(config)
+            # One-field refresh: the engine pulls only *field* off the
+            # source, so a light carrier replaces the full materialized
+            # contract (which would copy every genetics table for
+            # nothing).
             refresh = getattr(backend, "refresh_deme_ecology", None)
             if callable(refresh):
-                refresh(deme_index, [field], contracts.params)
+                refresh(deme_index, [field], contract_field_source(config, (field,)))
 
     def _write_deme_genetics(
         self, deme_index: int, field: str, values: NDArray[np.float64]
@@ -1400,10 +1403,12 @@ class SpatialPopulation:
             refresh = getattr(backend, "refresh_variant_tensors", None)
             if callable(fork) and callable(refresh):
                 variant_id = fork(deme_index)
-                from natal.contracts.materialize import materialize
+                from natal.contracts.materialize import contract_field_source
 
-                contracts = materialize(config)
-                refresh(variant_id, refresh_fields, contracts.params)
+                # Named-tensor refresh only: the light carrier replaces
+                # the full materialized contract (no blueprint, no
+                # untouched tables copied).
+                refresh(variant_id, refresh_fields, contract_field_source(config, refresh_fields))
 
     @property
     def tick(self) -> int:
@@ -2304,7 +2309,14 @@ class SpatialPopulation:
         remain to fire here — once, with each firing deme's own index.
         """
         for deme in self._demes:
-            deme.trigger_event("finish", deme_id=deme._deme_id)  # pyright: ignore[reportPrivateUsage]  # SpatialPopulation owns its demes; finish hooks must observe the firing deme's own index.
+            # The transient flag tells each deme's event-scope fallback
+            # that this ``finish`` fires on the stopped shared lifecycle
+            # (a manual deme ``finish`` trigger stays a rehearsal).
+            deme._lifecycle_finish_firing = True  # pyright: ignore[reportPrivateUsage]  # container owns the stopped-deme finish boundary
+            try:
+                deme.trigger_event("finish", deme_id=deme._deme_id)  # pyright: ignore[reportPrivateUsage]  # SpatialPopulation owns its demes; finish hooks must observe the firing deme's own index.
+            finally:
+                deme._lifecycle_finish_firing = False
 
     def _initialize_session(self, seed: int = 0) -> SpatialPopulation:
         """Enable the Rust spatial backend for subsequent runs.

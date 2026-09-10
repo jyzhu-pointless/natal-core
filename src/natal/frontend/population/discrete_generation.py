@@ -466,7 +466,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         # Bound native HistoryStore receives records during the session run.
 
         if was_stopped:
-            self.trigger_event("finish", deme_id=self._deme_id)
+            self._lifecycle_finish_firing = True
+            try:
+                self.trigger_event("finish", deme_id=self._deme_id)
+            finally:
+                self._lifecycle_finish_firing = False
         elif finish:
             self.finish_simulation()
 
