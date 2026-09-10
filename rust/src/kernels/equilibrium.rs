@@ -4,10 +4,11 @@
 //! operation with fixed multiplication order, branches, and guards (the
 //! numerics were originally ported bit-for-bit from the retired
 //! pure-Python reference engine).  It is evaluated on demand from the owned contract
-//! ([`crate::model::blueprint::Blueprint`] + [`crate::model::ecology::EcologyParams`]) whenever a
-//! tick batch assembles its [`crate::kernels::config::AgeStructuredConfig`], so parameter
-//! changes take effect without any stored derived state.  Columnized params
-//! are read at the requested deme's column entry / vector segment.
+//! ([`crate::model::blueprint::Blueprint`] + [`crate::model::ecology::EcologyParams`])
+//! whenever a lifecycle stage needs the derived values (juvenile density
+//! regulation and the fused Wright-Fisher update), so parameter changes take
+//! effect without any stored derived state.  Columnized params are read at
+//! the requested deme's column entry / vector segment.
 
 use crate::kernels::rng::clamp01;
 use crate::model::blueprint::Blueprint;

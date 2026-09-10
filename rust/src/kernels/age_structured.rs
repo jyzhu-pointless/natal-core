@@ -12,8 +12,8 @@
 use crate::kernels::rng::SessionRng;
 
 use crate::hooks::interpreter::HookProgram;
-use crate::kernels::config::AgeStructuredConfig;
 use crate::kernels::density_regulation;
+use crate::kernels::equilibrium::equilibrium_metrics;
 use crate::kernels::rng::{
     binomial, clamp01, continuous_binomial, continuous_multinomial, continuous_poisson,
     multinomial, poisson, EPS,
@@ -58,27 +58,38 @@ fn sperm_idx(age: usize, female_ztype: usize, male_ztype: usize, n_ztypes: usize
     (age * n_ztypes + female_ztype) * n_ztypes + male_ztype
 }
 
+/// First adult age class (mirrors the assembled `adult_start_age`).
+///
+/// ``Blueprint::validate`` guarantees ``adult_ages`` is exactly the adult
+/// range, so this equals ``new_adult_age``; the fallback keeps the exact
+/// arithmetic the retired config assembly used.
+#[inline]
+fn adult_start_age(bp: &Blueprint) -> usize {
+    bp.adult_ages.first().copied().unwrap_or(0) as usize
+}
+
 /// Normalize male mating weights into a female x male probability matrix.
 ///
 /// Each female row is proportional to ``sexual_selection_fitness * male_count``.
 /// Rows with zero or non-finite totals become all-zero so no matings are produced.
 ///
 /// ## Parameters
-/// - `cfg`: Simulation config.
+/// - `n_ztypes`: Number of zygote types.
+/// - `sexual_selection_fitness`: Flat female x male fitness table.
 /// - `male_counts`: Effective adult male counts per zygote type.
 /// - `out`: Output matrix of shape ``(n_ztypes, n_ztypes)``, overwritten.
 fn compute_mating_probability_matrix(
-    cfg: &AgeStructuredConfig,
+    n_ztypes: usize,
+    sexual_selection_fitness: &[f64],
     male_counts: &[f64],
     out: &mut [f64],
 ) {
     // Each female row is proportional to sexual_selection_fitness * male_count.
     // Rows are normalized; zero/non-finite rows become all-zero so no matings occur.
-    let n_ztypes = cfg.n_ztypes;
     for gf in 0..n_ztypes {
         let mut row_sum = 0.0;
         for gm in 0..n_ztypes {
-            let value = cfg.sexual_selection_fitness[gf * n_ztypes + gm] * male_counts[gm];
+            let value = sexual_selection_fitness[gf * n_ztypes + gm] * male_counts[gm];
             out[gf * n_ztypes + gm] = value;
             row_sum += value;
         }
@@ -102,13 +113,17 @@ fn compute_mating_probability_matrix(
 ///
 /// ## Parameters
 /// - `rng`: Random number generator.
-/// - `cfg`: Simulation config.
+/// - `bp`: The frozen blueprint (dimensions and sampling flags).
+/// - `eco`: Current ecology columns; the deme's segment feeds every rate.
+/// - `deme`: Deme column the rates are read from.
 /// - `female_counts`: Female counts per age/genotype (flat).
 /// - `sperm`: Mutable sperm-storage slice.
 /// - `mating_prob`: Precomputed female x male mating probabilities.
 fn sample_mating(
     rng: &mut SessionRng,
-    cfg: &AgeStructuredConfig,
+    bp: &Blueprint,
+    eco: &EcologyParams,
+    deme: usize,
     female_counts: &[f64],
     sperm: &mut [f64],
     mating_prob: &[f64],
@@ -118,16 +133,17 @@ fn sample_mating(
     // 2. Sample new virgin matings (binomial/continuous).
     // 3. Sample remating events that displace old sperm.
     // 4. Distribute new sperm using the mating probability row.
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
-    let adult_start = cfg.adult_start_age;
-    let stochastic = cfg.stochastic;
-    let continuous = cfg.continuous_sampling;
+    let n_ages = bp.n_ages;
+    let n_ztypes = bp.n_ztypes;
+    let adult_start = adult_start_age(bp);
+    let stochastic = bp.stochastic;
+    let continuous = bp.continuous_sampling;
+    let mating_rates = &eco.mating_rates[deme * 2 * n_ages..(deme + 1) * 2 * n_ages];
+    let p_displace = clamp01(eco.sperm_displacement_rate[deme]);
 
     let mut tmp = vec![0.0; n_ztypes];
     for age in adult_start..n_ages {
-        let p_mating = clamp01(cfg.age_based_mating_rates[age]);
-        let p_displace = clamp01(cfg.sperm_displacement_rate);
+        let p_mating = clamp01(mating_rates[age]);
         for gf in 0..n_ztypes {
             let n_female = female_counts[age * n_ztypes + gf];
             let mut mated_count = 0.0;
@@ -229,13 +245,19 @@ fn sample_mating(
 ///
 /// ## Parameters
 /// - `rng`: Random number generator.
-/// - `cfg`: Simulation config.
+/// - `bp`: The frozen blueprint (dimensions and sampling flags).
+/// - `eco`: Current ecology columns; the deme's segment feeds every rate.
+/// - `genetics`: Shared genetics tables.
+/// - `deme`: Deme column the rates are read from.
 /// - `sperm`: Stored sperm slice.
 /// - `n_f`: Output female age-0 counts per zygote type.
 /// - `n_m`: Output male age-0 counts per zygote type.
 fn fertilize(
     rng: &mut SessionRng,
-    cfg: &AgeStructuredConfig,
+    bp: &Blueprint,
+    eco: &EcologyParams,
+    genetics: &GeneticsTensors,
+    deme: usize,
     sperm: &[f64],
     n_f: &mut [f64],
     n_m: &mut [f64],
@@ -245,30 +267,33 @@ fn fertilize(
     // - Stochastic reproduction uses binomial/poisson counts.
     // - Offspring genotypes are drawn from the offspring tensor.
     // - Sex is assigned according to sex ratio or sex-chromosome rules.
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
-    let adult_start = cfg.adult_start_age;
-    let stochastic = cfg.stochastic;
-    let continuous = cfg.continuous_sampling;
+    let n_ages = bp.n_ages;
+    let n_ztypes = bp.n_ztypes;
+    let adult_start = adult_start_age(bp);
+    let stochastic = bp.stochastic;
+    let continuous = bp.continuous_sampling;
+    let reproduction_rates = &eco.reproduction_rates[deme * n_ages..(deme + 1) * n_ages];
+    let fertility = &eco.fertility[deme * n_ages..(deme + 1) * n_ages];
+    let eggs_per_female = eco.eggs_per_female[deme].max(0.0);
     let mut offspring_acc = vec![0.0; n_ztypes];
     let mut prob_norm = vec![0.0; n_ztypes];
     let mut tmp = vec![0.0; n_ztypes];
     let mut has_any = false;
 
     for age in adult_start..n_ages {
-        let p_reproduce = clamp01(cfg.age_based_reproduction_rates[age]);
-        let fertility_factor = clamp01(cfg.female_age_based_fertility[age]);
+        let p_reproduce = clamp01(reproduction_rates[age]);
+        let fertility_factor = clamp01(fertility[age]);
         for gf in 0..n_ztypes {
-            let ff = cfg.fecundity_fitness[gf];
+            let ff = genetics.fecundity_fitness[gf];
             for gm in 0..n_ztypes {
                 let n_pairs = sperm[sperm_idx(age, gf, gm, n_ztypes)];
                 if n_pairs <= 0.0 {
                     continue;
                 }
                 has_any = true;
-                let eggs_per_pair = cfg.eggs_per_female
+                let eggs_per_pair = eggs_per_female
                     * ff
-                    * cfg.fecundity_fitness[n_ztypes + gm]
+                    * genetics.fecundity_fitness[n_ztypes + gm]
                     * fertility_factor;
 
                 let n_total = if stochastic {
@@ -286,7 +311,7 @@ fn fertilize(
                         n_pairs_eff
                     };
                     let total_lambda = n_reproducing * eggs_per_pair;
-                    if cfg.fixed_egg_count {
+                    if bp.fixed_egg_count {
                         if continuous {
                             total_lambda
                         } else {
@@ -307,7 +332,7 @@ fn fertilize(
 
                 let mut p_surv = 0.0;
                 for go in 0..n_ztypes {
-                    p_surv += cfg.offspring_tensor[(gf * n_ztypes + gm) * n_ztypes + go];
+                    p_surv += genetics.offspring_tensor[(gf * n_ztypes + gm) * n_ztypes + go];
                 }
 
                 if stochastic {
@@ -327,7 +352,7 @@ fn fertilize(
                     let inv = 1.0 / p_surv;
                     for go in 0..n_ztypes {
                         prob_norm[go] =
-                            cfg.offspring_tensor[(gf * n_ztypes + gm) * n_ztypes + go] * inv;
+                            genetics.offspring_tensor[(gf * n_ztypes + gm) * n_ztypes + go] * inv;
                     }
                     if continuous {
                         continuous_multinomial(rng, n_viable, &prob_norm, &mut tmp);
@@ -342,8 +367,8 @@ fn fertilize(
                     }
                 } else {
                     for go in 0..n_ztypes {
-                        offspring_acc[go] +=
-                            n_total * cfg.offspring_tensor[(gf * n_ztypes + gm) * n_ztypes + go];
+                        offspring_acc[go] += n_total
+                            * genetics.offspring_tensor[(gf * n_ztypes + gm) * n_ztypes + go];
                     }
                 }
             }
@@ -358,21 +383,22 @@ fn fertilize(
         return;
     }
 
-    let sex_ratio = clamp01(cfg.sex_ratio);
+    let sex_ratio = clamp01(eco.sex_ratio[deme]);
     for go in 0..n_ztypes {
         let n_g = offspring_acc[go];
         if n_g <= EPS {
             continue;
         }
-        if cfg.has_sex_chromosomes && cfg.female_only_by_sex_chrom[go] {
+        if bp.has_sex_chromosomes && bp.female_only_by_sex_chrom[go] {
             n_f[go] = n_g;
-        } else if cfg.has_sex_chromosomes && cfg.male_only_by_sex_chrom[go] {
+        } else if bp.has_sex_chromosomes && bp.male_only_by_sex_chrom[go] {
             n_m[go] = n_g;
         } else {
-            let p_f = if cfg.has_sex_chromosomes {
-                let denom = cfg.female_ztype_compatibility[go] + cfg.male_ztype_compatibility[go];
+            let p_f = if bp.has_sex_chromosomes {
+                let denom =
+                    genetics.female_ztype_compatibility[go] + genetics.male_ztype_compatibility[go];
                 if denom > EPS {
-                    clamp01(cfg.female_ztype_compatibility[go] / denom)
+                    clamp01(genetics.female_ztype_compatibility[go] / denom)
                 } else {
                     0.5
                 }
@@ -402,7 +428,10 @@ fn fertilize(
 ///
 /// ## Parameters
 /// - `rng`: Random number generator.
-/// - `cfg`: Simulation config.
+/// - `bp`: The frozen blueprint (dimensions and sampling flags).
+/// - `eco`: Current ecology columns; the deme's segment feeds every rate.
+/// - `genetics`: Shared genetics tables.
+/// - `deme`: Deme column the rates are read from.
 /// - `ind`: Mutable individual-count flat slice.
 /// - `sperm`: Mutable sperm-storage flat slice.
 ///
@@ -410,7 +439,10 @@ fn fertilize(
 /// ``Ok(())`` on success, or a descriptive error string for invalid states.
 pub fn reproduction(
     rng: &mut SessionRng,
-    cfg: &AgeStructuredConfig,
+    bp: &Blueprint,
+    eco: &EcologyParams,
+    genetics: &GeneticsTensors,
+    deme: usize,
     ind: &mut [f64],
     sperm: &mut [f64],
 ) -> Result<(), String> {
@@ -420,12 +452,14 @@ pub fn reproduction(
     // 3. Sample matings and update stored sperm.
     // 4. Fertilize stored sperm into age-0 offspring.
     // 5. Apply zygote viability to newborns.
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
+    let n_ages = bp.n_ages;
+    let n_ztypes = bp.n_ztypes;
+    let mating_rates = &eco.mating_rates[deme * 2 * n_ages..(deme + 1) * 2 * n_ages];
     let mut effective_male_counts = vec![0.0; n_ztypes];
-    for &age in &cfg.adult_ages {
+    for &age in &bp.adult_ages {
+        let age = age as usize;
         if age < n_ages {
-            let male_rate = cfg.age_based_mating_rates[n_ages + age];
+            let male_rate = mating_rates[n_ages + age];
             for ztype in 0..n_ztypes {
                 effective_male_counts[ztype] +=
                     ind[ind_idx(1, age, ztype, n_ages, n_ztypes)] * male_rate;
@@ -437,43 +471,69 @@ pub fn reproduction(
     }
 
     let mut mating_prob = vec![0.0; n_ztypes * n_ztypes];
-    compute_mating_probability_matrix(cfg, &effective_male_counts, &mut mating_prob);
+    compute_mating_probability_matrix(
+        n_ztypes,
+        &genetics.sexual_selection_fitness,
+        &effective_male_counts,
+        &mut mating_prob,
+    );
 
-    sample_mating(rng, cfg, &ind[0..n_ages * n_ztypes], sperm, &mating_prob);
+    sample_mating(
+        rng,
+        bp,
+        eco,
+        deme,
+        &ind[0..n_ages * n_ztypes],
+        sperm,
+        &mating_prob,
+    );
 
     let mut n_female = vec![0.0; n_ztypes];
     let mut n_male = vec![0.0; n_ztypes];
-    fertilize(rng, cfg, sperm, &mut n_female, &mut n_male);
+    fertilize(
+        rng,
+        bp,
+        eco,
+        genetics,
+        deme,
+        sperm,
+        &mut n_female,
+        &mut n_male,
+    );
     for ztype in 0..n_ztypes {
         ind[ind_idx(0, 0, ztype, n_ages, n_ztypes)] = n_female[ztype];
         ind[ind_idx(1, 0, ztype, n_ages, n_ztypes)] = n_male[ztype];
     }
 
-    if cfg.stochastic {
+    if bp.stochastic {
         for ztype in 0..n_ztypes {
             let f = ind[ind_idx(0, 0, ztype, n_ages, n_ztypes)];
             let m = ind[ind_idx(1, 0, ztype, n_ages, n_ztypes)];
-            if cfg.continuous_sampling {
+            if bp.continuous_sampling {
                 ind[ind_idx(0, 0, ztype, n_ages, n_ztypes)] = if f > 0.0 {
-                    continuous_binomial(rng, f, cfg.zygote_viability_fitness[ztype])
+                    continuous_binomial(rng, f, genetics.zygote_viability_fitness[ztype])
                 } else {
                     0.0
                 };
                 ind[ind_idx(1, 0, ztype, n_ages, n_ztypes)] = if m > 0.0 {
-                    continuous_binomial(rng, m, cfg.zygote_viability_fitness[n_ztypes + ztype])
+                    continuous_binomial(rng, m, genetics.zygote_viability_fitness[n_ztypes + ztype])
                 } else {
                     0.0
                 };
             } else {
                 let n_f = f.round() as i64;
                 ind[ind_idx(0, 0, ztype, n_ages, n_ztypes)] = if n_f > 0 {
-                    binomial(rng, n_f, cfg.zygote_viability_fitness[ztype])
+                    binomial(rng, n_f, genetics.zygote_viability_fitness[ztype])
                 } else {
                     0.0
                 };
                 let n_m = m.round() as i64;
                 ind[ind_idx(1, 0, ztype, n_ages, n_ztypes)] = if n_m > 0 {
-                    binomial(rng, n_m, cfg.zygote_viability_fitness[n_ztypes + ztype])
+                    binomial(
+                        rng,
+                        n_m,
+                        genetics.zygote_viability_fitness[n_ztypes + ztype],
+                    )
                 } else {
                     0.0
                 };
@@ -481,9 +541,9 @@ pub fn reproduction(
         }
     } else {
         for ztype in 0..n_ztypes {
-            ind[ind_idx(0, 0, ztype, n_ages, n_ztypes)] *= cfg.zygote_viability_fitness[ztype];
+            ind[ind_idx(0, 0, ztype, n_ages, n_ztypes)] *= genetics.zygote_viability_fitness[ztype];
             ind[ind_idx(1, 0, ztype, n_ages, n_ztypes)] *=
-                cfg.zygote_viability_fitness[n_ztypes + ztype];
+                genetics.zygote_viability_fitness[n_ztypes + ztype];
         }
     }
     Ok(())
@@ -495,12 +555,14 @@ pub fn reproduction(
 /// and Beverton-Holt.  The returned factor is multiplied into age-0 totals.
 ///
 /// ## Parameters
-/// - `cfg`: Simulation config.
+/// - `bp`: The frozen blueprint (dimensions).
+/// - `eco`: Current ecology columns; the deme's segment feeds every rate.
+/// - `deme`: Deme column the rates are read from.
 /// - `ind`: Current individual-count flat slice.
 ///
 /// ## Returns
 /// A non-negative scaling factor.
-fn scaling_factor(cfg: &AgeStructuredConfig, ind: &[f64]) -> f64 {
+fn scaling_factor(bp: &Blueprint, eco: &EcologyParams, deme: usize, ind: &[f64]) -> f64 {
     // Juvenile density regulation by growth mode, dispatched through the
     // shared curve library with the Python reference operation order:
     // - NO_COMPETITION: 1.0 (no regulation).
@@ -510,48 +572,57 @@ fn scaling_factor(cfg: &AgeStructuredConfig, ind: &[f64]) -> f64 {
     // Totals group by sex first (female row sum + male row sum), matching
     // the Python reference's `f_row.sum() + m_row.sum()` — an interleaved
     // accumulation rounds differently in the last ulp.
-    if cfg.juvenile_growth_mode == NO_COMPETITION {
+    let n_ages = bp.n_ages;
+    let n_ztypes = bp.n_ztypes;
+    let juvenile_growth_mode = eco.growth_mode[deme];
+    if juvenile_growth_mode == NO_COMPETITION {
         return 1.0;
     }
-    if cfg.juvenile_growth_mode == FIXED {
+    if juvenile_growth_mode == FIXED {
         let mut female_sum = 0.0;
         let mut male_sum = 0.0;
-        for ztype in 0..cfg.n_ztypes {
-            female_sum += ind[ind_idx(0, 0, ztype, cfg.n_ages, cfg.n_ztypes)];
-            male_sum += ind[ind_idx(1, 0, ztype, cfg.n_ages, cfg.n_ztypes)];
+        for ztype in 0..n_ztypes {
+            female_sum += ind[ind_idx(0, 0, ztype, n_ages, n_ztypes)];
+            male_sum += ind[ind_idx(1, 0, ztype, n_ages, n_ztypes)];
         }
         let total_age_0 = female_sum + male_sum;
         return density_regulation::regulation_scaling(
             FIXED,
             total_age_0,
-            cfg.carrying_capacity,
+            eco.carrying_capacity[deme],
             0.0,
             0.0,
         )
         .unwrap_or(1.0);
     }
     // Compensatory family: blend juvenile counts below adulthood by the
-    // per-age competition weights, then evaluate the curve.
-    let mut juvenile_counts = vec![0.0; cfg.new_adult_age];
-    for age in 0..cfg.new_adult_age {
+    // per-age competition weights, then evaluate the curve.  The equilibrium
+    // metrics are derived from the current deme column on demand (the same
+    // computation the retired config assembly performed per tick).
+    let new_adult_age = bp.new_adult_age;
+    let competition_weights = &eco.competition_weights[deme * n_ages..(deme + 1) * n_ages];
+    let mut juvenile_counts = vec![0.0; new_adult_age];
+    for age in 0..new_adult_age {
         let mut female_sum = 0.0;
         let mut male_sum = 0.0;
-        for ztype in 0..cfg.n_ztypes {
-            female_sum += ind[ind_idx(0, age, ztype, cfg.n_ages, cfg.n_ztypes)];
-            male_sum += ind[ind_idx(1, age, ztype, cfg.n_ages, cfg.n_ztypes)];
+        for ztype in 0..n_ztypes {
+            female_sum += ind[ind_idx(0, age, ztype, n_ages, n_ztypes)];
+            male_sum += ind[ind_idx(1, age, ztype, n_ages, n_ztypes)];
         }
         juvenile_counts[age] = female_sum + male_sum;
     }
     let mut actual_comp = 0.0;
-    for age in 0..cfg.new_adult_age {
-        actual_comp += juvenile_counts[age] * cfg.age_based_relative_competition_strength[age];
+    for age in 0..new_adult_age {
+        actual_comp += juvenile_counts[age] * competition_weights[age];
     }
+    let (expected_competition_strength, expected_survival_rate) =
+        equilibrium_metrics(bp, eco, deme);
     density_regulation::regulation_scaling(
-        cfg.juvenile_growth_mode,
+        juvenile_growth_mode,
         actual_comp,
-        cfg.expected_competition_strength,
-        cfg.low_density_growth_rate,
-        cfg.expected_survival_rate,
+        expected_competition_strength,
+        eco.low_density_growth_rate[deme],
+        expected_survival_rate,
     )
     .unwrap_or(1.0)
 }
@@ -563,22 +634,17 @@ fn scaling_factor(cfg: &AgeStructuredConfig, ind: &[f64]) -> f64 {
 ///
 /// ## Parameters
 /// - `rng`: Random number generator.
-/// - `cfg`: Simulation config.
+/// - `bp`: The frozen blueprint (dimensions and sampling flags).
 /// - `ind`: Mutable individual-count flat slice.
 /// - `scaling`: Scaling factor from [`scaling_factor`].
-fn recruit_juveniles(
-    rng: &mut SessionRng,
-    cfg: &AgeStructuredConfig,
-    ind: &mut [f64],
-    scaling: f64,
-) {
+fn recruit_juveniles(rng: &mut SessionRng, bp: &Blueprint, ind: &mut [f64], scaling: f64) {
     // Resample age-0 counts so the total equals total * scaling.
     // Stochastic mode uses multinomial/continuous multinomial;
     // deterministic mode scales each category proportionally.
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
-    let stochastic = cfg.stochastic;
-    let continuous = cfg.continuous_sampling;
+    let n_ages = bp.n_ages;
+    let n_ztypes = bp.n_ztypes;
+    let stochastic = bp.stochastic;
+    let continuous = bp.continuous_sampling;
 
     let mut combined = Vec::with_capacity(2 * n_ztypes);
     // Python parity: the reference computes `total` as the *grouped* sum
@@ -658,7 +724,7 @@ fn recruit_juveniles(
 ///
 /// ## Parameters
 /// - `rng`: Random number generator.
-/// - `cfg`: Simulation config.
+/// - `bp`: The frozen blueprint (dimensions and sampling flags).
 /// - `ind`: Mutable individual-count flat slice.
 /// - `sperm`: Mutable sperm-storage flat slice.
 /// - `s_combined_f`: Combined female survival rates per age/genotype.
@@ -668,7 +734,7 @@ fn recruit_juveniles(
 /// ``Ok(())`` or an error if the state is inconsistent.
 fn sample_survival_with_sperm(
     rng: &mut SessionRng,
-    cfg: &AgeStructuredConfig,
+    bp: &Blueprint,
     ind: &mut [f64],
     sperm: &mut [f64],
     s_combined_f: &[f64],
@@ -677,9 +743,9 @@ fn sample_survival_with_sperm(
     // Stochastic female survival must keep stored sperm consistent:
     // surviving sperm categories are scaled, and virgins survive independently.
     // Males are sampled with a simple binomial.
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
-    let continuous = cfg.continuous_sampling;
+    let n_ages = bp.n_ages;
+    let n_ztypes = bp.n_ztypes;
+    let continuous = bp.continuous_sampling;
     for age in 0..n_ages {
         for g in 0..n_ztypes {
             let n_f_raw = ind[ind_idx(0, age, g, n_ages, n_ztypes)];
@@ -755,13 +821,13 @@ fn sample_survival_with_sperm(
 /// Deterministic survival: multiply counts and stored sperm by survival rates.
 ///
 /// ## Parameters
-/// - `cfg`: Simulation config.
+/// - `bp`: The frozen blueprint (dimensions).
 /// - `ind`: Mutable individual-count flat slice.
 /// - `sperm`: Mutable sperm-storage flat slice.
 /// - `s_combined_f`: Combined female survival rates.
 /// - `s_combined_m`: Combined male survival rates.
 fn apply_survival_deterministic(
-    cfg: &AgeStructuredConfig,
+    bp: &Blueprint,
     ind: &mut [f64],
     sperm: &mut [f64],
     s_combined_f: &[f64],
@@ -769,8 +835,8 @@ fn apply_survival_deterministic(
 ) {
     // Deterministic survival multiplies every count and sperm category
     // by the combined age/viability survival probability.
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
+    let n_ages = bp.n_ages;
+    let n_ztypes = bp.n_ztypes;
     for age in 0..n_ages {
         for g in 0..n_ztypes {
             let f_rate = s_combined_f[age * n_ztypes + g];
@@ -791,7 +857,10 @@ fn apply_survival_deterministic(
 ///
 /// ## Parameters
 /// - `rng`: Random number generator.
-/// - `cfg`: Simulation config.
+/// - `bp`: The frozen blueprint (dimensions and sampling flags).
+/// - `eco`: Current ecology columns; the deme's segment feeds every rate.
+/// - `genetics`: Shared genetics tables.
+/// - `deme`: Deme column the rates are read from.
 /// - `ind`: Mutable individual-count flat slice.
 /// - `sperm`: Mutable sperm-storage flat slice.
 ///
@@ -799,7 +868,10 @@ fn apply_survival_deterministic(
 /// ``Ok(())`` on success, or an error string for invalid states.
 pub fn survival(
     rng: &mut SessionRng,
-    cfg: &AgeStructuredConfig,
+    bp: &Blueprint,
+    eco: &EcologyParams,
+    genetics: &GeneticsTensors,
+    deme: usize,
     ind: &mut [f64],
     sperm: &mut [f64],
 ) -> Result<(), String> {
@@ -807,25 +879,26 @@ pub fn survival(
     // 1. Apply juvenile density regulation (scaling).
     // 2. Build combined age x viability survival rates.
     // 3. Apply stochastic or deterministic survival.
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
-    let scaling = scaling_factor(cfg, ind);
-    recruit_juveniles(rng, cfg, ind, scaling);
+    let n_ages = bp.n_ages;
+    let n_ztypes = bp.n_ztypes;
+    let scaling = scaling_factor(bp, eco, deme, ind);
+    recruit_juveniles(rng, bp, ind, scaling);
 
+    let survival_rates = &eco.survival_rates[deme * 2 * n_ages..(deme + 1) * 2 * n_ages];
     let mut s_combined_f = vec![1.0; n_ages * n_ztypes];
     let mut s_combined_m = vec![1.0; n_ages * n_ztypes];
-    let target_viability_age = cfg.new_adult_age - 1;
+    let target_viability_age = bp.new_adult_age - 1;
     for age in 0..n_ages {
-        let age_survival_f = cfg.age_based_survival_rates[age];
-        let age_survival_m = cfg.age_based_survival_rates[n_ages + age];
+        let age_survival_f = survival_rates[age];
+        let age_survival_m = survival_rates[n_ages + age];
         for ztype in 0..n_ztypes {
             let viability_f = if age == target_viability_age {
-                cfg.viability_fitness[age * n_ztypes + ztype]
+                genetics.viability_fitness[age * n_ztypes + ztype]
             } else {
                 1.0
             };
             let viability_m = if age == target_viability_age {
-                cfg.viability_fitness[(n_ages + age) * n_ztypes + ztype]
+                genetics.viability_fitness[(n_ages + age) * n_ztypes + ztype]
             } else {
                 1.0
             };
@@ -834,10 +907,10 @@ pub fn survival(
         }
     }
 
-    if cfg.stochastic {
-        sample_survival_with_sperm(rng, cfg, ind, sperm, &s_combined_f, &s_combined_m)
+    if bp.stochastic {
+        sample_survival_with_sperm(rng, bp, ind, sperm, &s_combined_f, &s_combined_m)
     } else {
-        apply_survival_deterministic(cfg, ind, sperm, &s_combined_f, &s_combined_m);
+        apply_survival_deterministic(bp, ind, sperm, &s_combined_f, &s_combined_m);
         Ok(())
     }
 }
@@ -848,14 +921,14 @@ pub fn survival(
 /// zeroed for both individual counts and stored sperm.
 ///
 /// ## Parameters
-/// - `cfg`: Simulation config.
+/// - `bp`: The frozen blueprint (dimensions).
 /// - `ind`: Mutable individual-count flat slice.
 /// - `sperm`: Mutable sperm-storage flat slice.
-pub fn aging(cfg: &AgeStructuredConfig, ind: &mut [f64], sperm: &mut [f64]) {
+pub fn aging(bp: &Blueprint, ind: &mut [f64], sperm: &mut [f64]) {
     // Shift every age class down by one, dropping the oldest class.
     // Then zero the newborn age class (age 0) for counts and sperm.
-    let n_ages = cfg.n_ages;
-    let n_ztypes = cfg.n_ztypes;
+    let n_ages = bp.n_ages;
+    let n_ztypes = bp.n_ztypes;
     for age in (1..n_ages).rev() {
         let older = age - 1;
         for sex in 0..2 {
@@ -885,15 +958,16 @@ pub fn aging(cfg: &AgeStructuredConfig, ind: &mut [f64], sperm: &mut [f64]) {
 
 /// Per-deme ``OP_SET_PARAM`` write-back context.
 ///
-/// Owns a mutable borrow of the session's [`EcologyParams`] plus the immutable
-/// contract references needed to re-assemble a config.  After each event
-/// boundary the tick commits the ECO scratch into the deme's ecology
-/// column; when the hook program carries set_param ops, the tick also
-/// re-assembles its config so writes take effect on the **same tick's**
-/// later lifecycle stages — matching the Python executor, where the
-/// early-hook write is visible to survival within one tick.
+/// Owns a mutable borrow of the session's (or a spatial deme's local copy of
+/// the) [`EcologyParams`] plus the immutable contracts the lifecycle stages
+/// read.  After each event boundary the tick commits the ECO scratch into the
+/// deme's ecology column, so the stage kernels — which read the columns
+/// through this context — observe the writes on the **same tick's** later
+/// lifecycle stages, matching the Python executor, where the early-hook write
+/// is visible to survival within one tick.  The same holds for a candidate
+/// ``updated_genetics`` committed by a Python callback.
 pub struct EcoCtx<'a> {
-    /// Blueprint providing dimensions for config assembly.
+    /// Blueprint providing dimensions and sampling flags.
     pub bp: &'a Blueprint,
     /// Session-owned ecology columns (written via ``set_eco_value``); for
     /// spatial ticks this is the deme's private single-deme local copy.
@@ -949,63 +1023,58 @@ impl EcoCtx<'_> {
         }
         Ok(())
     }
+}
 
-    /// Re-assemble the age-structured config from current ecology.
-    ///
-    /// ## Returns
-    /// A fresh [`AgeStructuredConfig`] reflecting committed set_param writes, or an
-    /// error string when assembly validation fails.
-    pub fn assemble(&self) -> Result<AgeStructuredConfig, String> {
-        AgeStructuredConfig::assemble_deme(
-            self.bp,
-            self.params,
-            self.updated_genetics.as_ref().unwrap_or(self.genetics),
-            self.deme,
-        )
-        .map_err(|err| err.to_string())
-    }
-
-    /// Re-assemble the discrete-generation config from current ecology.
-    ///
-    /// ## Returns
-    /// A fresh [`DiscreteGenerationConfig`] reflecting committed set_param writes,
-    /// or an error string when assembly validation fails.
-    pub fn assemble_discrete(
-        &self,
-    ) -> Result<crate::kernels::discrete_generation::DiscreteGenerationConfig, String> {
-        // DiscreteGenerationConfig reads the deme-0 column (panmictic sessions).
-        crate::kernels::discrete_generation::DiscreteGenerationConfig::assemble(
-            self.bp,
-            self.params,
-            self.updated_genetics.as_ref().unwrap_or(self.genetics),
-        )
-        .map_err(|err| err.to_string())
+/// Resolve the lifecycle-stage sources `(ecology, genetics, deme)`.
+///
+/// With a live [`EcoCtx`] the stages read the context's committed columns at
+/// its deme (using a callback's candidate genetics when present); otherwise
+/// the caller-provided session columns are used — the hook-free spatial path.
+pub(crate) fn stage_sources<'a>(
+    ctx: Option<&'a EcoCtx<'_>>,
+    columns: Option<(&'a EcologyParams, &'a GeneticsTensors, usize)>,
+) -> (&'a EcologyParams, &'a GeneticsTensors, usize) {
+    match ctx {
+        Some(ctx) => (
+            &*ctx.params,
+            ctx.updated_genetics.as_ref().unwrap_or(ctx.genetics),
+            ctx.deme,
+        ),
+        None => columns.expect("hook-free spatial ticks carry their ecology columns"),
     }
 }
 
 /// Run one full age-structured tick with hooks in the reference stage order.
 ///
 /// Stage order: first hook -> reproduction -> early hook -> survival -> late
-/// hook -> aging.
+/// hook -> aging.  The stage kernels read the live ecology columns and
+/// genetics at each stage boundary, so set_param writes and callback
+/// genetics candidates committed at a boundary are visible to the later
+/// stages of the same tick without any snapshot rebuild.
 ///
 /// ## Parameters
 /// - `rng`: Random number generator.
-/// - `cfg`: Simulation config.
+/// - `bp`: The frozen blueprint.
 /// - `hooks`: CSR hook program.
 /// - `ind`: Mutable individual-count flat slice.
 /// - `sperm`: Mutable sperm-storage flat slice.
 /// - `tick`: Current tick.
-/// - `deme_id`: Current deme id.
+/// - `deme_id`: Current deme id (hook selectors and journaling).
 /// - `eco_values`: Live ECO scratch for ``OP_SET_PARAM``.
 /// - `eco_ctx`: Optional write-back context; when present, ECO writes are
-///   committed after each event boundary and the config is re-assembled
-///   for set_param programs (same-tick visibility, Python parity).
+///   committed after each event boundary and the stage kernels read the
+///   committed columns through the context (same-tick visibility, Python
+///   parity).  When absent, *columns* supplies the stage sources.
+/// - `columns`: Stage sources ``(ecology, genetics, deme)`` used only when
+///   *eco_ctx* is ``None`` — hook-free spatial demes read their session
+///   column segment directly.  Panmictic sessions always lend a context and
+///   pass ``None``.
 ///
 /// ## Returns
 /// ``Ok(0)`` for continue, ``Ok(1)`` if a hook requested stop, or an error string.
 pub fn run_tick(
     rng: &mut SessionRng,
-    cfg: &AgeStructuredConfig,
+    bp: &Blueprint,
     hooks: &HookProgram,
     ind: &mut [f64],
     sperm: &mut [f64],
@@ -1013,20 +1082,20 @@ pub fn run_tick(
     deme_id: i64,
     eco_values: &mut [f64],
     eco_ctx: &mut Option<EcoCtx<'_>>,
+    columns: Option<(&EcologyParams, &GeneticsTensors, usize)>,
 ) -> Result<i32, String> {
     // One structured tick follows the Python reference order:
     // first hook -> reproduction -> early hook -> survival -> late hook -> aging.
     // Each event executes its CSR plan slots and Python callback slots in
     // one cross-type priority order; a nonzero result stops the run.  With
-    // an EcoCtx, set_param writes are committed at each boundary and the
-    // config is re-assembled so later stages of the same tick observe them.
-    // The ctx tick is re-stamped here so batch loops journal every tick
-    // under its own tick value (the ctx outlives one batch, not one tick).
+    // an EcoCtx, set_param writes are committed at each boundary so the
+    // stage kernels observe them through the live columns.  The ctx tick is
+    // re-stamped here so batch loops journal every tick under its own tick
+    // value (the ctx outlives one batch, not one tick).
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.tick = tick;
         ctx.phase = 0;
     }
-    let mut rebuilt: Option<AgeStructuredConfig> = None;
 
     let mut result = hooks.execute_event(
         rng,
@@ -1034,35 +1103,27 @@ pub fn run_tick(
         ind,
         sperm,
         2,
-        cfg.n_ages,
-        cfg.n_ztypes,
+        bp.n_ages,
+        bp.n_ztypes,
         tick,
-        cfg.stochastic,
-        cfg.continuous_sampling,
+        bp.stochastic,
+        bp.continuous_sampling,
         deme_id,
         eco_values,
         eco_ctx,
     )?;
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
-        if hooks.has_set_param
-            || hooks
-                .python_callbacks
-                .iter()
-                .any(|callbacks| !callbacks.is_empty())
-        {
-            rebuilt = Some(ctx.assemble()?);
-        }
     }
     if result != 0 {
         return Ok(result);
     }
 
-    let cfg_after_first: &AgeStructuredConfig = rebuilt.as_ref().unwrap_or(cfg);
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 1;
     }
-    reproduction(rng, cfg_after_first, ind, sperm)?;
+    let (eco, genetics, deme) = stage_sources(eco_ctx.as_ref(), columns);
+    reproduction(rng, bp, eco, genetics, deme, ind, sperm)?;
 
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 2;
@@ -1073,35 +1134,27 @@ pub fn run_tick(
         ind,
         sperm,
         2,
-        cfg.n_ages,
-        cfg.n_ztypes,
+        bp.n_ages,
+        bp.n_ztypes,
         tick,
-        cfg.stochastic,
-        cfg.continuous_sampling,
+        bp.stochastic,
+        bp.continuous_sampling,
         deme_id,
         eco_values,
         eco_ctx,
     )?;
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
-        if hooks.has_set_param
-            || hooks
-                .python_callbacks
-                .iter()
-                .any(|callbacks| !callbacks.is_empty())
-        {
-            rebuilt = Some(ctx.assemble()?);
-        }
     }
     if result != 0 {
         return Ok(result);
     }
 
-    let cfg_after_early: &AgeStructuredConfig = rebuilt.as_ref().unwrap_or(cfg);
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 3;
     }
-    survival(rng, cfg_after_early, ind, sperm)?;
+    let (eco, genetics, deme) = stage_sources(eco_ctx.as_ref(), columns);
+    survival(rng, bp, eco, genetics, deme, ind, sperm)?;
 
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 4;
@@ -1112,35 +1165,26 @@ pub fn run_tick(
         ind,
         sperm,
         2,
-        cfg.n_ages,
-        cfg.n_ztypes,
+        bp.n_ages,
+        bp.n_ztypes,
         tick,
-        cfg.stochastic,
-        cfg.continuous_sampling,
+        bp.stochastic,
+        bp.continuous_sampling,
         deme_id,
         eco_values,
         eco_ctx,
     )?;
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.commit(eco_values)?;
-        if hooks.has_set_param
-            || hooks
-                .python_callbacks
-                .iter()
-                .any(|callbacks| !callbacks.is_empty())
-        {
-            rebuilt = Some(ctx.assemble()?);
-        }
     }
     if result != 0 {
         return Ok(result);
     }
 
-    let cfg_after_late: &AgeStructuredConfig = rebuilt.as_ref().unwrap_or(cfg);
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 5;
     }
-    aging(cfg_after_late, ind, sperm);
+    aging(bp, ind, sperm);
     Ok(0)
 }
 

@@ -18,9 +18,7 @@ use rayon::prelude::*;
 
 use crate::hooks::interpreter::HookProgram;
 use crate::kernels::age_structured;
-use crate::kernels::config::AgeStructuredConfig;
 use crate::kernels::discrete_generation;
-use crate::kernels::discrete_generation::DiscreteGenerationConfig;
 use crate::kernels::rng::{new_rng, SessionRng};
 use crate::model::blueprint::Blueprint;
 use crate::model::ecology::EcologyParams;
@@ -156,7 +154,8 @@ where
 ///
 /// Shared body of the parallel and sequential heterogeneous schedulers.
 /// The local ecology copy (cut only when the program writes params) makes
-/// same-tick `set_param` writes visible to later stages of this deme.
+/// same-tick `set_param` writes visible to later stages of this deme; the
+/// lifecycle otherwise reads the session's columns at this deme directly.
 ///
 /// ## Returns
 /// ``(result, journal_rows)`` for this deme; ``result`` is ``Ok(0)`` to
@@ -164,14 +163,13 @@ where
 #[allow(clippy::too_many_arguments)] // Per-deme boundary mirrors the panmictic tick API.
 fn tick_hetero_deme(
     deme_id: usize,
-    cfg: &AgeStructuredConfig,
+    bp: &Blueprint,
     hooks: &HookProgram,
     rng: &mut SessionRng,
     ind: &mut [f64],
     sperm: &mut [f64],
     eco: &mut [f64],
     tick: i64,
-    bp: &Blueprint,
     params: &EcologyParams,
     genetics: &GeneticsTensors,
 ) -> (Result<i32, String>, Vec<SpatialEcoJournalRow>) {
@@ -187,9 +185,16 @@ fn tick_hetero_deme(
         tick,
         journal: Vec::new(),
     });
+    // Without a context (hook-free program) the lifecycle reads this deme's
+    // session column segment directly.
+    let columns = if ctx.is_some() {
+        None
+    } else {
+        Some((params, genetics, deme_id))
+    };
     let result = age_structured::run_tick(
         rng,
-        cfg,
+        bp,
         hooks,
         ind,
         sperm,
@@ -197,6 +202,7 @@ fn tick_hetero_deme(
         deme_id as i64,
         eco,
         &mut ctx,
+        columns,
     );
     let rows = ctx.map(|ctx| {
         if let Some(genetics) = ctx.updated_genetics.as_ref() {
@@ -234,23 +240,21 @@ fn tick_hetero_deme(
     (result, rows.unwrap_or_default())
 }
 
-/// Run one tick for every deme with one flat config per deme.
+/// Run one tick for every deme over the shared contracts.
 ///
-/// The configs slice is index-aligned with the demes: deme *d* consumes
-/// ``configs[d]`` (its own ecology column entry plus its shared genetics
-/// variant, already assembled by the session).  Each deme consumes its
-/// own persistent RNG stream from *rngs*; the stream advances across
-/// ticks instead of being rebuilt per tick.
+/// Every deme consumes its own ecology column entry plus its shared genetics
+/// variant (``deme_variants[d]`` indexes the bank) and its own persistent RNG
+/// stream from *rngs*; the stream advances across ticks instead of being
+/// rebuilt per tick.
 ///
 /// ## Parameters
-/// - `configs`: Per-deme configs (length equals the deme count).
 /// - `hooks`: CSR hook program.
 /// - `rngs`: Per-deme persistent RNG streams (advanced in place).
-/// - `ind_all`: Stacked individual-count slice.
-/// - `sperm_all`: Stacked sperm-storage slice.
+/// - `ind_all` / `sperm_all`: Stacked state slices.
 /// - `tick`: Current tick.
-/// - `bp`: Blueprint backing config re-assembly (set_param programs).
-/// - `params`: Columnized session ecology the local copies are cut from.
+/// - `eco_all`: Per-deme ECO scratch rows for OP_SET_PARAM.
+/// - `bp`: Blueprint providing dimensions and sampling flags.
+/// - `params`: Columnized session ecology; each deme reads its segment.
 /// - `variants`: Genetics variant bank shared across demes.
 /// - `deme_variants`: Per-deme index into the variant bank.
 /// - `journal`: Session audit sink, extended with this tick's per-deme
@@ -262,7 +266,6 @@ fn tick_hetero_deme(
 /// caller freezes the tick), or an error string.
 #[allow(clippy::too_many_arguments)] // Session boundary mirror of the panmictic tick API.
 pub fn run_spatial_tick_heterogeneous(
-    configs: &[AgeStructuredConfig],
     hooks: &HookProgram,
     rngs: &mut [SessionRng],
     ind_all: &mut [f64],
@@ -275,25 +278,20 @@ pub fn run_spatial_tick_heterogeneous(
     deme_variants: &[usize],
     journal: &mut Vec<SpatialEcoJournalRow>,
 ) -> Result<i32, String> {
-    if configs.is_empty() {
-        return Err(
-            "heterogeneous spatial run requires at least one config and one deme".to_string(),
-        );
+    let n_demes = deme_variants.len();
+    let n_ages = bp.n_ages;
+    let n_ztypes = bp.n_ztypes;
+    if n_demes == 0 {
+        return Err("heterogeneous spatial run requires at least one deme".to_string());
     }
-    let n_demes = configs.len();
-    let n_ages = configs[0].n_ages;
-    let n_ztypes = configs[0].n_ztypes;
-    if params.n_demes != n_demes || deme_variants.len() != n_demes || rngs.len() != n_demes {
+    if params.n_demes != n_demes || rngs.len() != n_demes {
         return Err(format!(
             "heterogeneous spatial run requires {n_demes} ecology columns, variant ids, and RNG streams, got {}, {}, and {}",
             params.n_demes,
-            deme_variants.len(),
+            variants.len(),
             rngs.len()
         ));
     }
-    // Capture per-deme config references up front so the scheduler body
-    // only carries the deme id and the disjoint mutable slices.
-    let deme_configs: Vec<&AgeStructuredConfig> = configs.iter().collect();
     schedule_deme_ticks(
         hooks,
         rngs,
@@ -305,18 +303,9 @@ pub fn run_spatial_tick_heterogeneous(
         n_ages * n_ztypes * n_ztypes,
         journal,
         |deme_id, rng, ind, sperm, eco| {
-            let cfg = deme_configs[deme_id];
-            if cfg.n_ages != n_ages || cfg.n_ztypes != n_ztypes {
-                return (
-                    Err(format!(
-                        "config for deme {deme_id} dimensions do not match the stacked state"
-                    )),
-                    Vec::new(),
-                );
-            }
             let genetics = &variants[deme_variants[deme_id]];
             tick_hetero_deme(
-                deme_id, cfg, hooks, rng, ind, sperm, eco, tick, bp, params, genetics,
+                deme_id, bp, hooks, rng, ind, sperm, eco, tick, params, genetics,
             )
         },
     )
@@ -329,13 +318,12 @@ pub fn run_spatial_tick_heterogeneous(
 #[allow(clippy::too_many_arguments)] // Per-deme boundary mirror.
 fn tick_discrete_deme(
     deme_id: usize,
-    cfg: &DiscreteGenerationConfig,
+    bp: &Blueprint,
     hooks: &HookProgram,
     rng: &mut SessionRng,
     ind: &mut [f64],
     eco: &mut [f64],
     tick: i64,
-    bp: &Blueprint,
     params: &EcologyParams,
     genetics: &GeneticsTensors,
 ) -> (Result<i32, String>, Vec<SpatialEcoJournalRow>) {
@@ -351,8 +339,24 @@ fn tick_discrete_deme(
         tick,
         journal: Vec::new(),
     });
-    let result =
-        discrete_generation::run_tick(rng, cfg, hooks, ind, tick, deme_id as i64, eco, &mut ctx);
+    // Without a context (hook-free program) the lifecycle reads this deme's
+    // session column segment directly.
+    let columns = if ctx.is_some() {
+        None
+    } else {
+        Some((params, genetics, deme_id))
+    };
+    let result = discrete_generation::run_tick(
+        rng,
+        bp,
+        hooks,
+        ind,
+        tick,
+        deme_id as i64,
+        eco,
+        &mut ctx,
+        columns,
+    );
     let rows = ctx.map(|ctx| {
         if let Some(genetics) = ctx.updated_genetics.as_ref() {
             let mut commits = hooks
@@ -392,7 +396,6 @@ fn tick_discrete_deme(
 /// age-structured kernel; the discrete lifecycle carries no sperm plane.
 ///
 /// ## Parameters
-/// - `configs`: Per-deme discrete configs (index-aligned with the demes).
 /// - `hooks`, `rngs`, `ind_all`, `tick`, `eco_all`, `bp`, `params`,
 ///   `variants`, `deme_variants`, `journal`: see
 ///   [`run_spatial_tick_heterogeneous`].
@@ -401,7 +404,6 @@ fn tick_discrete_deme(
 /// ``Ok(0)`` continue / ``Ok(1)`` stopped / error string.
 #[allow(clippy::too_many_arguments)] // Session boundary mirror of the age kernel.
 pub fn run_spatial_tick_discrete(
-    configs: &[DiscreteGenerationConfig],
     hooks: &HookProgram,
     rngs: &mut [SessionRng],
     ind_all: &mut [f64],
@@ -413,25 +415,24 @@ pub fn run_spatial_tick_discrete(
     deme_variants: &[usize],
     journal: &mut Vec<SpatialEcoJournalRow>,
 ) -> Result<i32, String> {
-    if configs.is_empty() {
-        return Err("discrete spatial run requires at least one config and one deme".to_string());
-    }
-    let n_demes = configs.len();
-    let n_ztypes = configs[0].n_ztypes;
+    let n_demes = deme_variants.len();
+    let n_ztypes = bp.n_ztypes;
     // Discrete canonicalization: 2 sexes x 2 ages.
     let ind_stride = 2 * 2 * n_ztypes;
-    if params.n_demes != n_demes || deme_variants.len() != n_demes || rngs.len() != n_demes {
+    if n_demes == 0 {
+        return Err("discrete spatial run requires at least one deme".to_string());
+    }
+    if params.n_demes != n_demes || rngs.len() != n_demes {
         return Err(format!(
             "discrete spatial run requires {n_demes} ecology columns, variant ids, and RNG streams, got {}, {}, and {}",
             params.n_demes,
-            deme_variants.len(),
+            variants.len(),
             rngs.len()
         ));
     }
     // A zero sperm plane satisfies the scheduler's chunking contract; the
     // discrete lifecycle never reads it.
     let mut sink = vec![0.0f64; ind_all.len().max(1)];
-    let deme_configs: Vec<&DiscreteGenerationConfig> = configs.iter().collect();
     schedule_deme_ticks(
         hooks,
         rngs,
@@ -443,11 +444,8 @@ pub fn run_spatial_tick_discrete(
         ind_stride,
         journal,
         |deme_id, rng, ind, _sperm_sink, eco| {
-            let cfg = deme_configs[deme_id];
             let genetics = &variants[deme_variants[deme_id]];
-            tick_discrete_deme(
-                deme_id, cfg, hooks, rng, ind, eco, tick, bp, params, genetics,
-            )
+            tick_discrete_deme(deme_id, bp, hooks, rng, ind, eco, tick, params, genetics)
         },
     )
 }

@@ -298,14 +298,15 @@ fn genetics_tensor_write_validates_sizes() {
     assert!(GeneticsTensors::expected_len(&bp, "nope").is_err());
 }
 
-/// ``single_deme`` is the HB-1 correctness core: a config assembled from
-/// the local single-deme copy must be numerically identical to the
-/// session's per-deme config, otherwise the local-EcoCtx spatial tick
-/// would change demography without any set_param write.  Deme 1 carries
-/// deliberately distinct ecology so a mis-cut segment cannot pass.
+/// ``single_deme`` is the HB-1 correctness core: the local single-deme copy
+/// must be numerically identical to the session's per-deme view — scalar
+/// entries, vector segments, and the derived equilibrium metrics — otherwise
+/// the local-EcoCtx spatial tick would change demography without any
+/// set_param write.  Deme 1 carries deliberately distinct ecology so a
+/// mis-cut segment cannot pass.
 #[test]
 fn single_deme_local_assembly_matches_per_deme_config() {
-    let (bp, mut params, genetics) = fixture();
+    let (bp, mut params, _genetics) = fixture();
     // Widen to 3 demes; give every deme distinct ecology columns.
     params.n_demes = 3;
     params.equilibrium_declared = vec![false; 3];
@@ -336,57 +337,57 @@ fn single_deme_local_assembly_matches_per_deme_config() {
     for deme in 0..3 {
         let local = params.single_deme(deme);
         assert_eq!(local.n_demes, 1, "deme {deme}");
-        let from_local =
-            crate::kernels::config::AgeStructuredConfig::assemble_deme(&bp, &local, &genetics, 0)
-                .expect("local assembly is valid");
-        let from_session = crate::kernels::config::AgeStructuredConfig::assemble_deme(
-            &bp, &params, &genetics, deme,
-        )
-        .expect("session assembly is valid");
-        // Key scalars (including the derived equilibrium metrics, which
-        // re-read every ecology input) and the vector segments.
-        assert_eq!(from_local.carrying_capacity, from_session.carrying_capacity);
-        assert_eq!(from_local.eggs_per_female, from_session.eggs_per_female);
-        assert_eq!(from_local.sex_ratio, from_session.sex_ratio);
+        // Key scalars: the local column entry must equal the session's
+        // per-deme entry (the lifecycle kernels read the local copy at
+        // deme 0, or the session columns at the deme itself).
+        assert_eq!(local.carrying_capacity[0], params.carrying_capacity[deme]);
+        assert_eq!(local.eggs_per_female[0], params.eggs_per_female[deme]);
+        assert_eq!(local.sex_ratio[0], params.sex_ratio[deme]);
         assert_eq!(
-            from_local.sperm_displacement_rate,
-            from_session.sperm_displacement_rate
+            local.sperm_displacement_rate[0],
+            params.sperm_displacement_rate[deme]
         );
         assert_eq!(
-            from_local.low_density_growth_rate,
-            from_session.low_density_growth_rate
+            local.low_density_growth_rate[0],
+            params.low_density_growth_rate[deme]
+        );
+        assert_eq!(local.growth_mode[0], params.growth_mode[deme]);
+        assert_eq!(
+            local.external_expected_eggs[0],
+            params.external_expected_eggs[deme]
         );
         assert_eq!(
-            from_local.juvenile_growth_mode,
-            from_session.juvenile_growth_mode
+            local.equilibrium_declared[0],
+            params.equilibrium_declared[deme]
         );
+        // The derived equilibrium metrics — which re-read every ecology
+        // input — must be identical whether computed from the local column
+        // or the session's per-deme segment.
+        let from_local = crate::kernels::equilibrium::equilibrium_metrics(&bp, &local, 0);
+        let from_session = crate::kernels::equilibrium::equilibrium_metrics(&bp, &params, deme);
         assert_eq!(
-            from_local.expected_competition_strength, from_session.expected_competition_strength,
+            from_local.0, from_session.0,
             "deme {deme}: equilibrium metrics re-read the local column"
         );
+        assert_eq!(from_local.1, from_session.1, "deme {deme}");
+        // Vector segments: each deme's (2, A) / (A,) extent is cut exactly.
+        let a = bp.n_ages;
         assert_eq!(
-            from_local.expected_survival_rate, from_session.expected_survival_rate,
-            "deme {deme}"
+            local.survival_rates,
+            params.survival_rates[deme * 2 * a..(deme + 1) * 2 * a]
         );
         assert_eq!(
-            from_local.age_based_survival_rates,
-            from_session.age_based_survival_rates
+            local.mating_rates,
+            params.mating_rates[deme * 2 * a..(deme + 1) * 2 * a]
         );
         assert_eq!(
-            from_local.age_based_mating_rates,
-            from_session.age_based_mating_rates
+            local.reproduction_rates,
+            params.reproduction_rates[deme * a..(deme + 1) * a]
         );
+        assert_eq!(local.fertility, params.fertility[deme * a..(deme + 1) * a]);
         assert_eq!(
-            from_local.age_based_reproduction_rates,
-            from_session.age_based_reproduction_rates
-        );
-        assert_eq!(
-            from_local.female_age_based_fertility,
-            from_session.female_age_based_fertility
-        );
-        assert_eq!(
-            from_local.age_based_relative_competition_strength,
-            from_session.age_based_relative_competition_strength
+            local.competition_weights,
+            params.competition_weights[deme * a..(deme + 1) * a]
         );
     }
 

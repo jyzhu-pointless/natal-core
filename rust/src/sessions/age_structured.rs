@@ -9,7 +9,6 @@ use pyo3::types::PyDict;
 use std::collections::HashMap;
 
 use crate::hooks::interpreter::HookProgram;
-use crate::kernels::config::AgeStructuredConfig;
 use crate::kernels::rng::{new_rng, SessionRng};
 use crate::model::blueprint::Blueprint;
 use crate::model::ecology::session_get_tensor;
@@ -54,9 +53,9 @@ pub type AgeSnapshot<'py> = (
 /// PyO3-exported stateful session for the age-structured Rust backend.
 ///
 /// Owns the frozen blueprint, the mutable params, the RNG, and a CSR hook
-/// program.  A flat [`AgeStructuredConfig`] is assembled from the contracts at every
-/// tick-batch entry point, so [`EcologyParams`] writes take effect on the next
-/// batch without rebuilding the session (the RNG keeps streaming).
+/// program.  The lifecycle kernels read the owned contracts directly at
+/// every stage boundary, so [`EcologyParams`] writes take effect within the
+/// same tick without rebuilding the session (the RNG keeps streaming).
 #[pyclass(name = "EngineSession")]
 pub struct AgeStructuredSession {
     blueprint: Blueprint,
@@ -390,10 +389,12 @@ impl AgeStructuredSession {
 
     /// Run the reproduction stage in place on the session-owned state.
     fn reproduction(&mut self) -> PyResult<()> {
-        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         crate::kernels::age_structured::reproduction(
             &mut self.rng,
-            &cfg,
+            &self.blueprint,
+            &self.params,
+            &self.genetics,
+            0,
             &mut self.state_ind,
             &mut self.state_sperm,
         )
@@ -406,10 +407,12 @@ impl AgeStructuredSession {
     /// - `ind`: Mutable individual-count array.
     /// - `sperm`: Mutable sperm-storage array.
     fn survival(&mut self) -> PyResult<()> {
-        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         crate::kernels::age_structured::survival(
             &mut self.rng,
-            &cfg,
+            &self.blueprint,
+            &self.params,
+            &self.genetics,
+            0,
             &mut self.state_ind,
             &mut self.state_sperm,
         )
@@ -422,8 +425,11 @@ impl AgeStructuredSession {
     /// - `ind`: Mutable individual-count array.
     /// - `sperm`: Mutable sperm-storage array.
     fn aging(&mut self) -> PyResult<()> {
-        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
-        crate::kernels::age_structured::aging(&cfg, &mut self.state_ind, &mut self.state_sperm);
+        crate::kernels::age_structured::aging(
+            &self.blueprint,
+            &mut self.state_ind,
+            &mut self.state_sperm,
+        );
         Ok(())
     }
 
@@ -443,10 +449,9 @@ impl AgeStructuredSession {
     /// ``0`` or ``1``.
     #[pyo3(signature = (deme_id))]
     fn tick(&mut self, deme_id: i64) -> PyResult<i32> {
-        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
         self.execution.begin()?;
         let tick = self.state_tick;
-        let result = self.run_with_eco(&cfg, tick, deme_id);
+        let result = self.run_with_eco(tick, deme_id);
         self.execution = match &result {
             Ok(0) => {
                 self.phase = 0;
@@ -529,9 +534,8 @@ impl AgeStructuredSession {
     /// Returns ``PyValueError`` when either vector has the wrong length.
     #[pyo3(signature = (ind_flat, sperm_flat, tick))]
     fn set_state(&mut self, ind_flat: Vec<f64>, sperm_flat: Vec<f64>, tick: i64) -> PyResult<()> {
-        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
-        let want_ind = 2 * cfg.n_ages * cfg.n_ztypes;
-        let want_sperm = cfg.n_ages * cfg.n_ztypes * cfg.n_ztypes;
+        let want_ind = 2 * self.blueprint.n_ages * self.blueprint.n_ztypes;
+        let want_sperm = self.blueprint.n_ages * self.blueprint.n_ztypes * self.blueprint.n_ztypes;
         if ind_flat.len() != want_ind {
             return Err(PyValueError::new_err(format!(
                 "ind_flat must contain {want_ind} values, got {}",
@@ -844,15 +848,11 @@ impl AgeStructuredSession {
     /// Run one structured tick with a live ECO scratch and write-back.
     ///
     /// The EcoCtx commits set_param writes into the deme's ecology column
-    /// at every event boundary and re-assembles the config for the same
-    /// tick's later stages — the same granularity as the Python executor.
-    /// The tick's journal rows are drained into the session audit trail.
-    fn run_with_eco(
-        &mut self,
-        cfg: &AgeStructuredConfig,
-        tick: i64,
-        deme_id: i64,
-    ) -> Result<i32, String> {
+    /// at every event boundary; the lifecycle stages read the committed
+    /// columns directly, so the same tick's later stages observe them — the
+    /// same granularity as the Python executor.  The tick's journal rows are
+    /// drained into the session audit trail.
+    fn run_with_eco(&mut self, tick: i64, deme_id: i64) -> Result<i32, String> {
         // Split borrows explicitly: the kernel mutates the session-owned
         // state buffers while the EcoCtx borrows the contracts.
         let Self {
@@ -880,7 +880,7 @@ impl AgeStructuredSession {
         });
         let result = crate::kernels::age_structured::run_tick(
             rng,
-            cfg,
+            blueprint,
             hooks,
             state_ind,
             state_sperm,
@@ -888,6 +888,7 @@ impl AgeStructuredSession {
             deme_id,
             &mut eco_values,
             &mut ctx,
+            None,
         );
         if let Some(ctx) = ctx.as_mut() {
             eco_journal.append(&mut ctx.journal);
@@ -1068,12 +1069,10 @@ impl AgeStructuredSession {
         observation_mask: Option<PyReadonlyArray4<'py, f64>>,
         checkpoint_every: i64,
     ) -> PyResult<(i64, Bound<'py, PyArray2<f64>>, bool)> {
-        // Assemble the config from the owned contracts at the batch entry,
-        // copy the observation mask if present, run the Rust batch loop
-        // directly on the session-owned state, and copy the flattened
-        // history into a NumPy 2-D array.  Python passes control
-        // parameters only (the session owns counts and tick).
-        let cfg = AgeStructuredConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        // Run the Rust batch loop directly on the session-owned state and
+        // copy the flattened history into a NumPy 2-D array.  The lifecycle
+        // kernels read the owned contracts at every stage boundary; Python
+        // passes control parameters only (the session owns counts and tick).
         let mask_vec = match observation_mask {
             Some(mask) => Some(
                 mask.as_slice()
@@ -1102,7 +1101,7 @@ impl AgeStructuredSession {
         let shared = if let Some(shared) = self.history_store.as_ref().map(std::sync::Arc::clone) {
             shared
         } else {
-            let dimensions = [1, 2, cfg.n_ages, cfg.n_ztypes];
+            let dimensions = [1, 2, self.blueprint.n_ages, self.blueprint.n_ztypes];
             let width = if mask_vec.is_some() {
                 1
             } else {
@@ -1174,7 +1173,7 @@ impl AgeStructuredSession {
             }
             let result = crate::kernels::age_structured::run_tick(
                 &mut self.rng,
-                &cfg,
+                &self.blueprint,
                 &self.hooks,
                 &mut self.state_ind,
                 &mut self.state_sperm,
@@ -1182,6 +1181,7 @@ impl AgeStructuredSession {
                 0,
                 &mut eco_values,
                 &mut eco_ctx,
+                None,
             )
             .map_err(|err| {
                 self.state_tick = current_tick;

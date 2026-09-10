@@ -8,7 +8,7 @@ use pyo3::types::PyDict;
 use std::collections::HashMap;
 
 use crate::hooks::interpreter::HookProgram;
-use crate::kernels::discrete_generation::DiscreteGenerationConfig;
+use crate::kernels::discrete_generation;
 use crate::kernels::rng::{new_rng, SessionRng};
 use crate::model::blueprint::Blueprint;
 use crate::model::ecology::session_get_tensor;
@@ -33,9 +33,9 @@ type DiscreteSnapshot<'py> = (
 /// PyO3-exported stateful session for discrete-generation / Wright-Fisher.
 ///
 /// Owns the frozen blueprint, the mutable params, the RNG, and a CSR hook
-/// program.  A flat [`DiscreteGenerationConfig`] is assembled from the contracts at
-/// every tick-batch entry point, so params writes take effect on the next
-/// batch without rebuilding the session (the RNG keeps streaming).
+/// program.  The lifecycle kernels read the owned contracts directly at
+/// every stage boundary, so params writes take effect within the same tick
+/// without rebuilding the session (the RNG keeps streaming).
 #[pyclass(name = "DiscreteEngineSession")]
 pub struct DiscreteGenerationSession {
     blueprint: Blueprint,
@@ -175,7 +175,7 @@ impl DiscreteGenerationSession {
         pr.validate(&bp)?;
         genetics.validate(&bp)?;
         // Validate the discrete normalization once at construction.
-        DiscreteGenerationConfig::assemble(&bp, &pr, &genetics)?;
+        discrete_generation::validate_discrete_shape(&bp)?;
         // Seed the session-owned state from the blueprint's frozen initial
         // population; enable_rust_backend follows with set_state carrying
         // the live Python state.
@@ -414,9 +414,7 @@ impl DiscreteGenerationSession {
     /// Returns ``PyValueError`` when the vector has the wrong length.
     #[pyo3(signature = (ind_flat, tick))]
     fn set_state(&mut self, ind_flat: Vec<f64>, tick: i64) -> PyResult<()> {
-        let cfg =
-            DiscreteGenerationConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
-        let want = 2 * 2 * cfg.n_ztypes;
+        let want = 2 * 2 * self.blueprint.n_ztypes;
         if ind_flat.len() != want {
             return Err(PyValueError::new_err(format!(
                 "ind_flat must contain {want} values, got {}",
@@ -663,11 +661,9 @@ impl DiscreteGenerationSession {
         observation_mask: Option<PyReadonlyArray4<'py, f64>>,
         checkpoint_every: i64,
     ) -> PyResult<(i64, Bound<'py, PyArray2<f64>>, bool)> {
-        // Assemble the config from the owned contracts at the batch entry,
-        // then run a batch of discrete or WF ticks directly on the
-        // session-owned state (control parameters only).
-        let cfg =
-            DiscreteGenerationConfig::assemble(&self.blueprint, &self.params, &self.genetics)?;
+        // Run a batch of discrete or WF ticks directly on the session-owned
+        // state (control parameters only).  The lifecycle kernels read the
+        // owned contracts at every stage boundary.
         let mask_vec = match observation_mask {
             Some(mask) => Some(
                 mask.as_slice()
@@ -697,7 +693,7 @@ impl DiscreteGenerationSession {
                 } else {
                     1 + self.state_ind.len()
                 },
-                [1, 2, 2, cfg.n_ztypes],
+                [1, 2, 2, self.blueprint.n_ztypes],
                 mask_vec.is_none(),
             );
             if let Some(mask) = mask_vec {
@@ -767,10 +763,10 @@ impl DiscreteGenerationSession {
                         &mut [],
                         2,
                         2,
-                        cfg.n_ztypes,
+                        self.blueprint.n_ztypes,
                         current_tick,
-                        cfg.stochastic,
-                        cfg.continuous_sampling,
+                        self.blueprint.stochastic,
+                        self.blueprint.continuous_sampling,
                         0,
                         &mut eco_values,
                         &mut eco_ctx,
@@ -782,13 +778,17 @@ impl DiscreteGenerationSession {
                     if hook_result != 0 {
                         Ok(hook_result)
                     } else {
-                        let rebuilt = eco_ctx
-                            .as_ref()
-                            .map(|ctx| ctx.assemble_discrete())
-                            .transpose()?;
+                        // The fused WF update reads the committed columns and
+                        // candidate genetics through the live context.
+                        let ctx = eco_ctx.as_ref().expect("wf tick lends an eco context");
+                        let genetics = ctx.updated_genetics.as_ref().unwrap_or(ctx.genetics);
                         crate::kernels::discrete_generation::run_wf_tick(
                             &mut self.rng,
-                            rebuilt.as_ref().unwrap_or(&cfg),
+                            &self.blueprint,
+                            // &mut EcologyParams coerces to the shared read.
+                            ctx.params,
+                            genetics,
+                            ctx.deme,
                             &mut self.state_ind,
                         )
                         .map(|_| 0)
@@ -797,13 +797,14 @@ impl DiscreteGenerationSession {
             } else {
                 crate::kernels::discrete_generation::run_tick(
                     &mut self.rng,
-                    &cfg,
+                    &self.blueprint,
                     &self.hooks,
                     &mut self.state_ind,
                     current_tick,
                     0,
                     &mut eco_values,
                     &mut eco_ctx,
+                    None,
                 )
             }
             .map_err(|err| {

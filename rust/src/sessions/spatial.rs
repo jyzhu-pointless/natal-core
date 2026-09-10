@@ -5,8 +5,7 @@ use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::hooks::interpreter::HookProgram;
-use crate::kernels::config::AgeStructuredConfig;
-use crate::kernels::discrete_generation::DiscreteGenerationConfig;
+use crate::kernels::discrete_generation;
 use crate::kernels::rng::{new_rng, SessionRng};
 use crate::model::blueprint::Blueprint;
 use crate::model::ecology::EcologyParams;
@@ -284,11 +283,22 @@ impl SpatialSession {
         };
         let state_ind = validate_stacked_ind(individual_count_all, &bp, deme_variants.len())?;
         let state_sperm = validate_stacked_sperm(sperm_storage_all, &bp, deme_variants.len())?;
-        // Validate the model's config assembly once at construction.
+        // Validate the model's normalized shape once at construction (the
+        // ecology columns and genetics variants were validated above).
         if discrete {
-            DiscreteGenerationConfig::assemble(&bp, &ecology.single_deme(0), &variants[0])?;
+            discrete_generation::validate_discrete_shape(&bp)?;
         } else {
-            AgeStructuredConfig::assemble_deme(&bp, &ecology, &variants[0], 0)?;
+            if bp.n_ages == 0 || bp.n_ztypes == 0 {
+                return Err(PyValueError::new_err(
+                    "n_ages and n_ztypes must be positive",
+                ));
+            }
+            if bp.new_adult_age == 0 || bp.new_adult_age > bp.n_ages {
+                return Err(PyValueError::new_err(format!(
+                    "new_adult_age must be in [1, {}], got {}",
+                    bp.n_ages, bp.new_adult_age
+                )));
+            }
         }
         let rngs = (0..deme_variants.len())
             .map(|deme| new_rng(crate::kernels::rng::stream_seed(seed, deme as i64)))
@@ -1057,21 +1067,10 @@ impl SpatialSession {
             }
         }
         let tick = self.state_tick;
+        // The lifecycle kernels read each deme's ecology column segment and
+        // its shared genetics variant directly — no per-deme snapshot build.
         let code = if self.discrete {
-            let mut configs = Vec::with_capacity(n_demes);
-            for (deme, &variant) in self.deme_variants.iter().enumerate() {
-                let tensors = self
-                    .variants
-                    .get(variant)
-                    .ok_or_else(|| PyValueError::new_err("variant id out of range"))?;
-                configs.push(DiscreteGenerationConfig::assemble(
-                    &self.blueprint,
-                    &self.ecology.single_deme(deme),
-                    tensors,
-                )?);
-            }
             crate::kernels::spatial::run_spatial_tick_discrete(
-                &configs,
                 &self.hooks,
                 &mut self.rngs,
                 &mut self.state_ind,
@@ -1084,21 +1083,7 @@ impl SpatialSession {
                 &mut self.eco_journal,
             )
         } else {
-            let mut configs = Vec::with_capacity(n_demes);
-            for (deme, &variant) in self.deme_variants.iter().enumerate() {
-                let tensors = self
-                    .variants
-                    .get(variant)
-                    .ok_or_else(|| PyValueError::new_err("variant id out of range"))?;
-                configs.push(AgeStructuredConfig::assemble_deme(
-                    &self.blueprint,
-                    &self.ecology,
-                    tensors,
-                    deme,
-                )?);
-            }
             crate::kernels::spatial::run_spatial_tick_heterogeneous(
-                &configs,
                 &self.hooks,
                 &mut self.rngs,
                 &mut self.state_ind,
