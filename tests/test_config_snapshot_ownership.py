@@ -99,3 +99,36 @@ def test_compact_handoff_sharing_is_confined_to_detached_internal_arrays() -> No
     for deme, snapshot in zip(owner.demes, ordinary, strict=True):
         np.testing.assert_array_equal(deme.config.viability_fitness, expected.viability_fitness)
         np.testing.assert_array_equal(snapshot.viability_fitness, expected.viability_fitness)
+
+
+def test_export_deme_drafts_detaches_custom_slots() -> None:
+    """The declaration-draft export never aliases the live ``custom`` mapping.
+
+    Requirement: the P8 handoff gathers declaration drafts from
+    ``deme._config`` (the session-less write authority).  The export
+    seam's isolation contract ("exports never alias the deme's live
+    draft") and the pre-handoff-repair behavior (``export_config()``
+    returned detached copies, ``custom`` included) require the mutable
+    ``custom`` dict and its array values to be copied too — a shared
+    dict lets any consumer-side write silently corrupt the live
+    declaration draft.
+    """
+    owner = _history_population("ConfigSnapshotCustomDetach", "spatial")
+    assert isinstance(owner, nt.SpatialPopulation)
+    live = owner._deme_object(0)._config  # pyright: ignore[reportPrivateUsage]  # declaration-draft authority under test
+    # Inject into EVERY deme's live draft: the loop below asserts on each
+    # deme's export, so each live draft must carry the array.
+    for slot in owner._demes:  # pyright: ignore[reportPrivateUsage]  # live declaration drafts under test
+        slot._config.custom["grid"] = np.arange(4.0)  # pyright: ignore[reportPrivateUsage]  # custom values may be arrays
+    for exported in (
+        *owner._export_deme_drafts(compact=True),  # pyright: ignore[reportPrivateUsage]  # export-seam isolation contract
+        *owner._export_deme_drafts(),  # pyright: ignore[reportPrivateUsage]
+    ):
+        assert exported.custom is not live.custom
+        assert exported.custom["grid"] is not live.custom["grid"]
+        exported.custom["probe_leak"] = 1
+        exported.custom["grid"] = exported.custom["grid"] + 1.0
+        exported.custom["grid"][0] = 99.0
+    for slot in owner._demes:  # pyright: ignore[reportPrivateUsage]  # every live draft stays uncorrupted
+        assert "probe_leak" not in slot._config.custom  # pyright: ignore[reportPrivateUsage]
+        assert slot._config.custom["grid"][0] == 0.0  # pyright: ignore[reportPrivateUsage]

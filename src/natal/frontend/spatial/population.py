@@ -31,6 +31,7 @@ from natal.frontend.data import (
     ModelDraft,
     PopulationState,
 )
+from natal.frontend.data.definition import copy_declaration_value
 from natal.frontend.genetics import Species
 from natal.frontend.hooks import (
     CompiledHookDescriptor,
@@ -996,8 +997,9 @@ class SpatialPopulation:
             draft = getattr(deme, "_config", None)  # pyright: ignore[reportPrivateUsage]  # declaration-side authority of a managed deme
             if not isinstance(draft, ModelDraft):
                 raise TypeError(f"deme[{idx}] does not carry a declaration draft")
-            # Detach every array: exports never alias the deme's live draft
-            # (compact dedups identical contents into one shared copy).
+            # Detach every mutable field: exports never alias the deme's
+            # live draft (compact dedups identical array contents into one
+            # shared copy; the custom mapping is copied with its arrays).
             replacements: dict[str, object] = {}
             for name, value in zip(draft._fields, draft, strict=True):
                 if isinstance(value, np.ndarray):
@@ -1011,6 +1013,8 @@ class SpatialPopulation:
                         replacements[name] = shared
                     else:
                         replacements[name] = array.copy()
+                elif isinstance(value, dict) and name == "custom":
+                    replacements[name] = copy_declaration_value(value)
             draft = draft._replace(**replacements)
             drafts.append(draft)
         return drafts
