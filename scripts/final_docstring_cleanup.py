@@ -166,7 +166,6 @@ def process_other_files():
         'age_structured_population.py',
         'base_population.py',
         'genetic_entities.py',
-        'numba_compat.py',
         'registry/index.py',
         'modifiers.py',
         'population_builder.py',

@@ -11,8 +11,8 @@ import time
 import numpy as np
 
 import natal as nt
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import HexGrid
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import HexGrid
 
 
 def build_hex_spatial_population() -> SpatialPopulation:
@@ -74,7 +74,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
 def main() -> None:
     """Build + run the hex-grid spatial demo and report timing."""
     spatial = build_hex_spatial_population()
-    spatial.run(1)  # warm-up (Numba compilation)
+    spatial.run(1)  # warm-up the native session
     print("start")
     start = time.perf_counter()
     spatial.run(5)

@@ -13,7 +13,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from natal.numba.compat import set_numba_seed
+import numpy as np
+
+
+def seed_rng(seed: int) -> None:
+    """Seed the NumPy RNG that drives the reference trajectories."""
+    np.random.seed(seed)
 
 from .lifecycle import DailyRelease
 from .slim_panmmictic import SLIM_SCRIPT
@@ -95,7 +100,7 @@ def _natal_trajectories(
     for repeat_index in range(repeats):
         if seed is not None:
             # Single-deme execution has no parallel-deme RNG ambiguity.
-            set_numba_seed(seed + repeat_index)
+            seed_rng(seed + repeat_index)
         state = scenario.state
         for transition in range(n_days + 1):
             adult_total, aa_adult = _summarize_state(state)

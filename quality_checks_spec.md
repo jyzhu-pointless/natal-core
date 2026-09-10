@@ -1,212 +1,103 @@
-# Quality Checks Specification (Unit Tests, Pyright, Ruff)
+# Quality Checks Specification
 
-This specification complements `docstring_spec.md` and defines the mandatory quality checks for code changes.
-It standardizes unit testing, static type checking, and linting so that changes are safe, consistent, and reviewable.
+> [Chinese version](./quality_checks_spec_cn.md). Keep both versions synchronized; English takes precedence.
 
----
+## Scope and Responsibility
 
-## 1. Scope
+This specification owns quality policy for Python and Rust code changes, including executable examples. [AGENTS.md](./AGENTS.md) defines authorization, risk classification, and reviewer assignment. [docstring_spec.md](./docstring_spec.md) defines docstring and annotation format. Skills reference these policies instead of introducing separate thresholds.
 
-This specification applies to all Python code changes in this repository, especially under `src/` and `demos/`.
-It applies equally to human contributors and AI Agents.
+Prose, comment, or layout changes that do not affect runtime or example code need accuracy, bilingual consistency, link, and relevant format checks rather than full code gates. Substantial rule or skill changes also need the independent scenario exercises described in AGENTS.md. Standalone syntax/style illustrations in specifications that do not call project code, describe project APIs, or express scientific models need document checks and snippet validation, not full project gates; executable project API/model examples remain code changes.
 
-Required quality gates:
-- Unit tests (`pytest`)
-- Type checking (`pyright` in strict mode)
-- Lint checks (`ruff`)
+## Validation Timing and Commands
 
----
-
-## 1.1 Solo Development and Lightweight Collaboration
-
-This repository is primarily maintained by a single developer with occasional external contributions.
-The workflow is intentionally lightweight, but quality gates remain strict:
-- Review steps may be lightweight, but quality checks are never optional.
-- Even without external reviewers, run all commands in Section 2 before merge.
-- Keep changes small and focused to reduce rollback risk.
-- Each change should include a short validation summary (tests, typing, lint).
-
----
-
-## 1.2 AI Agent Applicability
-
-AI Agent contributions must meet the exact same quality bar as human contributions, plus traceability:
-- Include changed-file scope, behavior summary, and executed validation commands.
-- No style-only changes without validation.
-- No new suppression (`# type: ignore`, Ruff ignores) without explicit rationale.
-- If API behavior or contracts change, update tests and docs in the same change.
-
----
-
-## 2. Required Commands
-
-Run the following commands before creating or merging a change:
+During development, run targeted checks that answer the current question. Before delivering a code change, run all four final gates against the completed artifacts:
 
 ```bash
 pytest
 pyright
 ruff check src demos
+python scripts/check_rust.py
 ```
 
-For Claude Code agents, the virtual environment is auto-activated; run commands directly without `source .venv/bin/activate`.
+This includes Rust-only changes. The Rust script's `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo check --all-targets` are hard gates; optional rust-analyzer diagnostics do not block delivery. Use the repository's environment and configuration; if a command is unavailable, report the missing prerequisite rather than assume success.
 
-After these commands pass, review the `docs/` directory to determine whether the change requires accompanying documentation updates and add or mark the necessary updates before proposing completion.
+The main agent may run checks. For high-risk changes, the evaluator independently executes final full gates; an identical preliminary full run by the author is unnecessary. After further substantive changes, rerun affected checks and review; repeat full gates when the changes invalidate prior full results or impact is unclear.
 
-Recommended autofix command for lint issues:
+Apply `ruff check src demos --fix` only for relevant lint findings, and inspect its diff for unrelated changes. Do not run autofix as an unconditional gate.
 
-```bash
-ruff check src demos --fix
-```
+For public signatures, defaults, export paths, or other changes to the stub surface, run `python scripts/generate_init_pyi.py` before final type checking. Complete necessary documentation and example updates before final review.
 
-If a change affects packaging or import exposure, also regenerate stubs:
+Run affected demos and runnable documentation examples with their required setup. Execute all demos and runnable examples for broad API migrations, shared infrastructure changes affecting their execution, or release validation. Distinguish illustrative fragments from runnable examples; report unavailable prerequisites and unexecuted relevant examples.
 
-```bash
-python scripts/generate_init_pyi.py
-```
+## Tests and Applicability
 
----
+Prefer pytest-collected behavior tests under `tests/test_*.py`, small reusable fixtures, and one coherent behavioral assertion group per test. Each test must verify an explicit behavior contract or mathematical property and identify a concrete error it would catch. Existing tests may satisfy a change if their applicability is demonstrated; do not add redundant tests to meet a quota.
 
-## 3. Unit Testing Rules (pytest)
+Cover the changed behavior, relevant boundaries, and the regression scenario for a fix. Select additional categories by their triggering conditions:
 
-### 3.1 Test placement and naming
+| Category | Required when | Evidence |
+|---|---|---|
+| Negative contract | The change removes or forbids an interface | Assert it is inaccessible, including affected exports |
+| Ownership | An API promises copies, read-only results, or other isolation | Attempt mutation and verify the promised isolation |
+| State transitions | The change involves or affects lifecycle behavior | Exercise relevant sequences such as restore→run, finish→snapshot, import→run, or clear→record |
+| Configuration combinations | Several configuration options jointly affect the change | Identify valid combinations and interactions; test critical combinations |
+| Error paths | Input constraints or failure handling change | Check the exception and the documented post-failure state |
 
-- Place tests under `tests/`.
-- Test file names must follow `test_*.py`.
-- Test function names should describe behavior, e.g., `test_builder_rejects_invalid_age_structure`.
+A non-applicable category needs a short reason, not an invented test. Ownership follows the API contract: an explicitly shared mutable view is not automatically a defect, and a read-only flag alone does not prove isolation. For error paths, require unchanged state when the contract promises atomic failure; otherwise verify documented recovery behavior.
 
-### 3.2 Test design requirements
+Exhaust small critical combination sets. For large sets, justify representative combinations, boundaries, and generated tests; do not claim exhaustive coverage after sampling.
 
-- Prefer behavior-driven tests that validate externally observable outcomes.
-- Keep tests deterministic; avoid time-dependent or random behavior without fixed seeds.
-- Use the Arrange-Act-Assert structure for readability.
-- Prefer one behavioral assertion group per test.
+Non-numerical assertions on interface absence, exception types, identity, mutability, or state are valid. Numerical tests must use independently justified expected values, error bounds, or mathematical invariants. Exact integer results should be exact; floating-point tolerances must have a numerical rationale. A run that merely avoids crashing does not verify numerical correctness.
 
-### 3.3 Fixtures and shared setup
+For stochastic output claims, use statistical validation with justified sample size and tolerances. State the quantity tested (mean, variance, or distribution), assumptions, seed strategy for reproducibility, and how false failures are controlled. There is no universal minimum run count. A deterministic regression or per-sample bound may test a specific property but does not establish distributional correctness. See `numerical-verification` for methods.
 
-- Reuse fixtures in `tests/conftest.py` instead of duplicating setup logic.
-- Keep fixtures small and focused.
-- Do not hide critical test assumptions inside deep fixture chains.
+## Coverage
 
-### 3.4 What to test for each change
+- New modules require at least 95% line coverage.
+- New executable code in existing modules requires at least 95% line coverage. Measure executed new lines against all executable new lines in the change; the whole module average cannot substitute.
+- Report the coverage command, baseline/diff used for new-line measurement, measurement scope, and uncovered lines. For example, `pytest --cov=src/natal --cov-report=term-missing --cov-report=json` supplies Python line data; map it to the change for existing modules.
+- Use appropriate language-specific coverage tooling for Rust executable changes; Python coverage does not establish Rust coverage.
+- If coverage cannot be reliably measured, report it as unconfirmed and treat required measurement as blocked. Never claim the threshold from an estimate.
+- Coverage does not replace contract or numerical checks. Do not hide executable lines with exclusions to reach the threshold.
 
-Every non-trivial code change must add or update tests that cover:
-- Happy path behavior
-- Boundary conditions
-- Invalid inputs and error paths (when relevant)
-- Regression scenario for the bug being fixed (if applicable)
+## Types, Docstrings, and Lint
 
-### 3.5 Coverage requirements
+Use the current repository Pyright strict configuration and Ruff configuration; do not copy potentially stale settings into skills. Annotate function parameters, returns, and public attributes as specified in the docstring specification. Obvious local variable types may be inferred; annotate when inference is ambiguous or the type expresses a meaningful constraint.
 
-- **New modules**: ≥95% line coverage.
-- **New code in existing modules**: ≥95% line coverage.
-- **Deterministic simulations** (`stochastic=False`): require exact numerical assertions on counts, frequencies, or derived statistics. A passing run with no assertion on the output value is insufficient.
-- **Stochastic simulations**: require statistical validation — multiple independent runs with confidence intervals or distributional checks. A single passing run is insufficient.
+Use precise types. `Any` and `object` require a specific documented reason when used as broad annotations; `object` may correctly describe an unknown value that is narrowed before use. Do not replace precise types with broad ones to silence errors. `cast(Any, …)` is forbidden. Use `cast(T, x)` only when a justified runtime invariant cannot be established by static analysis; prefer narrowing or restructuring. Every `# type: ignore` is a last resort and needs a brief, specific reason.
 
-### 3.6 Prohibited testing practices
+Type-only changes must preserve runtime behavior. Contract tightening requires corresponding tests and documentation. Respect existing justified lint exceptions; new suppressions must be narrow and explained. Do not disable rule families, leave dead code, or expand ignores to make checks pass.
 
-- Do not skip tests without a clear reason.
-- Do not leave temporary debug assertions or print-based checks.
-- Do not merge a feature with only manual verification when automated tests are feasible.
+Required type, docstring, and lint violations still need repair within the repair scope. Report their actual impact separately from scientific or runtime defects; architectural preferences and readability suggestions are not automatic blockers.
 
----
+## Repair Scope and Baseline Failures
 
-## 4. Type Checking Rules (Pyright)
+Fix all gate errors in modified code files and failures in other files caused by the change. This applies to pytest, Pyright, Ruff, and Rust gates. Do not broaden a task to repair unrelated files solely to obtain a green repository.
 
-### 4.1 Strict mode requirement
+A failure in an untouched, unaffected file may be recorded as pre-existing only with evidence such as reproduction before the change, or on the recorded base revision under comparable conditions. A familiar message or unchanged filename is insufficient. Do not reset or overwrite user changes to obtain a baseline.
 
-Pyright must pass with repository configuration:
-- `typeCheckingMode = "strict"`
-- `include = ["src"]`
-- `ignore = ["tests/**", "**/__pycache__", "**/*.pyc"]`
+Record the failing command, diagnostic, baseline revision or captured state, environment comparison, and why the current change does not affect it. Confirmed unrelated baseline failures need not block delivery; still report the full gate as failed with an accepted baseline finding, never as passed. Modified files and failures caused by the change do not qualify for this exception.
 
-### 4.2 Typing requirements
+If origin cannot be determined, investigate. A demonstrated in-scope defect requires repair; missing evidence or unavailable infrastructure that prevents required verification leaves the task blocked. Do not silently relabel failures, skip tests, suppress diagnostics, or change thresholds.
 
-- Add explicit type annotations for public APIs, function signatures, and important internal values.
-- Avoid implicit `Any` in new or modified code.
-- Use precise types (`Sequence[int]`, `Mapping[str, float]`, `NDArray[...]`, etc.) instead of overly broad types where practical.
+## Review Evidence and Verdicts
 
-### 4.3 Handling type errors
+The main agent supplies basic tests and self-validation. The independent evaluator checks existing coverage and may add or strengthen tests during review; no separate tester stage is required. Preserve the implementation/review boundary in AGENTS.md: the evaluator edits tests and reports defects, while the main agent repairs product code.
 
-- Prefer fixing root causes over local suppression.
-- Use `cast(...)` only when a runtime invariant is known and cannot be expressed directly.
-- `# type: ignore` is allowed only as a last resort and must include a short, specific reason.
+For a behavior-testable blocker, prefer handing off an executed failing regression test with the confirmed requirement, test location, reproduction command, expected outcome, and observed failure. Confirm that it fails for the claimed behavior rather than a broken fixture or missing dependency. Other blockers may use static diagnostics or concrete evidence; do not force every finding into a test. Unexecuted tests are proposed checks, not reproduced failures.
 
-### 4.4 Fix-everything policy for pyright
+Resolve essential contract ambiguity before treating a disputed expectation as a repair target. The main agent may challenge an incorrect test with evidence for evaluator correction but must not weaken, skip, or remove valid tests to make results pass. After repair, the evaluator independently reruns the repair targets and affected checks; final gate timing still follows the validation section. Issue a verdict against the final implementation and tests, including tests added during review.
 
-- **Modified files**: All pyright failures must be fixed, regardless of whether they pre-existed.
-- **Other files affected by the change** (e.g., signature or import changes): failures in those files must be fixed too.
-- **Pre-existing issues in untouched files**: explicitly note and analyse them. Fixing is encouraged but not strictly required for the current commit.
-- **`cast(Any, …)` is forbidden**. Never use it to bypass type checking.
-- **`Any` in function parameter lists is forbidden** unless accompanied by a concrete, documented justification.
-- **`cast(T, x)`** may be used only when static analysis cannot prove `x: T` at all (e.g., narrowing `Optional` after an explicit guard) and the error is otherwise unavoidable. Prefer type-narrowing assertions or restructuring before `cast`.
-- **`# type: ignore`** is a last resort. Every ignore must include a short, specific reason on the same line.
+Record four things: current requirements and evidence; issues introduced or affected by the change; confirmed unrelated baseline issues; and required checks that could not be completed.
 
-### 4.5 Backward compatibility and typing
+Each requirement/check is `PASS`, `FAIL`, `NOT CHECKED`, or `N/A` with a reason where needed. Baseline failures retain their failing command result and link to the baseline evidence.
 
-- Keep runtime behavior unchanged when introducing type-only refactors.
-- If a typing change tightens API contracts, update tests and docs in the same change.
+| Verdict | Condition |
+|---|---|
+| `APPROVED` | No in-scope blocker and all required validation completed; any unrelated baseline exception has evidence and is disclosed |
+| `REJECTED` | An in-scope defect, required standards violation, missing applicable test, or measured coverage below 95% requires repair |
+| `BLOCKED` | Missing tools, environment, evidence, or independent review prevents required verification, with no already established rejection reason |
 
----
+If both known defects and missing checks exist, return `REJECTED` and list the blocked checks too. Unchecked requirements cannot be counted as passing. An approval is scoped to the reviewed artifacts and does not claim that accepted baseline failures disappeared.
 
-## 5. Lint Rules (Ruff)
-
-### 5.1 Baseline configuration
-
-Ruff checks follow repository configuration in `pyproject.toml`, including:
-- `line-length = 88`
-- Rule families: `E`, `W`, `F`, `I`, `B`, `C4`, `UP`
-- Configured exceptions in `ignore` and `per-file-ignores`
-
-### 5.2 Scope and execution
-
-- Lint checks must pass for changed files under `src/` and `demos/`.
-- Keep imports sorted according to Ruff/isort rules.
-- Resolve lint findings by improving code clarity, not by broad suppression.
-
-### 5.3 Allowed exceptions
-
-- Respect repository-level exceptions that are already justified in `pyproject.toml`.
-- Do not add new ignores unless they are narrowly scoped and documented in the change.
-
-### 5.4 Prohibited lint handling
-
-- Do not disable entire rule categories for convenience.
-- Do not keep dead code, unreachable branches, or unused imports in committed changes.
-
----
-
-## 6. Pull Request Quality Checklist
-
-A change is ready to merge only when all of the following are true:
-- Unit tests pass (`pytest`).
-- Type checks pass (`pyright`).
-- Lint checks pass (`ruff check src demos`).
-- Added or modified behavior is covered by tests.
-- New public APIs are typed and documented consistently with `docstring_spec.md`.
-- For AI-generated changes, the change note includes summary, validation results, and residual risks (if any).
-
----
-
-## 7. Quick Triage Guidance
-
-If checks fail, resolve in this order:
-1. Fix correctness and failing tests first.
-2. Fix type issues that indicate real contract mismatches.
-3. Fix lint issues and import/order cleanup.
-4. Re-run the full command set before submission.
-
-This order reduces rework and avoids masking behavioral regressions with style-only edits.
-
----
-
-## 8. Minimum Delivery Flow (Human and AI Agent)
-
-Follow this minimum flow for every change:
-1. Implement one focused change objective.
-2. Run `pytest`, `pyright`, and `ruff check src demos`.
-3. If any check fails, fix in the order defined in Section 7 and rerun all checks.
-4. Update related docs and docstrings for public API changes.
-5. Record in the change note:
-	- What changed.
-	- How it was validated.
-	- Known limitations or follow-up items (if any).
+Prioritize correctness and failing tests, then contract/type issues, then formatting and lint. The delivery report states changed files, behavior and rationale, executed commands and results, reviewer identity when applicable, and remaining limitations.

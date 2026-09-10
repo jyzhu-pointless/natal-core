@@ -27,8 +27,8 @@ pop.run_tick()
 ```text
 population.run(...) / population.run_tick()
   → 获取已编译的事件 hooks
-  → 绑定 codegen runner
-  → 依次调用阶段内核（reproduction/survival/aging）
+  → 在原生引擎会话内执行
+  → 依次执行阶段内核（reproduction/survival/aging）
   → 更新 state 与 history
 ```
 
@@ -92,7 +92,7 @@ pop.run_tick()
 
 1. reproduction
   - 仅使用 age1 成体进行交配与受精。
-  - 使用临时 `temp_sperm_store` 参与当步受精，不跨 tick 保留长期精子库。
+  - 当步用临时配对/受精缓冲完成受精，不跨 tick 保留精子库（离散模型没有 `sperm_storage` 状态）。
   - 产出的后代写入 age0。
 2. survival
   - 先对 age0 做密度调节（同样支持四种 growth mode）。
@@ -119,42 +119,32 @@ pop.run_tick()
 - `True`：按固定期望卵数产卵。
 - `False`：按 Poisson 机制产卵（在随机模式下体现为随机卵数）。
 
-## 4. `simulator` 模块的职责
+## 4. 引擎实现布局
 
-`src/natal/engine/age_structured_simulator.py` 主要提供年龄结构模型的”阶段级内核函数”。
-`src/natal/engine/discrete_generation_simulator.py` 提供离散世代模型的对应函数。包括：
+Rust 原生扩展 `natal._engine_rs` 是唯一的执行引擎。它在引擎会话内拥有
+运行状态（泛交配模型每种群一个会话；空间容器一个堆叠会话），并实现
+两类模型的阶段内核：
 
-- 年龄结构模型：`run_reproduction`、`run_survival`、`run_aging`
-- 离散世代模型：`run_discrete_reproduction`、`run_discrete_survival`、`run_discrete_aging`
+- 年龄结构模型：reproduction、survival、aging（长期精子存储）。
+- 离散世代模型：两年龄段紧凑生命周期，精子仅当 tick 有效。
 
-此外，该模块还提供状态/配置导入导出的轻量包装函数，便于与上层对象方法配合使用。
+### 4.1 Spatial migration 布局
 
-### 4.1 Spatial migration 后端模块布局
-
-Spatial migration 相关内核现已按后端拆分到目录模块
-`src/natal/engine/migration/` 下：
-
-- `adjacency.py`：邻接行后端（dense/sparse row 路由）。
-- `kernel.py`：拓扑 + migration-kernel 后端。
-- `__init__.py`：包级后端入口重导出。
-
-兼容入口 `src/natal/engine/spatial_migrator.py`
-保持旧 API 不变，并按后端模式分发：
-
-- `migration_mode == 0` -> adjacency 后端（`adjacency.py`）
-- `migration_mode == 1` -> kernel-topology 后端（`kernel.py`）
-
-这样可以在不改变用户侧入口（如 `run_spatial_migration(...)`）的前提下，
-把 migration 内部实现做成可维护的模块化结构。
+迁移在空间引擎会话内、各 deme 生命周期之后作为 CSR 阶段执行。前端在
+构建期把所有迁移声明（拓扑、邻接矩阵或迁移核）折叠为一份冻结 CSR 加
+速率列（`src/natal/frontend/spatial/migration.py`）；会话每个 tick 用
+速率列乘以该 CSR。
 
 ## 5. 与 `state`/`config` 的关系
 
-模拟运行时，内核读写的是两个核心对象：
+运行状态与生态参数由 Rust 会话持有；Python 侧的 `pop.state` 与 `pop.config` 只是**查询快照**（每次访问重新生成，修改它们不影响引擎），详见 [PopulationState 与 ModelDraft](4_population_state_config.md)。
 
-- `state`：当前时刻的数量分布与时间步。
-- `config`：生存率、交配率、适应度、映射矩阵等规则参数。
+- `state`：当前时刻的数量分布与时间步（快照读）。
+- `config`：生存率、交配率、适应度、映射矩阵等规则参数的投影（快照读）。
 
-如果你已经阅读上一章，可以将本章理解为“`state`/`config` 如何在每个 tick 中被消费与更新”。
+运行期写入走受控通道：`pop.params.<name>` / `pop.update()`（标量）、`pop.params.tensor_write(...)`（向量与张量）。空间容器不暴露 `state`/`config` 属性，其参数写入见[空间生命周期执行](spatial_lifecycle_wrapper.md)。
+
+如果你已经阅读上一章，可以将本章理解为“这些快照如何在每个 tick 中被消费与更新”。
 
 ## 6. 历史记录机制
 
@@ -179,6 +169,7 @@ history = pop.history.individual_count
 state_flat = pop.export_state()
 # ... 保存或外部处理 ...
 pop.import_state(state_flat)
+# import_state() 同时清空该种群的历史，时间线从头开始
 ```
 
 典型场景：
@@ -186,6 +177,58 @@ pop.import_state(state_flat)
 1. 运行到某个关键时间点后保存快照。
 2. 从同一快照派生多个参数分支。
 3. 比较不同策略下的轨迹差异。
+
+### 7.1 随机流（RNG）与 bit-reproducible 承诺范围
+
+- `build()` 自动创建 Rust 会话。会话持有 `SessionRng`，多次 `run()` 持续推进同一随机流；
+  不需要选择或手动启用后端。
+- 空间模型中 deme `d` 从会话的基础种子按 `seed ^ d` 派生随机流；该 deme 的
+  生命周期阶段与迁移共用这条流。
+- Python Hook 内的 `ctx.rng` 是当前事件的受控 Rust 采样器。重复访问返回同一个采样器，
+  连续取样会推进随机流。回调返回后采样器失效；恢复检查点会恢复当时记录的 RNG 状态。
+- **承诺范围**：同一输入（构建参数 + seed + hook 组合）下，确定性
+  （`stochastic=False`）轨迹逐位可复现；随机轨迹在固定 seed 下跨进程可复现。
+  不承诺跨版本位级稳定（未来算法修复可能改变数值）。
+
+### 7.2 检查点与历史查询
+
+Rust 会话拥有历史数值、检查点和参数日志。`mode="raw"` 的每个保留记录都包含对应的完整检查点：个体与精子状态、tick、执行阶段与状态、RNG、生态参数（含迁移和 custom）及日志位置。遗传表不参与回滚。`mode="observation"` 只保留投影值，不隐藏完整原始历史，也不支持恢复。
+
+`pop.restore_checkpoint(tick)` 只接受仍保留的精确 tick；未记录或已淘汰的 tick 会在修改状态前报错。恢复保留该 tick 及以前的历史，并按检查点中的位置截断未来参数日志，包括同一 tick 上后来发生的更新。普通稳定边界恢复为 `Ready`；手动记录的停止或失败边界保留对应执行状态。
+
+`record_snapshot()` 可在两次运行之间记录当前边界，包括已停止的种群；重复记录同一 tick 会报错。`pop.history.boundary_metadata` 返回不可变的 `(tick, phase_cursor, status)` 元组序列。阶段游标标识生命周期中的位置，例如 `0` 是正常 tick 边界，`2` 是 early 阶段。结合 status 区分完整边界和中途停止。
+
+`pop.params_log_details` 返回 `(tick, event, deme, parameter, old, new)` 元组序列；普通种群的 deme 为 `0`，空间种群可从对应 deme 的查询接口读取日志。值保留布尔、整数、浮点或数组类型，新增与删除分别用 `None` 表示旧值与新值。查询中的数组是独立副本。`params_log` 保留原有四列标量投影，不包含数组和新增／删除记录；需要完整审计时使用 `params_log_details`。已取得的查询结果不会被后续更新或恢复改写。
+
+`max_rows` 同时限制保留的记录与检查点；无 Python 回调的批量运行在 Rust 内逐步记录并淘汰。`clear_history()` 清除记录和对应检查点，保留当前状态、RNG、参数和参数日志。
+
+下面的完整示例演示有界历史及日志回滚：
+
+```python
+import natal as nt
+
+species = nt.Species.from_dict(
+    "HistoryExample", {"Chr1": {"L1": ["W"]}}, gamete_labels=["default"]
+)
+pop = (
+    nt.DiscreteGenerationPopulation.setup(species=species, stochastic=False)
+    .initial_state(individual_count={"female": {"W|W": 10}, "male": {"W|W": 10}})
+    .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+    .reproduction(eggs_per_female=2.0, sex_ratio=0.5)
+    .competition(carrying_capacity=1000.0, low_density_growth_rate=2.0)
+    .record_history(mode="raw", max_rows=3)
+    .build()
+)
+pop.run(3, record_every=1)
+assert pop.history.ticks == (1, 2, 3)
+pop.update().competition(carrying_capacity=500.0)
+assert pop.params_log_details[-1][3:] == ("carrying_capacity", 1000.0, 500.0)
+pop.restore_checkpoint(1)
+assert pop.params.carrying_capacity == 1000.0
+assert pop.history.ticks == (1,)
+assert pop.params_log_details == ()
+assert pop.history.boundary_metadata == ((1, 0, "Ready"),)
+```
 
 ## 8. Hook 如何嵌入执行链路
 
@@ -238,7 +281,6 @@ pop.import_state(state_flat)
 
 ## 相关章节
 
-- [PopulationState 与 PopulationConfig](4_population_state_config.md)
-- [Numba 优化指南](4_numba_optimization.md)
+- [PopulationState 与 ModelDraft](4_population_state_config.md)
 - [Modifier 机制](3_modifiers.md)
 - [Hook 系统](2_hooks.md)

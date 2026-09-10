@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import pytest  # type: ignore
+import numpy as np
+import pytest  # type: ignore  # module under test is resolved dynamically (backend layout moved in slice 6)
 
 import natal as nt
-import numpy as np
-import pytest
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import HexGrid, SquareGrid, build_adjacency_matrix
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import HexGrid, SquareGrid, build_adjacency_matrix
 
 
 def _make_deme(species: nt.Species, name: str, adult_count: float) -> nt.AgeStructuredPopulation:
@@ -38,9 +37,6 @@ def _make_deme(species: nt.Species, name: str, adult_count: float) -> nt.AgeStru
         )
         .build()
     )
-
-
-@pytest.mark.numba_off
 def test_spatial_population_run_tick_with_real_demes_updates_state(simple_species: nt.Species) -> None:
     demes = [
         _make_deme(simple_species, "deme_0", adult_count=100.0),
@@ -63,6 +59,7 @@ def test_spatial_population_run_tick_with_real_demes_updates_state(simple_specie
         adjacency=adjacency,
         migration_rate=0.5,
     )
+    spatial._initialize_session(seed=0)
 
     spatial.run_tick()
 
@@ -72,9 +69,6 @@ def test_spatial_population_run_tick_with_real_demes_updates_state(simple_specie
     assert totals[1] > 0.0
     assert totals[2] > 0.0
     assert sum(totals) == 200.0
-
-
-@pytest.mark.numba_off
 def test_spatial_population_kernel_migration_updates_state(simple_species: nt.Species) -> None:
     demes = [
         _make_deme(simple_species, "deme_0", adult_count=0.0),
@@ -92,6 +86,7 @@ def test_spatial_population_kernel_migration_updates_state(simple_species: nt.Sp
         migration_kernel=np.array([[1.0, 0.0, 1.0]], dtype=np.float64),
         migration_rate=0.5,
     )
+    spatial._initialize_session(seed=0)
 
     row = spatial.migration_row(1)
     assert np.isclose(row.sum(), 1.0)
@@ -127,6 +122,7 @@ def test_spatial_population_kernel_migration_row_renormalizes_border_weights(
         migration_kernel=np.array([[1.0, 0.0, 1.0]], dtype=np.float64),
         migration_rate=1.0,
     )
+    spatial._initialize_session(seed=0)
 
     row = spatial.migration_row(0)
     expected = np.array([0.0, 1.0, 0.0], dtype=np.float64)
@@ -158,6 +154,7 @@ def test_spatial_population_hex_kernel_row_matches_valid_border_offsets(
         ),
         migration_rate=1.0,
     )
+    spatial._initialize_session(seed=0)
 
     row = spatial.migration_row(0)
     expected = np.zeros(9, dtype=np.float64)
@@ -165,9 +162,6 @@ def test_spatial_population_hex_kernel_row_matches_valid_border_offsets(
     expected[spatial.topology.to_index((1, 0))] = 1.0 / 3.0
     expected[spatial.topology.to_index((1, 1))] = 1.0 / 3.0
     assert np.allclose(row, expected)
-
-
-@pytest.mark.numba_off
 def test_spatial_population_hex_kernel_run_tick_matches_border_distribution(
     simple_species: nt.Species,
 ) -> None:
@@ -193,6 +187,7 @@ def test_spatial_population_hex_kernel_run_tick_matches_border_distribution(
         ),
         migration_rate=1.0,
     )
+    spatial._initialize_session(seed=0)
 
     spatial.run_tick()
 
@@ -202,9 +197,6 @@ def test_spatial_population_hex_kernel_run_tick_matches_border_distribution(
     assert np.isclose(totals[3], 200.0 / 3.0)
     assert np.isclose(totals[4], 200.0 / 3.0)
     assert np.isclose(sum(totals), 200.0)
-
-
-@pytest.mark.numba_off
 def test_spatial_population_heterogeneous_kernel_bank_routes_per_source(
     simple_species: nt.Species,
 ) -> None:
@@ -229,6 +221,7 @@ def test_spatial_population_heterogeneous_kernel_bank_routes_per_source(
         deme_kernel_ids=np.array([0, 1, 0], dtype=np.int64),
         migration_rate=1.0,
     )
+    spatial._initialize_session(seed=0)
 
     row0 = spatial.migration_row(0)
     row1 = spatial.migration_row(1)
@@ -243,9 +236,6 @@ def test_spatial_population_heterogeneous_kernel_bank_routes_per_source(
     assert np.isclose(totals[1], 200.0)
     assert np.isclose(totals[2], 0.0)
     assert np.isclose(sum(totals), 400.0)
-
-
-@pytest.mark.numba_off
 def test_spatial_population_run_tick_supports_heterogeneous_deme_configs(
     simple_species: nt.Species,
 ) -> None:
@@ -256,7 +246,6 @@ def test_spatial_population_run_tick_supports_heterogeneous_deme_configs(
 
     cfg0 = demes[0].export_config()
     demes[1].update().competition(low_density_growth_rate=1.7)
-    cfg1 = demes[1].export_config()
 
     assert cfg0.low_density_growth_rate != demes[1].export_config().low_density_growth_rate
 
@@ -265,15 +254,13 @@ def test_spatial_population_run_tick_supports_heterogeneous_deme_configs(
         adjacency=np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
         migration_rate=0.0,
     )
+    spatial._initialize_session(seed=0)
 
     spatial.run_tick()
 
     assert spatial.tick == 1
     totals = [float(deme.state.individual_count.sum()) for deme in spatial.demes]
     assert np.isclose(sum(totals), 400.0)
-
-
-@pytest.mark.numba_off
 def test_spatial_population_migration_rejects_inconsistent_sampling_modes(
     simple_species: nt.Species,
 ) -> None:
@@ -293,13 +280,11 @@ def test_spatial_population_migration_rejects_inconsistent_sampling_modes(
         adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
         migration_rate=0.5,
     )
+    spatial._initialize_session(seed=0)
 
     with pytest.raises(ValueError, match="migration requires consistent"):
         spatial.run_tick()
-
-
-@pytest.mark.numba_off
-def test_spatial_population_heterogeneous_configs_use_python_hook_dispatch(
+def test_spatial_population_heterogeneous_configs_use_engine_hook_dispatch(
     simple_species: nt.Species,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -315,22 +300,20 @@ def test_spatial_population_heterogeneous_configs_use_python_hook_dispatch(
         adjacency=np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
         migration_rate=0.0,
     )
+    spatial._initialize_session(seed=0)
 
-    original = SpatialPopulation._run_python_dispatch_tick
+    original = SpatialPopulation._run_rust_spatial_steps
     calls = {"count": 0}
 
-    def _wrapped(spatial_population: SpatialPopulation) -> bool:
-        calls["count"] += 1
-        return bool(original(spatial_population))
+    def _wrapped(spatial_population: SpatialPopulation, n_steps: int, record_every: int, clear_history_on_start: bool) -> bool:
+        calls["count"] += n_steps
+        return bool(original(spatial_population, n_steps, record_every, clear_history_on_start))
 
-    monkeypatch.setattr(SpatialPopulation, "_run_python_dispatch_tick", _wrapped)
+    monkeypatch.setattr(SpatialPopulation, "_run_rust_spatial_steps", _wrapped)
 
     spatial.run_tick()
     assert calls["count"] == 1
     assert spatial.tick == 1
-
-
-@pytest.mark.numba_off
 def test_spatial_population_heterogeneous_configs_run_uses_hook_dispatch_each_step(
     simple_species: nt.Species,
     monkeypatch: pytest.MonkeyPatch,
@@ -348,23 +331,21 @@ def test_spatial_population_heterogeneous_configs_run_uses_hook_dispatch_each_st
         adjacency=np.eye(3, dtype=np.float64),
         migration_rate=0.0,
     )
+    spatial._initialize_session(seed=0)
 
-    original = SpatialPopulation._run_python_dispatch_tick
+    original = SpatialPopulation._run_rust_spatial_steps
     calls = {"count": 0}
 
-    def _wrapped(spatial_population: SpatialPopulation) -> bool:
-        calls["count"] += 1
-        return bool(original(spatial_population))
+    def _wrapped(spatial_population: SpatialPopulation, n_steps: int, record_every: int, clear_history_on_start: bool) -> bool:
+        calls["count"] += n_steps
+        return bool(original(spatial_population, n_steps, record_every, clear_history_on_start))
 
-    monkeypatch.setattr(SpatialPopulation, "_run_python_dispatch_tick", _wrapped)
+    monkeypatch.setattr(SpatialPopulation, "_run_rust_spatial_steps", _wrapped)
 
     spatial.run(n_steps=3)
 
     assert calls["count"] == 3
     assert spatial.tick == 3
-
-
-@pytest.mark.numba_off
 def test_spatial_population_comprehensive_matches_two_deme_migration_theory(
     simple_species: nt.Species,
 ) -> None:
@@ -398,6 +379,7 @@ def test_spatial_population_comprehensive_matches_two_deme_migration_theory(
         adjacency=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
         migration_rate=migration_rate,
     )
+    spatial._initialize_session(seed=0)
 
     initial_totals = [float(deme.state.individual_count.sum()) for deme in spatial.demes]
     assert np.isclose(sum(initial_totals), 200.0)

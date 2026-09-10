@@ -1,11 +1,13 @@
-# `PopulationState` and `PopulationConfig`
+# `PopulationState` and `ModelDraft`
 
-`PopulationState` and `PopulationConfig` are the two most critical data objects in the NATAL simulation framework:
+`PopulationState` and `ModelDraft` are the two most critical data objects in the NATAL simulation framework:
 
 - `PopulationState` (and its discrete-generation counterpart `DiscretePopulationState`) is responsible for maintaining the dynamic state during simulation
-- `PopulationConfig` is responsible for storing simulation parameters and genetic mappings, serving as the configuration object read by engine at runtime
+- `ModelDraft` is responsible for storing simulation parameters and genetic mappings, serving as the configuration object read by engine at runtime
 
 Understanding these two objects helps in organizing initialization, execution, and result interpretation more reliably.
+
+`ModelDraft` is materialized into owned `Blueprint` and `Params` contracts at build time. Runtime parameter refreshes use the Params projection directly. The retired `hook_slot`, `SimState`, and `PlainPopulationState` compatibility surfaces are no longer part of the public API.
 
 ## Overview
 
@@ -13,19 +15,19 @@ After the user constructs a population via `setup(...).build()`, the framework i
 
 ```text
 User input parameters
-  → PopulationConfig (static configuration)
+  → ModelDraft (static configuration)
   → PopulationState / DiscretePopulationState (dynamic state)
   → run(...) / run_tick() continuously updates state
 ```
 
 This can be understood as:
 
-- `PopulationConfig` answers "what are the model rules"
+- `ModelDraft` answers "what are the model rules"
 - `PopulationState` answers "what is the current system state"
 
 ## `PopulationState`: The State Object for Age-Structured Models
 
-`PopulationState` is defined in `src/natal/population_state.py` and is essentially a `NamedTuple` container.
+`PopulationState` is defined in `src/natal/frontend/data/state.py` and is essentially a `NamedTuple` container.
 
 ### Field Structure
 
@@ -44,7 +46,7 @@ Field descriptions:
 
 ## `DiscretePopulationState`: The State Object for Discrete-Generation Models
 
-The discrete-generation model uses `DiscretePopulationState`, also defined in `src/natal/population_state.py`.
+The discrete-generation model uses `DiscretePopulationState`, also defined in `src/natal/frontend/data/state.py`.
 
 ### Field Structure
 
@@ -60,9 +62,9 @@ Key differences from `PopulationState`:
 - State updates are managed by the discrete-generation flow
 - In the current discrete-generation implementation, the configuration is normalized to `n_ages=2`, `new_adult_age=1`
 
-## `PopulationConfig`: Model Rules and Mapping Configuration
+## `ModelDraft`: Model Rules and Mapping Configuration
 
-`PopulationConfig` is defined in `src/natal/population_config.py` and contains the fixed parameters and matrices required to run the model.
+`ModelDraft` is defined in `src/natal/frontend/data/config.py` and contains the fixed parameters and matrices required to run the model.
 
 ### Configuration Groups
 
@@ -89,32 +91,38 @@ Key differences from `PopulationState`:
   - `initial_individual_count`
   - `initial_sperm_storage`
 
-### What to Pay Attention to When Using
+### Draft Representation Versus the Runtime Contract
 
-`PopulationConfig` is a `NamedTuple` whose topology (which fields exist and their shapes) is **immutable** after construction. However, the 9 ecological parameters (e.g., `carrying_capacity`, `eggs_per_female`) are stored as 0-d ndarrays and **can be mutated in-place inside hooks**:
+`ModelDraft` is a `NamedTuple` whose topology (which fields exist and their shapes) is **immutable** after construction. Two distinct uses matter:
+
+- **The authoritative runtime data lives in the Rust session.** Every access to `pop.config` returns a **detached query snapshot** (`pop.config is pop.config` is False): field values are projected from the session and arrays are copies. Mutating the snapshot — scalar assignment, `set_param(pop.config, ...)`, or `snapshot.viability_fitness[...] = x` — never writes back to the population.
+- **Runtime updates go through controlled channels.** Use `pop.params.<name>` or `pop.update()` for ecology scalars, and `pop.params.tensor_write(name, values)` for vectors and tensors. Inside a callback the same surfaces are `ctx.params` / `ctx.update()`, whose writes join the event transaction: they commit when the callback succeeds and are discarded when it fails.
 
 ```python
-@nt.hook(event="early", custom=True)
-def heatwave(state, config):
-    if state.n_tick == 10:
-        config.carrying_capacity[()] = 2000  # In-place mutation, takes effect immediately
+@nt.hook(event="early")
+def heatwave(ctx: TickContext) -> int:
+    if ctx.tick == 10:
+        ctx.params.carrying_capacity = 2000.0  # jsonc bounds-checked; later stages of the tick see it
     return 0
 ```
 
-Large array fields (`viability_fitness`, `zygotes_to_gametes_map`, etc.) are not recommended for runtime modification but can technically be mutated in-place via array indexing. You can print the field values of `PopulationConfig` to confirm that the model parameters match expectations:
-
 ```python
+# Query: a snapshot, for reads and diagnostics
 cfg = pop.config
 print(cfg.n_ages, cfg.n_ztypes)
 print(cfg.viability_fitness.shape)
+
+# Write: a controlled channel
+pop.params.carrying_capacity = 8000.0
+pop.params.tensor_write("viability_fitness", new_table)
 ```
 
 ## Minimal Example: Inspecting State and Config
 
 ```python
-from natal.genetics import Species
-from natal.population import AgeStructuredPopulation
-from natal.population import DiscreteGenerationPopulation
+from natal.frontend.genetics import Species
+from natal.frontend.population import AgeStructuredPopulation
+from natal.frontend.population import DiscreteGenerationPopulation
 
 sp = Species.from_dict(name="Demo", structure={"chr1": {"A": ["A1", "A2"]}})
 
@@ -142,7 +150,7 @@ print(dis_pop.config.n_ages, dis_pop.config.new_adult_age)  # 2, 1
 
 For logging, frontend-backend communication, and debugging, NATAL provides the ability to translate state objects into human-readable structures.
 
-The relevant API is located in `natal.output`:
+The relevant API is located in `natal.frontend.output`:
 
 - `population_state_to_dict` / `population_state_to_json`
 - `discrete_population_state_to_dict` / `discrete_population_state_to_json`
@@ -172,19 +180,19 @@ hist_view = nt.population_history_to_readable_dict(pop)
 print(hist_view["n_snapshots"], hist_view["snapshots"][-1]["tick"])
 ```
 
-If you need to apply observation rules, use ``pop.observe()`` for the current state or ``pop.history.observe(pop.observation)`` for recorded history (see [Population Observation Rules](2_data_output.md)):
+If you need to apply observation rules, use `pop.observe()` for the current state or `pop.history.observe(pop.observation)` for recorded history (see [Population Observation Rules](2_data_output.md)):
 
 ```python
 # Project current state through the canonical observation
 result = pop.observe()
-print(result.labels)
-print(result.values)
+print("Observation axes:", result.axes)
+print("Observation values:", result.values)
 ```
 
 If directly working with `PopulationState` / `DiscretePopulationState`, you can also call the corresponding functions and explicitly pass labels:
 
 ```python
-from natal.output import population_state_to_dict
+from natal.frontend.output import population_state_to_dict
 
 data = population_state_to_dict(
     state,

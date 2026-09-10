@@ -3,12 +3,11 @@
 from pathlib import Path
 
 
-def test_hatch_build_configuration_does_not_filter_out_source_tree():
-    """Ensure Hatch packaging keeps the source tree available in sdists."""
+def test_maturin_build_configuration_builds_rust_extension():
+    """Ensure maturin packaging points at the Rust crate and Python source."""
     pyproject_text = Path("pyproject.toml").read_text(encoding="utf-8")
 
-    assert "[tool.hatch.build]\ninclude = [" not in pyproject_text
-    assert 'packages = ["src/natal"]' in pyproject_text
-    assert 'artifacts = [' in pyproject_text
-    assert '"src/natal/hooks/templates/*.tmpl.py"' in pyproject_text
-    assert '"src/natal/engine/templates/*.tmpl.py"' not in pyproject_text
+    assert 'build-backend = "maturin"' in pyproject_text
+    assert 'manifest-path = "rust/Cargo.toml"' in pyproject_text
+    assert 'module-name = "natal._engine_rs"' in pyproject_text
+    assert 'python-source = "src"' in pyproject_text

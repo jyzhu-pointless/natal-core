@@ -8,11 +8,11 @@ import numpy as np
 import pytest
 
 import natal as nt
-import natal.ui.dashboard_population as dashboard_module
-from natal.data import DiscretePopulationState
-from natal.patterns import IndividualSelector
-from natal.spatial.configurator import SpatialConfigurator
-from natal.ui.dashboard_population import Dashboard
+import natal.frontend.ui.dashboard_population as dashboard_module
+from natal.frontend.data import DiscretePopulationState
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.spatial.builder import SpatialPopulationBuilder
+from natal.frontend.ui.dashboard_population import Dashboard
 
 
 class _FakeChart:
@@ -116,7 +116,7 @@ def _discrete_population(
     Returns:
         A built discrete-generation population.
     """
-    configurator = (
+    builder = (
         nt.DiscreteGenerationPopulation.setup(
             species=_species(f"{name}_species"),
             name=name,
@@ -131,14 +131,14 @@ def _discrete_population(
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=10.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             low_density_growth_rate=2.0,
             carrying_capacity=100,
         )
     )
     if history_mode == "observation":
-        configurator.record_history(mode="observation")
-    return configurator.build()
+        builder.record_history(mode="observation")
+    return builder.build()
 
 
 def _dashboard(population: nt.DiscreteGenerationPopulation) -> Dashboard:
@@ -176,56 +176,58 @@ def test_base_population_requires_installed_history_and_observation() -> None:
         _ = population.observation
 
 
-def test_spatial_runtime_rejects_output_schema_mutation() -> None:
-    """Runtime SpatialConfigurator cannot replace frozen output policies."""
-    configurator = SpatialConfigurator(_species("spatial_runtime"), n_demes=1)
-    configurator._pop_ref = object()  # type: ignore[reportPrivateUsage]  # emulate runtime binding
+def test_spatial_builder_has_no_runtime_binding() -> None:
+    """Output policies are frozen because no runtime SpatialPopulationBuilder exists.
 
-    with pytest.raises(RuntimeError, match="build phase"):
-        configurator.with_observation(groups={"all": IndividualSelector()})
-    with pytest.raises(RuntimeError, match="build phase"):
-        configurator.record_history(mode="observation")
+    The runtime-binding seam (``_pop_ref`` / ``for_population``) was removed
+    with the P5 three-split; spatial output policies can therefore only be
+    declared during the build chain.
+    """
+    builder = SpatialPopulationBuilder(_species("spatial_runtime"), n_demes=1)
+
+    assert not hasattr(builder, "_pop_ref")
+    assert not hasattr(SpatialPopulationBuilder, "for_population")
 
 
-def test_spatial_configurator_rejects_invalid_groups_and_mode() -> None:
+def test_spatial_builder_rejects_invalid_groups_and_mode() -> None:
     """Spatial output configuration validates public boundary values."""
-    configurator = SpatialConfigurator(_species("spatial_invalid"), n_demes=1)
+    builder = SpatialPopulationBuilder(_species("spatial_invalid"), n_demes=1)
 
     with pytest.raises(TypeError, match="mapping"):
-        configurator.with_observation(groups=[])  # type: ignore[arg-type]  # invalid runtime input
+        builder.with_observation(groups=[])  # type: ignore[arg-type]  # invalid runtime input
     with pytest.raises(ValueError, match="non-empty"):
-        configurator.with_observation(groups={})
+        builder.with_observation(groups={})
     with pytest.raises(ValueError, match="mode must be"):
-        configurator.record_history(mode="invalid")  # type: ignore[arg-type]  # invalid runtime input
+        builder.record_history(mode="invalid")  # type: ignore[arg-type]  # invalid runtime input
 
 
 @pytest.mark.parametrize("max_rows", [0, -1])
-def test_spatial_configurator_rejects_invalid_max_rows(max_rows: int) -> None:
+def test_spatial_builder_rejects_invalid_max_rows(max_rows: int) -> None:
     """History capacity must be None or a positive row count.
 
     Args:
         max_rows: An invalid capacity value supplied via parametrize.
     """
-    configurator = SpatialConfigurator(_species(f"spatial_rows_{max_rows}"), n_demes=1)
+    builder = SpatialPopulationBuilder(_species(f"spatial_rows_{max_rows}"), n_demes=1)
     with pytest.raises(ValueError, match="max_rows"):
-        configurator.record_history(max_rows=max_rows)
+        builder.record_history(max_rows=max_rows)
 
 
 def test_output_capacity_validation_and_spatial_success_path() -> None:
-    """Both configurators validate capacity and retain valid frozen settings."""
+    """Both updaters validate capacity and retain valid frozen settings."""
     species = _species("capacity_validation")
     with pytest.raises(ValueError, match="max_rows"):
         nt.DiscreteGenerationPopulation.setup(species).record_history(max_rows=0)
 
-    configurator = SpatialConfigurator(species, n_demes=1)
+    builder = SpatialPopulationBuilder(species, n_demes=1)
     groups = {"wild": IndividualSelector(ztype="WT|WT")}
-    result = configurator.with_observation(groups=groups).record_history(
+    result = builder.with_observation(groups=groups).record_history(
         mode="observation", max_rows=3
     )
-    assert result is configurator
-    assert configurator._observation_groups == groups  # type: ignore[reportPrivateUsage]  # verify frozen builder input
-    assert configurator._record_history_mode == "observation"  # type: ignore[reportPrivateUsage]  # verify frozen builder input
-    assert configurator._record_history_max_rows == 3  # type: ignore[reportPrivateUsage]  # verify frozen builder input
+    assert result is builder
+    assert builder._observation_groups == groups  # type: ignore[reportPrivateUsage]  # verify frozen builder input
+    assert builder._record_history_mode == "observation"  # type: ignore[reportPrivateUsage]  # verify frozen builder input
+    assert builder._record_history_max_rows == 3  # type: ignore[reportPrivateUsage]  # verify frozen builder input
 
 
 def test_dashboard_metrics_preserve_exact_counts_and_allele_frequencies() -> None:

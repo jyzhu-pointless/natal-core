@@ -1,4 +1,4 @@
-"""Comprehensive tests for ``natal.spatial.configurator``.
+"""Comprehensive tests for ``natal.frontend.spatial.builder``.
 
 Covers:
 - Homogeneous builds (discrete_generation and age_structured pop_types)
@@ -17,16 +17,24 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.numba.utils import numba_disabled
-from natal.patterns import IndividualSelector
-from natal.spatial.configurator import BatchSetting, SpatialConfigurator, batch_setting
-from natal.spatial.topology import HexGrid, SquareGrid
+
+from contextlib import contextmanager
+
+
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.spatial.builder import (
+    BatchSetting,
+    SpatialPopulationBuilder,
+    batch_setting,
+)
+from natal.frontend.spatial.topology import HexGrid, SquareGrid
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _simple_species(name: str = "SpatialConfiguratorTestSpecies") -> nt.Species:
+
+def _simple_species(name: str = "SpatialPopulationBuilderTestSpecies") -> nt.Species:
     """Return a minimal species with one biallelic locus."""
     return nt.Species.from_dict(
         name,
@@ -42,6 +50,7 @@ def _simple_species(name: str = "SpatialConfiguratorTestSpecies") -> nt.Species:
 # ===========================================================================
 # BatchSetting unit tests
 # ===========================================================================
+
 
 class TestBatchSetting:
     """Unit tests for BatchSetting class and batch_setting() helper."""
@@ -82,9 +91,9 @@ class TestBatchSetting:
 
     def test_batch_setting_2d_array_shape_mismatch_raises(self) -> None:
         """2D array with correct total size but wrong grid shape raises."""
-        arr = np.array([[1.0, 2.0, 3.0],
-                        [4.0, 5.0, 6.0],
-                        [7.0, 8.0, 9.0]])  # shape (3,3) = 9 values
+        arr = np.array(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]
+        )  # shape (3,3) = 9 values
         bs = batch_setting(arr)
         topo = SquareGrid(rows=1, cols=9)  # 9 demes, but topology expects 1x9
         with pytest.raises(ValueError, match="shape"):
@@ -141,26 +150,27 @@ class TestBatchSetting:
     def test_batch_setting_scalar_none_raises(self) -> None:
         """BatchSetting expand with None scalar values (line 155)."""
         bs = batch_setting([1, 2, 3])
-        object.__setattr__(bs, '_values', None)
+        object.__setattr__(bs, "_values", None)
         with pytest.raises(ValueError, match="scalar values are None"):
             bs.expand(3)
 
     def test_batch_setting_array_none_raises(self) -> None:
         """BatchSetting expand with None array values (line 165)."""
         bs = batch_setting(np.array([1.0, 2.0]))
-        object.__setattr__(bs, '_values_array', None)
+        object.__setattr__(bs, "_values_array", None)
         with pytest.raises(ValueError, match="array values are None"):
             bs.expand(2)
 
     def test_batch_setting_unknown_kind_raises(self) -> None:
         """BatchSetting expand with unknown kind (line 202)."""
         bs = batch_setting([1, 2])
-        object.__setattr__(bs, '_kind', 'bogus')
+        object.__setattr__(bs, "_kind", "bogus")
         with pytest.raises(ValueError, match="Unknown kind"):
             bs.expand(2)
 
     def test_batch_setting_spatial_fn_1param(self) -> None:
         """Spatial fn expand with 1 parameter (line 200)."""
+
         def fn(i: int) -> float:
             """Map a flat deme index to a deterministic value.
 
@@ -178,6 +188,7 @@ class TestBatchSetting:
 
     def test_batch_setting_spatial_fn_2param(self) -> None:
         """Spatial fn expand with 2 parameters (lines 196-199)."""
+
         def fn(r: int, c: int) -> float:
             """Map grid coordinates to a deterministic value.
 
@@ -196,11 +207,13 @@ class TestBatchSetting:
 
     def test_batch_setting_spatial_fn_no_signature(self) -> None:
         """Spatial fn expand when inspect.signature raises ValueError (lines 193-194)."""
+
         def _no_sig_fn(x: float) -> float:
             return float(x * 3)
+
         # Setting __signature__ to a non-Signature causes inspect.signature to
         # raise ValueError, which triggers the fallback to _fn_param_count = 1.
-        _no_sig_fn.__signature__ = "not-a-signature"  # type: ignore[assignment]
+        _no_sig_fn.__signature__ = "not-a-signature"  # type: ignore[assignment]  # deliberately malformed to trigger the fallback branch under test
         bs = batch_setting(_no_sig_fn)
         result = bs.expand(4, SquareGrid(1, 4))
         assert result == [0.0, 3.0, 6.0, 9.0]
@@ -210,33 +223,34 @@ class TestBatchSetting:
 # Homogeneous build — discrete_generation
 # ===========================================================================
 
+
 class TestHomogeneousBuildDiscrete:
     """Homogeneous spatial build with discrete_generation pop_type."""
 
     def test_build_and_run_minimal(self) -> None:
         species = _simple_species("HomoDiscreteMin")
         topo = SquareGrid(2, 2)
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=topo,
-                                             pop_type="discrete_generation")
-                .setup(name="test_min", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(kernel=None, migration_rate=0.0)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=4, topology=topo, pop_type="discrete_generation"
             )
-            assert isinstance(spatial, nt.SpatialPopulation)
-            assert spatial.n_demes == 4
-            assert spatial.tick == 0
+            .setup(name="test_min", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(kernel=None, migration_rate=0.0)
+            .build()
+        )
+        assert isinstance(spatial, nt.SpatialPopulation)
+        assert spatial.n_demes == 4
+        assert spatial.tick == 0
 
-            spatial.run(5)
+        spatial.run(5)
 
         assert spatial.tick == 5
         assert spatial.get_total_count() > 0
@@ -245,22 +259,22 @@ class TestHomogeneousBuildDiscrete:
 
     def test_build_homogeneous_no_topology(self) -> None:
         species = _simple_species("HomoDiscreteNoTopo")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=3, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="test_no_topo", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 50},
-                        "male": {"WT|WT": 50},
-                    }
-                )
-                .reproduction(eggs_per_female=5)
-                .competition(carrying_capacity=500)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=3, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(3)
+            .setup(name="test_no_topo", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 50},
+                    "male": {"WT|WT": 50},
+                }
+            )
+            .reproduction(eggs_per_female=5)
+            .competition(carrying_capacity=500)
+            .build()
+        )
+        spatial.run(3)
 
         assert spatial.tick == 3
         assert spatial.get_total_count() > 0
@@ -269,21 +283,21 @@ class TestHomogeneousBuildDiscrete:
     def test_all_deme_indices_present(self) -> None:
         species = _simple_species("HomoDiscreteIdx")
         topo = SquareGrid(2, 2)
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=topo,
-                                             pop_type="discrete_generation")
-                .setup(name="test_idx", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=4, topology=topo, pop_type="discrete_generation"
             )
+            .setup(name="test_idx", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .build()
+        )
 
         # The first deme keeps the original name (no _deme_0 suffix).
         assert [spatial.deme(i).name for i in range(4)] == [
@@ -298,33 +312,34 @@ class TestHomogeneousBuildDiscrete:
 # Homogeneous build — age_structured
 # ===========================================================================
 
+
 class TestHomogeneousBuildAgeStructured:
     """Homogeneous spatial build with age_structured pop_type."""
 
     def test_build_and_run(self) -> None:
         species = _simple_species("HomoAgeStruct")
         topo = SquareGrid(2, 2)
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=topo,
-                                             pop_type="age_structured")
-                .setup(name="test_age", stochastic=False)
-                .age_structure(n_ages=4, new_adult_age=2)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": [0, 0, 100, 0]},
-                        "male": {"WT|WT": [0, 0, 100, 0]},
-                    }
-                )
-                .survival(
-                    female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
-                    male_age0_survival=1.0,
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(age_1_carrying_capacity=500)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=4, topology=topo, pop_type="age_structured"
             )
-            spatial.run(3)
+            .setup(name="test_age", stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=2)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0, 0, 100, 0]},
+                    "male": {"WT|WT": [0, 0, 100, 0]},
+                }
+            )
+            .survival(
+                female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
+                male_age0_survival=1.0,
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(age_1_carrying_capacity=500)
+            .build()
+        )
+        spatial.run(3)
 
         assert spatial.tick == 3
         assert spatial.n_demes == 4
@@ -335,27 +350,31 @@ class TestHomogeneousBuildAgeStructured:
 # Heterogeneous build — batch_setting
 # ===========================================================================
 
+
 class TestHeterogeneousBuild:
     """Heterogeneous spatial build with batch_setting parameters."""
 
     def test_batch_carrying_capacity_discrete(self) -> None:
         species = _simple_species("HetCCDisc")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="het_cc", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=batch_setting([1000, 500, 500, 1000]))
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
-            spatial.run(2)
+            .setup(name="het_cc", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=batch_setting([1000, 500, 500, 1000]))
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.n_demes == 4
@@ -364,22 +383,22 @@ class TestHeterogeneousBuild:
 
     def test_batch_eggs_per_female(self) -> None:
         species = _simple_species("HetEggs")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=3, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="het_eggs", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=batch_setting([10, 20, 30]))
-                .competition(carrying_capacity=2000)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=3, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="het_eggs", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=batch_setting([10, 20, 30]))
+            .competition(carrying_capacity=2000)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -387,25 +406,25 @@ class TestHeterogeneousBuild:
 
     def test_batch_low_density_growth_rate(self) -> None:
         species = _simple_species("HetGrowth")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=3, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="het_growth", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(
-                    carrying_capacity=1000,
-                    low_density_growth_rate=batch_setting([2.0, 4.0, 6.0]),
-                )
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=3, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="het_growth", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(
+                carrying_capacity=1000,
+                low_density_growth_rate=batch_setting([2.0, 4.0, 6.0]),
+            )
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -413,25 +432,25 @@ class TestHeterogeneousBuild:
 
     def test_batch_juvenile_growth_mode(self) -> None:
         species = _simple_species("HetMode")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=3, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="het_mode", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(
-                    carrying_capacity=1000,
-                    juvenile_growth_mode=batch_setting([2, 2, 3]),
-                )
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=3, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="het_mode", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(
+                carrying_capacity=1000,
+                juvenile_growth_mode=batch_setting([2, 2, 3]),
+            )
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -442,31 +461,35 @@ class TestHeterogeneousBuild:
 # with_observation chaining
 # ===========================================================================
 
+
 class TestObservation:
     """Tests for with_observation chaining."""
 
     def test_with_observation_dict(self) -> None:
         species = _simple_species("ObsDict")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="obs_dict", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .with_observation(
-                    groups={"wt": IndividualSelector(ztype="WT|WT")},
-                    collapse_age=True,
-                )
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
-            spatial.run(2)
+            .setup(name="obs_dict", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .with_observation(
+                groups={"wt": IndividualSelector(ztype="WT|WT")},
+                collapse_age=True,
+            )
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.observation is not None
@@ -474,29 +497,25 @@ class TestObservation:
     def test_with_observation_selector(self) -> None:
         """Build and run a spatial Observation from an IndividualSelector."""
         species = _simple_species("ObsList")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="obs_list", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .with_observation(
-                    groups={
-                        "wt_female": IndividualSelector(
-                            ztype="WT|WT", sex="female"
-                        )
-                    },
-                )
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="obs_list", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .with_observation(
+                groups={"wt_female": IndividualSelector(ztype="WT|WT", sex="female")},
+            )
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.observation is not None
@@ -506,29 +525,30 @@ class TestObservation:
 # HexGrid topology
 # ===========================================================================
 
+
 class TestHexGridTopology:
     """Tests with HexGrid topology."""
 
     def test_hexgrid_build_and_run(self) -> None:
         species = _simple_species("HexGridSpec")
         topo = HexGrid(rows=3, cols=4)
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=12, topology=topo,
-                                             pop_type="discrete_generation")
-                .setup(name="hex", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(kernel=None, migration_rate=0.0)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=12, topology=topo, pop_type="discrete_generation"
             )
-            spatial.run(3)
+            .setup(name="hex", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(kernel=None, migration_rate=0.0)
+            .build()
+        )
+        spatial.run(3)
 
         assert spatial.tick == 3
         assert spatial.n_demes == 12
@@ -540,22 +560,22 @@ class TestHexGridTopology:
     def test_hexgrid_wrapping(self) -> None:
         species = _simple_species("HexWrapSpec")
         topo = HexGrid(rows=2, cols=2, wrap=True)
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=topo,
-                                             pop_type="discrete_generation")
-                .setup(name="hex_wrap", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=4, topology=topo, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="hex_wrap", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -566,55 +586,62 @@ class TestHexGridTopology:
 # Error paths
 # ===========================================================================
 
+
 class TestErrorPaths:
-    """Error paths in SpatialConfigurator and SpatialPopulation."""
+    """Error paths in SpatialPopulationBuilder and SpatialPopulation."""
 
     def test_n_demes_zero_raises(self) -> None:
         species = _simple_species("ZeroDemes")
         with pytest.raises(ValueError, match="n_demes must be >= 1"):
-            SpatialConfigurator(species, n_demes=0)
+            SpatialPopulationBuilder(species, n_demes=0)
 
     def test_n_demes_negative_raises(self) -> None:
         species = _simple_species("NegDemes")
         with pytest.raises(ValueError, match="n_demes must be >= 1"):
-            SpatialConfigurator(species, n_demes=-1)
+            SpatialPopulationBuilder(species, n_demes=-1)
 
     def test_adjacency_mode_requires_kernel_raises(self) -> None:
         """Kernel mode with no kernel and no kernel_bank raises."""
         species = _simple_species("KernelModeNoKernel")
-        with numba_disabled():
-            builder = (
-                nt.SpatialPopulation.builder(species, n_demes=1, topology=SquareGrid(1, 1),
-                                             pop_type="discrete_generation")
-                .setup(stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
+        builder = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=1,
+                topology=SquareGrid(1, 1),
+                pop_type="discrete_generation",
             )
+            .setup(stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+        )
         with pytest.raises(ValueError, match="migration_kernel is required"):
             builder.migration(strategy="kernel").build()
 
     def test_migration_kernel_even_dimension_raises(self) -> None:
         species = _simple_species("EvenKernel")
-        with numba_disabled():
-            builder = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="even_kern", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
+        builder = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
+            .setup(name="even_kern", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+        )
         # Validation of odd dimensions happens at build() time.
         builder.migration(kernel=np.array([[0.1, 0.1], [0.1, 0.1]]), migration_rate=0.1)
         with pytest.raises(ValueError, match="odd dimensions"):
@@ -622,14 +649,22 @@ class TestErrorPaths:
 
     def test_age_structure_on_discrete_raises(self) -> None:
         species = _simple_species("AgeStructOnDisc")
-        builder = SpatialConfigurator(species, n_demes=2, pop_type="discrete_generation")
-        with pytest.raises(TypeError, match="age_structure.*only valid.*age_structured"):
+        builder = SpatialPopulationBuilder(
+            species, n_demes=2, pop_type="discrete_generation"
+        )
+        with pytest.raises(
+            TypeError, match="age_structure.*only valid.*age_structured"
+        ):
             builder.age_structure(n_ages=4, new_adult_age=2)
 
     def test_batch_kernel_and_kernel_bank_conflict(self) -> None:
         species = _simple_species("KernelConflict")
-        builder = SpatialConfigurator(species, n_demes=2, pop_type="discrete_generation")
-        with pytest.raises(ValueError, match="Cannot use batch_setting for kernel when kernel_bank"):
+        builder = SpatialPopulationBuilder(
+            species, n_demes=2, pop_type="discrete_generation"
+        )
+        with pytest.raises(
+            ValueError, match="Cannot use batch_setting for kernel when kernel_bank"
+        ):
             builder.migration(
                 kernel=batch_setting([np.ones((3, 3)), np.ones((3, 3))]),
                 kernel_bank=[np.ones((3, 3))],
@@ -637,8 +672,12 @@ class TestErrorPaths:
 
     def test_batch_kernel_and_deme_kernel_ids_conflict(self) -> None:
         species = _simple_species("KernelIdsConflict")
-        builder = SpatialConfigurator(species, n_demes=2, pop_type="discrete_generation")
-        with pytest.raises(ValueError, match="Cannot use batch_setting for kernel when deme_kernel_ids"):
+        builder = SpatialPopulationBuilder(
+            species, n_demes=2, pop_type="discrete_generation"
+        )
+        with pytest.raises(
+            ValueError, match="Cannot use batch_setting for kernel when deme_kernel_ids"
+        ):
             builder.migration(
                 kernel=batch_setting([np.ones((3, 3)), np.ones((3, 3))]),
                 deme_kernel_ids=np.array([0, 0]),
@@ -646,21 +685,24 @@ class TestErrorPaths:
 
     def test_wrong_invalid_migration_strategy_raises(self) -> None:
         species = _simple_species("InvalidStrategy")
-        with numba_disabled():
-            builder = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="inv_strat", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(strategy="invalid")
+        builder = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
+            .setup(name="inv_strat", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(strategy="invalid")
+        )
         # Validation of migration_strategy happens at build() time.
         with pytest.raises(ValueError, match="migration_strategy must be one of"):
             builder.build()
@@ -669,6 +711,7 @@ class TestErrorPaths:
 # ===========================================================================
 # Migration with kernel_bank + deme_kernel_ids
 # ===========================================================================
+
 
 class TestMigrationKernelBank:
     """Heterogeneous migration via kernel_bank and deme_kernel_ids."""
@@ -680,40 +723,47 @@ class TestMigrationKernelBank:
         kernel_b = np.ones((3, 3), dtype=np.float64)
         kernel_b[1, 1] = 0.0
 
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="kern_bank", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(
-                    kernel_bank=[kernel_a, kernel_b],
-                    deme_kernel_ids=np.array([0, 0, 1, 1], dtype=np.int64),
-                    migration_rate=0.1,
-                    kernel_include_center=False,
-                )
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
-            spatial.run(2)
+            .setup(name="kern_bank", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(
+                kernel_bank=[kernel_a, kernel_b],
+                deme_kernel_ids=np.array([0, 0, 1, 1], dtype=np.int64),
+                migration_rate=0.1,
+                kernel_include_center=False,
+            )
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
-        assert spatial.kernel_bank is not None
-        assert spatial.deme_kernel_ids is not None
-        assert spatial.migration_mode == "kernel"
+        # The bank+ids resolve at build time into per-deme CSR rows: all 4
+        # demes emit the 8-entry kernel ring (row-normalized).
+        assert spatial.blueprint.n_demes == 4
+        assert spatial.migration_csr.stay_after_send is True
+        assert int(spatial.migration_csr.indptr[-1]) == 12
+        assert np.isclose(spatial.migration_csr.weights.sum(), 4.0)
 
 
 # ===========================================================================
 # Migration with batch_setting kernel
 # ===========================================================================
+
 
 class TestMigrationBatchKernel:
     """Heterogeneous migration using batch_setting for kernel."""
@@ -723,27 +773,30 @@ class TestMigrationBatchKernel:
         kernel = np.ones((3, 3), dtype=np.float64)
         kernel[1, 1] = 0.0
 
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="batch_kern", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(
-                    kernel=batch_setting([kernel, kernel, kernel, kernel]),
-                    migration_rate=0.0,
-                    kernel_include_center=False,
-                )
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
-            spatial.run(2)
+            .setup(name="batch_kern", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(
+                kernel=batch_setting([kernel, kernel, kernel, kernel]),
+                migration_rate=0.0,
+                kernel_include_center=False,
+            )
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -751,28 +804,36 @@ class TestMigrationBatchKernel:
     def test_adjacency_migration_with_rate_zero(self) -> None:
         """Migration with rate=0 should not affect population."""
         species = _simple_species("AdjZeroRate")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="adj_zero", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(strategy="adjacency", migration_rate=0.0)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
-            spatial.run(2)
+            .setup(name="adj_zero", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(strategy="adjacency", migration_rate=0.0)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
-        assert spatial.migration_mode == "adjacency"
+        # strategy="adjacency" resolves to adjacency-mode CSR: rows keep
+        # the raw topology adjacency weights (moore grid corner: weight
+        # 1.0 per neighbor, three neighbors per deme).
+        assert spatial.migration_csr.stay_after_send is False
+        assert int(spatial.migration_csr.indptr[-1]) == 12
+        assert np.allclose(spatial.migration_csr.weights, 1.0)
 
     def test_kernel_strategy_migration(self) -> None:
         """Explicit kernel migration strategy."""
@@ -780,81 +841,108 @@ class TestMigrationBatchKernel:
         kernel = np.ones((3, 3), dtype=np.float64)
         kernel[1, 1] = 0.0
 
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="kern_strat", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(kernel=kernel, migration_rate=0.1, strategy="kernel",
-                           kernel_include_center=False)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
-            spatial.run(2)
+            .setup(name="kern_strat", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(
+                kernel=kernel,
+                migration_rate=0.1,
+                strategy="kernel",
+                kernel_include_center=False,
+            )
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
-        assert spatial.migration_mode == "kernel"
+        # strategy="kernel" resolves to kernel-mode CSR: the 3x3 kernel
+        # minus its center leaves 8 entries per deme, row-normalized.
+        assert spatial.migration_csr.stay_after_send is True
+        assert int(spatial.migration_csr.indptr[-1]) == 12
+        assert np.isclose(spatial.migration_csr.weights.sum(), 4.0)
 
     def test_adjust_migration_on_edge(self) -> None:
         """adjust_migration_on_edge=True with kernel migration."""
         species = _simple_species("AdjustEdgeSpec")
-        kernel = np.array([[0.0, 0.1, 0.0],
-                           [0.1, 0.0, 0.1],
-                           [0.0, 0.1, 0.0]], dtype=np.float64)
+        kernel = np.array(
+            [[0.0, 0.1, 0.0], [0.1, 0.0, 0.1], [0.0, 0.1, 0.0]], dtype=np.float64
+        )
 
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="adjust_edge", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(kernel=kernel, migration_rate=0.1, strategy="kernel",
-                           adjust_migration_on_edge=True)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
-            spatial.run(2)
+            .setup(name="adjust_edge", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(
+                kernel=kernel,
+                migration_rate=0.1,
+                strategy="kernel",
+                adjust_migration_on_edge=True,
+            )
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
-        assert spatial.adjust_migration_on_edge is True
+        # With adjust_migration_on_edge every row (even the corner demes
+        # with two valid neighbors) normalizes to a total weight of 1.
+        rows = spatial.migration_csr.indptr
+        assert all(
+            np.isclose(spatial.migration_csr.weights[rows[d] : rows[d + 1]].sum(), 1.0)
+            for d in range(4)
+        )
 
     def test_hybrid_strategy(self) -> None:
         """Hybrid migration strategy (falls back to auto)."""
         species = _simple_species("HybridStrat")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="hybrid", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(strategy="hybrid", migration_rate=0.0)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
-            spatial.run(2)
+            .setup(name="hybrid", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(strategy="hybrid", migration_rate=0.0)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -865,31 +953,32 @@ class TestMigrationBatchKernel:
 # Builder method chain coverage
 # ===========================================================================
 
+
 class TestBuilderMethodChaining:
     """Additional coverage for builder method chaining paths."""
 
     def test_survival_discrete_with_three_params(self) -> None:
         species = _simple_species("SurvDisc")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="surv_disc", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .survival(
-                    female_age0_survival=0.8,
-                    male_age0_survival=0.7,
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="surv_disc", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .survival(
+                female_age0_survival=0.8,
+                male_age0_survival=0.7,
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -897,23 +986,23 @@ class TestBuilderMethodChaining:
 
     def test_fitness_method(self) -> None:
         species = _simple_species("FitSpec")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="fitness", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100, "WT|Dr": 0, "Dr|Dr": 0},
-                        "male": {"WT|WT": 100, "WT|Dr": 0, "Dr|Dr": 0},
-                    }
-                )
-                .fitness(viability={"WT|WT": 1.0, "WT|Dr": 0.9, "Dr|Dr": 0.8})
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="fitness", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100, "WT|Dr": 0, "Dr|Dr": 0},
+                    "male": {"WT|WT": 100, "WT|Dr": 0, "Dr|Dr": 0},
+                }
+            )
+            .fitness(viability={"WT|WT": 1.0, "WT|Dr": 0.9, "Dr|Dr": 0.8})
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -921,23 +1010,23 @@ class TestBuilderMethodChaining:
 
     def test_modifiers_method(self) -> None:
         species = _simple_species("ModSpec")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="modifiers", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .modifiers(gamete_modifiers=None, zygote_modifiers=None)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="modifiers", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .modifiers(gamete_modifiers=None, zygote_modifiers=None)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -945,27 +1034,27 @@ class TestBuilderMethodChaining:
 
     def test_survival_age_structured(self) -> None:
         species = _simple_species("SurvAgeSpec")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="age_structured")
-                .setup(name="surv_age", stochastic=False)
-                .age_structure(n_ages=4, new_adult_age=2)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": [0, 0, 100, 0]},
-                        "male": {"WT|WT": [0, 0, 100, 0]},
-                    }
-                )
-                .survival(
-                    female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
-                    male_age_based_survival=[1.0, 1.0, 1.0, 0.0],
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(age_1_carrying_capacity=500)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="age_structured"
             )
-            spatial.run(2)
+            .setup(name="surv_age", stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=2)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0, 0, 100, 0]},
+                    "male": {"WT|WT": [0, 0, 100, 0]},
+                }
+            )
+            .survival(
+                female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
+                male_age_based_survival=[1.0, 1.0, 1.0, 0.0],
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(age_1_carrying_capacity=500)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -973,27 +1062,27 @@ class TestBuilderMethodChaining:
 
     def test_old_juvenile_carrying_capacity_alias(self) -> None:
         species = _simple_species("OldJuvCC")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="age_structured")
-                .setup(name="old_juv", stochastic=False)
-                .age_structure(n_ages=4, new_adult_age=2)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": [0, 0, 100, 0]},
-                        "male": {"WT|WT": [0, 0, 100, 0]},
-                    }
-                )
-                .survival(
-                    female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
-                    male_age_based_survival=[1.0, 1.0, 1.0, 0.0],
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(old_juvenile_carrying_capacity=800)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="age_structured"
             )
-            spatial.run(2)
+            .setup(name="old_juv", stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=2)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0, 0, 100, 0]},
+                    "male": {"WT|WT": [0, 0, 100, 0]},
+                }
+            )
+            .survival(
+                female_age_based_survival=[1.0, 1.0, 1.0, 0.0],
+                male_age_based_survival=[1.0, 1.0, 1.0, 0.0],
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(old_juvenile_carrying_capacity=800)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -1001,23 +1090,23 @@ class TestBuilderMethodChaining:
 
     def test_hooks_method(self) -> None:
         species = _simple_species("HookSpec")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="hooks", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .hooks()
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="hooks", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .hooks()
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -1025,23 +1114,23 @@ class TestBuilderMethodChaining:
 
     def test_presets_method(self) -> None:
         species = _simple_species("PresetSpec")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="presets", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .presets()
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="presets", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .presets()
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -1050,23 +1139,23 @@ class TestBuilderMethodChaining:
     def test_presets_with_batch_setting(self) -> None:
         """Cover presets with BatchSetting positional arg (lines 797-803)."""
         species = _simple_species("PresetBatch")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="preset_batch", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .presets(batch_setting([None, None]))
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="preset_batch", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .presets(batch_setting([None, None]))
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -1081,23 +1170,23 @@ class TestBuilderMethodChaining:
             target_allele="WT",
             species=species,
         )
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="preset_batch_nn", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .presets(batch_setting([drive, None]))
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="preset_batch_nn", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .presets(batch_setting([drive, None]))
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -1112,23 +1201,23 @@ class TestBuilderMethodChaining:
             target_allele="WT",
             species=species,
         )
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="preset_mixed", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .presets(batch_setting([None, None]), drive)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="preset_mixed", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .presets(batch_setting([None, None]), drive)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
 
@@ -1141,24 +1230,24 @@ class TestBuilderMethodChaining:
         (Lines 1147, 1209, 1402-1404)
         """
         species = _simple_species("FitnessFallback")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="fitness_fallback", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .fitness(viability=batch_setting([{"WT|WT": 1.0}, None]))
-                .hooks()
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="fitness_fallback", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .fitness(viability=batch_setting([{"WT|WT": 1.0}, None]))
+            .hooks()
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -1168,6 +1257,7 @@ class TestBuilderMethodChaining:
 # ===========================================================================
 # _make_hashable indirect coverage
 # ===========================================================================
+
 
 class TestMakeHashable:
     """Indirect testing of _make_hashable via batch_setting._resolve_migration_kernels."""
@@ -1182,41 +1272,52 @@ class TestMakeHashable:
         kernel_b[1, 1] = 0.0
         # kernel_a and kernel_b are equal -> they should be deduplicated
 
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=SquareGrid(2, 2),
-                                             pop_type="discrete_generation")
-                .setup(name="hash_test", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(
-                    kernel=batch_setting([kernel_a, kernel_b, kernel_a, kernel_b]),
-                    migration_rate=0.0,
-                )
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species,
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="discrete_generation",
             )
-            spatial.run(2)
+            .setup(name="hash_test", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(
+                kernel=batch_setting([kernel_a, kernel_b, kernel_a, kernel_b]),
+                migration_rate=0.0,
+            )
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
-        assert spatial.kernel_bank is not None
-        assert len(spatial.kernel_bank) == 1
+        # kernel_a and kernel_b are content-equal: the batch kernel
+        # deduplicates to a single bank entry, visible as one CSR weight
+        # value per row position (all demes share the same routing).
+        assert int(spatial.migration_csr.indptr[-1]) == 12
+        assert np.allclose(
+            spatial.migration_csr.weights,
+            spatial.migration_csr.weights[:3].tolist() * 4,
+        )
 
 
 # ===========================================================================
 # _make_hashable with dict/tuple/list inputs
 # ===========================================================================
 
+
 class TestMakeHashableBranches:
     """Direct tests for _make_hashable covering dict/tuple/list branches."""
 
     def test_make_hashable_dict(self) -> None:
-        from natal.spatial.configurator import _make_hashable
+        from natal.frontend.spatial.builder import _make_hashable
+
         d = {"b": 2, "a": 1}
         h = _make_hashable(d)
         assert isinstance(h, tuple)
@@ -1224,28 +1325,32 @@ class TestMakeHashableBranches:
         assert len(h[1]) == 2
 
     def test_make_hashable_list(self) -> None:
-        from natal.spatial.configurator import _make_hashable
+        from natal.frontend.spatial.builder import _make_hashable
+
         lst = [3, 1, 2]
         h = _make_hashable(lst)
         assert isinstance(h, tuple)
         assert h == (3, 1, 2)
 
     def test_make_hashable_tuple(self) -> None:
-        from natal.spatial.configurator import _make_hashable
+        from natal.frontend.spatial.builder import _make_hashable
+
         tup = (10, 20)
         h = _make_hashable(tup)
         assert isinstance(h, tuple)
         assert h == (10, 20)
 
     def test_make_hashable_ndarray(self) -> None:
-        from natal.spatial.configurator import _make_hashable
+        from natal.frontend.spatial.builder import _make_hashable
+
         arr = np.array([[1.0, 2.0], [3.0, 4.0]])
         h = _make_hashable(arr)
         assert isinstance(h, tuple)
         assert h[0] == "__ndarray__"
 
     def test_make_hashable_scalar(self) -> None:
-        from natal.spatial.configurator import _make_hashable
+        from natal.frontend.spatial.builder import _make_hashable
+
         assert _make_hashable(42) == 42
         assert _make_hashable("hello") == "hello"
 
@@ -1254,28 +1359,29 @@ class TestMakeHashableBranches:
 # _detect_and_delegate_with_positional_args coverage
 # ===========================================================================
 
+
 class TestDetectAndDelegateWithArgs:
     """Cover _detect_and_delegate_with_positional_args via presets."""
 
     def test_presets_with_positional_args(self) -> None:
         species = _simple_species("PosPresetOk")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=1,
-                                             pop_type="discrete_generation")
-                .setup(name="pp_ok", stochastic=False)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100},
-                        "male": {"WT|WT": 100},
-                    }
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .presets()
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=1, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="pp_ok", stochastic=False)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100},
+                    "male": {"WT|WT": 100},
+                }
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .presets()
+            .build()
+        )
+        spatial.run(2)
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
@@ -1285,38 +1391,39 @@ class TestDetectAndDelegateWithArgs:
 # initial_state with sperm_storage (age_structured)
 # ===========================================================================
 
+
 class TestInitialStateWithSpermStorage:
     """Cover the 'sperm_storage is not None' branch in initial_state."""
 
     def test_initial_state_with_sperm_storage(self) -> None:
         species = _simple_species("InitSpermStore")
         topo = SquareGrid(1, 2)
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=topo,
-                                             pop_type="age_structured")
-                .setup(name="sperm_init", stochastic=False)
-                .age_structure(n_ages=4, new_adult_age=2)
-                .initial_state(
-                    individual_count={
-                        "female": {"WT|WT": 100, "WT|Dr": 0},
-                        "male": {"WT|WT": 100, "WT|Dr": 0},
-                    },
-                    sperm_storage={"WT|WT": {"WT|WT": {2: 5}}},
-                )
-                .survival(
-                    female_age_based_survival=[1.0, 0.9, 0.8, 0.0],
-                    male_age_based_survival=[1.0, 0.8, 0.7, 0.0],
-                )
-                .reproduction(
-                    eggs_per_female=10,
-                    female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
-                    male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
-                )
-                .competition(carrying_capacity=1000, expected_num_new_adult_females=100)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=topo, pop_type="age_structured"
             )
-            spatial.run(2)
+            .setup(name="sperm_init", stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=2)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": 100, "WT|Dr": 0},
+                    "male": {"WT|WT": 100, "WT|Dr": 0},
+                },
+                sperm_storage={"WT|WT": {"WT|WT": {2: 5}}},
+            )
+            .survival(
+                female_age_based_survival=[1.0, 0.9, 0.8, 0.0],
+                male_age_based_survival=[1.0, 0.8, 0.7, 0.0],
+            )
+            .reproduction(
+                eggs_per_female=10,
+                female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
+                male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
+            )
+            .competition(carrying_capacity=1000, expected_num_new_adult_females=100)
+            .build()
+        )
+        spatial.run(2)
 
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
@@ -1327,6 +1434,7 @@ class TestInitialStateWithSpermStorage:
 # Additional coverage: BatchSetting first_value with empty array
 # ===========================================================================
 
+
 class TestBatchSettingFirstValueEdge:
     """Additional first_value edge cases."""
 
@@ -1334,7 +1442,7 @@ class TestBatchSettingFirstValueEdge:
         """BatchSetting with empty array returns None (line 226)."""
         arr = np.array([1.0])
         bs = batch_setting(arr)
-        object.__setattr__(bs, '_values_array', np.array([]))
+        object.__setattr__(bs, "_values_array", np.array([]))
         assert bs.first_value() is None
 
 
@@ -1342,29 +1450,35 @@ class TestBatchSettingFirstValueEdge:
 # Migration with explicit adjacency
 # ===========================================================================
 
+
 class TestMigrationAdjacency:
     """Tests for migration with explicit adjacency (line 951)."""
 
     def test_migration_with_adjacency(self) -> None:
-        from natal.spatial.topology import build_adjacency_matrix
+        from natal.frontend.spatial.topology import build_adjacency_matrix
+
         species = _simple_species("MigAdj")
         topo = SquareGrid(2, 2)
         adj = build_adjacency_matrix(topo)
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=4, topology=topo,
-                                             pop_type="discrete_generation")
-                .setup(name="mig_adj", stochastic=False)
-                .initial_state(
-                    individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}},
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .migration(kernel=np.ones((3, 3)), migration_rate=0.1, strategy="kernel",
-                           adjacency=adj)
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=4, topology=topo, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="mig_adj", stochastic=False)
+            .initial_state(
+                individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}},
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .migration(
+                kernel=np.ones((3, 3)),
+                migration_rate=0.1,
+                strategy="kernel",
+                adjacency=adj,
+            )
+            .build()
+        )
+        spatial.run(2)
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
@@ -1374,27 +1488,30 @@ class TestMigrationAdjacency:
 # Heterogeneous build with varying initial state
 # ===========================================================================
 
+
 class TestHeterogeneousIndividualCount:
     """Heterogeneous build with per-deme individual_count (covers lines 1131, 1201, 1267-1281)."""
 
     def test_batch_individual_count(self) -> None:
         species = _simple_species("HetIndiv")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="het_indiv", stochastic=False)
-                .initial_state(
-                    individual_count=batch_setting([
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
+            )
+            .setup(name="het_indiv", stochastic=False)
+            .initial_state(
+                individual_count=batch_setting(
+                    [
                         {"female": {"WT|WT": 100}, "male": {"WT|WT": 100}},
                         {"female": {"WT|WT": 50}, "male": {"WT|WT": 50}},
-                    ]),
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=1000)
-                .build()
+                    ]
+                ),
             )
-            spatial.run(2)
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=1000)
+            .build()
+        )
+        spatial.run(2)
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
@@ -1404,28 +1521,29 @@ class TestHeterogeneousIndividualCount:
 # Observation on heterogeneous build
 # ===========================================================================
 
+
 class TestObservationOnHeterogeneous:
     """Observation chaining on a heterogeneous build (line 1178)."""
 
     def test_observation_on_hetero(self) -> None:
         species = _simple_species("HetObs")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=None,
-                                             pop_type="discrete_generation")
-                .setup(name="het_obs", stochastic=False)
-                .initial_state(
-                    individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}},
-                )
-                .reproduction(eggs_per_female=10)
-                .competition(carrying_capacity=batch_setting([500, 1000]))
-                .with_observation(
-                    groups={"wt": IndividualSelector(ztype="WT|WT")},
-                    collapse_age=True,
-                )
-                .build()
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=None, pop_type="discrete_generation"
             )
-            spatial.run(2)
+            .setup(name="het_obs", stochastic=False)
+            .initial_state(
+                individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}},
+            )
+            .reproduction(eggs_per_female=10)
+            .competition(carrying_capacity=batch_setting([500, 1000]))
+            .with_observation(
+                groups={"wt": IndividualSelector(ztype="WT|WT")},
+                collapse_age=True,
+            )
+            .build()
+        )
+        spatial.run(2)
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
@@ -1436,41 +1554,46 @@ class TestObservationOnHeterogeneous:
 # Heterogeneous build with age_structured individual_count and sperm_storage
 # ===========================================================================
 
+
 class TestHeterogeneousAgeStructuredState:
     """Heterogeneous age_structured build with batch individual_count and
     sperm_storage (covers lines 1133-1135, 1268, 1284-1293)."""
 
     def test_batch_age_structured_state(self) -> None:
         species = _simple_species("HetAgeState")
-        with numba_disabled():
-            spatial = (
-                nt.SpatialPopulation.builder(species, n_demes=2, topology=SquareGrid(1, 2),
-                                             pop_type="age_structured")
-                .setup(name="het_age_state", stochastic=False)
-                .age_structure(n_ages=4, new_adult_age=2)
-                .initial_state(
-                    individual_count=batch_setting([
+        spatial = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=2, topology=SquareGrid(1, 2), pop_type="age_structured"
+            )
+            .setup(name="het_age_state", stochastic=False)
+            .age_structure(n_ages=4, new_adult_age=2)
+            .initial_state(
+                individual_count=batch_setting(
+                    [
                         {"female": {"WT|WT": 100}, "male": {"WT|WT": 100}},
                         {"female": {"WT|WT": 50}, "male": {"WT|WT": 50}},
-                    ]),
-                    sperm_storage=batch_setting([
+                    ]
+                ),
+                sperm_storage=batch_setting(
+                    [
                         {"WT|WT": {"WT|WT": {2: 10}}},
                         {"WT|WT": {"WT|WT": {2: 5}}},
-                    ]),
-                )
-                .survival(
-                    female_age_based_survival=[1.0, 0.9, 0.8, 0.0],
-                    male_age_based_survival=[1.0, 0.8, 0.7, 0.0],
-                )
-                .reproduction(
-                    eggs_per_female=10,
-                    female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
-                    male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
-                )
-                .competition(carrying_capacity=1000, expected_num_new_adult_females=100)
-                .build()
+                    ]
+                ),
             )
-            spatial.run(2)
+            .survival(
+                female_age_based_survival=[1.0, 0.9, 0.8, 0.0],
+                male_age_based_survival=[1.0, 0.8, 0.7, 0.0],
+            )
+            .reproduction(
+                eggs_per_female=10,
+                female_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
+                male_age_based_mating_rate=[0.0, 0.0, 0.3, 0.5],
+            )
+            .competition(carrying_capacity=1000, expected_num_new_adult_females=100)
+            .build()
+        )
+        spatial.run(2)
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())

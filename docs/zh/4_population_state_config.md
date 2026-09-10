@@ -1,31 +1,33 @@
-# `PopulationState` 与 `PopulationConfig`
+# `PopulationState` 与 `ModelDraft`
 
-`PopulationState` 和 `PopulationConfig` 是 NATAL 模拟框架中最关键的两个数据对象：
+`PopulationState` 和 `ModelDraft` 是 NATAL 模拟框架中最关键的两个数据对象：
 
 - `PopulationState`（以及离散世代对应的 `DiscretePopulationState`）负责保存模拟过程中的动态状态
-- `PopulationConfig` 负责保存模拟参数与遗传映射，是运行内核时读取的配置对象
+- `ModelDraft` 负责保存模拟参数与遗传映射，是运行内核时读取的配置对象
 
 理解这两个对象有助于更稳定地组织初始化、运行与结果解释过程。
 
+`ModelDraft` 在构建时会物化为由自身拥有数据的 `Blueprint` 和 `Params` 合同；运行时参数刷新直接使用 Params 投影。已移除 `hook_slot`、`SimState` 以及 `PlainPopulationState` 兼容接口，它们不再属于公开 API。
+
 ## 概述
 
-用户通过 Builder 或 `setup(...).build()` 完成种群构建后，框架内部会形成以下流程：
+用户通过 `setup(...).build()` 完成种群构建后，框架内部会形成以下流程：
 
 ```text
 用户输入参数
-  → PopulationConfig（静态配置）
+  → ModelDraft（静态配置）
   → PopulationState / DiscretePopulationState（动态状态）
   → run(...) / run_tick() 持续更新 state
 ```
 
 可以将其理解为：
 
-- `PopulationConfig` 回答"模型规则是什么"
+- `ModelDraft` 回答"模型规则是什么"
 - `PopulationState` 回答"当前系统处于什么状态"
 
 ## `PopulationState`：年龄结构模型的状态对象
 
-`PopulationState` 定义在 `src/natal/population_state.py`，本质上是 `NamedTuple` 容器。
+`PopulationState` 定义在 `src/natal/frontend/data/state.py`，本质上是 `NamedTuple` 容器。
 
 ### 字段结构
 
@@ -44,7 +46,7 @@ class PopulationState(NamedTuple):
 
 ## `DiscretePopulationState`：离散世代模型的状态对象
 
-离散世代模型使用 `DiscretePopulationState`，同样定义在 `src/natal/population_state.py`。
+离散世代模型使用 `DiscretePopulationState`，同样定义在 `src/natal/frontend/data/state.py`。
 
 ### 字段结构
 
@@ -60,9 +62,9 @@ class DiscretePopulationState(NamedTuple):
 - 状态更新由离散世代流程维护
 - 当前离散世代实现中，配置会规范为 `n_ages=2`、`new_adult_age=1`
 
-## `PopulationConfig`：模型规则与映射配置
+## `ModelDraft`：模型规则与映射配置
 
-`PopulationConfig` 定义在 `src/natal/population_config.py`，包含运行模型所需的固定参数与矩阵。
+`ModelDraft` 定义在 `src/natal/frontend/data/config.py`，包含运行模型所需的固定参数与矩阵。
 
 ### 配置内容分组
 
@@ -89,32 +91,38 @@ class DiscretePopulationState(NamedTuple):
   - `initial_individual_count`
   - `initial_sperm_storage`
 
-### 使用时应关注什么
+### 草稿表示与运行合同
 
-`PopulationConfig` 是一个 `NamedTuple`，其拓扑结构（包含哪些字段、字段的 shape）在构建后**不可变**。但其中生态参数（如 `carrying_capacity`、`eggs_per_female` 等 9 个标量）以 0-d ndarray 形式存储，**可以在 Hook 中原地修改**：
+`ModelDraft` 是一个 `NamedTuple`，其拓扑结构（包含哪些字段、字段的 shape）在构建后**不可变**。使用时需要区分两种用途：
+
+- **运行数据的权威副本在 Rust 会话中。** `pop.config` 每次访问都返回一个**分离的查询快照**（`pop.config is pop.config` 为 False）：字段值来自会话投影，数组是拷贝。修改快照——标量赋值、`set_param(pop.config, ...)`、`snapshot.viability_fitness[...] = x`——都不会写回种群。
+- **运行期更新走受控通道。** 生态标量用 `pop.params.<name>` 或 `pop.update()`；向量/张量用 `pop.params.tensor_write(name, values)`。回调内同样用 `ctx.params` / `ctx.update()`，写入进入事件事务：回调成功才提交，失败则丢弃本次候选。
 
 ```python
-@nt.hook(event="early", custom=True)
-def heatwave(state, config):
-    if state.n_tick == 10:
-        config.carrying_capacity[()] = 2000  # 原地修改，立即生效
+@nt.hook(event="early")
+def heatwave(ctx: TickContext) -> int:
+    if ctx.tick == 10:
+        ctx.params.carrying_capacity = 2000.0  # 经 jsonc 边界校验，同一 tick 的后续阶段可见
     return 0
 ```
 
-大数组字段（如 `viability_fitness`、`zygotes_to_gametes_map`）不建议在运行中修改，但技术上也可通过数组索引进行原地赋值。可以打印输出 `PopulationConfig` 的字段值，以确认模型参数是否符合预期：
-
 ```python
+# 查询：快照，适合读取与诊断
 cfg = pop.config
 print(cfg.n_ages, cfg.n_ztypes)
 print(cfg.viability_fitness.shape)
+
+# 写入：受控通道
+pop.params.carrying_capacity = 8000.0
+pop.params.tensor_write("viability_fitness", new_table)
 ```
 
 ## 最简示例：查看 state 与 config
 
 ```python
-from natal.genetics import Species
-from natal.population import AgeStructuredPopulation
-from natal.population import DiscreteGenerationPopulation
+from natal.frontend.genetics import Species
+from natal.frontend.population import AgeStructuredPopulation
+from natal.frontend.population import DiscreteGenerationPopulation
 
 sp = Species.from_dict(name="Demo", structure={"chr1": {"A": ["A1", "A2"]}})
 
@@ -142,7 +150,7 @@ print(dis_pop.config.n_ages, dis_pop.config.new_adult_age)  # 2, 1
 
 为便于日志记录、前后端通信与调试，NATAL 提供了将状态对象翻译为人类可读结构的能力。
 
-相关 API 位于 `natal.output`：
+相关 API 位于 `natal.frontend.output`：
 
 - `population_state_to_dict` / `population_state_to_json`
 - `discrete_population_state_to_dict` / `discrete_population_state_to_json`
@@ -172,7 +180,7 @@ hist_view = nt.population_history_to_readable_dict(pop)
 print(hist_view["n_snapshots"], hist_view["snapshots"][-1]["tick"])
 ```
 
-如果需要在翻译时直接应用 observation rules（详见 [种群观测规则](2_data_output.md)），可使用观测集成接口：
+如果需要在翻译时直接应用 observation rules（详见 [种群观测规则](2_data_output.md)），当前状态用 `pop.observe()`，已记录的历史用 `pop.history.observe(pop.observation)`：
 
 ```python
 observed = pop.observe()
@@ -183,7 +191,7 @@ print("观测值:", observed.values)
 如果直接操作 `PopulationState` / `DiscretePopulationState`，也可以调用对应的函数，并显式传入标签：
 
 ```python
-from natal.output import population_state_to_dict
+from natal.frontend.output import population_state_to_dict
 
 data = population_state_to_dict(
     state,

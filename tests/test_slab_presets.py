@@ -76,7 +76,7 @@ class TestWolbachiaEndToEnd:
         sp = nt.Species.from_dict("w_e2e", {"c1": {"l1": ["A", "a"]}},
                                   somatic_labels=["normal", "infected"])
         # infected viability should be 0.9, normal stays 1.0
-        cfg = nt.Configurator.for_discrete(sp).setup(stochastic=False)
+        cfg = nt.PopulationBuilder.for_discrete(sp).setup(stochastic=False)
         cfg = cfg.initial_state(individual_count={
             "female": {"A|A@infected": {1: 50}, "A|A@normal": {1: 50}},
             "male": {"A|A@normal": {1: 100}},

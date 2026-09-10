@@ -1,85 +1,72 @@
 #!/usr/bin/env python3
-"""Generate src/natal/__init__.pyi from module-level __all__ declarations."""
+"""Generate src/natal/__init__.pyi from the explicit public export list.
+
+The list lives in ``src/natal/__init__.py`` as ``_PUBLIC_EXPORTS`` (plan S6,
+must-not-exist item 8); the consistency test in ``tests/test_phase0_shims.py``
+pins it against the modules' literal ``__all__``.  Importing ``natal`` is
+lazy-safe (no child-module execution), so the generator reads the list at
+runtime instead of re-scanning the tree."""
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
-from typing import Any, Sequence, cast
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT_DIR / "src" / "natal"
 OUTPUT_FILE = PACKAGE_DIR / "__init__.pyi"
 
 
-def extract_module_exports(module_file: Path) -> list[str]:
-    """Return literal __all__ entries from a module source file."""
-    try:
-        source = module_file.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(module_file))
-    except (OSError, SyntaxError):
-        return []
-
-    for node in tree.body:
-        value_node = None
-        if isinstance(node, ast.Assign):
-            if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
-                value_node = node.value
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id == "__all__":
-                value_node = node.value
-
-        if value_node is None:
-            continue
-
-        try:
-            exports = ast.literal_eval(value_node)
-            exports = cast(Sequence[Any], exports)
-        except Exception:
-            return []
-
-        if isinstance(exports, (list, tuple)) and all(isinstance(item, str) for item in exports):
-            return list(exports)
-        return []
-
-    return []
-
-
 def iter_public_modules(package_dir: Path) -> list[tuple[str, list[str]]]:
-    """Collect public exports for each top-level module and subpackage."""
-    module_exports: list[tuple[str, list[str]]] = []
+    """Read the explicit public export list from the installed package.
 
-    for module_file in sorted(package_dir.glob("*.py")):
-        if module_file.name.startswith("_") or module_file.name == "__init__.py":
-            continue
-        exports = extract_module_exports(module_file)
-        if exports:
-            module_exports.append((module_file.stem, exports))
+    Dotted owner names (e.g. ``frontend.hooks``) map to the real package
+    paths so the generated stub imports resolve.
+    """
+    import sys
 
-    # Scan subpackages: read their __init__.py __all__
-    for init_file in sorted(package_dir.glob("*/__init__.py")):
-        subpkg = init_file.parent.name
-        if subpkg.startswith("_"):
-            continue
-        exports = extract_module_exports(init_file)
-        if exports:
-            module_exports.append((subpkg, exports))
+    sys.path.insert(0, str(ROOT_DIR / "src"))
+    import natal  # noqa: PLC0415 — the explicit list IS the source of truth
 
-    return module_exports
+    return sorted(
+        (unit, list(names)) for unit, names in natal._PUBLIC_EXPORTS.items()  # noqa: SLF001 — generated from the pinned list
+    )
+
+
+# Names whose canonical package-level re-export is deferred through a PEP 562
+# module ``__getattr__`` (import-cycle safety).  Stub resolution cannot see
+# through ``__getattr__``, so these names are imported from the deeper,
+# cycle-free defining module instead.  Keyed by (owning package, name) because
+# a name can be legitimately re-exported by several packages.
+STUB_SOURCE_REDIRECTS: dict[tuple[str, str], str] = {
+    ("frontend.presets", "apply_preset_fitness_patch"): "frontend.presets._fitness",
+}
 
 
 def format_import(module_name: str, exported_names: list[str]) -> list[str]:
-    """Render a stub import statement for one module."""
-    names = sorted(exported_names)
-    single_line = f"from .{module_name} import {', '.join(names)}"
-    if len(single_line) <= 88:
-        return [single_line]
+    """Render a stub import statement for one module.
 
-    lines = [f"from .{module_name} import ("]
-    for name in names:
-        lines.append(f"    {name},")
-    lines.append(")")
-    return lines
+    ``STUB_SOURCE_REDIRECTS`` moves individual names to a deeper, cycle-free
+    module when the canonical package re-export is deferred via a module-level
+    ``__getattr__`` (PEP 562), which stub resolution cannot see through.
+    """
+    names = sorted(exported_names)
+    redirected = {
+        name: target for (pkg, name), target in STUB_SOURCE_REDIRECTS.items()
+        if pkg == module_name and name in names
+    }
+    names = [n for n in names if n not in redirected]
+    rendered: list[str] = []
+    if names:
+        single_line = f"from .{module_name} import {', '.join(names)}"
+        if len(single_line) <= 88:
+            rendered.append(single_line)
+        else:
+            rendered.append(f"from .{module_name} import (")
+            rendered.extend(f"    {name}," for name in names)
+            rendered.append(")")
+    for name, target in sorted(redirected.items()):
+        rendered.append(f"from .{target} import {name}")
+    return rendered
 
 
 def render_stub(module_exports: list[tuple[str, list[str]]]) -> str:

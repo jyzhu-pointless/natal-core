@@ -1,0 +1,30 @@
+[package]
+name = "natal-engine-core"
+version = "0.1.0"
+edition = "2021"
+# Also serves as clippy's msrv: keeps version-gated lints (e.g.
+# manual_is_multiple_of) from suggesting APIs newer than this floor.
+rust-version = "1.86"
+description = "Rust simulation kernels for the NATAL Core engine"
+license = "MIT"
+
+[lib]
+name = "_engine_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+numpy = "0.23.0"
+pyo3 = { version = "0.23.5", features = [] }
+
+rand = "0.10.2"
+rand_distr = "0.6.0"
+rayon = "1.10"
+
+[features]
+# The extension-module feature links against the Python interpreter, which
+# breaks plain `cargo test` linking; maturin builds enable it (pyproject).
+extension-module = ["pyo3/extension-module"]
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

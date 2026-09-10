@@ -8,6 +8,6 @@ The `hooks` subpackage provides the core components for the declarative hook sys
 
 ## Complete Module Reference
 
-::: natal.hooks
+::: natal.frontend.hooks
     options:
       heading_level: 3

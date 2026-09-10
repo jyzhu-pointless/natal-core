@@ -19,7 +19,7 @@ def my_filter(genotype):
 ## Core Example: W->D Only in W::D Heterozygotes
 
 ```python
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 
 def is_wd_heterozygote(genotype) -> bool:
@@ -87,17 +87,20 @@ Benefits of this approach:
 When the rule scope is complex, it is recommended to use the species' pattern parsing capability to generate `genotype_filter`, avoiding fragile string comparisons.
 
 ```python
+from natal.frontend.presets import GeneticPreset
+
+
 class PatternBasedPreset(GeneticPreset):
     def __init__(self, pattern: str, conversion_rate: float = 0.95):
         super().__init__(name="PatternBasedPreset")
         self.pattern = pattern
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+    def gamete_modifier(self, host):
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("PatternBased")
-        pattern_filter = population.species.parse_genotype_pattern(self.pattern)
+        pattern_filter = host.species.parse_genotype_pattern(self.pattern)
 
         ruleset.add_allele_convert(
             from_allele="WT",
@@ -105,7 +108,10 @@ class PatternBasedPreset(GeneticPreset):
             rate=self.conversion_rate,
             genotype_filter=pattern_filter,
         )
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 Practical advice:
@@ -117,6 +123,9 @@ Practical advice:
 ## Conditional Mutation (Genotype-Dependent)
 
 ```python
+from natal.frontend.presets import GeneticPreset
+
+
 class ConditionalMutation(GeneticPreset):
     """Conditional Mutation - only occurs in specific genetic backgrounds"""
 
@@ -125,8 +134,8 @@ class ConditionalMutation(GeneticPreset):
         self.target_allele = target_allele
         self.required_background = required_background
 
-    def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+    def gamete_modifier(self, host):
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("ConditionalMutation")
 
@@ -138,7 +147,10 @@ class ConditionalMutation(GeneticPreset):
             genotype_filter=lambda gt: self.required_background in str(gt)
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 ## Maintaining Consistency with Observation Statistics

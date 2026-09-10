@@ -1,4 +1,6 @@
-# Migration Kernel 底层实现
+# Migration Kernel 底层实现（历史：njit 时代，已移除）
+
+> **历史实现说明**：本页记录的是已删除的 Python/njit 迁移核（`_build_kernel_offset_table`、`run_spatial_migration`、`migrate_scalar_bucket` 等符号在 `src/` 中已不存在，`src/natal/engine/` 目录也不存在）。当前实现是：构建期在 `src/natal/frontend/spatial/migration.py` 折叠 CSR，运行期由 `rust/src/kernels/spatial.rs` 执行。现行说明见[空间生命周期执行](spatial_lifecycle_wrapper.md)。以下内容仅用于理解历史设计，不能当作当前行为保证。
 
 本文梳理 kernel 模式迁移的底层机制，涵盖 kernel 到空间偏移的转换过程、边界处理策略、以及异构 kernel 的路由方式。
 
@@ -239,7 +241,7 @@ for k in range(n_kernels):
 
 这些预构建的数组在迁移时传入 `apply_spatial_kernel_migration`。
 
-### 5.3 迁移阶段（Numba prange 内）
+### 5.3 迁移阶段（并行内核内）
 
 ```python
 for src in prange(n_demes):
@@ -259,7 +261,7 @@ for src in prange(n_demes):
     )
 ```
 
-这种方式不会预构建 O(n_demes²) 的稠密邻接矩阵，每个 source deme 在 `prange` 内按需构建稀疏迁移行。
+历史实现中，这种方式不会预构建 O(n_demes²) 的稠密邻接矩阵，每个 source deme 在 `prange` 内按需构建稀疏迁移行。**当前实现不同**：构建期始终物化 `(n_demes, n_demes)` 稠密邻接（`src/natal/frontend/spatial/population.py`），再折叠为 CSR；大规模网格下的稠密矩阵开销仍然存在。
 
 ## 6. 与 Adjacency 模式的对比
 
@@ -272,7 +274,7 @@ for src in prange(n_demes):
 | 边界处理 | 预先编码在矩阵中 | 运行时判断（wrap/clip） |
 | 异构 kernel | 不支持（或需预构建 n² 稠密矩阵） | 按 kernel 分组偏移表 |
 
-对于大规模网格（如 501×501 = 251001 demes），kernel 模式避免了 O(n²) 邻接矩阵的存储和访问开销。
+历史实现中，kernel 模式对大网格避免了 O(n²) 邻接矩阵开销；当前实现仍需先物化稠密邻接，因此这一收益不再成立。
 
 ## 7. 关键决策与边界条件
 
@@ -307,8 +309,10 @@ if virgin_count < 0.0 and abs(virgin_count) < 1e-10:
 
 | 文件 | 内容 |
 |------|------|
-| `src/natal/engine/migration/kernel.py` | `_build_kernel_offset_table`、`_build_source_kernel_sparse_row`、`apply_spatial_kernel_migration` |
-| `src/natal/engine/migration/adjacency.py` | `migrate_scalar_bucket`、`migrate_sperm_bucket` |
-| `src/natal/engine/spatial_migrator.py` | `run_spatial_migration`、`apply_spatial_adjacency_migration`（分发入口） |
-| `src/natal/spatial_population.py` | `_build_heterogeneous_kernel_arrays`、运行时调度 |
-| `src/natal/engine/templates/spatial_lifecycle_*.tmpl.py` | 代码生成模板（在 njit 路径中调用 `run_spatial_migration`） |
+| `src/natal/frontend/spatial/migration.py` | `fold_migration_csr`、`_kernel_row_entries`（构建期折叠） |
+| `src/natal/frontend/spatial/topology.py` | `build_adjacency_matrix`、`build_gaussian_kernel`、坐标回绕 |
+| `src/natal/frontend/spatial/population.py` | 稠密邻接物化与迁移参数调度 |
+| `rust/src/kernels/spatial.rs` | 运行期 CSR 迁移核 |
+| `rust/src/sessions/spatial.rs` | 会话层的迁移调用与 deme 流 |
+
+历史文件（已删除，仅供对照）：`src/natal/engine/migration/kernel.py`、`.../adjacency.py`、`src/natal/engine/spatial_migrator.py`、`src/natal/spatial_population.py`、`src/natal/engine/templates/spatial_lifecycle_*.tmpl.py`。

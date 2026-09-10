@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 import uuid
 
-from natal.presets import HomingDrive
-from natal.genetics import Species
+from natal.frontend.presets import HomingDrive
+from natal.frontend.genetics import Species
 import natal as nt
 
 

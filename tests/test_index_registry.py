@@ -1,11 +1,11 @@
-"""Unit tests for natal.registry.index.IndexRegistry."""
+"""Unit tests for natal.frontend.registry.index.IndexRegistry."""
 
 import numpy as np
 import pytest  # type: ignore
 
-from natal.genetics import Genotype, HaploidGenotype
-from natal.genetics import Species
-from natal.registry.index import IndexRegistry
+from natal.frontend.genetics import Genotype, HaploidGenotype
+from natal.frontend.genetics import Species
+from natal.frontend.registry.index import IndexRegistry
 
 
 def _simple_species(name: str = "idxreg_test") -> Species:

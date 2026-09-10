@@ -103,9 +103,27 @@ You can check the nature of chromosomes:
 
 ```python
 # Check chromosome nature
+chr_x = sp.get_chromosome("chrX")
 if chr_x.is_sex_chromosome:
     print(f"Sex chromosome type: {chr_x.sex_type}")  # Output: "X"
     print(f"Sex chromosome system: {chr_x.sex_system}")  # Output: "XY"
+```
+
+#### Gamete Labels and Somatic Labels
+
+`gamete_labels` and `somatic_labels` introduce label dimensions to the genetic system, marking extra information carried by gametes and individuals.
+
+**Gamete labels** (pre-existing) define the marker types a gamete can carry. The `Species.gamete_labels` attribute defaults to an empty list `[]`; when none are declared the registry uses the single `"default"` label (no distinction). A common use is marking gametes with deposited Cas9 protein (`"Cas9_deposited"`), together with presets such as HomingDrive.
+
+**Somatic labels** (new) are the symmetric counterpart — they define the somatic markers an individual can carry. `Species.somatic_labels` also defaults to `[]`; when none are declared the registry uses `"default"`. They can mark states such as an individual's Cas9 expression level or toxin load. Once declared, the registry uses exactly the declared labels and does not add `"default"` automatically.
+
+Both are declared when the `Species` is constructed and are shared by every population of that species:
+
+```python
+sp = nt.Species("Mosquito",
+    gamete_labels=["default", "Cas9_deposited"],
+    somatic_labels=["wildtype", "Cas9_high"],
+)
 ```
 
 #### Creation Method 2: Chain API
@@ -122,7 +140,7 @@ chr1.add("B").add_alleles(["B1", "B2"])
 
 # X chromosome
 chr_x = sp.add("ChrX", sex_type="X")
-chr_x.add("white").add_alleles(["w+", "w"])
+chr_x.add("white").add_alleles(["wp", "w"])
 
 # Y chromosome (male only)
 chr_y = sp.add("ChrY", sex_type="Y")
@@ -156,7 +174,11 @@ chr_x = sp.get_chromosome("ChrX")
 You can delete a chromosome from a `Species`:
 
 ```python
-sp.remove_chromosome("chr1")
+removed_species = nt.Species("RemovedChromosomeExample")
+removed_chr = removed_species.add("removed_chr")
+removed_species.remove_chromosome("removed_chr")
+assert removed_species.get_chromosome("removed_chr") is None
+removed_chr.add("D", position=150.0)  # Existing object remains usable.
 ```
 
 After deletion, the chromosome will be removed from the species' genetic architecture, but the `Chromosome` instance itself will continue to exist.
@@ -271,9 +293,13 @@ gene_drive = sp.get_gene("Drive")
 Manual retrieval of `Haplotype` instances is generally not required.
 
 ```python
-# Get all possible haplotypes on a chromosome
+# Get all possible haplotypes on a chromosome: take each haploid genotype's
+# haplotype for this chromosome, then deduplicate
 chr1 = sp.get_chromosome("chr1")  # Get chromosome object
-all_haplotypes = chr1.get_all_haplotypes()
+all_haplotypes = list(dict.fromkeys(
+    hg.get_haplotype_for_chromosome(chr1)
+    for hg in sp.get_all_haploid_genotypes()
+))
 
 # Iterate over all haplotypes
 for hap in all_haplotypes:
@@ -290,7 +316,7 @@ for hap in all_haplotypes:
 
 #### Retrieving Haploid Genotypes from Formatted Strings
 
-**String parsing is the most flexible approach**, supporting direct retrieval of haploid genotypes from strings. When printing a haploid genotype, it is also automatically converted to string format, consistent with the input string format.
+**String parsing is the most flexible approach**, supporting direct retrieval of haploid genotypes from strings. Printing a haploid genotype also converts it to string format automatically, but the output uses the canonical slash-separated form and is not necessarily character-for-character identical to the input (for example, input `"ABC;XY"` prints as `"A/B/C;X/Y"`).
 
 ```python
 sp = nt.Species.from_dict(
@@ -303,9 +329,10 @@ sp = nt.Species.from_dict(
 
 # Retrieve haploid genotype directly from string
 hg1 = sp.get_haploid_genotype_from_str("ABC;XY")
-hg2 = sp.get_haploid_genotype_from_str("a/b/c;x/y")  # Equivalent notation
+hg2 = sp.get_haploid_genotype_from_str("A/B/C;X/Y")  # Equivalent notation
 
-print(f"Haploid genotype: {hg1}")  # Output: ABC;XY
+print(f"Haploid genotype: {hg1}")  # Output: A/B/C;X/Y
+print(hg1 is hg2)  # Output: True (both spellings resolve to the same instance)
 ```
 
 #### String Parsing Syntax Rules
@@ -322,11 +349,13 @@ String parsing follows these syntax rules:
 hg1 = sp.get_haploid_genotype_from_str("ABC;XY")
 # Equivalent to: hg1 = sp.get_haploid_genotype_from_str("A/B/C;X/Y")
 
-# Example 2: Multi-character genes, must use slash
-hg2 = sp.get_haploid_genotype_from_str("WT/Drive/R2;X/Y")
+# Example 2: Slashes written explicitly yield the same haploid genotype
+hg2 = sp.get_haploid_genotype_from_str("A/B/C;X/Y")
+print(hg1 is hg2)  # Output: True
 
-# Example 3: Mix of single-character and multi-character genes
-hg3 = sp.get_haploid_genotype_from_str("A/WT/Drive;X/Y")
+# Example 3: All recessive alleles
+hg3 = sp.get_haploid_genotype_from_str("abc;xy")
+print(hg3)  # Output: a/b/c;x/y
 ```
 
 #### Caching Mechanism
@@ -351,35 +380,40 @@ Like `HaploidGenotype`, `Genotype` also supports direct retrieval from strings a
 
 ```python
 sp = nt.Species.from_dict(
-    name="TestDrive",
-    structure={"chr1": {"loc": ["WT", "Drive"]}}
+    name="TestGenotype",
+    structure={
+        "chr1": {"A": ["A", "a"], "B": ["B", "b"], "C": ["C", "c"]},
+        "chr2": {"X": ["WT", "Drive"], "Y": ["R1", "R2"]},
+    }
 )
 
 # Retrieve genotype directly from string
-wt_wt = sp.get_genotype_from_str("WT|WT")
-wt_drive = sp.get_genotype_from_str("WT|Drive")
-drive_drive = sp.get_genotype_from_str("Drive|Drive")
+gt1 = sp.get_genotype_from_str("ABC|abc; WT/R1|Drive/R2")
+gt2 = sp.get_genotype_from_str("A/B/C|a/b/c; WT/R1|Drive/R2")
+gt3 = sp.get_genotype_from_str("abc|ABC; Drive/R2|WT/R1")
 
-print(f"Genotype: {wt_drive}")  # Output: WT|Drive (by default, maternal/paternal order is canonicalized — see Species.unordered)
+print(f"Genotype: {gt1}")  # Output: A/B/C|a/b/c;WT/R1|Drive/R2
+print(gt1 is gt2, gt1 is gt3)  # Output: True True (equivalent spellings; unordered=True also canonicalizes order)
 ```
 
 #### String Parsing Syntax Rules
 
 The string parsing syntax for `Genotype` is essentially the same as for `HaploidGenotype`, with the addition of maternal and paternal separation:
 
-- **Pipe (|) separates maternal and paternal**: The left side of the pipe is the maternal haploid genotype, the right side is the paternal haploid genotype. **Note:** by default (`Species.unordered=True`), the system canonicalizes the pair so `A|a` and `a|A` resolve to the same genotype — tracking parent-of-origin explicitly requires `unordered=False`.
+- **Pipe (|) separates maternal and paternal**: within each chromosome segment, the left side of the pipe is that chromosome's maternal haplotype and the right side is the paternal haplotype; segments are still separated by semicolons, e.g. `A/B/C|a/b/c; WT/R1|Drive/R2`. **Note:** by default (`Species.unordered=True`), the system canonicalizes the pair so `A|a` and `a|A` resolve to the same genotype — tracking parent-of-origin explicitly requires `unordered=False`.
 - **Other rules are the same as HaploidGenotype**: Including semicolons to separate chromosomes, slashes to separate genes, and the ability to omit slashes for single-character genes
 
 ```python
-# Example 1: Single-character genes, slash can be omitted
-gt1 = sp.get_genotype_from_str("ABC|abc")
-# Equivalent to: gt1 = sp.get_genotype_from_str("A/B/C|a/b/c")
+# Example 1: Single-character genes, slash can be omitted (chr1 segment)
+gt1 = sp.get_genotype_from_str("ABC|abc; WT/R1|Drive/R2")
+# Equivalent to: gt1 = sp.get_genotype_from_str("A/B/C|a/b/c; WT/R1|Drive/R2")
 
-# Example 2: Multi-character genes, must use slash
-gt2 = sp.get_genotype_from_str("WT/Drive/R2|WT/Drive/R2")
+# Example 2: Multi-character genes must use slash (the chr2 segment's WT/Drive and R1/R2 cannot omit slashes)
+gt2 = sp.get_genotype_from_str("A/B/C|a/b/c; WT/R1|Drive/R2")
 
-# Example 3: Mix of single-character and multi-character genes
-gt3 = sp.get_genotype_from_str("A/WT/Drive|a/WT/Drive")
+# Example 3: Swap maternal/paternal and use different alleles
+gt3 = sp.get_genotype_from_str("abc|ABC; Drive/R2|WT/R1")
+print(gt1 is gt2, gt1 is gt3)  # Output: True True
 ```
 
 #### Caching Mechanism
@@ -464,7 +498,7 @@ print(f"Haploid genotypes: {len(all_haploid)}")  # 2*3*2 = 12
 print(f"Diploid genotypes: {len(all_genotypes)}")  # 12*12 = 144
 
 # 3. Work with specific genotypes
-gt = sp.get_genotype_from_str("A1|A2")
+gt = sp.get_genotype_from_str("A1/B1|A2/B2; C1|C2")
 print(f"Maternal haplotype: {gt.maternal}")
 print(f"Paternal haplotype: {gt.paternal}")
 ```
@@ -490,22 +524,30 @@ numpy array access individual_count[:, :, 5]
 ### Genotype Object and IndexRegistry Coordination
 
 ```python
-pop = nt.AgeStructuredPopulation(species=sp, ...)
+pop = (nt.AgeStructuredPopulation
+    .setup(species=sp, name="IndexDemo")
+    .age_structure(n_ages=4, new_adult_age=2)
+    .initial_state({
+        "female": {"A1/B1|A2/B2; C1|C2": [0, 0, 100, 0]},
+        "male": {"A1/B1|A2/B2; C1|C2": [0, 0, 100, 0]},
+    })
+    .build()
+)
 
 # Get IndexRegistry
-registry = pop.registry  # or pop._index_registry
+registry = pop.registry  # or pop.index_registry
 
-# Genotype → Integer index
-gt = sp.get_genotype_from_str("A1|A2")
-gt_idx = registry.genotype_index(gt)
-print(f"Genotype index: {gt_idx}")
+# Genotype → integer index (a ZType index also needs the somatic label; this species declares no somatic_labels, so the default label is "default")
+gt = sp.get_genotype_from_str("A1/B1|A2/B2; C1|C2")
+gt_idx = registry.ztype_index(gt, "default")
+print(f"ZType index: {gt_idx}")
 
-# Reverse: Integer index → Genotype
-gt_back = registry.index_to_genotype[gt_idx]
-print(f"Genotype: {gt_back}")
+# Reverse: integer index → (Genotype, slab label)
+gt_back, slab_back = registry.index_to_ztype[gt_idx]
+print(f"ZType: {gt_back} @{slab_back}")
 
 # Use in numpy arrays
-individual_count = pop.state.individual_count  # shape: (n_sexes, n_ages, n_genotypes)
+individual_count = pop.state.individual_count  # shape: (n_sexes, n_ages, n_ztypes)
 female_count_of_gt = individual_count[0, :, gt_idx]  # Female count across all ages for a genotype
 ```
 

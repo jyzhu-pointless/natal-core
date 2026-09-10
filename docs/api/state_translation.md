@@ -19,15 +19,13 @@ Use `pop.observe()` and `pop.history.observe(pop.observation)` for observation-c
 Observation rules are configured during population setup:
 
 ```python
-from natal.patterns.individual_selector import IndividualSelector
+from natal.frontend.patterns.individual_selector import IndividualSelector
 
-pop = nt.AgeStructuredPopulation.setup(
-    species=species,
-    configurator=(
-        nt.Configurator(species)
-        .with_observation({"adult_wt": IndividualSelector(ztype="WT|WT", age=[1])})
-        .record_history()
-    ),
+pop = (
+    nt.AgeStructuredPopulation.setup(species=species)
+    .with_observation({"adult_wt": IndividualSelector(ztype="WT|WT", age=[1])})
+    .record_history()
+    .build()
 )
 
 # Current state:
@@ -86,6 +84,6 @@ print(hist_json[:200])
 
 ## Complete Module Reference
 
-::: natal.output.translation
+::: natal.frontend.output.translation
     options:
       heading_level: 3

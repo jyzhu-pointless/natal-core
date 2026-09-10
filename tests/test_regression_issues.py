@@ -11,14 +11,12 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.hooks import Op, hook
+from natal.frontend.hooks import Op, hook
 
 
 # ============================================================================
 # Issue #34 — zygote modifier IndexError
 # ============================================================================
-
-@pytest.mark.numba_on
 def test_regression_issue34_zygote_modifier_index_error():
     """Build with somatic_labels > 1 + embryo_resistance > 0 should not crash.
 
@@ -45,7 +43,7 @@ def test_regression_issue34_zygote_modifier_index_error():
 
     # This must not raise.
     pop = (
-        nt.Configurator.for_age_structured(sp)
+        nt.PopulationBuilder.for_age_structured(sp)
         .setup(stochastic=False)
         .age_structure(n_ages=8, new_adult_age=2)
         .initial_state(
@@ -73,8 +71,6 @@ def test_regression_issue34_zygote_modifier_index_error():
 # ============================================================================
 # Issue #36 — gamete modifier wrong ztype
 # ============================================================================
-
-@pytest.mark.numba_on
 def test_regression_issue36_gamete_modifier_wrong_ztype():
     """Cargo allele should NOT vanish when slabs > 1.
 
@@ -121,7 +117,7 @@ def test_regression_issue36_gamete_modifier_wrong_ztype():
         ]
 
     pop = (
-        nt.Configurator.for_age_structured(sp)
+        nt.PopulationBuilder.for_age_structured(sp)
         .setup(stochastic=False)
         .age_structure(n_ages=8, new_adult_age=2)
         .initial_state(
@@ -140,7 +136,7 @@ def test_regression_issue36_gamete_modifier_wrong_ztype():
         )
         .reproduction(eggs_per_female=50, sex_ratio=0.5)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             low_density_growth_rate=16,
             carrying_capacity=12 * 72,
         )
@@ -189,7 +185,7 @@ def test_regression_issue36_gamete_modifier_wrong_ztype():
     # Deterministic model — exact expected values computed from the
     # fixed-point dynamics of the full age-structured model with
     # HomingDrive (95% conversion, 50% resistance, 1% embryo resistance),
-    # concave competition, and multi-component fitness.
+    # beverton_holt competition, and multi-component fitness.
     assert cargo_f == pytest.approx(0.21708254280392394, rel=1e-12), (
         f"cargo frequency mismatch (got {cargo_f!r})"
     )

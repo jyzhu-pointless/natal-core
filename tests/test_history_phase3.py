@@ -19,14 +19,14 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.output.history import (
+from natal.frontend.output.history import (
     History,
     HistoryBatch,
     HistorySchema,
     PopulationLayout,
 )
-from natal.output.observation import Observation, ObservationFilter
-from natal.patterns.individual_selector import IndividualSelector
+from natal.frontend.output.observation import Observation, ObservationFilter
+from natal.frontend.patterns.individual_selector import IndividualSelector
 
 # ============================================================================
 # Helpers
@@ -101,7 +101,7 @@ def _build_pop(
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=50.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             low_density_growth_rate=6.0,
             carrying_capacity=400,
         )
@@ -317,7 +317,7 @@ class TestReadOnlyCachedArrays:
 
     def test_individual_count_raw_mode_only(self) -> None:
         """individual_count raises ValueError in observation mode."""
-        from natal.output.history import ObservationMetadata
+        from natal.frontend.output.history import ObservationMetadata
 
         layout = _minimal_layout(n_ztypes=3)
         om = ObservationMetadata(labels=("g0",), collapse_age=False, n_groups=1)
@@ -332,7 +332,7 @@ class TestReadOnlyCachedArrays:
 
     def test_values_shape(self) -> None:
         """values returns (n_records, n_groups, n_sexes, n_ages)."""
-        from natal.output.history import ObservationMetadata
+        from natal.frontend.output.history import ObservationMetadata
 
         n_groups, n_sexes, n_ages = 2, 2, 2
         row_size = 1 + n_groups * n_sexes * n_ages  # 1 + 8 = 9
@@ -351,7 +351,7 @@ class TestReadOnlyCachedArrays:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history._rows.append(row)
+        history._append(HistoryBatch(schema=history.schema, rows=row[np.newaxis, :]))
 
         vals = history.values
         # Invariant: shape = (1, 2, 2, 2)
@@ -360,7 +360,7 @@ class TestReadOnlyCachedArrays:
 
     def test_values_read_only(self) -> None:
         """values is writeable=False."""
-        from natal.output.history import ObservationMetadata
+        from natal.frontend.output.history import ObservationMetadata
 
         n_groups, n_sexes, n_ages = 1, 2, 2
         row_size = 1 + n_groups * n_sexes * n_ages
@@ -377,7 +377,7 @@ class TestReadOnlyCachedArrays:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history._rows.append(row)
+        history._append(HistoryBatch(schema=history.schema, rows=row[np.newaxis, :]))
 
         vals = history.values
         assert not vals.flags.writeable
@@ -386,7 +386,7 @@ class TestReadOnlyCachedArrays:
 
     def test_values_cached(self) -> None:
         """values returns same instance on second access."""
-        from natal.output.history import ObservationMetadata
+        from natal.frontend.output.history import ObservationMetadata
 
         row_size = 1 + 1 * 2 * 2  # 5
         layout = _minimal_layout(n_sexes=2, n_ages=2, n_ztypes=3)
@@ -400,7 +400,7 @@ class TestReadOnlyCachedArrays:
         history = History(obs_schema)
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history._rows.append(row)
+        history._append(HistoryBatch(schema=history.schema, rows=row[np.newaxis, :]))
 
         v1 = history.values
         v2 = history.values
@@ -537,7 +537,7 @@ class TestReadOnlyCachedArrays:
 
     def test_sperm_storage_obs_mode_raises(self) -> None:
         """sperm_storage raises ValueError in observation mode."""
-        from natal.output.history import ObservationMetadata
+        from natal.frontend.output.history import ObservationMetadata
 
         layout = _minimal_layout(n_sexes=2, n_ages=2, n_ztypes=3, has_sperm_storage=True)
         om = ObservationMetadata(labels=("g0",), collapse_age=False, n_groups=1)
@@ -572,8 +572,8 @@ class TestTicksProperty:
         assert history.ticks == (0, 1, 2, 3, 4)
         assert isinstance(history.ticks, tuple)
 
-    def test_ticks_cached(self) -> None:
-        """ticks returns same tuple object on second access (caching)."""
+    def test_ticks_metadata_remains_stable(self) -> None:
+        """Exported tick metadata remains unchanged as native storage grows."""
         schema = _raw_schema(row_size=5)
         history = History(schema)
         rows = _make_rows(3, 5, start_tick=0)
@@ -581,8 +581,11 @@ class TestTicksProperty:
 
         t1 = history.ticks
         t2 = history.ticks
-        # Invariant: same object returned (cached)
-        assert t1 is t2
+        # Independent reads describe the same exact stored coordinates.
+        assert t1 == t2 == (0, 1, 2)
+        history._append(HistoryBatch(schema=schema, rows=_make_rows(1, 5, start_tick=3)))
+        assert t1 == (0, 1, 2)
+        assert history.ticks == (0, 1, 2, 3)
 
     def test_ticks_cache_invalidated_after_append(self) -> None:
         """ticks cache invalidated after appending new rows."""
@@ -810,7 +813,7 @@ class TestRestoreState:
 
     def test_restore_state_observation_mode_raises(self) -> None:
         """restore_state raises ValueError in observation mode."""
-        from natal.output.history import ObservationMetadata
+        from natal.frontend.output.history import ObservationMetadata
 
         layout = _minimal_layout(n_ztypes=3)
         om = ObservationMetadata(labels=("g0",), collapse_age=False, n_groups=1)
@@ -821,8 +824,7 @@ class TestRestoreState:
         # Add a row so it's not empty
         row = np.zeros(5, dtype=np.float64)
         row[0] = 0.0
-        history._rows.append(row)
-        history._seen_ticks.add(0)
+        history._append(HistoryBatch(schema=history.schema, rows=row[np.newaxis, :]))
 
         with pytest.raises(ValueError, match="Cannot restore state from observation-mode"):
             history.restore_state(0)
@@ -888,7 +890,7 @@ class TestObserveWithObservation:
         # Since we have no real registry, use the legacy build_filter approach
         # Or actually, let's use the direct low-level: build a mask manually
         # to construct an Observation, then test observe(observation)
-        from natal.output.observation import Observation
+        from natal.frontend.output.observation import Observation
 
         mask = np.zeros((1, n_sexes, n_ages, n_ztypes), dtype=np.float64)
         mask[0, :, :, 0] = 1.0
@@ -951,7 +953,7 @@ class TestObserveWithObservation:
         mask[0, :, :, 0] = 1.0  # group 0: ztype 0
         mask[1, :, :, 1] = 1.0  # group 1: ztype 1
         mask[1, :, :, 2] = 1.0  # group 1: ztype 2
-        from natal.output.observation import Observation
+        from natal.frontend.output.observation import Observation
 
         observation = Observation(
             labels=("g0", "g1"),
@@ -981,7 +983,7 @@ class TestObserveWithObservation:
         ind[0, 0, 0] = 100.0
         history._append(HistoryBatch(schema=schema, rows=row[np.newaxis, :]))
 
-        from natal.output.observation import Observation
+        from natal.frontend.output.observation import Observation
 
         mask = np.ones((1, n_sexes, n_ages, n_ztypes), dtype=np.float64)
         observation = Observation(
@@ -1039,7 +1041,6 @@ class TestObserveWithObservation:
 
     def test_observe_with_real_population_observation(self, simple_species) -> None:
         """End-to-end: raw history → observe(Observation built from population)."""
-        nt.disable_numba()
         pop = _build_pop(simple_species, "obs_e2e", with_observation=False)
         pop.run(n_steps=3, record_every=1)
 
@@ -1086,7 +1087,6 @@ class TestObserveWithObservation:
         self, simple_species
     ) -> None:
         """observe with Observation built via build_from_selectors."""
-        nt.disable_numba()
         pop = _build_pop(simple_species, "obs_sel", with_observation=False)
         pop.run(n_steps=2, record_every=1)
 
@@ -1247,7 +1247,7 @@ class TestCacheInvalidationAfterClear:
 
     def test_clear_invalidates_values(self) -> None:
         """values cache rebuilt after clear."""
-        from natal.output.history import ObservationMetadata
+        from natal.frontend.output.history import ObservationMetadata
 
         row_size = 1 + 1 * 2 * 2  # 5
         layout = _minimal_layout(n_sexes=2, n_ages=2, n_ztypes=3)
@@ -1262,7 +1262,7 @@ class TestCacheInvalidationAfterClear:
 
         row = np.zeros(row_size, dtype=np.float64)
         row[0] = 0.0
-        history._rows.append(row)
+        history._append(HistoryBatch(schema=history.schema, rows=row[np.newaxis, :]))
 
         v1 = history.values
         assert v1.shape[0] == 1

@@ -10,9 +10,9 @@ import pytest
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.modifiers.module import GameteModifier, ZygoteModifier
-from natal.numba.utils import numba_disabled
-from natal.population.base import BasePopulation
+from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
+from natal.frontend.population.base import BasePopulation
+from tests._config_assertions import assert_config_equal
 
 PopulationKind: TypeAlias = Literal["age", "discrete"]
 ConversionKind: TypeAlias = Literal["gamete", "zygote"]
@@ -53,7 +53,7 @@ class _DeferredFailurePreset(nt.GeneticPreset):
             return False
         if self.fail_capacity is None:
             return True
-        return float(population.config.carrying_capacity[()]) == self.fail_capacity
+        return float(population.config.carrying_capacity) == self.fail_capacity
 
     def gamete_modifier(
         self,
@@ -128,7 +128,7 @@ class _ConfigSensitivePreset(nt.GeneticPreset):
 
     def _rate(self, population: BasePopulation[Any]) -> float:  # Any: inherited preset contract accepts either state model.
         """Select the exact conversion rate from the group's capacity."""
-        return 0.8 if float(population.config.carrying_capacity[()]) == 700.0 else 0.2
+        return 0.8 if float(population.config.carrying_capacity) == 700.0 else 0.2
 
     def gamete_modifier(
         self,
@@ -229,8 +229,7 @@ class _ConfigSensitivePreset(nt.GeneticPreset):
 @pytest.fixture(autouse=True)
 def _use_python_path() -> Iterator[None]:
     """Keep this configuration-contract matrix independent of JIT codegen."""
-    with numba_disabled():
-        yield
+    yield
 
 
 def _make_species(name: str, *, extra_glab: bool = False) -> nt.Species:
@@ -352,13 +351,13 @@ def _build_spatial_population(
     )
 
 
-def _build_configurator(
+def _build_population_builder(
     species: nt.Species,
     *,
     kind: PopulationKind,
     name: str,
-) -> nt.Configurator:
-    """Create an unbuilt configurator for build-time transaction tests."""
+) -> nt.PopulationBuilder:
+    """Create an unbuilt builder for build-time transaction tests."""
     if kind == "age":
         return (
             nt.AgeStructuredPopulation.setup(
@@ -544,7 +543,7 @@ def _arrange_noncontiguous_config_groups(
     for i, label in enumerate(layout):
         pop.deme(i).set_config(config_a if label == "A" else config_b)
         expected_capacity = 200.0 if label == "A" else 700.0
-        assert pop.deme(i).config.carrying_capacity[()] == expected_capacity
+        assert pop.deme(i).config.carrying_capacity == expected_capacity
     return config_a, config_b
 
 
@@ -639,69 +638,6 @@ def test_nonspatial_reconfigure_refresh_matches_fresh_build(
         fresh.state.individual_count,
     )
     assert np.all(candidate.state.individual_count >= 0.0)
-
-
-@pytest.mark.parametrize("kind", ["age", "discrete"])
-@pytest.mark.parametrize("compress", [False, True])
-@pytest.mark.parametrize("conversion", ["gamete", "zygote"])
-@pytest.mark.parametrize("new_rate", [0.4, (0.2, 0.6)], ids=["scalar", "tuple"])
-def test_spatial_all_deme_reconfigure_refresh_matches_fresh_build(
-    kind: PopulationKind,
-    compress: bool,
-    conversion: ConversionKind,
-    new_rate: Rate,
-) -> None:
-    """Spatial all-deme reconfigure remains exact through refresh and run."""
-    axis = f"{kind}_{compress}_{conversion}_{type(new_rate).__name__}"
-    species = _make_species(f"conversion_spatial_{axis}")
-    old_preset = _make_toxin_preset(conversion, 0.9, name=f"old_spatial_{axis}")
-    candidate = _build_spatial_population(
-        species,
-        old_preset,
-        kind=kind,
-        compress=compress,
-        name=f"candidate_spatial_{axis}",
-    )
-    change = (
-        {"conversion_rate": new_rate}
-        if conversion == "gamete"
-        else {"embryo_disruption_rate": new_rate}
-    )
-    candidate.update().reconfigure_preset(old_preset, **change)
-
-    fresh_preset = _make_toxin_preset(
-        conversion,
-        new_rate,
-        name=f"fresh_spatial_{axis}",
-    )
-    fresh = _build_spatial_population(
-        species,
-        fresh_preset,
-        kind=kind,
-        compress=compress,
-        name=f"fresh_spatial_{axis}",
-    )
-
-    for candidate_deme, fresh_deme in zip(candidate.demes, fresh.demes):
-        candidate_deme.refresh_modifiers()
-        candidate_deme.refresh_modifiers()
-        _assert_conversion_probabilities(
-            candidate_deme,
-            conversion=conversion,
-            rate=new_rate,
-        )
-        _assert_maps_equal(candidate_deme, fresh_deme)
-
-    candidate.run(2)
-    fresh.run(2)
-    assert candidate.tick == fresh.tick == 2
-    for candidate_deme, fresh_deme in zip(candidate.demes, fresh.demes):
-        np.testing.assert_array_equal(
-            candidate_deme.state.individual_count,
-            fresh_deme.state.individual_count,
-        )
-        assert np.all(candidate_deme.state.individual_count >= 0.0)
-
 
 @pytest.mark.parametrize("kind", ["age", "discrete"])
 def test_compressed_homing_with_sparse_gtypes_refreshes_exactly(
@@ -876,7 +812,7 @@ def test_build_time_preset_failure_can_retry_same_object_exactly() -> None:
         "build_retry_same_preset_recipe",
         fail_during_rebuild=True,
     )
-    configurator = (
+    builder = (
         nt.AgeStructuredPopulation.setup(species=species, stochastic=False)
         .age_structure(n_ages=2, new_adult_age=1)
         .initial_state({
@@ -888,16 +824,16 @@ def test_build_time_preset_failure_can_retry_same_object_exactly() -> None:
             juvenile_growth_mode=nt.NO_COMPETITION,
         )
     )
-    original_config = configurator.config
+    original_config = builder.config
 
     with pytest.raises(ValueError, match="group modifier failure"):
-        configurator.presets(preset)
+        builder.presets(preset)
 
-    assert configurator.config is original_config
+    assert builder.config is original_config
     assert preset._bound_species is None  # pyright: ignore[reportPrivateUsage]  # failed registration must restore caller-owned binding.
 
     preset.fail_during_rebuild = False
-    retried = configurator.presets(preset).build()
+    retried = builder.presets(preset).build()
     fresh = _build_population(
         species,
         _ConfigSensitivePreset("build_retry_fresh_recipe"),
@@ -929,21 +865,21 @@ def test_build_time_multi_preset_failure_rolls_back_and_retries_exactly(
         fail_during_rebuild=True,
         failure_stage=failure_stage,
     )
-    configurator = _build_configurator(
+    builder = _build_population_builder(
         species,
         kind=kind,
         name=f"build_transaction_pop_{axis}",
     )
     if scenario == "append":
-        configurator.presets(successful)
+        builder.presets(successful)
 
-    original_config = configurator.config
-    original_registry = configurator._registry  # pyright: ignore[reportPrivateUsage]  # transaction must restore the registry object exactly.
-    original_presets = list(configurator._presets)  # pyright: ignore[reportPrivateUsage]  # build-time registration has no public metadata view.
-    original_gamete = list(configurator.gamete_modifiers)
-    original_zygote = list(configurator.zygote_modifiers)
-    original_compression = configurator._compression_applied  # pyright: ignore[reportPrivateUsage]  # rollback covers all Configurator transaction state.
-    original_arrays = _copy_config_arrays(configurator.config)
+    original_config = builder.config
+    original_registry = builder._registry  # pyright: ignore[reportPrivateUsage]  # transaction must restore the registry object exactly.
+    original_presets = list(builder._presets)  # pyright: ignore[reportPrivateUsage]  # build-time registration has no public metadata view.
+    original_gamete = list(builder.gamete_modifiers)
+    original_zygote = list(builder.zygote_modifiers)
+    original_compression = builder._compression_applied  # pyright: ignore[reportPrivateUsage]  # rollback covers all PopulationBuilder transaction state.
+    original_arrays = _copy_config_arrays(builder.config)
     attempted = (successful, failing) if scenario == "same-call" else (failing,)
     expected_message = (
         "deferred fitness failure"
@@ -952,27 +888,27 @@ def test_build_time_multi_preset_failure_rolls_back_and_retries_exactly(
     )
 
     with pytest.raises(ValueError, match=expected_message):
-        configurator.presets(*attempted)
+        builder.presets(*attempted)
 
-    assert configurator.config is original_config
-    assert configurator._registry is original_registry  # pyright: ignore[reportPrivateUsage]  # exact registry identity is part of atomic rollback.
-    assert configurator._presets == original_presets  # pyright: ignore[reportPrivateUsage]  # no failed recipe may remain registered.
-    assert configurator.gamete_modifiers == original_gamete
-    assert configurator.zygote_modifiers == original_zygote
-    assert configurator._compression_applied is original_compression  # pyright: ignore[reportPrivateUsage]  # compression state cannot leak from a failed attempt.
-    _assert_config_arrays_equal(configurator.config, original_arrays)
+    assert builder.config is original_config
+    assert builder._registry is original_registry  # pyright: ignore[reportPrivateUsage]  # exact registry identity is part of atomic rollback.
+    assert builder._presets == original_presets  # pyright: ignore[reportPrivateUsage]  # no failed recipe may remain registered.
+    assert builder.gamete_modifiers == original_gamete
+    assert builder.zygote_modifiers == original_zygote
+    assert builder._compression_applied is original_compression  # pyright: ignore[reportPrivateUsage]  # compression state cannot leak from a failed attempt.
+    _assert_config_arrays_equal(builder.config, original_arrays)
     expected_successful_binding = species if scenario == "append" else None
     assert successful._bound_species is expected_successful_binding  # pyright: ignore[reportPrivateUsage]  # same-call rollback releases earlier inputs; append preserves prior success.
     assert failing._bound_species is None  # pyright: ignore[reportPrivateUsage]  # the failed input remains reusable by its caller.
 
     failing.fail_during_rebuild = False
-    retried = configurator.presets(*attempted).build()
+    retried = builder.presets(*attempted).build()
     fresh_successful = _make_fitness_drive(f"build_transaction_fresh_successful_{axis}")
     fresh_failing = _DeferredFailurePreset(
         f"build_transaction_fresh_failing_{axis}",
         failure_stage=failure_stage,
     )
-    fresh = _build_configurator(
+    fresh = _build_population_builder(
         species,
         kind=kind,
         name=f"build_transaction_fresh_pop_{axis}",
@@ -1009,9 +945,9 @@ def test_age_invalid_conversion_rate_is_atomic() -> None:
         name="invalid_rate_atomic_age_pop",
     )
     original_config = pop.config
-    original_state = pop.state
-    original_counts = pop.state.individual_count.copy()
-    original_sperm = pop.state.sperm_storage.copy()
+    original_state = pop._state  # pyright: ignore[reportPrivateUsage]  # live container (public state snapshots since R5)
+    original_counts = pop._state.individual_count.copy()  # pyright: ignore[reportPrivateUsage]
+    original_sperm = pop._state.sperm_storage.copy()  # pyright: ignore[reportPrivateUsage]
     original_gamete = pop.gamete_modifiers
     original_zygote = pop.zygote_modifiers
     original_presets = pop.presets
@@ -1023,60 +959,16 @@ def test_age_invalid_conversion_rate_is_atomic() -> None:
         pop.update().reconfigure_preset(drive, drive_conversion_rate="bad")
 
     assert drive.drive_conversion_rate == (0.8, 0.8)
-    assert pop.config is original_config
-    assert pop.state is original_state
-    np.testing.assert_array_equal(pop.state.individual_count, original_counts)
-    np.testing.assert_array_equal(pop.state.sperm_storage, original_sperm)
+    assert_config_equal(pop.config, original_config)
+    assert pop._state is original_state  # pyright: ignore[reportPrivateUsage]
+    np.testing.assert_array_equal(pop._state.individual_count, original_counts)  # pyright: ignore[reportPrivateUsage]
+    np.testing.assert_array_equal(pop._state.sperm_storage, original_sperm)  # pyright: ignore[reportPrivateUsage]
     assert pop.gamete_modifiers == original_gamete
     assert pop.zygote_modifiers == original_zygote
     assert pop.presets == original_presets
     np.testing.assert_array_equal(pop.config.zygotes_to_gametes_map, original_z2g)
     np.testing.assert_array_equal(pop.config.gametes_to_zygotes_map, original_g2z)
     np.testing.assert_array_equal(pop.config.offspring_tensor, original_offspring)
-
-
-def test_spatial_invalid_conversion_rate_is_atomic() -> None:
-    """Invalid all-deme reconfiguration leaves every deme unchanged."""
-    species = _make_species("invalid_rate_atomic_spatial")
-    drive = nt.HomingDrive(
-        name="invalid_rate_spatial_drive",
-        drive_allele="Drive",
-        target_allele="WT",
-        drive_conversion_rate=0.8,
-    )
-    pop = _build_spatial_population(
-        species,
-        drive,
-        kind="age",
-        compress=False,
-        name="invalid_rate_atomic_spatial_pop",
-    )
-    original_configs = [deme.config for deme in pop.demes]
-    original_states = [deme.state for deme in pop.demes]
-    original_counts = [deme.state.individual_count.copy() for deme in pop.demes]
-    original_sperm = [deme.state.sperm_storage.copy() for deme in pop.demes]
-    original_gamete = [deme.gamete_modifiers for deme in pop.demes]
-    original_zygote = [deme.zygote_modifiers for deme in pop.demes]
-    original_presets = [deme.presets for deme in pop.demes]
-    original_tensors = [deme.config.offspring_tensor.copy() for deme in pop.demes]
-
-    with pytest.raises(TypeError):
-        pop.update().reconfigure_preset(drive, drive_conversion_rate="bad")
-
-    assert drive.drive_conversion_rate == (0.8, 0.8)
-    for i, deme in enumerate(pop.demes):
-        assert deme.config is original_configs[i]
-        assert deme.state is original_states[i]
-        np.testing.assert_array_equal(deme.state.individual_count, original_counts[i])
-        np.testing.assert_array_equal(deme.state.sperm_storage, original_sperm[i])
-        assert deme.gamete_modifiers == original_gamete[i]
-        assert deme.zygote_modifiers == original_zygote[i]
-        assert deme.presets == original_presets[i]
-        np.testing.assert_array_equal(
-            deme.config.offspring_tensor,
-            original_tensors[i],
-        )
-
 
 def test_nonspatial_first_preset_registration_failure_is_atomic() -> None:
     """A failing first registration leaves a panmictic population unchanged."""
@@ -1103,7 +995,7 @@ def test_nonspatial_first_preset_registration_failure_is_atomic() -> None:
     with pytest.raises(ValueError, match="deferred modifier failure"):
         pop.update().presets(failing)
 
-    assert pop.config is original_config
+    assert_config_equal(pop.config, original_config)
     assert pop.presets == original_presets
     assert all(registered is not failing for registered in pop.presets)
     assert pop.gamete_modifiers == original_gamete
@@ -1111,55 +1003,6 @@ def test_nonspatial_first_preset_registration_failure_is_atomic() -> None:
     np.testing.assert_array_equal(pop.config.zygotes_to_gametes_map, original_maps[0])
     np.testing.assert_array_equal(pop.config.gametes_to_zygotes_map, original_maps[1])
     np.testing.assert_array_equal(pop.config.offspring_tensor, original_maps[2])
-
-
-def test_spatial_first_preset_registration_failure_is_atomic() -> None:
-    """A failing first registration leaves every non-contiguous deme unchanged."""
-    layout: tuple[GroupLabel, ...] = ("A", "B", "A")
-    species = _make_species("first_registration_failure_spatial")
-    baseline = _ConfigSensitivePreset("first_registration_baseline_spatial")
-    pop = _build_spatial_population(
-        species, baseline, kind="discrete", compress=False,
-        name="first_registration_failure_spatial_pop",
-        n_demes=len(layout),
-    )
-    _arrange_noncontiguous_config_groups(pop, layout)
-    failing = _DeferredFailurePreset(
-        "first_registration_failure_spatial_preset",
-        fail_during_rebuild=True,
-    )
-    original_configs = [deme.config for deme in pop.demes]
-    original_presets = [deme.presets for deme in pop.demes]
-    original_gamete = [deme.gamete_modifiers for deme in pop.demes]
-    original_zygote = [deme.zygote_modifiers for deme in pop.demes]
-    original_maps = [
-        (
-            deme.config.zygotes_to_gametes_map.copy(),
-            deme.config.gametes_to_zygotes_map.copy(),
-            deme.config.offspring_tensor.copy(),
-        )
-        for deme in pop.demes
-    ]
-
-    with pytest.raises(ValueError, match="deferred modifier failure"):
-        pop.update().presets(failing)
-
-    for i, deme in enumerate(pop.demes):
-        assert deme.config is original_configs[i]
-        assert deme.presets == original_presets[i]
-        assert all(registered is not failing for registered in deme.presets)
-        assert deme.gamete_modifiers == original_gamete[i]
-        assert deme.zygote_modifiers == original_zygote[i]
-        np.testing.assert_array_equal(
-            deme.config.zygotes_to_gametes_map, original_maps[i][0],
-        )
-        np.testing.assert_array_equal(
-            deme.config.gametes_to_zygotes_map, original_maps[i][1],
-        )
-        np.testing.assert_array_equal(
-            deme.config.offspring_tensor, original_maps[i][2],
-        )
-
 
 @pytest.mark.parametrize("failure_stage", ["zygote", "fitness"])
 def test_nonspatial_first_registration_late_stage_failure_is_atomic(
@@ -1183,8 +1026,8 @@ def test_nonspatial_first_registration_late_stage_failure_is_atomic(
         failure_stage=failure_stage,
     )
     original_config = pop.config
-    original_state = pop.state
-    original_counts = pop.state.individual_count.copy()
+    original_state = pop._state  # pyright: ignore[reportPrivateUsage]  # live container (public state snapshots since R5)
+    original_counts = pop._state.individual_count.copy()  # pyright: ignore[reportPrivateUsage]
     original_presets = pop.presets
     original_gamete = pop.gamete_modifiers
     original_zygote = pop.zygote_modifiers
@@ -1209,9 +1052,9 @@ def test_nonspatial_first_registration_late_stage_failure_is_atomic(
     with pytest.raises(ValueError, match=expected_message):
         pop.update().presets(failing)
 
-    assert pop.config is original_config
-    assert pop.state is original_state
-    np.testing.assert_array_equal(pop.state.individual_count, original_counts)
+    assert_config_equal(pop.config, original_config)
+    assert pop._state is original_state  # pyright: ignore[reportPrivateUsage]
+    np.testing.assert_array_equal(pop._state.individual_count, original_counts)  # pyright: ignore[reportPrivateUsage]
     assert pop.presets == original_presets
     assert pop.gamete_modifiers == original_gamete
     assert pop.zygote_modifiers == original_zygote
@@ -1229,204 +1072,6 @@ def test_nonspatial_first_registration_late_stage_failure_is_atomic(
         original_arrays,
     ):
         np.testing.assert_array_equal(getattr(pop.config, field), expected)
-
-
-def test_spatial_single_deme_first_registration_failure_restores_shared_config() -> None:
-    """Single-deme failure reverses clone-on-write as part of the transaction."""
-    species = _make_species("single_deme_first_registration_failure")
-    baseline = _ConfigSensitivePreset("single_deme_first_registration_baseline")
-    pop = _build_spatial_population(
-        species,
-        baseline,
-        kind="discrete",
-        compress=False,
-        name="single_deme_first_registration_failure_pop",
-        n_demes=3,
-    )
-    failing = _DeferredFailurePreset(
-        "single_deme_first_registration_failure_preset",
-        fail_during_rebuild=True,
-        failure_stage="zygote",
-    )
-    original_configs = [deme.config for deme in pop.demes]
-    assert original_configs[0] is original_configs[1] is original_configs[2]
-    original_presets = [deme.presets for deme in pop.demes]
-    original_gamete = [deme.gamete_modifiers for deme in pop.demes]
-    original_zygote = [deme.zygote_modifiers for deme in pop.demes]
-    original_tensors = [deme.config.offspring_tensor.copy() for deme in pop.demes]
-
-    with pytest.raises(ValueError, match="deferred modifier failure"):
-        pop.update(deme=1).presets(failing)
-
-    for i, deme in enumerate(pop.demes):
-        assert deme.config is original_configs[i]
-        assert deme.presets == original_presets[i]
-        assert deme.gamete_modifiers == original_gamete[i]
-        assert deme.zygote_modifiers == original_zygote[i]
-        np.testing.assert_array_equal(
-            deme.config.offspring_tensor,
-            original_tensors[i],
-        )
-    assert failing._bound_species is None  # pyright: ignore[reportPrivateUsage]  # failed registration must release caller-owned preset binding.
-
-
-def test_spatial_later_config_group_registration_failure_is_atomic() -> None:
-    """A failure in the later B group restores an already-built A group."""
-    layout: tuple[GroupLabel, ...] = ("A", "B", "B", "A")
-    species = _make_species("later_group_first_registration_failure")
-    baseline = _ConfigSensitivePreset("later_group_first_registration_baseline")
-    pop = _build_spatial_population(
-        species,
-        baseline,
-        kind="discrete",
-        compress=False,
-        name="later_group_first_registration_failure_pop",
-        n_demes=len(layout),
-    )
-    _arrange_noncontiguous_config_groups(pop, layout)
-    failing = _DeferredFailurePreset(
-        "later_group_first_registration_failure_preset",
-        fail_during_rebuild=True,
-        failure_stage="zygote",
-        fail_capacity=700.0,
-    )
-    original_configs = [deme.config for deme in pop.demes]
-    original_presets = [deme.presets for deme in pop.demes]
-    original_gamete = [deme.gamete_modifiers for deme in pop.demes]
-    original_zygote = [deme.zygote_modifiers for deme in pop.demes]
-    original_arrays = [
-        tuple(
-            getattr(deme.config, field).copy()
-            for field in (
-                "zygotes_to_gametes_map",
-                "gametes_to_zygotes_map",
-                "offspring_tensor",
-                "viability_fitness",
-                "fecundity_fitness",
-                "sexual_selection_fitness",
-                "zygote_viability_fitness",
-            )
-        )
-        for deme in pop.demes
-    ]
-
-    with pytest.raises(ValueError, match="deferred modifier failure"):
-        pop.update().presets(failing)
-
-    for i, deme in enumerate(pop.demes):
-        assert deme.config is original_configs[i]
-        assert deme.presets == original_presets[i]
-        assert deme.gamete_modifiers == original_gamete[i]
-        assert deme.zygote_modifiers == original_zygote[i]
-        for field, expected in zip(
-            (
-                "zygotes_to_gametes_map",
-                "gametes_to_zygotes_map",
-                "offspring_tensor",
-                "viability_fitness",
-                "fecundity_fitness",
-                "sexual_selection_fitness",
-                "zygote_viability_fitness",
-            ),
-            original_arrays[i],
-        ):
-            np.testing.assert_array_equal(getattr(deme.config, field), expected)
-    assert failing._bound_species is None  # pyright: ignore[reportPrivateUsage]  # later-group rollback must release caller-owned preset binding.
-
-
-def test_spatial_first_registration_success_preserves_group_numerics() -> None:
-    """Successful first registration keeps sharing and exact group behavior."""
-    layout: tuple[GroupLabel, ...] = ("A", "B", "B", "A")
-    species = _make_species("first_registration_success_spatial")
-    baseline = _DeferredFailurePreset("first_registration_success_baseline")
-    pop = _build_spatial_population(
-        species,
-        baseline,
-        kind="discrete",
-        compress=False,
-        name="first_registration_success_spatial_pop",
-        n_demes=len(layout),
-    )
-    old_a, old_b = _arrange_noncontiguous_config_groups(pop, layout)
-    added = _ConfigSensitivePreset("first_registration_success_added")
-
-    pop.update().presets(added)
-
-    new_a = pop.deme(0).config
-    new_b = pop.deme(1).config
-    assert new_a is not old_a
-    assert new_b is not old_b
-    assert new_a is not new_b
-    assert added._bound_species is species  # pyright: ignore[reportPrivateUsage]  # successful registration must retain the species binding.
-    for i, label in enumerate(layout):
-        expected_config = new_a if label == "A" else new_b
-        expected_rate = 0.2 if label == "A" else 0.8
-        deme = pop.deme(i)
-        assert deme.config is expected_config
-        assert len(deme.presets) == 2
-        assert deme.presets[0] is baseline
-        assert deme.presets[1] is added
-        assert len(deme.gamete_modifiers) == 2
-        assert len(deme.zygote_modifiers) == 1
-        _assert_group_sensitive_probabilities(deme, expected_rate)
-
-    expected_maps = [
-        (
-            deme.config.zygotes_to_gametes_map.copy(),
-            deme.config.gametes_to_zygotes_map.copy(),
-            deme.config.offspring_tensor.copy(),
-        )
-        for deme in pop.demes
-    ]
-    for i, deme in enumerate(pop.demes):
-        deme.refresh_modifiers()
-        np.testing.assert_array_equal(
-            deme.config.zygotes_to_gametes_map,
-            expected_maps[i][0],
-        )
-        np.testing.assert_array_equal(
-            deme.config.gametes_to_zygotes_map,
-            expected_maps[i][1],
-        )
-        np.testing.assert_array_equal(
-            deme.config.offspring_tensor,
-            expected_maps[i][2],
-        )
-
-    reference_a = _build_population(
-        species,
-        _DeferredFailurePreset("first_registration_success_reference_a_base"),
-        kind="discrete",
-        compress=False,
-        name="first_registration_success_reference_a",
-        carrying_capacity=200.0,
-    )
-    reference_b = _build_population(
-        species,
-        _DeferredFailurePreset("first_registration_success_reference_b_base"),
-        kind="discrete",
-        compress=False,
-        name="first_registration_success_reference_b",
-        carrying_capacity=700.0,
-    )
-    reference_a.update().presets(
-        _ConfigSensitivePreset("first_registration_success_reference_a_added")
-    )
-    reference_b.update().presets(
-        _ConfigSensitivePreset("first_registration_success_reference_b_added")
-    )
-    pop.run(2)
-    reference_a.run(2)
-    reference_b.run(2)
-    assert pop.tick == reference_a.tick == reference_b.tick == 2
-    for i, label in enumerate(layout):
-        expected_state = reference_a.state if label == "A" else reference_b.state
-        np.testing.assert_array_equal(
-            pop.deme(i).state.individual_count,
-            expected_state.individual_count,
-        )
-        assert np.all(pop.deme(i).state.individual_count >= 0.0)
-
 
 def _build_dual_modifier_population(name: str) -> tuple[Population, nt.ToxinAntidoteDrive]:
     """Build a population with one preset and both modifier kinds."""
@@ -1510,9 +1155,9 @@ def test_deferred_modifier_failure_is_atomic_nonspatial() -> None:
         name="deferred_failure_nonspatial_pop",
     )
     original_config = pop.config
-    original_state = pop.state
-    original_counts = pop.state.individual_count.copy()
-    original_sperm = pop.state.sperm_storage.copy()
+    original_state = pop._state  # pyright: ignore[reportPrivateUsage]  # live container (public state snapshots since R5)
+    original_counts = pop._state.individual_count.copy()  # pyright: ignore[reportPrivateUsage]
+    original_sperm = pop._state.sperm_storage.copy()  # pyright: ignore[reportPrivateUsage]
     original_presets = pop.presets
     original_gamete = pop.gamete_modifiers
     original_zygote = pop.zygote_modifiers
@@ -1524,65 +1169,16 @@ def test_deferred_modifier_failure_is_atomic_nonspatial() -> None:
         pop.update().reconfigure_preset(preset, fail_during_rebuild=True)
 
     assert preset.fail_during_rebuild is False
-    assert pop.config is original_config
-    assert pop.state is original_state
-    np.testing.assert_array_equal(pop.state.individual_count, original_counts)
-    np.testing.assert_array_equal(pop.state.sperm_storage, original_sperm)
+    assert_config_equal(pop.config, original_config)
+    assert pop._state is original_state  # pyright: ignore[reportPrivateUsage]
+    np.testing.assert_array_equal(pop._state.individual_count, original_counts)  # pyright: ignore[reportPrivateUsage]
+    np.testing.assert_array_equal(pop._state.sperm_storage, original_sperm)  # pyright: ignore[reportPrivateUsage]
     assert pop.presets == original_presets
     assert pop.gamete_modifiers == original_gamete
     assert pop.zygote_modifiers == original_zygote
     np.testing.assert_array_equal(pop.config.zygotes_to_gametes_map, original_z2g)
     np.testing.assert_array_equal(pop.config.gametes_to_zygotes_map, original_g2z)
     np.testing.assert_array_equal(pop.config.offspring_tensor, original_offspring)
-
-
-def test_deferred_modifier_failure_is_atomic_spatial() -> None:
-    """A spatial trial closure failure leaves every target deme unchanged."""
-    species = _make_species("deferred_failure_spatial")
-    preset = _DeferredFailurePreset("deferred_failure_spatial_preset")
-    pop = _build_spatial_population(
-        species,
-        preset,
-        kind="age",
-        compress=False,
-        name="deferred_failure_spatial_pop",
-    )
-    original_configs = [deme.config for deme in pop.demes]
-    original_states = [deme.state for deme in pop.demes]
-    original_counts = [deme.state.individual_count.copy() for deme in pop.demes]
-    original_sperm = [deme.state.sperm_storage.copy() for deme in pop.demes]
-    original_presets = [deme.presets for deme in pop.demes]
-    original_gamete = [deme.gamete_modifiers for deme in pop.demes]
-    original_zygote = [deme.zygote_modifiers for deme in pop.demes]
-    original_z2g = [deme.config.zygotes_to_gametes_map.copy() for deme in pop.demes]
-    original_g2z = [deme.config.gametes_to_zygotes_map.copy() for deme in pop.demes]
-    original_offspring = [deme.config.offspring_tensor.copy() for deme in pop.demes]
-
-    with pytest.raises(ValueError, match="deferred modifier failure"):
-        pop.update().reconfigure_preset(preset, fail_during_rebuild=True)
-
-    assert preset.fail_during_rebuild is False
-    for i, deme in enumerate(pop.demes):
-        assert deme.config is original_configs[i]
-        assert deme.state is original_states[i]
-        np.testing.assert_array_equal(deme.state.individual_count, original_counts[i])
-        np.testing.assert_array_equal(deme.state.sperm_storage, original_sperm[i])
-        assert deme.presets == original_presets[i]
-        assert deme.gamete_modifiers == original_gamete[i]
-        assert deme.zygote_modifiers == original_zygote[i]
-        np.testing.assert_array_equal(
-            deme.config.zygotes_to_gametes_map,
-            original_z2g[i],
-        )
-        np.testing.assert_array_equal(
-            deme.config.gametes_to_zygotes_map,
-            original_g2z[i],
-        )
-        np.testing.assert_array_equal(
-            deme.config.offspring_tensor,
-            original_offspring[i],
-        )
-
 
 def test_invalid_fitness_mode_is_atomic_nonspatial() -> None:
     """Invalid fitness mode cannot mutate preset or fitness tensors."""
@@ -1614,7 +1210,7 @@ def test_invalid_fitness_mode_is_atomic_nonspatial() -> None:
         pop.update().reconfigure_preset(drive, viability_mode="not-a-mode")
 
     assert drive.viability_mode == "multiplicative"
-    assert pop.config is original_config
+    assert_config_equal(pop.config, original_config)
     np.testing.assert_array_equal(pop.config.viability_fitness, original_fitness[0])
     np.testing.assert_array_equal(pop.config.fecundity_fitness, original_fitness[1])
     np.testing.assert_array_equal(
@@ -1626,225 +1222,23 @@ def test_invalid_fitness_mode_is_atomic_nonspatial() -> None:
         original_fitness[3],
     )
 
+def test_spatial_runtime_update_chain_removed() -> None:
+    """The spatial update() chain is deleted; the panmictic one remains.
 
-def test_invalid_fitness_mode_is_atomic_spatial() -> None:
-    """Invalid all-deme fitness mode leaves every config and tensor unchanged."""
-    species = _make_species("invalid_fitness_mode_spatial")
-    drive = nt.HomingDrive(
-        name="invalid_fitness_mode_spatial_drive",
-        drive_allele="Drive",
-        target_allele="WT",
-        drive_conversion_rate=0.8,
-        viability_scaling=0.7,
-        viability_mode="multiplicative",
-    )
-    pop = _build_spatial_population(
-        species,
-        drive,
-        kind="age",
-        compress=False,
-        name="invalid_fitness_mode_spatial_pop",
-    )
-    original_configs = [deme.config for deme in pop.demes]
-    original_fitness = [
-        (
-            deme.config.viability_fitness.copy(),
-            deme.config.fecundity_fitness.copy(),
-            deme.config.sexual_selection_fitness.copy(),
-            deme.config.zygote_viability_fitness.copy(),
-        )
-        for deme in pop.demes
-    ]
+    The spatial runtime preset reconfiguration / registration API
+    (``SpatialPopulation.update`` -> ``_SpatialUpdate``) was removed with
+    the write-plane change.  Runtime genetics writes on
+    spatial populations go through the ``DemeSlice`` channels (see
+    ``tests/test_spatial_update.py``); the removed reconfigure/presets
+    runtime tests above applied exclusively to the deleted API.
+    """
+    assert not hasattr(nt.SpatialPopulation, "update")
+    assert not hasattr(nt.SpatialPopulation, "update_deme")
+    # The panmictic runtime channel is the RuntimeUpdater handle: the
+    # for_population factory and the runtime-handle builder are gone.
+    from natal.frontend.builder import PopulationBuilder, RuntimeUpdater
 
-    with pytest.raises(ValueError, match="Unknown fitness scaling mode"):
-        pop.update().reconfigure_preset(drive, viability_mode="not-a-mode")
-
-    assert drive.viability_mode == "multiplicative"
-    for i, deme in enumerate(pop.demes):
-        assert deme.config is original_configs[i]
-        np.testing.assert_array_equal(
-            deme.config.viability_fitness,
-            original_fitness[i][0],
-        )
-        np.testing.assert_array_equal(
-            deme.config.fecundity_fitness,
-            original_fitness[i][1],
-        )
-        np.testing.assert_array_equal(
-            deme.config.sexual_selection_fitness,
-            original_fitness[i][2],
-        )
-        np.testing.assert_array_equal(
-            deme.config.zygote_viability_fitness,
-            original_fitness[i][3],
-        )
-
-
-@pytest.mark.parametrize(
-    "layout",
-    [("A", "B", "A"), ("A", "B", "B", "A")],
-    ids=["A-B-A", "A-B-B-A"],
-)
-def test_noncontiguous_config_groups_keep_modifiers_and_run_exactly(
-    layout: tuple[GroupLabel, ...],
-) -> None:
-    """Non-contiguous config groups retain their own modifiers and numerics."""
-    axis = "".join(layout)
-    species = _make_species(f"noncontiguous_groups_{axis}")
-    preset = _ConfigSensitivePreset(f"noncontiguous_groups_preset_{axis}")
-    pop = _build_spatial_population(
-        species,
-        preset,
-        kind="discrete",
-        compress=False,
-        name=f"noncontiguous_groups_pop_{axis}",
-        n_demes=len(layout),
-    )
-    old_a, old_b = _arrange_noncontiguous_config_groups(pop, layout)
-
-    pop.update().presets(preset)
-
-    new_a = pop.deme(layout.index("A")).config
-    new_b = pop.deme(layout.index("B")).config
-    assert new_a is not old_a
-    assert new_b is not old_b
-    assert new_a is not new_b
-    for i, label in enumerate(layout):
-        expected_config = new_a if label == "A" else new_b
-        expected_rate = 0.2 if label == "A" else 0.8
-        assert pop.deme(i).config is expected_config
-        assert len(pop.deme(i).gamete_modifiers) == 1
-        assert len(pop.deme(i).zygote_modifiers) == 1
-        _assert_group_sensitive_probabilities(pop.deme(i), expected_rate)
-
-    gamete_a = pop.deme(layout.index("A")).gamete_modifiers[0][2]
-    gamete_b = pop.deme(layout.index("B")).gamete_modifiers[0][2]
-    zygote_a = pop.deme(layout.index("A")).zygote_modifiers[0][2]
-    zygote_b = pop.deme(layout.index("B")).zygote_modifiers[0][2]
-    assert gamete_a is not gamete_b
-    assert zygote_a is not zygote_b
-    for i, label in enumerate(layout):
-        expected_gamete = gamete_a if label == "A" else gamete_b
-        expected_zygote = zygote_a if label == "A" else zygote_b
-        assert pop.deme(i).gamete_modifiers[0][2] is expected_gamete
-        assert pop.deme(i).zygote_modifiers[0][2] is expected_zygote
-
-    gamete_view = pop.deme(0).gamete_modifiers
-    zygote_view = pop.deme(0).zygote_modifiers
-    gamete_view.clear()
-    zygote_view.clear()
-    gamete_view.append(pop.deme(layout.index("B")).gamete_modifiers[0])
-    zygote_view.append(pop.deme(layout.index("B")).zygote_modifiers[0])
-    assert pop.deme(0).gamete_modifiers[0][2] is gamete_a
-    assert pop.deme(0).zygote_modifiers[0][2] is zygote_a
-
-    expected_maps = [
-        (
-            deme.config.zygotes_to_gametes_map.copy(),
-            deme.config.gametes_to_zygotes_map.copy(),
-            deme.config.offspring_tensor.copy(),
-        )
-        for deme in pop.demes
-    ]
-    for i, deme in enumerate(pop.demes):
-        deme.refresh_modifiers()
-        np.testing.assert_array_equal(
-            deme.config.zygotes_to_gametes_map,
-            expected_maps[i][0],
-        )
-        np.testing.assert_array_equal(
-            deme.config.gametes_to_zygotes_map,
-            expected_maps[i][1],
-        )
-        np.testing.assert_array_equal(
-            deme.config.offspring_tensor,
-            expected_maps[i][2],
-        )
-
-    reference_a = _build_population(
-        species,
-        _ConfigSensitivePreset(f"reference_a_{axis}"),
-        kind="discrete",
-        compress=False,
-        name=f"reference_a_pop_{axis}",
-        carrying_capacity=200.0,
-    )
-    reference_b = _build_population(
-        species,
-        _ConfigSensitivePreset(f"reference_b_{axis}"),
-        kind="discrete",
-        compress=False,
-        name=f"reference_b_pop_{axis}",
-        carrying_capacity=700.0,
-    )
-    pop.run(2)
-    reference_a.run(2)
-    reference_b.run(2)
-    assert pop.tick == reference_a.tick == reference_b.tick == 2
-    for i, label in enumerate(layout):
-        expected_state = reference_a.state if label == "A" else reference_b.state
-        np.testing.assert_array_equal(
-            pop.deme(i).state.individual_count,
-            expected_state.individual_count,
-        )
-        assert np.all(pop.deme(i).state.individual_count >= 0.0)
-
-
-@pytest.mark.parametrize(
-    "layout",
-    [("A", "B", "A"), ("A", "B", "B", "A")],
-    ids=["A-B-A", "A-B-B-A"],
-)
-def test_noncontiguous_config_group_failure_is_atomic(
-    layout: tuple[GroupLabel, ...],
-) -> None:
-    """A failed grouped preset rebuild preserves every identity and array."""
-    axis = "".join(layout)
-    species = _make_species(f"noncontiguous_failure_{axis}")
-    preset = _ConfigSensitivePreset(f"noncontiguous_failure_preset_{axis}")
-    pop = _build_spatial_population(
-        species,
-        preset,
-        kind="discrete",
-        compress=False,
-        name=f"noncontiguous_failure_pop_{axis}",
-        n_demes=len(layout),
-    )
-    _arrange_noncontiguous_config_groups(pop, layout)
-    pop.update().presets(preset)
-    original_configs = [deme.config for deme in pop.demes]
-    original_states = [deme.state for deme in pop.demes]
-    original_counts = [deme.state.individual_count.copy() for deme in pop.demes]
-    original_gamete = [deme.gamete_modifiers for deme in pop.demes]
-    original_zygote = [deme.zygote_modifiers for deme in pop.demes]
-    original_maps = [
-        (
-            deme.config.zygotes_to_gametes_map.copy(),
-            deme.config.gametes_to_zygotes_map.copy(),
-            deme.config.offspring_tensor.copy(),
-        )
-        for deme in pop.demes
-    ]
-
-    with pytest.raises(ValueError, match="group modifier failure"):
-        pop.update().reconfigure_preset(preset, fail_during_rebuild=True)
-
-    assert preset.fail_during_rebuild is False
-    for i, deme in enumerate(pop.demes):
-        assert deme.config is original_configs[i]
-        assert deme.state is original_states[i]
-        np.testing.assert_array_equal(deme.state.individual_count, original_counts[i])
-        assert deme.gamete_modifiers == original_gamete[i]
-        assert deme.zygote_modifiers == original_zygote[i]
-        np.testing.assert_array_equal(
-            deme.config.zygotes_to_gametes_map,
-            original_maps[i][0],
-        )
-        np.testing.assert_array_equal(
-            deme.config.gametes_to_zygotes_map,
-            original_maps[i][1],
-        )
-        np.testing.assert_array_equal(
-            deme.config.offspring_tensor,
-            original_maps[i][2],
-        )
+    assert not hasattr(PopulationBuilder, "for_population")
+    assert not hasattr(PopulationBuilder, "_genetic_candidate")
+    assert not hasattr(PopulationBuilder, "_commit_genetic_candidate")
+    assert nt.RuntimeUpdater is RuntimeUpdater

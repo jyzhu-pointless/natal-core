@@ -12,9 +12,9 @@ import numpy as np
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.spatial.configurator import batch_setting
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import (
+from natal.frontend.spatial.builder import batch_setting
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import (
     SquareGrid,
     build_adjacency_matrix,
 )
@@ -70,7 +70,6 @@ def summarize_readable(spatial: SpatialPopulation) -> None:
 
 
 def main() -> None:
-    nt.disable_numba()
 
     species = nt.Species.from_dict(
         name="SpatialDemoSpecies",

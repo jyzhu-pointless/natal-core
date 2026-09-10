@@ -1,9 +1,7 @@
 """Simplified weekly life-history model for laboratory Drosophila."""
 
 import natal as nt
-from natal.patterns import IndividualSelector
-
-nt.disable_numba()
+from natal.frontend.patterns import IndividualSelector
 
 species = nt.Species.from_dict(
     name="Drosophila melanogaster",

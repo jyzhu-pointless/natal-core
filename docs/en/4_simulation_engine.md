@@ -27,8 +27,8 @@ Internally, the execution path can be summarized as:
 ```text
 population.run(...) / population.run_tick()
   → Retrieve compiled event hooks
-  → Bind codegen runner
-  → Sequentially invoke stage engine (reproduction/survival/aging)
+  → Run inside the native engine session
+  → Sequentially execute stage kernels (reproduction/survival/aging)
   → Update state and history
 ```
 
@@ -92,7 +92,7 @@ Key point: AgeStructured follows the "long-term sperm storage" path, and `sperm_
 
 1. reproduction
   - Only age1 adults participate in mating and fertilization.
-  - Uses a temporary `temp_sperm_store` for the current step's fertilization; does not retain a long-term sperm bank across ticks.
+  - The current step fertilizes through a temporary pairing buffer; no sperm bank is retained across ticks (the discrete model has no `sperm_storage` state).
   - Offspring are written into age0.
 2. survival
   - First apply density regulation to age0 (also supports the four growth modes).
@@ -119,39 +119,34 @@ Additionally, the reproduction stage is affected by `fixed_egg_count`:
 - `True`: Eggs are produced at a fixed expected count.
 - `False`: Eggs are produced via a Poisson mechanism (resulting in random egg counts in stochastic mode).
 
-## 4. Responsibilities of the `simulation_engine` Module
+## 4. Engine Implementation Layout
 
-`src/natal/engine/age_structured_simulator.py` primarily provides "stage-level kernel functions" for the age-structured model.
-`src/natal/engine/discrete_generation_simulator.py` provides the corresponding functions for the discrete-generation model. These include:
+The native Rust extension `natal._engine_rs` is the only execution
+engine. It owns the run state inside engine sessions (per-population for
+panmictic models, one stacked session for spatial containers) and
+implements the stage kernels for both model families:
 
-- Age-structured model: `run_reproduction`, `run_survival`, `run_aging`
-- Discrete-generation model: `run_discrete_reproduction`, `run_discrete_survival`, `run_discrete_aging`
+- Age-structured model: reproduction, survival, aging (long-term sperm storage).
+- Discrete-generation model: the compact two-age lifecycle with per-tick sperm.
 
-Additionally, this module provides lightweight wrapper functions for state/config import/export, facilitating integration with higher-level object methods.
+### 4.1 Spatial Migration Layout
 
-### 4.1 Spatial Migration Backend Module Layout
-
-Spatial migration engine are now split into directory modules under `src/natal/engine/migration/`:
-
-- `adjacency.py`: Adjacency backend (dense/sparse row routing).
-- `kernel.py`: Topology + migration-kernel backend.
-- `__init__.py`: Package-level backend entry re-export.
-
-The compatibility entry point `src/natal/engine/spatial_migration_engine.py` maintains the old API and dispatches according to backend mode:
-
-- `migration_mode == 0` → adjacency backend (`adjacency.py`)
-- `migration_mode == 1` → kernel-topology backend (`kernel.py`)
-
-This allows the internal migration implementation to be organized into a maintainable modular structure without changing the user-facing entry point (e.g., `run_spatial_migration(...)`).
+Migration runs inside the spatial engine session as the CSR stage after
+the per-deme lifecycle. The frontend folds every migration declaration
+(topology, adjacency matrix, or migration kernel) into one frozen CSR
+plus a rate column at build time (`src/natal/frontend/spatial/migration.py`);
+the session multiplies the rate column by that CSR each tick.
 
 ## 5. Relationship with `state`/`config`
 
-During simulation, engine read and write two core objects:
+The Rust session owns the runtime state and ecology parameters; Python-side `pop.state` and `pop.config` are **query snapshots** (regenerated on every access, so mutating them never affects the engine) — see [PopulationState and ModelDraft](4_population_state_config.md).
 
-- `state`: The current population distribution and time step.
-- `config`: Rule parameters such as survival rates, mating rates, fitness, and mapping matrices.
+- `state`: the current population distribution and time step (snapshot read).
+- `config`: a projection of rule parameters such as survival rates, mating rates, fitness, and mapping matrices (snapshot read).
 
-If you have read the previous chapter, you can think of this chapter as "how `state`/`config` are consumed and updated in each tick."
+Runtime writes go through controlled channels: `pop.params.<name>` / `pop.update()` for scalars and `pop.params.tensor_write(...)` for vectors and tensors. The spatial container exposes no `state`/`config` attributes; its parameter writes are covered in [Spatial Lifecycle Execution](spatial_lifecycle_wrapper.md).
+
+If you have read the previous chapter, you can think of this chapter as "how these snapshots are consumed and updated in each tick."
 
 ## 6. History Recording Mechanism
 
@@ -184,6 +179,63 @@ Typical scenarios:
 1. Run to a critical time point and save a snapshot.
 2. Fork multiple parameter branches from the same snapshot.
 3. Compare trajectory differences under different strategies.
+
+### 7.1 Random Streams (RNG) and the Bit-Reproducible Promise
+
+- `build()` creates the Rust session automatically. The session owns its
+  `SessionRng` and continues the stream across `run()` calls; no backend
+  selection or enable step is required.
+- In spatial models, deme `d` derives its stream from the session's base seed
+  using `seed ^ d`. Lifecycle stages and migration consume that deme's stream.
+- Inside Python hooks, `ctx.rng` is the event's controlled Rust sampler.
+  Repeated access returns the same sampler and advances the stream. The
+  sampler expires when the callback returns; restoring a checkpoint restores
+  the recorded RNG state.
+- **Promise scope**: with identical inputs (build parameters + seed + hook
+  combination), deterministic (`stochastic=False`) trajectories are bitwise
+  reproducible, and stochastic trajectories reproduce across processes under
+  a fixed seed. Version-to-version bit-level stability is *not* promised
+  (future algorithm fixes may change numerics).
+
+### 7.2 Checkpoints and History Queries
+
+Rust sessions own history values, checkpoints, and parameter logs. Every retained `mode="raw"` record has a complete checkpoint: individual and sperm state, tick, execution phase and status, RNG, ecology parameters (including migration and custom values), and log positions. Genetics tables are not rolled back. `mode="observation"` keeps only projected values, without hidden full raw history, and cannot restore checkpoints.
+
+`pop.restore_checkpoint(tick)` accepts only an exact retained tick; an unrecorded or evicted tick fails before changing state. Restoration keeps history through that tick and truncates future parameter logs at the recorded positions, including updates made later at the same tick. Ordinary stable boundaries restore to `Ready`; manually recorded stopped or failed boundaries retain their execution status.
+
+`record_snapshot()` records the current boundary between runs, including a stopped population; recording the same tick twice raises an error. `pop.history.boundary_metadata` returns an immutable sequence of `(tick, phase_cursor, status)` tuples. The phase cursor identifies a lifecycle position, such as `0` for a normal tick boundary and `2` for the early phase. Use it together with status to distinguish complete boundaries from interrupted execution.
+
+`pop.params_log_details` returns `(tick, event, deme, parameter, old, new)` tuples. The deme is `0` for a non-spatial population; spatial populations expose logs through the corresponding deme's query interface. Values retain their Boolean, integer, floating-point, or array types; `None` represents the old value for additions and the new value for deletions. Arrays in query results are independent copies. `params_log` keeps the original four-column scalar projection, excluding arrays and additions/deletions; use `params_log_details` for the complete audit. Later updates or restores do not alter previously retrieved results.
+
+`max_rows` bounds both retained records and checkpoints. Batch runs without Python callbacks record and evict within Rust. `clear_history()` clears records and their checkpoints while preserving current state, RNG, parameters, and parameter logs.
+
+This complete example demonstrates bounded history and log rollback:
+
+```python
+import natal as nt
+
+species = nt.Species.from_dict(
+    "HistoryExample", {"Chr1": {"L1": ["W"]}}, gamete_labels=["default"]
+)
+pop = (
+    nt.DiscreteGenerationPopulation.setup(species=species, stochastic=False)
+    .initial_state(individual_count={"female": {"W|W": 10}, "male": {"W|W": 10}})
+    .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+    .reproduction(eggs_per_female=2.0, sex_ratio=0.5)
+    .competition(carrying_capacity=1000.0, low_density_growth_rate=2.0)
+    .record_history(mode="raw", max_rows=3)
+    .build()
+)
+pop.run(3, record_every=1)
+assert pop.history.ticks == (1, 2, 3)
+pop.update().competition(carrying_capacity=500.0)
+assert pop.params_log_details[-1][3:] == ("carrying_capacity", 1000.0, 500.0)
+pop.restore_checkpoint(1)
+assert pop.params.carrying_capacity == 1000.0
+assert pop.history.ticks == (1,)
+assert pop.params_log_details == ()
+assert pop.history.boundary_metadata == ((1, 0, "Ready"),)
+```
 
 ## 8. How Hooks Integrate into the Execution Pipeline
 
@@ -236,7 +288,6 @@ In practical modeling, you typically only need to use the population API consist
 
 ## Related Sections
 
-- [PopulationState and PopulationConfig](4_population_state_config.md)
-- [Numba Optimization Guide](4_numba_optimization.md)
+- [PopulationState and ModelDraft](4_population_state_config.md)
 - [Modifier Mechanism](3_modifiers.md)
 - [Hook System](2_hooks.md)

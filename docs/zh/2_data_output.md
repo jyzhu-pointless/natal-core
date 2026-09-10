@@ -164,6 +164,7 @@ print(pop.history.values.shape)  # (record, group, sex)
 ### Spatial 示例
 
 ```python
+import natal as nt
 from natal import SpatialPopulation, HexGrid
 import numpy as np
 
@@ -261,7 +262,7 @@ Raw History 始终保存所有 deme，不受 Observation 的选择或聚合模�
 
 ### 记录模式与容量
 
-Configurator 提供 `record_history()` 方法，在构建阶段设置记录模式和容量。该方法**独立于** `with_observation()`——链式调用的顺序无关紧要。
+PopulationBuilder 提供 `record_history()` 方法，在构建阶段设置记录模式和容量。该方法**独立于** `with_observation()`——链式调用的顺序无关紧要。
 
 ```python
 # 构建时：配置记录模式和容量
@@ -280,7 +281,7 @@ pop = (
 | 参数 | 默认值 | 说明 |
 |-----------|---------|------|
 | `mode` | `"raw"` | `"raw"` 记录完整状态；`"observation"` 记录压缩后的观测聚合 |
-| `max_rows` | `None` | 最多保存的快照数（FIFO 淘汰）。`None` = 无限制 |
+| `max_rows` | `None` | 最多保存的快照数（FIFO 淘汰）。`None` 应用种群的有界默认值（`max_history`，5000 行）——被淘汰的行会连带丢弃配对的恢复检查点 |
 
 ### 运行时空录配置
 
@@ -291,7 +292,7 @@ pop.record_every = 10  # 每10步记录一次
 pop.max_history = 1000  # 最多保存1000个快照（旧版）
 ```
 
-录制 schema（模式、行大小、布局）在**构建时冻结**，记录首行后无法更改。一旦通过 Configurator 配置完成，`pop.record_every` 和 `pop.max_history` 只控制记录**频率**和**旧版上限**，不影响 schema。
+录制 schema（模式、行大小、布局）在**构建时冻结**，记录首行后无法更改。一旦通过 PopulationBuilder 配置完成，`pop.record_every` 和 `pop.max_history` 只控制记录**频率**和**旧版上限**，不影响 schema。
 
 ```python
 # 运行模拟并记录历史
@@ -361,12 +362,14 @@ pop.run_tick()
 pop.record_snapshot()  # 在单个 tick 后手动记录
 ```
 
-应在两次 `run()` 调用之间的稳定边界调用。当前 tick 已有记录时抛出
-`ValueError`；在已结束的种群上调用会抛出 `RuntimeError`。
+应在两次 `run()` 调用之间调用，包括中途停止后的边界。当前 tick 已有记录时抛出
+`ValueError`。`pop.history.boundary_metadata` 保留该记录的 tick、阶段游标和执行状态。
 
 ### pop.restore_checkpoint(tick) — 状态恢复
 
-从原始模式的历史记录中恢复种群状态到指定 tick。该 tick 之后的所有记录将被删除：
+`pop.tick` 为只读属性，始终随所属模拟状态变化。直接赋值会抛出 `RuntimeError`，不会改变时钟或状态。
+
+从原始模式历史的精确保留 tick 恢复状态、RNG、生态参数、执行阶段及状态，并按检查点位置截断参数日志。未记录或已淘汰的 tick 会报错且不改变种群。该 tick 之后的所有记录将被删除：
 
 ```python
 # 在模拟过程中记录原始历史
@@ -443,7 +446,10 @@ import pandas as pd
 def history_to_dataframe(observed_history):
     """Convert observed history records to DataFrame"""
     data = []
-    group_labels = observed_history.labels["group"]
+    observation = observed_history.schema.observation
+    if observation is None:
+        raise ValueError("history must use observation mode")
+    group_labels = observation.labels
     for i, tick in enumerate(observed_history.ticks):
         row = {
             "tick": tick,
@@ -571,11 +577,12 @@ species = nt.Species.from_dict(
 )
 
 pop = (
-    nt.DiscreteGenerationPopulation
+    nt.AgeStructuredPopulation
     .setup(species=species, name="age_demo", stochastic=False)
+    .age_structure(n_ages=8, new_adult_age=2)
     .initial_state(individual_count={
-        "female": {"WT|WT": 500, "Dr|WT": 50},
-        "male": {"WT|WT": 500, "Dr|WT": 50},
+        "female": {"WT|WT": [0, 0, 500, 0, 0, 0, 0, 0], "Dr|WT": [0, 0, 50, 0, 0, 0, 0, 0]},
+        "male": {"WT|WT": [0, 0, 500, 0, 0, 0, 0, 0], "Dr|WT": [0, 0, 50, 0, 0, 0, 0, 0]},
     })
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=10000)
@@ -600,7 +607,8 @@ for i, tick in enumerate(observed.ticks):
     values = observed.values[i]  # (group, sex)
     total = float(values.sum())
     if total > 0:
-        group_labels = observed.labels["group"]
+        assert observed.schema.observation is not None
+        group_labels = observed.schema.observation.labels
         juv_idx = group_labels.index("juveniles")
         juvenile_ratio = values[juv_idx].sum() / total
         print(f"Tick {tick}: juvenile ratio = {juvenile_ratio:.3f}")
@@ -636,15 +644,15 @@ for i, tick in enumerate(observed.ticks):
 
 ### 构建 Population 后还能修改录制规则吗？
 不能。canonical observation 和 History schema 都在 `build()` 时冻结。
-`pop.update().with_observation(...)` 与 `pop.update().record_history(...)` 会抛出
-`RuntimeError`。运行时只读取 `pop.observation`、调用 `pop.observe()`，或在
+`pop.update()` 返回的运行时更新句柄上不存在 `with_observation()` 与 `record_history()`（访问即抛出
+`AttributeError`）。运行时只读取 `pop.observation`、调用 `pop.observe()`，或在
 raw History 上调用 `pop.history.observe(pop.observation)`。
 
 ### `record_history()` 和 `with_observation()` 有什么区别？
 `with_observation()` 定义*观测哪些分组*（观测投影规则）。`record_history()` 设置*如何记录*——原始完整状态还是压缩后的观测聚合。两者相互独立：可以有观测分组但不启用压缩记录，也可以启用压缩记录但无需显式定义分组（自动恒等观测）。
 
 ### 能否将种群恢复到之前的状态？
-可以，如果使用了原始模式记录（`mode="raw"`），通过 `pop.restore_checkpoint(tick)` 即可恢复。它会将个体计数（以及适用时的精子存储）恢复到该 tick 的精确状态。观测模式的历史不支持检查点恢复，因为它不保留逐基因型的数据。
+可以，如果使用了原始模式记录（`mode="raw"`），通过 `pop.restore_checkpoint(tick)` 即可恢复。它会恢复该精确保留 tick 的个体与精子状态、RNG、生态参数、执行阶段与状态，并截断未来历史及参数日志。观测模式的历史不支持检查点恢复，因为它不保留逐基因型的数据。
 
 ---
 

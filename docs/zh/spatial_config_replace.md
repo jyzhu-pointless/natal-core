@@ -1,20 +1,22 @@
-# SpatialConfigurator 异构 Config 共享机制
+# SpatialPopulationBuilder 异构 Config 共享机制
+
+> **实现说明**：本页描述异构构建中 `ModelDraft._replace` 共享大数组的内部机制。该机制仍在使用，但**不是**异构构建的全部内容——声明冻结、按签名分组与模板克隆见 [SpatialPopulationBuilder：空间种群批量构造](spatial_population_builder.md)。
 
 ## 问题
 
-`SpatialConfigurator._build_heterogeneous()` 为每个 config 等价组调用 `_build_template_for_group()`，该函数完整重放 builder 管线（`setup → … → build()`），每次都调用 `build_population_config()` 创建全新的 `PopulationConfig`。
+`SpatialPopulationBuilder._build_heterogeneous()` 为每个 config 等价组调用 `_build_template_for_group()`，该函数完整重放 builder 管线（`setup → … → build()`），每次都调用 `build_population_config()` 创建全新的 `ModelDraft`。
 
 如果只有少数参数在组间不同，所有大数组（`zygotes_to_gametes_map`、`gametes_to_zygotes_map`、`viability_fitness`、`fecundity_fitness` 等）仍会被重复创建，造成内存浪费。
 
 ```
 2601 个 deme，每个有唯一的 carrying_capacity
-→ 2601 个完整 PopulationConfig
+→ 2601 个完整 ModelDraft
 → 大数组被复制 2601 次
 ```
 
 ## 方案：`_replace` 快路径
 
-`PopulationConfig` 是 `NamedTuple`，其 `_replace()` 方法创建新实例时**共享所有未被替换字段的引用**。利用这一特性，第一个组完整构建，后续组仅替换差异字段：
+`ModelDraft` 是 `NamedTuple`，其 `_replace()` 方法创建新实例时**共享所有未被替换字段的引用**。利用这一特性，第一个组完整构建，后续组仅替换差异字段：
 
 ```
 组 0: 完整 builder 管线 → base_config（所有数组）
@@ -34,8 +36,8 @@
 
 | Builder kwarg | Config 字段 | 转换方式 |
 |---|---|---|
-| `individual_count` | `initial_individual_count` | `PopulationConfigBuilder.resolve_*_initial_individual_count()` |
-| `sperm_storage` | `initial_sperm_storage` | `PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage()` |
+| `individual_count` | `initial_individual_count` | `_params.resolve_*_initial_individual_count()` |
+| `sperm_storage` | `initial_sperm_storage` | `_params.resolve_age_structured_initial_sperm_storage()` |
 
 ### 2. 多字段映射（显式）
 
@@ -68,7 +70,7 @@ builder kwarg 名与 config 字段名不同，定义在 `_KWARG_RENAMES`：
 
 ## 数组字段的转换
 
-`individual_count` 和 `sperm_storage` 的值是用户传入的 dict（如 `{"female": {"WT|WT": 100}}`），需要先转换为 numpy 数组才能 `_replace`。转换通过 `PopulationConfigBuilder` 的静态方法完成：
+`individual_count` 和 `sperm_storage` 的值是用户传入的 dict（如 `{"female": {"WT|WT": 100}}`），需要先转换为 numpy 数组才能 `_replace`。转换由 `natal.frontend.builder._params` 中的普通解析函数完成：
 
 - 年龄结构：`resolve_age_structured_initial_individual_count(species, distribution, n_ages, new_adult_age)`
 - 离散世代：`resolve_discrete_initial_individual_count(species, distribution)`
@@ -110,7 +112,7 @@ _build_heterogeneous()
        │   │
        │   ├─ _build_variant_config(sig_map, base_config)
        │   │   │
-       │   │   ├─ 数组字段 → PopulationConfigBuilder.resolve_* → _replace
+       │   │   ├─ 数组字段 → _params 的 resolve_* → _replace
        │   │   ├─ 多字段 → _replace(base=raw, scaled=raw*pop_scale)
        │   │   ├─ 重命名 → _replace(renamed_field=val)
        │   │   ├─ 动态发现 → hasattr → _replace
@@ -147,14 +149,12 @@ _build_heterogeneous()
 
 ## 文件位置
 
-所有改动集中在 `src/natal/spatial_builder.py`：
+相关实现集中在 `src/natal/frontend/spatial/builder.py`：
 
 | 符号 | 作用 |
 |---|---|
 | `_ARRAY_KWARGS` | 需 dict→array 转换的参数集合 |
-| `_KWARG_MULTI_FIELD` | 多字段映射（carrying_capacity 变体） |
 | `_KWARG_RENAMES` | builder kwarg → config 字段重命名 |
-| `_EQUILIBRIUM_SENSITIVE_KWARGS` | 需重算平衡态的参数集合 |
-| `SpatialConfigurator._build_heterogeneous()` | 主构建逻辑 |
-| `SpatialConfigurator._can_use_replace(sig_map, base_config)` | 判断是否可用 `_replace` |
-| `SpatialConfigurator._build_variant_config()` | 创建 variant config |
+| `SpatialPopulationBuilder._build_heterogeneous_demes()` | 异构构建主流程 |
+| `SpatialPopulationBuilder._can_use_replace(sig_map, base_config)` | 判断是否可用 `_replace` |
+| `SpatialPopulationBuilder._build_variant_config()` | 创建 variant config |

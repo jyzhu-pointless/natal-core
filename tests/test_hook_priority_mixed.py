@@ -1,14 +1,30 @@
 #!/usr/bin/env python3
-"""Mixed hook-type priority and Python-dispatch behavior tests."""
+"""Event execution ordering and stop semantics for the hook forms.
+
+Cross-type priority semantics: within one event, CSR declarative plans
+and single-parameter Python callbacks execute interleaved in one stable
+ascending-priority order (lower values run first; ties keep declaration
+order).  A stop request from either kind aborts the event, skipping every
+later hook of either kind.
+
+Hooks are declared in the build chain (hook plans are compiled once at
+``build()``); every former ``update().hooks(...)`` registration order is
+preserved as a build-time declaration order.
+
+The legacy njit-hook interleaving is gone — njit hooks have no migration
+channel, so every former njit hook below is a Python callback with the
+same mutation semantics.
+"""
 
 from __future__ import annotations
 
-from typing import List
+from collections.abc import Sequence
+from typing import Any, List
 
 import pytest  # type: ignore
 
 import natal as nt
-from natal.hooks import Op, hook
+from natal.frontend.hooks import Op, hook
 
 
 def _make_species(name: str) -> nt.Species:
@@ -22,347 +38,336 @@ def _make_species(name: str) -> nt.Species:
     )
 
 
-def _build_discrete_population(name: str) -> nt.DiscreteGenerationPopulation:
+def _declare(chain: Any, hook_calls: Sequence[Any]) -> Any:
+    """Append build-time hook declarations to a builder chain.
+
+    Each entry is ``(items, kwargs)`` mirroring one historical
+    ``update().hooks(...)`` call, so every former registration-order
+    scenario is preserved as a declaration-order scenario.
+    """
+    for items, kwargs in hook_calls:
+        chain = chain.hooks(*items, **kwargs)
+    return chain
+
+
+def _build_discrete_population(
+    name: str, hook_calls: Sequence[Any] | None = None
+) -> nt.DiscreteGenerationPopulation:
     species = _make_species(name)
-    return (
-        nt.DiscreteGenerationPopulation.setup(
-            species=species,
-            name=name,
-            stochastic=False,
-        )
-        .initial_state(
-            individual_count={
-                "female": {"WT|WT": [0.0, 10.0]},
-                "male": {"WT|WT": [0.0, 10.0]},
-            }
-        )
-        .reproduction(eggs_per_female=0.0)
-        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
-        .build()
-    )
+    return _declare(
+        (
+            nt.DiscreteGenerationPopulation.setup(
+                species=species,
+                name=name,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 10.0]},
+                    "male": {"WT|WT": [0.0, 10.0]},
+                }
+            )
+            .reproduction(eggs_per_female=0.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        ),
+        list(hook_calls or []),
+    ).build()
 
 
-@pytest.mark.numba_off
-def test_mixed_priority_ordering_first_event() -> None:
-    pop = _build_discrete_population("mixed_priority_first_event")
+def test_callback_priority_ordering_first_event() -> None:
     calls: List[str] = []
     observed: dict[str, float] = {}
 
     @hook(event="first", priority=0)
-    def first_python(state, config, deme_id) -> None:
-        _ = config, deme_id
-        calls.append("python_first")
-        observed["first_python_seen"] = float(state.individual_count[1, 1, 0])
+    def first_probe_a(pop):
+        _ = pop
+        calls.append("probe_a")
+        observed["probe_a_seen"] = 10.0
 
     @hook(event="first", priority=1)
-    def first_njit(state, config, deme_id):
-        _ = deme_id
-        calls.append("njit_first")
-        state.individual_count[1, 1, 0] += 2.0
-        return 0
-
-    @hook(event="first", priority=2)
-    def first_csr():
-        return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0)]
+    def first_probe_b(pop):
+        calls.append("probe_b")
+        observed["probe_b_seen"] = float(pop.state.individual_count[1, 1, 0])
 
     @hook(event="early", priority=0)
-    def early_probe(state, config, deme_id) -> None:
-        _ = config, deme_id
-        calls.append("python_early_probe")
-        observed["early_seen"] = float(state.individual_count[1, 1, 0])
+    def early_probe(pop):
+        calls.append("early_probe")
+        observed["early_seen"] = float(pop.state.individual_count[1, 1, 0])
 
-    pop.set_hook("first", first_csr)
-    pop.set_hook("first", first_njit)
-    pop.set_hook("first", first_python)
-    pop.set_hook("early", early_probe)
+    pop = _build_discrete_population(
+        "cb_priority_first_event",
+        [((first_probe_a, first_probe_b, early_probe), {})],
+    )
 
     pop.run(n_steps=1)
 
-    assert calls[:2] == ["python_first", "njit_first"]
-    assert observed["first_python_seen"] == 10.0
-    # 10 + njit(2) + csr(3): verifies csr happened after njit in mixed ordering
-    assert observed["early_seen"] == 15.0
+    assert calls[:2] == ["probe_a", "probe_b"]
+    assert observed["probe_b_seen"] == 10.0
 
 
-@pytest.mark.numba_off
-def test_mixed_priority_ordering_early_event() -> None:
-    pop = _build_discrete_population("mixed_priority_early_event")
+def test_mixed_csr_then_callbacks_in_order() -> None:
+    """CSR(pri=0) → cb(pri=1) → cb(pri=2): priority order across types."""
     calls: List[str] = []
     observed: dict[str, float] = {}
 
-    @hook(event="early", priority=0)
-    def early_python(state, config, deme_id) -> None:
-        _ = config, deme_id
-        calls.append("python_early")
-        observed["early_python_seen"] = float(state.individual_count[1, 1, 0])
-
-    @hook(event="early", priority=1)
-    def early_njit(state, config, deme_id):
-        _ = deme_id
-        calls.append("njit_early")
-        state.individual_count[1, 1, 0] += 2.0
-        return 0
-
-    @hook(event="early", priority=2)
-    def early_csr():
+    @hook(event="first", priority=0)
+    def first_csr_early_pri():
+        # priority 0: runs before both callbacks despite being a plan
         return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0)]
 
-    @hook(event="late", priority=0)
-    def late_probe(state, config, deme_id) -> None:
-        _ = config, deme_id
-        calls.append("python_late_probe")
-        observed["late_seen"] = float(state.individual_count[1, 1, 0])
+    @hook(event="first", priority=1)
+    def cb_one(pop):
+        calls.append("cb_one")
+        pop.state.individual_count[1, 1, 0] += 2.0
+        return 0
 
-    pop.set_hook("early", early_csr)
-    pop.set_hook("early", early_njit)
-    pop.set_hook("early", early_python)
-    pop.set_hook("late", late_probe)
+    @hook(event="first", priority=2)
+    def cb_two(pop):
+        calls.append("cb_two")
+        return 0
 
+    @hook(event="early", priority=0)
+    def early_probe(pop):
+        calls.append("early_probe")
+        observed["early_seen"] = float(pop.state.individual_count[1, 1, 0])
+
+    pop = _build_discrete_population(
+        "mixed_csr_then_cb",
+        [((first_csr_early_pri, cb_one, cb_two, early_probe), {})],
+    )
     pop.run(n_steps=1)
 
-    assert calls[:2] == ["python_early", "njit_early"]
-    assert observed["early_python_seen"] == 10.0
-    assert observed["late_seen"] == 15.0
+    # Observed at the early boundary (before aging wipes age-1):
+    # 10 + csr(3) + cb_one(2) = 15: the priority-0 plan ran first.
+    assert calls == ["cb_one", "cb_two", "early_probe"]
+    assert observed["early_seen"] == 15.0
 
 
-@pytest.mark.numba_off
-def test_numba_disabled_python_hook_runs_via_run_without_manual_trigger() -> None:
-    pop = _build_discrete_population("python_hook_auto_run")
+def test_callback_hooks_run_without_manual_trigger() -> None:
     calls: List[str] = []
 
-    def python_hook(state, config, deme_id) -> None:
-        _ = state, config, deme_id
+    def python_hook(pop) -> None:
+        _ = pop
         calls.append("called")
 
-    pop.set_hook("first", python_hook)
+    pop = _build_discrete_population(
+        "cb_auto_run",
+        [((python_hook,), {"event": "first"})],
+    )
     pop.run(n_steps=1)
 
     assert calls == ["called"]
 
 
-# ---------------------------------------------------------------------------
-# Numba-enabled tests for unified mixed-type hook dispatch (TODO #1).
-# These tests verify that CSR + njit hooks interleave by priority inside a
-# single compiled njit function, without falling back to Python dispatch.
-# ---------------------------------------------------------------------------
-
-
-def _build_simple_discrete_population(name: str) -> nt.DiscreteGenerationPopulation:
-    """Minimal panmictic population for mixed hook testing (Numba on).
+def _build_simple_discrete_population(
+    name: str, hook_calls: Sequence[Any] | None = None
+) -> nt.DiscreteGenerationPopulation:
+    """Minimal panmictic population for hook execution testing.
 
     All 10 individuals start at age 0.  Survival=1.0 keeps them alive
     across the single tick (discrete aging shifts age 0 → age 1 at tick end,
     but hooks observe the post-survival, pre-aging state at age 0).
     """
     species = _make_species(name)
-    return (
-        nt.DiscreteGenerationPopulation.setup(
-            species=species,
-            name=name,
-            stochastic=False,
-        )
-        .initial_state(
-            individual_count={
-                "female": {"WT|WT": [10.0, 0.0]},
-                "male": {"WT|WT": [10.0, 0.0]},
-            }
-        )
-        .reproduction(eggs_per_female=0.0)
-        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
-        .build()
-    )
+    return _declare(
+        (
+            nt.DiscreteGenerationPopulation.setup(
+                species=species,
+                name=name,
+                stochastic=False,
+            )
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [10.0, 0.0]},
+                    "male": {"WT|WT": [10.0, 0.0]},
+                }
+            )
+            .reproduction(eggs_per_female=0.0)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        ),
+        list(hook_calls or []),
+    ).build()
 
 
-def test_unified_mixed_priority_csr_before_njit() -> None:
-    """CSR(pri=0) → njit(pri=1): unified function respects interleaved order.
-
-    Hooks target age-0 cells; post-tick aging moves them to age 1.
-    CSR sets age-0 male to 20, njit adds 100 → 120 at age 1 after aging."""
-    pop = _build_simple_discrete_population("unified_csr_before_njit")
-
+def test_unified_csr_before_callback() -> None:
+    """CSR(pri=0) → callback(pri=1): the callback sees the CSR mutation."""
     @hook(event="first", priority=0)
     def csr_hook():
         return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20)]
 
     @hook(event="first", priority=1)
-    def njit_hook(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 100.0
+    def cb_hook(pop):
+        pop.state.individual_count[1, 0, 0] += 100.0
         return 0
 
-    pop.set_hook("first", csr_hook)
-    pop.set_hook("first", njit_hook)
+    pop = _build_simple_discrete_population(
+        "unified_csr_before_cb",
+        [((csr_hook, cb_hook), {})],
+    )
 
     pop.run(n_steps=1)
 
-    # Post-aging: age-0 → age-1.  CSR set=20 → njit add=100 → age1 = 120.
+    # CSR set=20 → callback add=100 → age1 = 120 after aging.
     assert pop.state.individual_count[1, 1, 0] == 120.0
 
 
-def test_unified_mixed_priority_njit_before_csr() -> None:
-    """njit(pri=0) → CSR(pri=1): unified function respects interleaved order.
+def test_callback_beats_lower_priority_csr() -> None:
+    """callback(pri=0) → CSR(pri=1): one priority order across both kinds.
 
-    njit adds 100 to age-0 male first, then CSR sets age-0 male to 20.
-    CSR set_count overwrites → final age-1 = 20 after aging."""
-    pop = _build_simple_discrete_population("unified_njit_before_csr")
-
+    The callback adds 100 first (10 → 110); the higher-value plan then
+    sets the slot to 20 outright.  The final 20 proves the callback ran
+    before the plan — the pre-interleaving engine always ran plans first
+    and would finish at 120.
+    """
     @hook(event="early", priority=0)
-    def njit_hook(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 100.0
+    def cb_hook(pop):
+        pop.state.individual_count[1, 0, 0] += 100.0
         return 0
 
     @hook(event="early", priority=1)
     def csr_hook():
         return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20)]
 
-    pop.set_hook("early", njit_hook)
-    pop.set_hook("early", csr_hook)
+    pop = _build_simple_discrete_population(
+        "cb_beats_csr",
+        [((cb_hook, csr_hook), {})],
+    )
 
     pop.run(n_steps=1)
 
-    # njit(pri=0): 10+100=110 → CSR(pri=1): set_count to 20 → age1 = 20
+    # callback +100 (110) ran first, then set_count(20) overwrote it.
     assert pop.state.individual_count[1, 1, 0] == 20.0
 
 
-def test_unified_mixed_interleaved_three_way() -> None:
-    """CSR(0) → njit(1) → CSR(2): three hooks interleaved by priority.
-
-    CSR0: set_count age-0 to 1.  njit1: add 10.  CSR2: add 100.
-    Correct order: 10→set1→+10→+100 = 111 at age-1 after aging."""
-    pop = _build_simple_discrete_population("unified_three_way")
-
-    @hook(event="first", priority=0)
-    def csr_first():
-        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=1)]
-
-    @hook(event="first", priority=1)
-    def njit_mid(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 10.0
-        return 0
-
-    @hook(event="first", priority=2)
-    def csr_last():
-        return [Op.add(genotypes="WT|WT", ages=0, sex="male", delta=100)]
-
-    pop.set_hook("first", csr_first)
-    pop.set_hook("first", njit_mid)
-    pop.set_hook("first", csr_last)
-
-    pop.run(n_steps=1)
-
-    # Correct order: 10→set1→+10→+100 = 111 at age-1
-    # If njit ran before csr_first: 10+10=20→set1→+100 = 101
-    assert pop.state.individual_count[1, 1, 0] == 111.0
-
-
-def test_unified_mixed_njit_only_event_unchanged() -> None:
-    """Events without mixed types still use original compile_combined_hook path.
-
-    Uses unique hook bodies to avoid Numba cache collisions in-process."""
-    pop = _build_simple_discrete_population("unified_njit_only")
-
-    @hook(event="first", priority=0)
-    def njit_x(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        # njit_x: add 3 (unique body to avoid stale cache)
-        state.individual_count[1, 0, 0] += 3.0
-        return 0
-
-    @hook(event="first", priority=1)
-    def njit_y(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        # njit_y: add 5 (unique body)
-        state.individual_count[1, 0, 0] += 5.0
-        return 0
-
-    pop.set_hook("first", njit_x)
-    pop.set_hook("first", njit_y)
-
-    pop.run(n_steps=1)
-
-    # 10 + njit_x(3) + njit_y(5) = 18 at age-1 after aging
-    assert pop.state.individual_count[1, 1, 0] == 18.0
-
-
-def test_filtered_registry_preserves_non_mixed_csr() -> None:
-    """CSR hooks on a non-mixed event must still work through the filtered registry.
-
-    Regression test for the bug where ``_build_filtered_hook_program`` skipped
-    deme-selector entries for no-op hooks, causing misalignment when the
-    template's ``execute_csr_event_arrays`` iterated hooks for a non-mixed
-    event whose hook_idx lay beyond the removed mixed-event hooks.
-
-    Scenario:
-      - "first": mixed (1 CSR + 1 njit) → CSR removed from registry
-      - "early": CSR-only (non-mixed) → must still execute via template
-    """
-    pop = _build_simple_discrete_population("filtered_non_mixed_csr")
-
-    # Mixed event: "first"
-    @hook(event="first", priority=0)
-    def first_csr():
+def test_callback_observes_priority_earlier_csr_write() -> None:
+    """A callback reads the mutation of a smaller-priority CSR plan."""
+    @hook(event="early", priority=0)
+    def csr_hook():
         return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20)]
 
-    @hook(event="first", priority=1)
-    def first_njit(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 100.0
+    observed: dict[str, float] = {}
+
+    @hook(event="early", priority=1)
+    def cb_hook(pop):
+        observed["male_age0"] = float(pop.state.individual_count[1, 0, 0])
         return 0
 
-    # Non-mixed event: "early" — only CSR, should go through template
+    pop = _build_simple_discrete_population(
+        "cb_sees_csr",
+        [((csr_hook, cb_hook), {})],
+    )
+
+    pop.run(n_steps=1)
+
+    assert observed["male_age0"] == 20.0
+    assert pop.state.individual_count[1, 1, 0] == 20.0
+
+
+def test_callbacks_share_state_mutations_in_order() -> None:
+    """Two callbacks on one event see each other's mutations in priority order."""
+    @hook(event="first", priority=0)
+    def cb_a(pop):
+        pop.state.individual_count[1, 0, 0] += 10.0
+        return 0
+
+    @hook(event="first", priority=1)
+    def cb_b(pop):
+        pop.state.individual_count[1, 0, 0] += 5.0
+        return 0
+
+    pop = _build_simple_discrete_population(
+        "cb_share_state",
+        [((cb_a, cb_b), {})],
+    )
+
+    pop.run(n_steps=1)
+
+    # 10 + 10 + 5 = 25 at age-1 after aging.
+    assert pop.state.individual_count[1, 1, 0] == 25.0
+
+
+def test_same_priority_callbacks_stable_order() -> None:
+    """Callbacks with equal priority execute in declaration order."""
+    @hook(event="first", priority=0)
+    def first_registered(pop):
+        pop.state.individual_count[1, 0, 0] = 100.0
+        return 0
+
+    @hook(event="first", priority=0)
+    def second_registered(pop):
+        pop.state.individual_count[1, 0, 0] += 1.0
+        return 0
+
+    pop = _build_simple_discrete_population(
+        "same_priority_cb",
+        [((first_registered, second_registered), {})],
+    )
+    pop.run(n_steps=1)
+
+    # first sets to 100, second adds 1 → 101 at age-1
+    assert pop.state.individual_count[1, 1, 0] == 101.0
+
+
+def test_same_priority_mixed_tie_keeps_declaration_order() -> None:
+    """Equal-priority CSR plans and callbacks tie in declaration order.
+
+    Two interleavings in one event, all at priority 0: the plan declared
+    first runs before the callback declared after it, and the callback
+    declared first observes the pre-plan state before the later plan.
+    """
+    observed: List[float] = []
+
+    @hook(event="first", priority=0)
+    def plan_set_twenty():
+        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20.0)]
+
+    @hook(event="first", priority=0)
+    def cb_after_plan(pop):
+        observed.append(float(pop.state.individual_count[1, 0, 0]))
+        return 0
+
+    @hook(event="first", priority=0)
+    def cb_before_plan(pop):
+        observed.append(float(pop.state.individual_count[1, 0, 0]))
+        return 0
+
+    @hook(event="first", priority=0)
+    def plan_set_thirty():
+        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=30.0)]
+
+    pop = _build_simple_discrete_population(
+        "tie_mixed_order",
+        [((plan_set_twenty, cb_after_plan, cb_before_plan, plan_set_thirty), {})],
+    )
+
+    pop.run(n_steps=1)
+
+    # Declaration order under one priority: plan(20) -> cb sees 20 ->
+    # cb sees 20 -> plan(30). Aging moves the slot to age 1.
+    assert observed == [20.0, 20.0]
+    assert pop.state.individual_count[1, 1, 0] == 30.0
+
+
+def test_csr_on_other_event_still_executes() -> None:
+    """CSR hooks on a non-mixed event still execute (registry completeness)."""
+    @hook(event="first", priority=0)
+    def first_cb(pop):
+        pop.state.individual_count[1, 0, 0] += 100.0
+        return 0
+
     @hook(event="early", priority=0)
     def early_csr():
         return [Op.add(genotypes="WT|WT", ages=0, sex="male", delta=50)]
 
-    pop.set_hook("first", first_csr)
-    pop.set_hook("first", first_njit)
-    pop.set_hook("early", early_csr)
+    pop = _build_simple_discrete_population(
+        "csr_other_event",
+        [((first_cb, early_csr), {})],
+    )
 
     pop.run(n_steps=1)
 
-    # first: set 20 → +100 = 120 at age-0 → post-aging age-1
-    # early: +50 = 170 at age-0 → post-aging age-1
-    # Final: 120 + 50 = 170 (reproduction=0, survival=1.0, aging shifts to age1)
-    assert pop.state.individual_count[1, 1, 0] == 170.0
-
-
-def test_filtered_registry_preserves_non_mixed_njit() -> None:
-    """njit hooks on a non-mixed event must still work through the filtered registry.
-
-    Scenario:
-      - "first": mixed (CSR + njit) → CSR removed
-      - "late": njit-only (non-mixed) → must still execute via template's
-        combined njit hook (not the unified path)
-    """
-    pop = _build_simple_discrete_population("filtered_non_mixed_njit")
-
-    @hook(event="first", priority=0)
-    def first_csr():
-        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20)]
-
-    @hook(event="first", priority=1)
-    def first_njit(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 100.0
-        return 0
-
-    @hook(event="late", priority=0)
-    def late_njit(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 7.0
-        return 0
-
-    pop.set_hook("first", first_csr)
-    pop.set_hook("first", first_njit)
-    pop.set_hook("late", late_njit)
-
-    pop.run(n_steps=1)
-
-    # first: set 20 → +100 = 120
-    # late: +7 = 127
-    assert pop.state.individual_count[1, 1, 0] == 127.0
+    # first: 10+100 = 110 → early: +50 = 160 (post-aging age-1).
+    assert pop.state.individual_count[1, 1, 0] == 160.0
 
 
 # ---------------------------------------------------------------------------
@@ -370,10 +375,8 @@ def test_filtered_registry_preserves_non_mixed_njit() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_stop_if_zero_shortcircuits_remaining_hooks() -> None:
-    """Op.stop_if_zero should abort the event, skipping later hooks."""
-    pop = _build_simple_discrete_population("stop_if_zero")
-
+def test_stop_if_zero_shortcircuits_remaining_callbacks() -> None:
+    """Op.stop_if_zero aborts the event, skipping later callbacks."""
     @hook(event="first", priority=0)
     def csr_kill():
         # Set male to 0 → triggers stop_if_zero below.
@@ -384,25 +387,23 @@ def test_stop_if_zero_shortcircuits_remaining_hooks() -> None:
         return [Op.stop_if_zero(genotypes="WT|WT", ages=0, sex="male")]
 
     @hook(event="first", priority=2)
-    def njit_should_be_skipped(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 999.0  # should never execute
+    def cb_should_be_skipped(pop):
+        pop.state.individual_count[1, 0, 0] += 999.0  # should never execute
         return 0
 
-    pop.set_hook("first", csr_kill)
-    pop.set_hook("first", csr_stop)
-    pop.set_hook("first", njit_should_be_skipped)
+    pop = _build_simple_discrete_population(
+        "stop_if_zero",
+        [((csr_kill, csr_stop, cb_should_be_skipped), {})],
+    )
 
     pop.run(n_steps=1)
 
-    # csr_kill set to 0 → csr_stop sees 0 → STOP → njit skipped
+    # csr_kill set to 0 → csr_stop sees 0 → STOP → callback skipped
     assert pop.state.individual_count[1, 1, 0] == 0.0
 
 
-def test_stop_if_extinction_shortcircuits_remaining_hooks() -> None:
-    """Op.stop_if_extinction should abort when total population reaches 0."""
-    pop = _build_simple_discrete_population("stop_if_extinction")
-
+def test_stop_if_extinction_shortcircuits_remaining_callbacks() -> None:
+    """Op.stop_if_extinction aborts when total population reaches 0."""
     @hook(event="first", priority=0)
     def csr_kill():
         # Set both sexes to 0.
@@ -416,14 +417,14 @@ def test_stop_if_extinction_shortcircuits_remaining_hooks() -> None:
         return [Op.stop_if_extinction()]
 
     @hook(event="first", priority=2)
-    def njit_should_be_skipped(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 999.0
+    def cb_should_be_skipped(pop):
+        pop.state.individual_count[1, 0, 0] += 999.0
         return 0
 
-    pop.set_hook("first", csr_kill)
-    pop.set_hook("first", csr_stop)
-    pop.set_hook("first", njit_should_be_skipped)
+    pop = _build_simple_discrete_population(
+        "stop_if_extinction",
+        [((csr_kill, csr_stop, cb_should_be_skipped), {})],
+    )
 
     pop.run(n_steps=1)
 
@@ -431,26 +432,25 @@ def test_stop_if_extinction_shortcircuits_remaining_hooks() -> None:
 
 
 def test_stop_if_zero_condition_not_met_continues() -> None:
-    """Op.stop_if_zero should NOT abort when count > 0."""
-    pop = _build_simple_discrete_population("stop_if_zero_continue")
-
+    """Op.stop_if_zero does NOT abort when count > 0."""
     @hook(event="first", priority=0)
     def csr_stop():
         # Male count is 10 > 0 → condition not met → continue.
         return [Op.stop_if_zero(genotypes="WT|WT", ages=0, sex="male")]
 
     @hook(event="first", priority=1)
-    def njit_should_run(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 5.0
+    def cb_should_run(pop):
+        pop.state.individual_count[1, 0, 0] += 5.0
         return 0
 
-    pop.set_hook("first", csr_stop)
-    pop.set_hook("first", njit_should_run)
+    pop = _build_simple_discrete_population(
+        "stop_if_zero_continue",
+        [((csr_stop, cb_should_run), {})],
+    )
 
     pop.run(n_steps=1)
 
-    # STOP not triggered → njit runs → 10 + 5 = 15 at age-1
+    # STOP not triggered → callback runs → 10 + 5 = 15 at age-1
     assert pop.state.individual_count[1, 1, 0] == 15.0
 
 
@@ -461,13 +461,13 @@ def test_stop_if_zero_condition_not_met_continues() -> None:
 
 def test_op_scale_end_to_end() -> None:
     """Op.scale should multiply individual counts by a factor."""
-    pop = _build_simple_discrete_population("op_scale")
-
-    @hook(event="first", priority=0)
-    def csr_scale():
-        return [Op.scale(genotypes="WT|WT", ages=0, sex="male", factor=0.3)]
-
-    pop.set_hook("first", csr_scale)
+    pop = _build_simple_discrete_population(
+        "op_scale",
+        [(
+            (Op.scale(genotypes="WT|WT", ages=0, sex="male", factor=0.3),),
+            {"event": "first"},
+        )],
+    )
     pop.run(n_steps=1)
 
     # 10 * 0.3 = 3 at age-1 (deterministic, no stochastic)
@@ -476,14 +476,13 @@ def test_op_scale_end_to_end() -> None:
 
 def test_op_sample_end_to_end() -> None:
     """Op.sample should clamp individual counts to at most the given size."""
-    pop = _build_simple_discrete_population("op_sample")
-
-    @hook(event="first", priority=0)
-    def csr_sample():
-        # Clamp to at most 4.
-        return [Op.sample(genotypes="WT|WT", ages=0, sex="male", size=4)]
-
-    pop.set_hook("first", csr_sample)
+    pop = _build_simple_discrete_population(
+        "op_sample",
+        [(
+            (Op.sample(genotypes="WT|WT", ages=0, sex="male", size=4),),
+            {"event": "first"},
+        )],
+    )
     pop.run(n_steps=1)
 
     # 10 clamped to 4 at age-1
@@ -492,14 +491,13 @@ def test_op_sample_end_to_end() -> None:
 
 def test_op_kill_end_to_end() -> None:
     """Op.kill should remove a fraction of individuals."""
-    pop = _build_simple_discrete_population("op_kill")
-
-    @hook(event="first", priority=0)
-    def csr_kill():
-        # Kill 60% → 40% survive.
-        return [Op.kill(genotypes="WT|WT", ages=0, sex="male", prob=0.6)]
-
-    pop.set_hook("first", csr_kill)
+    pop = _build_simple_discrete_population(
+        "op_kill",
+        [(
+            (Op.kill(genotypes="WT|WT", ages=0, sex="male", prob=0.6),),
+            {"event": "first"},
+        )],
+    )
     pop.run(n_steps=1)
 
     # 10 * (1 - 0.6) = 4 at age-1
@@ -508,17 +506,27 @@ def test_op_kill_end_to_end() -> None:
 
 def test_op_subtract_end_to_end() -> None:
     """Op.subtract should remove a fixed number of individuals."""
-    pop = _build_simple_discrete_population("op_subtract")
-
-    @hook(event="first", priority=0)
-    def csr_sub():
-        return [Op.subtract(genotypes="WT|WT", ages=0, sex="male", delta=7)]
-
-    pop.set_hook("first", csr_sub)
+    pop = _build_simple_discrete_population(
+        "op_sub",
+        [(
+            (Op.subtract(genotypes="WT|WT", ages=0, sex="male", delta=7),),
+            {"event": "first"},
+        )],
+    )
     pop.run(n_steps=1)
 
     # 10 - 7 = 3 at age-1
     assert pop.state.individual_count[1, 1, 0] == 3.0
+
+
+def test_op_bare_hook_no_event_kwarg() -> None:
+    """An Op carrying its own event declares without the event kwarg."""
+    op = Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=99)
+    op.event = "early"
+    pop = _build_simple_discrete_population("op_self_event", [((op,), {})])
+    pop.run(n_steps=1)
+
+    assert pop.state.individual_count[1, 1, 0] == 99.0
 
 
 # ---------------------------------------------------------------------------
@@ -527,47 +535,20 @@ def test_op_subtract_end_to_end() -> None:
 
 
 def test_no_hooks_runs_normally() -> None:
-    """Population with zero registered hooks should run without error."""
+    """Population with zero declared hooks should run without error."""
     pop = _build_simple_discrete_population("no_hooks")
     pop.run(n_steps=1)
     assert pop.state.individual_count[1, 1, 0] == 10.0
 
 
-def test_same_priority_hooks_stable_order() -> None:
-    """Hooks with the same priority should execute in registration order."""
-    pop = _build_simple_discrete_population("same_priority")
-
+def test_single_callback_hook() -> None:
+    """A single callback hook on a single event should execute correctly."""
     @hook(event="first", priority=0)
-    def first_registered(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] = 100.0
+    def single(pop):
+        pop.state.individual_count[1, 0, 0] += 42.0
         return 0
 
-    @hook(event="first", priority=0)
-    def second_registered(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 1.0
-        return 0
-
-    pop.set_hook("first", first_registered)
-    pop.set_hook("first", second_registered)
-    pop.run(n_steps=1)
-
-    # first sets to 100, second adds 1 → 101 at age-1
-    assert pop.state.individual_count[1, 1, 0] == 101.0
-
-
-def test_single_njit_hook() -> None:
-    """A single njit hook on a single event should execute correctly."""
-    pop = _build_simple_discrete_population("single_njit")
-
-    @hook(event="first", priority=0)
-    def single(state, config, deme_id=-1):
-        _ = (config, deme_id)
-        state.individual_count[1, 0, 0] += 42.0
-        return 0
-
-    pop.set_hook("first", single)
+    pop = _build_simple_discrete_population("single_cb", [((single,), {})])
     pop.run(n_steps=1)
 
     assert pop.state.individual_count[1, 1, 0] == 52.0
@@ -575,13 +556,24 @@ def test_single_njit_hook() -> None:
 
 def test_single_csr_hook() -> None:
     """A single CSR hook on a single event should execute correctly."""
-    pop = _build_simple_discrete_population("single_csr")
-
-    @hook(event="early", priority=0)
-    def single():
-        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=99)]
-
-    pop.set_hook("early", single)
+    pop = _build_simple_discrete_population(
+        "single_csr",
+        [(
+            (Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=99),),
+            {"event": "early"},
+        )],
+    )
     pop.run(n_steps=1)
 
     assert pop.state.individual_count[1, 1, 0] == 99.0
+
+
+def test_legacy_signature_rejected() -> None:
+    """The njit-era (state, config, deme_id) signature is rejected up front."""
+    @hook(event="first")
+    def legacy_hook(state, config, deme_id):  # pragma: no cover - rejected
+        _ = (state, config, deme_id)
+        return 0
+
+    with pytest.raises(TypeError, match="def hook\\(pop\\) -> int"):
+        _build_simple_discrete_population("legacy_rejected", [((legacy_hook,), {})])

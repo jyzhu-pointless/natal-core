@@ -10,9 +10,9 @@ import pytest
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.output import History
-from natal.patterns import IndividualSelector
-from natal.ui.dashboard_population import Dashboard
+from natal.frontend.output import History
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.ui.dashboard_population import Dashboard
 
 InvalidGroups: TypeAlias = (
     None
@@ -24,14 +24,14 @@ InvalidGroups: TypeAlias = (
 )
 
 
-def _configurator(name: str) -> nt.AgeStructuredConfigurator:
-    """Create a deterministic four-age configurator for contract tests.
+def _builder(name: str) -> nt.PopulationBuilder:
+    """Create a deterministic four-age builder for contract tests.
 
     Args:
         name: Identifier used to name the species and population.
 
     Returns:
-        A chainable configurator ready for further customization.
+        A chainable builder ready for further customization.
     """
     species = nt.Species.from_dict(
         name=f"{name}_species",
@@ -61,7 +61,7 @@ def _configurator(name: str) -> nt.AgeStructuredConfigurator:
             male_age_based_survival=[1.0, 0.9, 0.8],
         )
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             old_juvenile_carrying_capacity=500,
             expected_num_new_adult_females=10,
         )
@@ -86,12 +86,12 @@ def _build_population(
     Returns:
         A built population whose configuration is frozen.
     """
-    configurator = _configurator(name)
+    builder = _builder(name)
     if groups is not None:
-        configurator.with_observation(groups=groups, collapse_age=collapse_age)
+        builder.with_observation(groups=groups, collapse_age=collapse_age)
     if history_mode is not None:
-        configurator.record_history(mode=history_mode)
-    return configurator.build()
+        builder.record_history(mode=history_mode)
+    return builder.build()
 
 
 def _coordinate_unique_counts(n_ztypes: int) -> NDArray[np.float64]:
@@ -147,7 +147,7 @@ def test_identity_projection_preserves_group_sex_age_coordinates() -> None:
     observation = population.observation
     assert observation is not None
     counts = _coordinate_unique_counts(population.index_registry.n_ztypes)
-    population.state.individual_count[...] = counts
+    population.import_state(population.state._replace(individual_count=counts))
 
     expected = np.moveaxis(counts, 2, 0)
     np.testing.assert_array_equal(observation.apply(counts), expected)
@@ -177,7 +177,7 @@ def test_collapse_age_sums_only_the_age_axis() -> None:
         collapse_age=True,
     )
     counts = _coordinate_unique_counts(population.index_registry.n_ztypes)
-    population.state.individual_count[...] = counts
+    population.import_state(population.state._replace(individual_count=counts))
 
     expected = np.moveaxis(counts, 2, 0).sum(axis=2)
     result = population.observe()
@@ -243,13 +243,13 @@ def test_observation_and_history_configuration_order_is_irrelevant() -> None:
     """Swapping the two chain calls produces the same frozen policies."""
     groups = OrderedDict((("wild", IndividualSelector(ztype="WT|WT")),))
     first_observation = (
-        _configurator("contract_order_observation_first")
+        _builder("contract_order_observation_first")
         .with_observation(groups=groups, collapse_age=True)
         .record_history(mode="observation", max_rows=7)
         .build()
     )
     first_history = (
-        _configurator("contract_order_history_first")
+        _builder("contract_order_history_first")
         .record_history(mode="observation", max_rows=7)
         .with_observation(groups=groups, collapse_age=True)
         .build()
@@ -265,15 +265,19 @@ def test_observation_and_history_configuration_order_is_irrelevant() -> None:
     assert first_observation.history.max_rows == first_history.history.max_rows == 7
 
 
-def test_runtime_configurator_rejects_output_schema_mutation() -> None:
-    """A built Population cannot replace Observation or History policy."""
+def test_runtime_updater_rejects_output_schema_mutation() -> None:
+    """A built Population cannot replace Observation or History policy.
+
+    The runtime updater carries no output-schema vocabulary at all: the
+    build-only methods are absent (``AttributeError``), not rejected.
+    """
     population = _build_population("contract_runtime_mutation")
 
-    with pytest.raises(RuntimeError, match="build phase"):
+    with pytest.raises(AttributeError):
         population.update().with_observation(
             groups={"all": IndividualSelector()}
         )
-    with pytest.raises(RuntimeError, match="build phase"):
+    with pytest.raises(AttributeError):
         population.update().record_history(mode="observation")
 
 
@@ -322,7 +326,7 @@ def test_with_observation_rejects_noncanonical_groups(groups: InvalidGroups) -> 
         groups: An invalid groups value supplied via parametrize.
     """
     with pytest.raises((TypeError, ValueError)):
-        _configurator(f"contract_invalid_groups_{id(groups)}").with_observation(
+        _builder(f"contract_invalid_groups_{id(groups)}").with_observation(
             groups=groups
         ).build()
 
@@ -359,21 +363,21 @@ def test_deleted_get_history_not_accessible() -> None:
 
 
 def test_deleted_output_current_state_not_importable() -> None:
-    """output_current_state must not be importable from natal.output.translation."""
+    """output_current_state must not be importable from natal.frontend.output.translation."""
     with pytest.raises(ImportError):
-        from natal.output.translation import output_current_state  # noqa: F401
+        from natal.frontend.output.translation import output_current_state  # noqa: F401
 
 
 def test_deleted_output_history_not_importable() -> None:
-    """output_history must not be importable from natal.output.translation."""
+    """output_history must not be importable from natal.frontend.output.translation."""
     with pytest.raises(ImportError):
-        from natal.output.translation import output_history  # noqa: F401
+        from natal.frontend.output.translation import output_history  # noqa: F401
 
 
 def test_deleted_spatial_population_output_history_not_importable() -> None:
     """spatial_population_output_history must not be importable."""
     with pytest.raises(ImportError):
-        from natal.output.translation import spatial_population_output_history  # noqa: F401
+        from natal.frontend.output.translation import spatial_population_output_history  # noqa: F401
 
 
 def test_history_has_no_public_append() -> None:
@@ -393,15 +397,15 @@ def test_history_has_no_public_to_numpy() -> None:
 
 
 def test_observationfilter_not_publicly_exported() -> None:
-    """ObservationFilter must not be importable from natal.output."""
+    """ObservationFilter must not be importable from natal.frontend.output."""
     with pytest.raises(ImportError):
-        from natal.output import ObservationFilter  # noqa: F401
+        from natal.frontend.output import ObservationFilter  # noqa: F401
 
 
 def test_historybatch_not_publicly_exported() -> None:
-    """HistoryBatch must not be importable from natal.output."""
+    """HistoryBatch must not be importable from natal.frontend.output."""
     with pytest.raises(ImportError):
-        from natal.output import HistoryBatch  # noqa: F401
+        from natal.frontend.output import HistoryBatch  # noqa: F401
 
 
 def test_history_observe_rejects_legacy_mask() -> None:
@@ -415,6 +419,6 @@ def test_history_observe_rejects_legacy_mask() -> None:
 
 def test_observationfilter_create_observation_deleted() -> None:
     """ObservationFilter.create_observation must not be callable."""
-    from natal.output.observation import ObservationFilter
+    from natal.frontend.output.observation import ObservationFilter
     assert not hasattr(ObservationFilter, "create_observation")
     assert "create_observation" not in dir(ObservationFilter)

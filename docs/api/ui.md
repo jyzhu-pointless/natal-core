@@ -10,6 +10,6 @@ Requires `nicegui`.
 
 ## Complete Module Reference
 
-::: natal.ui
+::: natal.frontend.ui
     options:
       heading_level: 3

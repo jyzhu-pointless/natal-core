@@ -1,5 +1,13 @@
 # TODO
 
+> [!NOTE] 历史标注
+> 本文件中所有与 numba 相关的条目（`numba`、`njit_switch`、`NUMBA_ENABLED`、
+> `enable_numba()/disable_numba()`、`.numba_cache`、`NATAL_DISABLE_NUMBA`、
+> `@pytest.mark.numba_off/on` 等）在 ⑥（numba 全拆）完成时已全部过时：
+> 对应机制已移除，相关 backlog 项（#15、#22、#23 等）不再适用。以下保留原文
+> 仅作为历史记录，请不要据此继续实现。
+
+
 > 最后审计：2026-08-15。已完成事项迁入本地 `TODO.legacy.md`；本文件只保留未完成或部分完成的工作。
 >
 > 排序逻辑：正确性 bug > 性能优化 > UX 改进 > 代码质量。同一档内，部分完成 > 未开始 > 仅设计。

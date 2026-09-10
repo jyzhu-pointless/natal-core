@@ -1,6 +1,6 @@
 # 种群初始化（Panmictic）
 
-种群初始化是 NATAL Core 模拟的第一步，通过链式 API（`Configurator`）配置和构建种群。
+种群初始化是 NATAL Core 模拟的第一步，通过链式 API（`PopulationBuilder`）配置和构建种群。
 
 > **说明**：此文档覆盖 **panmictic（单 deme、均匀混合）** 种群的链式配置。空间种群（含拓扑、迁移、`batch_setting` 异构配置）见 [Spatial 模拟指南](3_spatial_simulation.md)。两者的链式语法一致，空间种群额外增加了 `.migration()` 方法和 `batch_setting` 支持。
 
@@ -36,7 +36,7 @@ pop.update().competition(carrying_capacity=5000)
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 ```
 
-参见 [Configurator API 参考](api/configurator.md)。
+参见 [PopulationBuilder API 参考](api/population_builder.md)。
 
 ## 配置流程
 
@@ -45,7 +45,7 @@ pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 ```text
 Population.setup() → 链式配置方法调用
   → build()
-  → PopulationConfig / PopulationState
+  → ModelDraft / PopulationState
   → run_tick / run
   → reproduction → survival → aging（以及 hooks）
 ```
@@ -176,7 +176,19 @@ NATAL Core 提供两种主要的种群类型：
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
 | `competition_strength` | `float` | 老幼体（age=1）的相对竞争因子。 | `5.0` | 幼体密度调节 | 竞争权重按年龄区分：age=0 固定为 `1.0`，age=1 使用 `competition_strength`。 |
-| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 支持 `"logistic"`、`"beverton_holt"` 等模式，通常使用 `"logistic"`。 |
+| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 支持 `"logistic"`、`"beverton_holt"`、`"ricker"` 等模式，通常使用 `"logistic"`。 |
+
+**密度调节曲线**（`x` = 实际竞争强度 / 期望竞争强度；`s` = 平衡存活率；`r` = 低密度增长率）：
+
+| 模式 | 整数 | g(x) | 说明 |
+|---|---|---|---|
+| `no_competition` | 0 | 1.0 | 无密度调节 |
+| `fixed` | 1 | `min(1, K/N)` | 按总 0 龄个体数固定截断 |
+| `linear`（`"logistic"` 为历史别名） | 2 | `max(0, r - (r-1)·x) · s` | 增长率随竞争线性下降 |
+| `beverton_holt` | 3 | `r / (x·(r-1) + 1) · s` | 双曲（凹）曲线；旧别名 `"concave"` 与整数常量 `CONCAVE` 均已移除（使用它们会得到带迁移提示的 `ValueError` / `AttributeError`） |
+| `ricker` | 4 | `r^(1-x) · s` | 指数过度补偿；`r > e` 时出现振荡 |
+
+三条验收底线：① 平衡点 x=1 时所有曲线收敛到 `s`（g(1)=s）；② 低密度 x→0 时 g(0)=r·s（三条曲线在同一平衡点共享数值）；③ 确定性模拟下曲线缩放逐位可复现。
 | `low_density_growth_rate` | `float` | 低密度下的内禀增长率。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；取值过大容易导致种群振荡。 |
 | `age_1_carrying_capacity` | `Optional[int]` | age=1 阶段的种群承载容量。 | `None` | 幼体密度调节 | 如果显式指定，会优先使用该值（优先级最高）。 |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | 与 `age_1_carrying_capacity` 功能相同的遗留参数名（已弃用）。 | `None` | 幼体密度调节 | 推荐使用 `age_1_carrying_capacity`，两者同时设置时以 `age_1_carrying_capacity` 为准。 |
@@ -386,7 +398,7 @@ def release_drive_carriers():
 
 ### `setup(...)`
 
-参数与年龄结构模型一致：`name`、`stochastic`、`continuous_sampling`、`fixed_egg_count`、`species`。其中 `species` 是必填参数，用于定义种群的遗传结构。
+参数与年龄结构模型一致：`name`、`stochastic`、`continuous_sampling`、`fixed_egg_count`、`species`，并新增 `backend`（`"auto"` / `"rust"` / `"python"`，默认 `"auto"`）。其中 `species` 是必填参数，用于定义种群的遗传结构。
 
 ### `initial_state(...)`
 
@@ -478,7 +490,7 @@ def release_drive_carriers():
 
 ## 实现原理
 
-链式 API 的底层通过 `Configurator` 对象管理配置。每个链式方法立即写入 `PopulationConfig` 的 NumPy 数组——无延迟执行，无中间累积。配置的生效顺序：
+链式 API 的底层通过 `PopulationBuilder` 对象管理配置。每个链式方法立即写入 `ModelDraft` 的 NumPy 数组——无延迟执行，无中间累积。配置的生效顺序：
 
 1. **基础配置**：`setup()` 和 `age_structure()` 设置基本参数和维度
 2. **状态配置**：`initial_state()` 解析字典为 3-D 数组写入 config
@@ -490,14 +502,14 @@ def release_drive_carriers():
 
 ## 小结
 
-链式 API（`Configurator`）将种群参数组织为可链式配置的流程。每个方法立即写入 `PopulationConfig`，`build()` 执行 sync 并创建 `Population` 对象。同一 API 同时服务于构建时和运行时（`pop.update()`）。
+链式 API（`PopulationBuilder`）将种群参数组织为可链式配置的流程。每个方法立即写入 `ModelDraft`，`build()` 执行 sync 并创建 `Population` 对象。运行期修改使用 `pop.update()` 返回的专用 `RuntimeUpdater`——域方法语法相同，但不携带任何构建能力。
 
 
 ## 相关章节
 
 - [Hook 系统](2_hooks.md) - 钩子函数的详细使用方法
 - [基因型模式匹配](2_genotype_patterns.md) - 基因型匹配规则详解
-- [PopulationState & PopulationConfig：编译与配置](4_population_state_config.md) - 底层配置对象详解
+- [PopulationState & ModelDraft：编译与配置](4_population_state_config.md) - 底层配置对象详解
 - [模拟内核深度解析](4_simulation_engine.md) - 模拟执行流程和算法实现
 
 ***

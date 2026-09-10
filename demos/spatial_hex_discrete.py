@@ -12,8 +12,8 @@ import time
 import numpy as np
 
 import natal as nt
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import HexGrid, build_gaussian_kernel
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import HexGrid, build_gaussian_kernel
 
 MAP_SIZE: int = 501
 
@@ -24,7 +24,7 @@ def build_hex_kernel(
 ) -> np.ndarray:
     """Build a normalized Gaussian migration kernel for hex grid.
 
-    Thin wrapper around :func:`natal.spatial.topology.build_gaussian_kernel`
+    Thin wrapper around :func:`natal.frontend.spatial.topology.build_gaussian_kernel`
     with a hex-grid topology. See that function for the full implementation
     and parameter details. ``sigma`` and ``mean_dispersal`` are mutually
     exclusive; defaults to ``sigma=1.0`` when neither is given.
@@ -87,7 +87,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
         )
         .reproduction(eggs_per_female=50.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             carrying_capacity=1000,
             low_density_growth_rate=6,
         )
@@ -99,7 +99,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
 def main() -> None:
     """Build + run the hex-grid spatial demo and report timing."""
     spatial = build_hex_spatial_population()
-    print("start")
+    print("start (native engine session)")
     start = time.perf_counter()
     spatial.run(3, record_every=0)
     elapsed = time.perf_counter() - start

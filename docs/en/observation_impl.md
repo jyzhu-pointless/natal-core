@@ -7,10 +7,10 @@ This document is for NATAL Core maintainers and contributors. It explains the bo
 An Observation only defines how to derive observed values from population state. History only defines which kind of snapshot to store. A RecordingPlan connects them at build time, but they remain independent concepts:
 
 ```text
-Configurator.with_observation(...)
+PopulationBuilder.with_observation(...)
   → compile an immutable canonical Observation
 
-Configurator.record_history(mode=...)
+PopulationBuilder.record_history(mode=...)
   → select a raw or observation History schema
 
 Population state
@@ -27,23 +27,26 @@ Core modules and responsibilities:
 | `output/observation.py` | Defines `Observation`, `ObservationResult`, `ObservationFilter`, and identity observations |
 | `output/history.py` | Defines immutable schemas, typed array views, and post-hoc projection of raw History |
 | `output/_recording.py` | Compiles the `RecordingPlan`, row width, and spatial layout at build time |
-| `output/record.py` | Provides uniform observation-row encoding for non-spatial engines |
-| `engine/templates/spatial_lifecycle_*.tmpl.py` | Runs the spatial lifecycle and returns regular raw batches |
-| `spatial/population.py` | Applies the canonical Observation at the spatial container boundary, then commits History |
+| `rust/src/output/history.rs` | Owns the history ring, its row data, retention budgets, and the shared history handle |
+| `rust/src/output/observation.rs` | Owns the numerical projection and the current-state observation entry point |
+| `rust/src/output/parameter_log.rs` | Owns the parameter log and log value conversion |
+| `rust/src/sessions/spatial.rs` | Runs spatial lifecycle batches and records boundaries inside Rust |
+| `spatial/population.py` | Passes run controls and selectors and wraps Rust observation query results |
 
 ## Build-Time Public Interface
 
-Non-spatial Configurators use:
+Non-spatial PopulationBuilders use:
 
 ```text
-.with_observation(groups, collapse_age=False)
+.with_observation(groups, *, collapse_age=False)
 ```
 
-The spatial Configurator additionally accepts a deme selection and processing mode:
+The spatial PopulationBuilder additionally accepts a deme selection and processing mode:
 
 ```text
 .with_observation(
     groups,
+    *,
     collapse_age=False,
     demes=None,
     deme_mode="preserve",
@@ -63,7 +66,7 @@ The spatial arguments have the following semantics:
 
 `demes` must be a non-empty, duplicate-free sequence of integer indices within the Population range. Every group shares the same ordered deme selection; separate groups cannot define different deme sets. `deme_mode` accepts only `"preserve"` and `"aggregate"`.
 
-The Observation and History schema are frozen by `build()`. A runtime Configurator cannot replace the `with_observation()` or `record_history()` rules.
+The Observation and History schema are frozen by `build()`. A runtime PopulationBuilder cannot replace the `with_observation()` or `record_history()` rules.
 
 ## Canonical Observation
 
@@ -160,22 +163,17 @@ Observation History has discarded unrecorded ZTypes and unselected demes, so it 
 
 ## Spatial Recording Path
 
-Spatial recording does not execute the Observation inside the Numba wrapper. The wrapper runs lifecycle steps and migration, then returns a regular raw batch at stable tick boundaries:
+Spatial sessions run lifecycle stages and migration in Rust and write directly to the Rust HistoryStore at recording boundaries. Raw mode keeps complete state; observation mode projects through the compiled selector and stores only observed values.
 
 ```text
-Numba spatial wrapper
-  → [tick, all deme individual_count, all deme sperm_storage]
-  → SpatialPopulation._process_kernel_history(...)
-       ├─ raw History: validate and commit the complete batch
-       └─ observation History:
-            reshape into regular spatial count
-            → canonical Observation.apply(...)
-            → commit the fixed-shape projected row
+Rust spatial session
+  → lifecycle and migration
+  → raw state or native observation projection
+  → bounded HistoryStore and raw checkpoints
+  → Python query: independent result arrays
 ```
 
-The Python fallback calls `_record_snapshot()` at the same stable tick boundaries. Raw mode commits complete spatial state, while observation mode calls the same `Observation.apply()`. Both backends therefore share the same Observation semantics and History schema; only the place where the raw batch is produced differs.
-
-The spatial wrapper transports raw batches to keep engine transport regular and fixed. The lifecycle kernel does not need to understand groups, deme selection, or aggregate rules. All Observation semantics remain concentrated in the canonical `Observation` and the spatial container boundary, rather than being reimplemented by the engine, Python fallback, and post-hoc projection paths.
+Current-state observation, post-hoc projection of raw history, and observation recording share one Rust numerical implementation. Python compiles selectors, maintains labels, and exposes read-only queries. Batch runs without Python callbacks do not return to Python each tick or transport complete state back and forth. Manual snapshots also record directly from the session. `max_rows` evicts old records and their checkpoints as each row is written, avoiding accumulation of an entire run batch.
 
 ## Removed Compact Spatial Layout
 
@@ -199,7 +197,7 @@ Changes to Observation or History recording should verify at least these numeric
 4. `collapse_age=True` is element-wise equal to the uncollapsed result summed along age.
 5. Raw History retains every deme, ZType, and applicable sperm-storage value.
 6. Post-hoc projection of raw History is element-wise equal to `Observation.apply()` at the same tick.
-7. The Numba path and Python fallback produce identical ticks and payloads in deterministic simulations.
+7. In-engine batches and out-of-band snapshots produce identical payloads for the same tick in deterministic simulations; note that a batch record includes the tick-0 initial boundary, while an out-of-band `record_snapshot()` records the current tick.
 8. Unselected demes require no sentinel representation, and real zero counts are not confused with selection state.
 
 Assertions must compare explicit axes and coordinate values. Comparing only totals or sorted flattened arrays cannot detect axis swaps or incorrect deme ordering.

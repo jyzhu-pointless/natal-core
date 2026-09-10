@@ -10,6 +10,6 @@ zygote modifiers, and fitness patches into populations.
 
 ## Complete Module Reference
 
-::: natal.presets
+::: natal.frontend.presets
     options:
       heading_level: 3

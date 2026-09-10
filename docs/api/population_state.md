@@ -4,10 +4,10 @@ Population state management and data structures.
 
 ## Overview
 
-The `population_state` module defines the runtime state of population simulations, including individual tracking, age structure, and genetic composition.
+The `natal.frontend.data.state` module defines the runtime state of population simulations (`PopulationState` / `DiscretePopulationState`), including individual tracking, age structure, and genetic composition.
 
 ## Complete Module Reference
 
-::: natal.data.state
+::: natal.frontend.data.state
     options:
       heading_level: 3

@@ -44,12 +44,18 @@ Modifier 的作用就是对这两类映射进行有控制的改写。
 - 细胞质不兼容
 - 非孟德尔比例的后代重分配
 
-## 3. 推荐接入方式（Builder）
+## 3. 推荐接入方式（PopulationBuilder 构建链）
 
-在用户实践中，推荐在 Builder 阶段统一注册 Modifier：
+在用户实践中，推荐在构建阶段（PopulationBuilder 链）统一注册 Modifier：
 
 ```python
 import natal as nt
+
+species = nt.Species.from_dict(
+    name="ModifierDemo",
+    structure={"chr1": {"loc": ["Drive", "WT"]}},
+    gamete_labels=["default", "Cas9_deposited"],
+)
 
 
 def my_gamete_modifier(pop):
@@ -64,9 +70,9 @@ def my_gamete_modifier(pop):
 pop = (
     nt.AgeStructuredPopulation
     .setup(species=species)
-    .age_structure(n_ages=8)
+    .age_structure(n_ages=8, new_adult_age=2)
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
-    .modifiers(gamete_modifiers=[(0, "drive", my_gamete_modifier)])
+    .modifiers(gamete_modifiers=[my_gamete_modifier])
     .build()
 )
 ```
@@ -160,21 +166,35 @@ pop = nt.AgeStructuredPopulation.setup(species).build()
 
 ### 7.1 动态注册
 
+修饰器通过 ``.modifiers()`` 链式方法注册，注册即重建遗传映射：
+
 ```python
-pop.set_gamete_modifier(my_gamete_modifier, modifier_name="drive")
-pop.set_zygote_modifier(embryo_rescue_modifier, modifier_name="rescue")
+pop = (
+    nt.AgeStructuredPopulation.setup(species)
+    .age_structure(n_ages=8, new_adult_age=2)
+    .modifiers(gamete_modifiers=[my_gamete_modifier])
+    .build()
+)
 ```
+
+没有构建后的 ``set_gamete_modifier`` API（也没有替换/删除已注册修饰器的 API）。
+构建后仍可用 ``pop.add_gamete_modifier(...)`` / ``pop.add_zygote_modifier(...)``
+追加修饰器并立即重编译遗传映射；若要整体更换修饰器集合，请重建种群
+（修饰器参与 Blueprint 冻结的遗传映射）；值层面的运行期修改走参数/预设通道。
 
 ### 7.2 优先级
 
-当多个 Modifier 同时作用时，会按优先级顺序执行。
+多个修饰器同时作用时，按传入 ``.modifiers()`` 的顺序执行（先传入的先执行）：
 
 ```python
-pop.set_gamete_modifier(base_mod, modifier_id=1, modifier_name="base")
-pop.set_gamete_modifier(drive_mod, modifier_id=2, modifier_name="drive")
+pop = (
+    nt.AgeStructuredPopulation.setup(species)
+    .modifiers(gamete_modifiers=[base_mod, drive_mod])
+    .build()
+)
 ```
 
-实践上，建议把“基础规则”放在较低优先级，把“覆盖/修正规则”放在较高优先级。
+实践中建议"基础规则"在前、"覆盖/修正规则"在后，使后者的映射生效。
 
 ## 8. 建模建议
 
@@ -209,4 +229,4 @@ Modifier 是 NATAL 中表达“遗传规则改写”的核心机制。
 - [遗传预设系统](2_genetic_presets.md)
 - [Hook 系统](2_hooks.md)
 - [模拟内核深度解析](4_simulation_engine.md)
-- [PopulationState 与 PopulationConfig](4_population_state_config.md)
+- [PopulationState 与 ModelDraft](4_population_state_config.md)

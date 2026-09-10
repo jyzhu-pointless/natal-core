@@ -19,7 +19,12 @@ from benchmarks.mgdrive1.slim_panmmictic import (
     benchmark_slim,
 )
 from benchmarks.mgdrive1.spatial_benchmark import run_spatial
-from natal.numba.compat import set_numba_seed
+import numpy as np
+
+
+def seed_rng(seed: int) -> None:
+    """Seed the NumPy RNG that drives the reference trajectories."""
+    np.random.seed(seed)
 
 
 def _natal_replicates(
@@ -40,7 +45,7 @@ def _natal_replicates(
         stochastic=True,
         migration_rate=0.0,
     )
-    set_numba_seed(seed)
+    seed_rng(seed)
     # Exclude JIT warm-up from the sampled replicates.
     from benchmarks.mgdrive1.spatial_benchmark import step_spatial
 
@@ -55,7 +60,7 @@ def _natal_replicates(
     )
     outcomes: list[np.ndarray] = []
     for repeat in range(repeats):
-        set_numba_seed(seed + repeat)
+        seed_rng(seed + repeat)
         result = run_spatial(
             scenario.state,
             scenario.config,

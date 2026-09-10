@@ -5,8 +5,8 @@ import uuid
 
 import numpy as np
 
-from natal.presets import apply_preset_fitness_patch
-from natal.genetics import Species
+from natal.frontend.presets import apply_preset_fitness_patch
+from natal.frontend.genetics import Species
 
 
 class _FakeConfig:
@@ -251,8 +251,8 @@ class TestPresetFitnessPatch(unittest.TestCase):
 
 
     def test_import_from_canonical_path(self) -> None:
-        """apply_preset_fitness_patch is importable from natal.fitness._patch."""
-        from natal.fitness._patch import apply_preset_fitness_patch as _patch_fn
+        """apply_preset_fitness_patch is importable from natal.frontend.fitness._patch."""
+        from natal.frontend.fitness._patch import apply_preset_fitness_patch as _patch_fn
 
         patch = {
             "viability_per_allele": {
@@ -270,12 +270,12 @@ class TestPresetFitnessPatch(unittest.TestCase):
         self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_drive_drive], 0.64)
 
     def test_with_minimal_fitness_population_view(self) -> None:
-        """Works with a minimal object satisfying FitnessPopulationView protocol.
+        """Works with a minimal object satisfying the RecipeHost protocol.
 
         The protocol requires only three attributes (config, species,
-        index_registry) — no Population or ConfigContext needed.
+        index_registry) — no Population or live session needed.
         """
-        from natal.fitness._patch import apply_preset_fitness_patch as _patch_fn
+        from natal.frontend.fitness._patch import apply_preset_fitness_patch as _patch_fn
 
         class _MinimalView:
             __slots__ = ('config', 'species', 'index_registry')

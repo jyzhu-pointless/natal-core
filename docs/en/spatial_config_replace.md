@@ -1,20 +1,22 @@
-# SpatialConfigurator Heterogeneous Config Sharing Mechanism
+# SpatialPopulationBuilder Heterogeneous Config Sharing Mechanism
+
+> **Implementation note**: this page describes the internal `ModelDraft._replace` sharing of large arrays during a heterogeneous build. The mechanism is still in use, but it is **not** the whole heterogeneous build — declaration freezing, signature grouping, and template cloning live in [SpatialPopulationBuilder: Batch Construction of Spatial Populations](spatial_population_builder.md).
 
 ## Problem
 
-`SpatialConfigurator._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `PopulationConfig`.
+`SpatialPopulationBuilder._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `ModelDraft`.
 
 If only a few parameters differ between groups, all large arrays (`zygotes_to_gametes_map`, `gametes_to_zygotes_map`, `viability_fitness`, `fecundity_fitness`, etc.) are still duplicated, causing memory waste.
 
 ```
 2601 demes, each with a unique carrying_capacity
-→ 2601 full PopulationConfig instances
+→ 2601 full ModelDraft instances
 → Large arrays copied 2601 times
 ```
 
 ## Solution: `_replace` Fast Path
 
-`PopulationConfig` is a `NamedTuple`, and its `_replace()` method creates a new instance while **sharing references to all fields that are not replaced**. Leveraging this property, the first group is built in full, and subsequent groups only replace the differing fields:
+`ModelDraft` is a `NamedTuple`, and its `_replace()` method creates a new instance while **sharing references to all fields that are not replaced**. Leveraging this property, the first group is built in full, and subsequent groups only replace the differing fields:
 
 ```
 Group 0: Full builder pipeline → base_config (all arrays)
@@ -34,8 +36,8 @@ Builder parameters that require dict → numpy array conversion, defined in `_AR
 
 | Builder kwarg | Config Field | Conversion Method |
 |---|---|---|
-| `individual_count` | `initial_individual_count` | `PopulationConfigBuilder.resolve_*_initial_individual_count()` |
-| `sperm_storage` | `initial_sperm_storage` | `PopulationConfigBuilder.resolve_age_structured_initial_sperm_storage()` |
+| `individual_count` | `initial_individual_count` | `_params.resolve_*_initial_individual_count()` |
+| `sperm_storage` | `initial_sperm_storage` | `_params.resolve_age_structured_initial_sperm_storage()` |
 
 ### 2. Multi-Field Mapping (Explicit)
 
@@ -68,7 +70,7 @@ Changes to `carrying_capacity`, `eggs_per_female`, and `sex_ratio` affect `expec
 
 ## Array Field Conversion
 
-The values for `individual_count` and `sperm_storage` are user-provided dicts (e.g., `{"female": {"WT|WT": 100}}`), which must be converted to numpy arrays before `_replace`. Conversion is done via static methods on `PopulationConfigBuilder`:
+The values for `individual_count` and `sperm_storage` are user-provided dicts (e.g., `{"female": {"WT|WT": 100}}`), which must be converted to numpy arrays before `_replace`. Conversion is done by the plain resolver functions in `natal.frontend.builder._params`:
 
 - Age-structured: `resolve_age_structured_initial_individual_count(species, distribution, n_ages, new_adult_age)`
 - Discrete generation: `resolve_discrete_initial_individual_count(species, distribution)`
@@ -110,7 +112,7 @@ _build_heterogeneous()
        │   │
        │   ├─ _build_variant_config(sig_map, base_config)
        │   │   │
-       │   │   ├─ Array fields → PopulationConfigBuilder.resolve_* → _replace
+       │   │   ├─ Array fields → _params resolve_* → _replace
        │   │   ├─ Multi-field → _replace(base=raw, scaled=raw*pop_scale)
        │   │   ├─ Renames → _replace(renamed_field=val)
        │   │   ├─ Dynamic discovery → hasattr → _replace
@@ -147,14 +149,12 @@ With 2601 demes and only `initial_individual_count` differing:
 
 ## File Location
 
-All changes are concentrated in `src/natal/spatial_builder.py`:
+The relevant implementation lives in `src/natal/frontend/spatial/builder.py`:
 
 | Symbol | Role |
 |---|---|
 | `_ARRAY_KWARGS` | Set of parameters requiring dict→array conversion |
-| `_KWARG_MULTI_FIELD` | Multi-field mapping (carrying_capacity variants) |
 | `_KWARG_RENAMES` | Builder kwarg → config field renames |
-| `_EQUILIBRIUM_SENSITIVE_KWARGS` | Set of parameters requiring equilibrium recalculation |
-| `SpatialConfigurator._build_heterogeneous()` | Main build logic |
-| `SpatialConfigurator._can_use_replace(sig_map, base_config)` | Determines whether `_replace` can be used |
-| `SpatialConfigurator._build_variant_config()` | Creates variant config |
+| `SpatialPopulationBuilder._build_heterogeneous_demes()` | Main heterogeneous build flow |
+| `SpatialPopulationBuilder._can_use_replace(sig_map, base_config)` | Determines whether `_replace` can be used |
+| `SpatialPopulationBuilder._build_variant_config()` | Creates variant config |

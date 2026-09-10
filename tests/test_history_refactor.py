@@ -22,8 +22,8 @@ import pytest
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.output._recording import RecordingPlan, compile_recording_plan
-from natal.output.history import (
+from natal.frontend.output._recording import RecordingPlan, compile_recording_plan
+from natal.frontend.output.history import (
     History,
     HistoryBatch,
     HistorySchema,
@@ -31,15 +31,8 @@ from natal.output.history import (
     PopulationLayout,
     SpatialHistoryLayout,
 )
-from natal.output.observation import Observation, ObservationFilter, apply_rule
-from natal.patterns import IndividualSelector
-
-
-@pytest.fixture(autouse=True)
-def _restore_numba_state() -> None:
-    """Ensure Numba is re-enabled after any test that disables it."""
-    yield
-    nt.enable_numba()
+from natal.frontend.output.observation import Observation, ObservationFilter, apply_rule
+from natal.frontend.patterns import IndividualSelector
 
 # ============================================================================
 # Helpers
@@ -691,7 +684,6 @@ class TestCompileRecordingPlan:
 
     def test_raw_mode_row_size(self, simple_species) -> None:
         """Raw mode: row_size = 1 + ind_size * n_demes + sperm_size * n_demes."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="rp_raw", stochastic=False
@@ -723,7 +715,6 @@ class TestCompileRecordingPlan:
 
     def test_observation_mode_row_size(self, simple_species) -> None:
         """Observation mode: row_size = 1 + n_groups * n_sexes * n_ages."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="rp_obs", stochastic=False
@@ -757,7 +748,6 @@ class TestCompileRecordingPlan:
 
     def test_observation_mode_row_size_multi_group(self, simple_species) -> None:
         """Row size scales with n_groups."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="rp_multi", stochastic=False
@@ -790,7 +780,6 @@ class TestCompileRecordingPlan:
 
     def test_spatial_layout_created_for_multi_deme(self, simple_species) -> None:
         """Multi-deme raw recording includes SpatialHistoryLayout."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="rp_spatial", stochastic=False
@@ -833,7 +822,6 @@ class TestObservationApplyEquivalence:
 
     def test_apply_equals_apply_rule(self, simple_species) -> None:
         """apply() with baked mask produces the same output as apply_rule()."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="apply_eq", stochastic=False
@@ -885,7 +873,6 @@ class TestObservationBuildMask:
 
     def test_build_mask_shape(self, simple_species) -> None:
         """Build a four-dimensional mask with the configured axes."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="mask_shape", stochastic=False
@@ -920,7 +907,6 @@ class TestObservationBuildMask:
 
     def test_build_mask_total_star(self, simple_species) -> None:
         """Wildcard '*' selects all ztypes."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="mask_star", stochastic=False
@@ -957,7 +943,6 @@ class TestObservationCollapseAge:
 
     def test_collapse_age_output_shape(self, simple_species) -> None:
         """Remove the age axis when observation requests age collapse."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="collapse", stochastic=False
@@ -985,7 +970,6 @@ class TestObservationCollapseAge:
 
     def test_collapse_age_flag_preserved(self, simple_species) -> None:
         """Collapsed values equal the full projection summed over age."""
-        nt.disable_numba()
         pop_collapsed = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="collapse_cmp", stochastic=False
@@ -1034,7 +1018,6 @@ class TestObservationLazyRebuild:
 
     def test_mask_none_triggers_rebuild(self, simple_species) -> None:
         """Observation created via create_observation (mask=None) can still apply."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="lazy", stochastic=False
@@ -1075,7 +1058,6 @@ class TestWithObservationRegression:
 
     def test_with_observation_output_history(self, simple_species) -> None:
         """Explicit Observation projects exactly while History remains raw."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species,
@@ -1091,7 +1073,7 @@ class TestWithObservationRegression:
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=50.0)
             .competition(
-                juvenile_growth_mode="concave",
+                juvenile_growth_mode="beverton_holt",
                 low_density_growth_rate=6.0,
                 carrying_capacity=400,
             )
@@ -1129,7 +1111,6 @@ class TestRawVsObservationEquivalence:
 
     def test_raw_posthoc_equals_observation_mode(self, simple_species) -> None:
         """Identity and explicit rules both leave unspecified History raw."""
-        nt.disable_numba()
 
         pop_identity = (
             nt.DiscreteGenerationPopulation.setup(
@@ -1146,7 +1127,7 @@ class TestRawVsObservationEquivalence:
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=50.0)
             .competition(
-                juvenile_growth_mode="concave",
+                juvenile_growth_mode="beverton_holt",
                 low_density_growth_rate=6.0,
                 carrying_capacity=400,
             )
@@ -1167,7 +1148,7 @@ class TestRawVsObservationEquivalence:
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=50.0)
             .competition(
-                juvenile_growth_mode="concave",
+                juvenile_growth_mode="beverton_holt",
                 low_density_growth_rate=6.0,
                 carrying_capacity=400,
             )
@@ -1242,7 +1223,6 @@ class TestHistoryToListDict:
 
     def test_to_dict_raw_discrete(self, simple_species) -> None:
         """to_dict() on raw-mode history yields correct structure."""
-        nt.disable_numba()
         pop = (
             nt.DiscreteGenerationPopulation.setup(
                 species=simple_species, name="todict", stochastic=False

@@ -46,10 +46,16 @@ Typical uses:
 
 ## 3. Recommended Integration Method
 
-In practice, it is recommended to register Modifiers uniformly at the Builder stage:
+In practice, it is recommended to register Modifiers uniformly during the build stage (the PopulationBuilder chain):
 
 ```python
 import natal as nt
+
+species = nt.Species.from_dict(
+    name="ModifierDemo",
+    structure={"chr1": {"loc": ["Drive", "WT"]}},
+    gamete_labels=["default", "Cas9_deposited"],
+)
 
 
 def my_gamete_modifier(pop):
@@ -64,9 +70,9 @@ def my_gamete_modifier(pop):
 pop = (
     nt.AgeStructuredPopulation
     .setup(species=species)
-    .age_structure(n_ages=8)
+    .age_structure(n_ages=8, new_adult_age=2)
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
-    .modifiers(gamete_modifiers=[(0, "drive", my_gamete_modifier)])
+    .modifiers(gamete_modifiers=[my_gamete_modifier])
     .build()
 )
 ```
@@ -152,7 +158,7 @@ Both have the same allele but different labels, potentially triggering different
 ```python
 # Gamete labels are defined by setting gamete_labels on the Species
 species.gamete_labels = ["default", "Cas9_deposited"]
-# Then build normally using Configurator (labels take effect automatically)
+# Then build normally using PopulationBuilder (labels take effect automatically)
 pop = nt.AgeStructuredPopulation.setup(species).build()
 ```
 
@@ -160,21 +166,40 @@ pop = nt.AgeStructuredPopulation.setup(species).build()
 
 ### 7.1 Dynamic Registration
 
+Modifiers are registered through the ``.modifiers()`` chain method, which
+rebuilds the inheritance maps immediately:
+
 ```python
-pop.set_gamete_modifier(my_gamete_modifier, modifier_name="drive")
-pop.set_zygote_modifier(embryo_rescue_modifier, modifier_name="rescue")
+pop = (
+    nt.AgeStructuredPopulation.setup(species)
+    .age_structure(n_ages=8, new_adult_age=2)
+    .modifiers(gamete_modifiers=[my_gamete_modifier])
+    .build()
+)
 ```
+
+There is no post-build ``set_gamete_modifier`` API (and no API to replace or
+remove an already registered modifier). After the build you can still append
+modifiers with ``pop.add_gamete_modifier(...)`` / ``pop.add_zygote_modifier(...)``,
+which recompiles the inheritance maps immediately. To change the whole modifier
+set, rebuild the population (modifiers participate in the Blueprint-frozen
+inheritance maps), or use runtime parameter/preset channels for value-level changes.
 
 ### 7.2 Priority
 
-When multiple Modifiers act simultaneously, they execute in order of priority.
+When multiple modifiers act simultaneously, they execute in the order
+given to ``.modifiers()`` (earlier entries first):
 
 ```python
-pop.set_gamete_modifier(base_mod, modifier_id=1, modifier_name="base")
-pop.set_gamete_modifier(drive_mod, modifier_id=2, modifier_name="drive")
+pop = (
+    nt.AgeStructuredPopulation.setup(species)
+    .modifiers(gamete_modifiers=[base_mod, drive_mod])
+    .build()
+)
 ```
 
-In practice, it is recommended to put "base rules" at a lower priority and "override/correction rules" at a higher priority.
+Put "base rules" earlier and "override/correction rules" later so the
+later maps win.
 
 ## 8. Modeling Advice
 
@@ -209,4 +234,4 @@ Using both in coordination allows expressing most advanced genetic mechanisms.
 - [Genetic Preset System](2_genetic_presets.md)
 - [Hook System](2_hooks.md)
 - [the Simulation Engine Deep Dive](4_simulation_engine.md)
-- [PopulationState and PopulationConfig](4_population_state_config.md)
+- [PopulationState and ModelDraft](4_population_state_config.md)

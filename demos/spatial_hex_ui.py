@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any, Callable  # noqa: E402
 
 import natal as nt
-from natal.spatial.configurator import batch_setting
-from natal.spatial.population import SpatialPopulation
-from natal.spatial.topology import HexGrid
-from natal.ui import launch
+from natal.frontend.spatial.builder import batch_setting
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import HexGrid
+from natal.frontend.ui import launch
 
 MAP_SIZE = 9
 LOCAL_CAPACITY = 10000
@@ -72,7 +72,7 @@ def build_hex_spatial_population() -> SpatialPopulation:
         .initial_state(individual_count=batch_setting(initial_counts))
         .reproduction(eggs_per_female=50.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             carrying_capacity=LOCAL_CAPACITY,
             low_density_growth_rate=6.0,
         )

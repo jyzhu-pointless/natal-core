@@ -1,6 +1,6 @@
 # Spatial 模拟指南
 
-SpatialPopulation 的实际用法：用 SpatialConfigurator 快速构建多 deme 种群，配置拓扑与迁移核，控制 deme 间流动。
+SpatialPopulation 的实际用法：用 SpatialPopulationBuilder 快速构建多 deme 种群，配置拓扑与迁移核，控制 deme 间流动。
 
 阅读完成后，可以写出下面这类代码：
 
@@ -16,15 +16,15 @@ spatial = (
 )
 ```
 
-> **提示**：`SpatialConfigurator` 是同构/异构空间种群的首选构造方式。2601 个同构 deme 的构造时间从 ~2.6s 降至 ~16ms。详见 [SpatialConfigurator 文档](spatial_builder.md)。
+> **提示**：`SpatialPopulationBuilder` 是同构/异构空间种群的首选构造方式（构建一次模板、克隆其余 deme）。详见 [SpatialPopulationBuilder 文档](spatial_population_builder.md)。
 
 ## 两种构造路径
 
-### 推荐：SpatialConfigurator（链式 API）
+### 推荐：SpatialPopulationBuilder（链式 API）
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
 
@@ -56,8 +56,8 @@ pop_het = (
 如果已有独立构建好的 deme 列表，可以直接传给 `SpatialPopulation` 构造函数。所有 deme 必须共享同一个 Species 对象：
 
 ```python
-from natal.spatial import SpatialPopulation
-from natal.spatial import SquareGrid
+from natal.frontend.spatial import SpatialPopulation
+from natal.frontend.spatial import SquareGrid
 
 shared_config = demes[0].export_config()
 for deme in demes[1:]:
@@ -94,7 +94,7 @@ spatial = SpatialPopulation(
 
 ## 链式 API
 
-`SpatialConfigurator` 的链式调用流程与 panmictic builder 一致，以下按推荐顺序列出各方法。带 `→` 标记的是空间特有方法，`[B]` 标记的参数接受 `batch_setting`（跨 deme 异构配置）。
+`SpatialPopulationBuilder` 的链式调用流程与 panmictic builder 一致，以下按推荐顺序列出各方法。带 `→` 标记的是空间特有方法，`[B]` 标记的参数接受 `batch_setting`（跨 deme 异构配置）。
 
 ```python
 pop = (
@@ -168,12 +168,12 @@ pop = (
 
 ## batch_setting 异构配置
 
-`batch_setting` 是 `SpatialConfigurator` 的核心机制，允许不同 deme 在同一链式调用中指定不同的参数值。内部通过 config 等价性分组自动优化——相同参数的 deme 共享编译产物，仅 state 数组独立。
+`batch_setting` 是 `SpatialPopulationBuilder` 的核心机制，允许不同 deme 在同一链式调用中指定不同的参数值。内部通过 config 等价性分组自动优化——相同参数的 deme 共享编译产物，仅 state 数组独立。
 
 ### 四种输入形式
 
 ```python
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 import numpy as np
 
 # 1. 标量列表（一一对应 n_demes 个 deme）
@@ -214,7 +214,7 @@ pop = (
 为每个 deme 指定不同的初始基因型分布，常用于空间驱动释放场景：
 
 ```python
-from natal.spatial import batch_setting
+from natal.frontend.spatial import batch_setting
 
 # 默认所有 deme 只有 WT
 n_demes = 100
@@ -233,7 +233,7 @@ pop = (
     .initial_state(individual_count=batch_setting(states))
     .reproduction(eggs_per_female=50)
     .competition(carrying_capacity=1000, low_density_growth_rate=6,
-                 juvenile_growth_mode="concave")
+                 juvenile_growth_mode="beverton_holt")
     .presets(HomingDrive(name="Drive", drive_allele="Dr", target_allele="WT",
                          resistance_allele="R2", functional_resistance_allele="R1",
                          drive_conversion_rate=0.95))
@@ -409,16 +409,16 @@ pop.run(100)
 pop.run(500, record_every=5)
 ```
 
-`SpatialPopulation.run()` 的 `record_every` 参数控制 Numba 编译内核中的历史采样间隔。设为 0 表示不记录历史。
+`SpatialPopulation.run()` 的 `record_every` 参数控制执行内核中的历史采样间隔。设为 0 表示不记录历史。
 
 ### 访问聚合状态
 
 ```python
 # 跨 deme 汇总
-pop.total_population_size   # 总个体数
-pop.total_females           # 总雌性数
-pop.total_males             # 总雄性数
-pop.sex_ratio               # 性别比例（雌/雄）
+pop.get_total_count()       # 总个体数
+pop.get_female_count()      # 总雌性数
+pop.get_male_count()        # 总雄性数
+pop.get_female_count() / pop.get_male_count()   # 性别比例（雌/雄）
 pop.tick                    # 当前时间步
 
 # 等位基因频率（全空间汇总）
@@ -433,31 +433,41 @@ aggregate = pop.aggregate_individual_count()
 ```python
 # 按索引获取 deme
 deme_0 = pop.deme(0)
-print(deme_0.total_population_size)
+print(deme_0.get_total_count())
 print(deme_0.compute_allele_frequencies())
 
 # 遍历所有 deme
 for i in range(pop.n_demes):
     d = pop.deme(i)
-    print(f"deme {i}: {d.total_population_size}")
+    print(f"deme {i}: {d.get_total_count()}")
 ```
 
-每个 deme 是 `AgeStructuredPopulation` 或 `DiscreteGenerationPopulation` 实例；
+每个 deme 通过 `DemeSlice` 视图访问（读操作委托给底层种群，写入走
+`write_ecology` / `write_genetics` 通道）；
 空间容器自身提供 canonical `observation`、`observe()` 和类型化 `history`。
 
 ### 重置与控制
 
 ```python
-# 重置所有 deme 到初始状态
+# 重置所有 deme 到初始状态（清除终止标记）
 pop.reset()
 
-# 检查是否已终止
-if pop.is_finished:
-    print("模拟已终止")
+# 检查终止状态——容器自身没有 is_finished，逐 deme 检查
+any(d.is_finished for d in pop.demes)
 
-# 手动终止
-pop.finish_simulation()
+# 结束共享运行，不推进时间
+pop.run(0, finish=True)
 ```
+
+容器没有 `is_finished` / `finish_simulation()`：任何 deme 终止后，`run()` /
+`run_tick()` 会抛出 `RuntimeError`；由 hook 触发停止时，容器会把所有 deme
+标记为 finished。
+
+受管理的 deme 句柄支持查询、参数更新以及限定到该 deme 的
+``trigger_event``。独立的 ``run``/``step``、``reset``、状态或配置导入、
+检查点恢复、记录、清空历史和 ``finish_simulation`` 均抛出 ``RuntimeError``。
+运行与历史控制必须由空间容器执行；初始状态使用构建器声明，运行中需要改变状态时，
+使用所选 deme 回调中的 ``TickContext.state``。
 
 ### 数据输出
 
@@ -493,7 +503,7 @@ print(observed_history.values.shape)
 
 1. 检查每个 deme 是否已经 `is_finished`。
 2. 把所有 deme 的 state 拼成统一数组，构建 config bank。
-3. 运行 Numba 编译的空间生命周期包装器：`prange` 并行执行各 deme 生命周期 → 统一迁移。
+3. 运行空间生命周期：各 deme 生命周期按 deme 粒度并行执行 → 统一迁移，全部在同一引擎会话内。
 4. 将更新后的 state 写回每个 deme。
 
 如果一个 deme 先触发终止条件（如种群灭绝），整个 `SpatialPopulation` 也会停止推进。详细执行流程见 [空间生命周期包装器](spatial_lifecycle_wrapper.md)。
@@ -592,7 +602,7 @@ $$p_n = \frac{w_n}{S_{\text{ref}}}, \quad S_{\text{ref}} = \begin{cases} \sum_{m
 NATAL 提供 `build_gaussian_kernel()` 工厂函数，自动根据拓扑类型使用正确的距离度量：
 
 ```python
-from natal.spatial import build_gaussian_kernel, HexGrid, SquareGrid
+from natal.frontend.spatial import build_gaussian_kernel, HexGrid, SquareGrid
 
 # 六边形网格高斯核 —— 自动使用余弦定理距离公式
 hex_kernel = build_gaussian_kernel(HexGrid, size=11, sigma=1.5)
@@ -724,7 +734,7 @@ pop.run(10)
 
 ```python
 from natal import Species, SpatialPopulation, HexGrid
-from natal.spatial import build_gaussian_kernel
+from natal.frontend.spatial import build_gaussian_kernel
 
 species = Species.from_dict(name="hex", structure={"chr1": {"loc": ["WT", "Dr"]}})
 
@@ -736,7 +746,7 @@ pop = (
     .setup(name="hex_demo", stochastic=True, continuous_sampling=True)
     .initial_state(individual_count={"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50)
-    .competition(carrying_capacity=1000, low_density_growth_rate=6, juvenile_growth_mode="concave")
+    .competition(carrying_capacity=1000, low_density_growth_rate=6, juvenile_growth_mode="beverton_holt")
     .migration(kernel=kernel, migration_rate=0.5)
     .build()
 )
@@ -746,10 +756,10 @@ pop.run(10)
 
 ## WebUI 调试
 
-Spatial 模型可以直接接到 `natal.ui.launch(...)`。
+Spatial 模型可以直接接到 `natal.frontend.ui.launch(...)`。
 
 ```python
-from natal.ui import launch
+from natal.frontend.ui import launch
 
 launch(spatial, port=8080, title="Spatial Debug Dashboard")
 ```
@@ -791,7 +801,7 @@ SpatialPopulation 的实际使用顺序可以记成四步：
 
 ## 相关章节
 
-- [SpatialConfigurator：批量构造](spatial_builder.md)
+- [SpatialPopulationBuilder：空间种群批量构造](spatial_population_builder.md)
 - [空间生命周期包装器](spatial_lifecycle_wrapper.md)
 - [Migration Kernel 底层实现](migration_kernel_impl.md)
 - [模拟内核深度解析](4_simulation_engine.md)

@@ -25,6 +25,8 @@ site/*
 !.github/copilot-instructions.md
 !.github/instructions/
 !.github/instructions/**
+!.github/workflows/
+!.github/workflows/**
 
 .vscode/*
 !.vscode/settings.json
@@ -37,6 +39,7 @@ site/*
 .codex/*
 .reasonix/*
 .agents/*
+.zcode/*
 
 *beamer*
 

@@ -1,619 +1,247 @@
 #!/usr/bin/env python3
-"""Tests for selector ``mode`` parameter (auto / expand / aggregate).
+"""Tests for selector-based hook callbacks (``@hook(selectors={...})``).
 
-Tests are partitioned by execution path via pytest markers:
-
-- ``@pytest.mark.numba_on``  — Numba-compiled path (3 existing + 2 new)
-- ``@pytest.mark.numba_off`` — Python fallback path (19 tests)
-- unmarked                  — decoration-time error (1 test)
+The retired ``mode`` parameter (expand / aggregate / auto) and the njit-era
+``py_wrapper`` / ``njit_fn`` payloads no longer exist.  The remaining
+contract: symbolic selector specs are resolved once at build-time
+compilation into int32 index arrays; the user callback receives the
+resolved values as keyword arguments after the TickContext (single-index
+selectors collapse to plain ints, multi-index selectors pass as int32
+arrays).
 """
 
-import sys
-from pathlib import Path
+from __future__ import annotations
 
 import numpy as np
-import pytest  # type: ignore
+import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+import natal as nt
+from natal.frontend.hooks.entry.selector import compile_selector_callback
+from natal.frontend.hooks.tick_context import TickContext
+from natal.frontend.hooks.types import CompiledHookDescriptor
 
-from natal.hooks.entry.decorator import hook  # noqa: E402
-from natal.hooks.entry.selector import compile_selector_hook  # noqa: E402
-from natal.genetics import Species  # noqa: E402
-from natal.registry.index import IndexRegistry  # noqa: E402
 
 # ============================================================================
 # Helpers
 # ============================================================================
 
 
-@pytest.fixture(scope="module")
-def _aa_species():
-    """Species with alleles A and a for selector-mode tests."""
-    return Species.from_dict(
-        name="_SelectorTest",
-        structure={"chr1": {"loc": ["A", "a"]}},
-        gamete_labels=["default"],
+def _build_pop(
+    name: str, hook_calls: list | None = None
+) -> nt.DiscreteGenerationPopulation:
+    """Build a quiescent discrete population (state changes only via hooks).
+
+    Args:
+        name: Population name.
+        hook_calls: Optional ``(items, kwargs)`` pairs declared through
+            ``.hooks()`` in the build chain.
+    """
+    species = nt.Species.from_dict(
+        name=f"Selector_{name}", structure={"chr1": {"loc": ["A", "a"]}}
     )
-
-
-def _make_registry(species):
-    reg = IndexRegistry()
-    reg.slab_labels = ["default"]
-    reg.glab_labels = ["default"]
-    for gt in species.get_all_genotypes():
-        reg.register_genotype(gt)
-    return reg
-
-
-class _FakeConfig:
-    n_ages = 3
-
-
-class _FakePop:
-    def __init__(self, species, registry):
-        self._species = species
-        self._registry = registry
-        self._config = _FakeConfig()
-
-    @property
-    def species(self):
-        return self._species
-
-    @property
-    def registry(self):
-        return self._registry
-
-    @property
-    def config(self):
-        return self._config
-
-    @property
-    def index_registry(self):
-        return self._registry
-
-    def register_compiled_hook(self, desc):
-        self._last_desc = desc
-        return desc
-
-
-# Module-level shared state (rebuild per-test via _make_fake_pop)
-_species: Species | None = None
-_registry: IndexRegistry | None = None
-
-
-def _make_fake_pop():
-    global _species, _registry
-    if _species is None:
-        _species = Species.from_dict(
-            name="_SelectorTest",
-            structure={"chr1": {"loc": ["A", "a"]}},
-            gamete_labels=["default"],
+    chain = (
+        nt.DiscreteGenerationPopulation.setup(
+            species=species, name=name, stochastic=False
         )
-        _registry = IndexRegistry()
-        _registry.slab_labels = ["default"]
-        _registry.glab_labels = ["default"]
-        for gt in _species.get_all_genotypes():
-            _registry.register_genotype(gt)
-    return _FakePop(_species, _registry)
-
-    def register_compiled_hook(self, desc):
-        pass
-
-
-class _MockState:
-    """Minimal state with .individual_count for Python fallback tests."""
-
-    def __init__(self) -> None:
-        # 2 sexes × 3 ages × 3 genotypes (matching _FakeRegistry)
-        self.individual_count = np.ones((2, 3, 3), dtype=np.float64) * 42.0
-
-
-class _MockConfig:
-    n_ages = 3
-
-
-# ============================================================================
-# mode="expand" — Python fallback (registration only)
-# ============================================================================
-
-
-@pytest.mark.numba_off
-def test_mode_expand_registers():
-    """mode='expand' → register succeeds."""
-
-    @hook(event="early", selectors={"target": "A|A"}, mode="expand")
-    def fn(state, config, target):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-@pytest.mark.numba_off
-def test_mode_expand_two_selectors():
-    """mode='expand' with two selectors."""
-
-    @hook(event="early", selectors={"a": "A|A", "b": "A|a"}, mode="expand")
-    def fn(state, config, a, b):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-@pytest.mark.numba_off
-def test_mode_expand_ignores_param_name():
-    """mode='expand' ignores param names — even 'ctx' stays expand."""
-
-    @hook(event="early", selectors={"target": "A|A"}, mode="expand")
-    def fn(state, config, ctx):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-# ============================================================================
-# mode="aggregate" — Python fallback (registration only)
-# ============================================================================
-
-
-@pytest.mark.numba_off
-def test_mode_aggregate_registers():
-    """mode='aggregate' → register succeeds with namedtuple path."""
-
-    @hook(event="early", selectors={"target": "A|A"}, mode="aggregate")
-    def fn(state, config, s):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-@pytest.mark.numba_off
-def test_mode_aggregate_overrides_auto():
-    """mode='aggregate' overrides auto even when param name matches key."""
-
-    @hook(event="early", selectors={"target": "A|A"}, mode="aggregate")
-    def fn(state, config, target):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-@pytest.mark.numba_off
-def test_mode_aggregate_with_deme_id():
-    """mode='aggregate' with deme_id in signature."""
-
-    @hook(event="early", selectors={"t": "A|A"}, mode="aggregate")
-    def fn(state, config, deme_id, s):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-# ============================================================================
-# mode="auto" — Python fallback (registration only)
-# ============================================================================
-
-
-@pytest.mark.numba_off
-def test_mode_auto_expand_when_param_matches_key():
-    """auto: param name matches selector key → expand (old style)."""
-
-    @hook(event="early", selectors={"target": "A|A"})
-    def fn(state, config, target):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-@pytest.mark.numba_off
-def test_mode_auto_aggregate_when_param_differs():
-    """auto: param name differs from keys → aggregate (namedtuple)."""
-
-    @hook(event="early", selectors={"target": "A|A"})
-    def fn(state, config, ctx):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-@pytest.mark.numba_off
-def test_mode_auto_two_selectors_aggregate():
-    """auto: two selectors, param doesn't match → aggregate."""
-
-    @hook(event="early", selectors={"a": "A|A", "b": "A|a"})
-    def fn(state, config, ctx):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-@pytest.mark.numba_off
-def test_mode_auto_default():
-    """Default (no mode) → auto behavior."""
-
-    @hook(event="early", selectors={"target": "A|A"})
-    def fn(state, config, ctx):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-@pytest.mark.numba_off
-def test_mode_auto_with_deme_id():
-    """auto: deme_id is skipped, ctx still triggers aggregate."""
-
-    @hook(event="early", selectors={"target": "A|A"})
-    def fn(state, config, deme_id, ctx):
-        pass
-
-    desc = fn.register(_make_fake_pop())
-    assert desc.py_wrapper is not None
-
-
-# ============================================================================
-# Invalid mode — decoration-time error (no path)
-# ============================================================================
-
-
-def test_invalid_mode_raises():
-    """Invalid mode string raises ValueError at decoration time."""
-    with pytest.raises(ValueError, match="mode must be"):
-        @hook(event="early", selectors={"a": "A|A"}, mode="invalid")  # type: ignore[arg-type]
-        def fn(state, config, a):
-            pass
-
-
-# ============================================================================
-# Numba path — full execution (3 existing tests)
-# ============================================================================
-
-
-@pytest.mark.numba_on
-def test_full_execution_aggregate_mode():
-    """Numba: mode='aggregate' with @njit hook — namedtuple execution."""
-    from numba import njit
-
-    import natal as nt
-
-    species = nt.Species.from_dict(name="T", structure={"chr1": {"loc": ["W", "D"]}})
-    pop = (nt.DiscreteGenerationPopulation
-        .setup(species=species, stochastic=False)
-        .setup(name="test")
-        .initial_state(individual_count={"female": {"W|W": 100, "D|D": 50},
-                                          "male":   {"W|W": 100, "D|D": 50}})
-        .reproduction(eggs_per_female=10)
-        .competition(juvenile_growth_mode="no_competition")
-        .build()
+        .initial_state(
+            individual_count={
+                "female": {"A|A": [42.0, 0.0], "A|a": [42.0, 0.0], "a|a": [42.0, 0.0]},
+                "male": {"A|A": [42.0, 0.0], "A|a": [42.0, 0.0], "a|a": [42.0, 0.0]},
+            }
+        )
+        .reproduction(eggs_per_female=0.0)
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
     )
-
-    from natal.data import DiscretePopulationState
-
-    ind = pop.state.individual_count.copy()
-    ind[0, 0, 1] = 30  # W|D (unordered, covers both W|D and D|W) at index 1
-    state = DiscretePopulationState(n_tick=0, individual_count=ind)
-
-    @njit
-    def kill_fn(state, config, nt_sel):
-        state.individual_count[:, :, nt_sel.target] = 0
-        state.individual_count[:, :, nt_sel.drive] *= 0.5
-
-    desc = compile_selector_hook(
-        kill_fn, pop, "early",
-        selectors_spec={"target": "D|D", "drive": "D|W"},
-        mode="aggregate",
-    )
-    desc.njit_fn(state, pop.config, 0)
-
-    assert ind[0, 0, 2] == 0,   f"D|D should be 0, got {ind[0, 0, 2]}"
-    assert ind[0, 0, 1] == 15,  f"W|D should be 15, got {ind[0, 0, 1]}"
-
-
-@pytest.mark.numba_on
-def test_full_execution_expand_mode():
-    """Numba: mode='expand' with @njit hook — individual kwargs."""
-    from numba import njit
-
-    import natal as nt
-
-    species = nt.Species.from_dict(name="T", structure={"chr1": {"loc": ["W", "D"]}})
-    pop = (nt.DiscreteGenerationPopulation
-        .setup(species=species, stochastic=False)
-        .setup(name="test")
-        .initial_state(individual_count={"female": {"W|W": 100, "D|D": 50},
-                                          "male":   {"W|W": 100, "D|D": 50}})
-        .reproduction(eggs_per_female=10)
-        .competition(juvenile_growth_mode="no_competition")
-        .build()
-    )
-
-    from natal.data import DiscretePopulationState
-
-    ind = pop.state.individual_count.copy()
-    ind[0, 0, 2] = 50  # D|D
-    ind[0, 0, 0] = 100  # W|W
-    state = DiscretePopulationState(n_tick=0, individual_count=ind)
-
-    @njit
-    def kill_fn(state, config, target, drive):
-        state.individual_count[:, :, target] = 0
-        state.individual_count[:, :, drive] *= 0.5
-
-    desc = compile_selector_hook(
-        kill_fn, pop, "early",
-        selectors_spec={"target": "D|D", "drive": "W|W"},
-        mode="expand",
-    )
-    desc.njit_fn(state, pop.config, 0)
-
-    assert ind[0, 0, 2] == 0,   f"D|D should be 0, got {ind[0, 0, 2]}"
-    assert ind[0, 0, 0] == 50,  f"W|W should be 50, got {ind[0, 0, 0]}"
-
-
-@pytest.mark.numba_on
-def test_backward_compat_old_style():
-    """Numba: old-style (no mode) still works — auto detection."""
-    from numba import njit
-
-    import natal as nt
-
-    species = nt.Species.from_dict(name="T", structure={"chr1": {"loc": ["W", "D"]}})
-    pop = (nt.DiscreteGenerationPopulation
-        .setup(species=species, stochastic=False)
-        .setup(name="test")
-        .initial_state(individual_count={"female": {"W|W": 100}, "male": {"W|W": 100}})
-        .reproduction(eggs_per_female=10)
-        .competition(juvenile_growth_mode="no_competition")
-        .build()
-    )
-
-    from natal.data import DiscretePopulationState
-
-    ind = pop.state.individual_count.copy()
-    state = DiscretePopulationState(n_tick=0, individual_count=ind)
-
-    @njit
-    def fn(state, config, target):
-        state.individual_count[:, :, target] = 0
-
-    desc = compile_selector_hook(fn, pop, "early", selectors_spec={"target": "W|W"})
-    desc.njit_fn(state, pop.config, 0)
-
-    assert ind[0, 0, 0] == 0
+    for items, kwargs in hook_calls or []:
+        chain = chain.hooks(*items, **kwargs)
+    return chain.build()
 
 
 # ============================================================================
-# Numba path — new tests (deme_id forwarding + multi-genotype selector)
+# Invalid mode / retired surface (negative contract)
 # ============================================================================
 
 
-@pytest.mark.numba_on
-def test_full_execution_numba_deme_id():
-    """Numba: deme_id is forwarded correctly — user function receives it."""
-    from numba import njit
-
-    import natal as nt
-
-    species = nt.Species.from_dict(name="NumbaDeme", structure={"chr1": {"loc": ["W", "D"]}})
-    pop = (nt.DiscreteGenerationPopulation
-        .setup(species=species, stochastic=False)
-        .setup(name="test")
-        .initial_state(individual_count={"female": {"W|W": 100}, "male": {"W|W": 100}})
-        .reproduction(eggs_per_female=10)
-        .competition(juvenile_growth_mode="no_competition")
-        .build()
-    )
-
-    from natal.data import DiscretePopulationState
-
-    ind = pop.state.individual_count.copy()
-    state = DiscretePopulationState(n_tick=0, individual_count=ind)
-
-    @njit
-    def fn(state, config, deme_id, target):
-        # Write deme_id into the targeted cell as a sentinel value.
-        state.individual_count[0, 0, target] = float(deme_id)
-
-    desc = compile_selector_hook(fn, pop, "early", selectors_spec={"target": "W|W"})
-    desc.njit_fn(state, pop.config, 7)
-
-    assert ind[0, 0, 0] == 7.0  # deme_id=7 was forwarded and stored
+def test_retired_mode_parameter_is_rejected() -> None:
+    """``mode=`` was removed; the decorator rejects it at decoration time."""
+    with pytest.raises(TypeError, match="mode"):
+        @nt.hook(event="early", selectors={"target": "A|A"}, mode="expand")  # type: ignore[call-arg]  # retired kwarg probe
+        def fn(pop: TickContext, target: object) -> None:
+            _ = pop, target
+            return None
 
 
-@pytest.mark.numba_on
-def test_full_execution_numba_multi_genotype():
-    """Numba: array selector for multiple genotypes — each index zeroed."""
-    from numba import njit
+def test_retired_py_wrapper_payload_is_absent() -> None:
+    """The njit-era ``py_wrapper`` payload is no longer on descriptors."""
+    pop = _build_pop("sel_retired_payload")
 
-    import natal as nt
+    @nt.hook(event="early", selectors={"target": "A|A"})
+    def fn(pop: TickContext, target: object) -> int:
+        _ = pop, target
+        return 0
 
-    species = nt.Species.from_dict(name="NumbaMulti", structure={"chr1": {"loc": ["W", "D"]}})
-    pop = (nt.DiscreteGenerationPopulation
-        .setup(species=species, stochastic=False)
-        .setup(name="test")
-        .initial_state(individual_count={"female": {"W|W": 100, "D|D": 50},
-                                          "male":   {"W|W": 100, "D|D": 50}})
-        .reproduction(eggs_per_female=10)
-        .competition(juvenile_growth_mode="no_competition")
-        .build()
-    )
-
-    from natal.data import DiscretePopulationState
-
-    ind = pop.state.individual_count.copy()
-    # Unordered: W|W=0, W|D=1, D|D=2 — set to known values
-    ind[0, 0, 0] = 100  # W|W
-    ind[0, 0, 1] = 200  # W|D (unordered, covers both W|D and D|W)
-    ind[0, 0, 2] = 400  # D|D
-    state = DiscretePopulationState(n_tick=0, individual_count=ind)
-
-    @njit
-    def fn(state, config, group):
-        for g in group:
-            state.individual_count[:, :, g] = 0
-
-    desc = compile_selector_hook(
-        fn, pop, "early",
-        selectors_spec={"group": ["W|W", "D|D"]},
-        mode="expand",
-    )
-    desc.njit_fn(state, pop.config, 0)
-
-    assert ind[0, 0, 0] == 0,    f"W|W should be 0, got {ind[0, 0, 0]}"
-    assert ind[0, 0, 2] == 0,    f"D|D should be 0, got {ind[0, 0, 2]}"
-    assert ind[0, 0, 1] == 200,  f"W|D should be untouched (200), got {ind[0, 0, 1]}"
+    desc: CompiledHookDescriptor = fn.register(pop)
+    assert not hasattr(desc, "py_wrapper")
+    assert not hasattr(desc, "njit_fn")
+    _ = pop
 
 
 # ============================================================================
-# Selector resolution verification (Python fallback)
+# Registration and compile_selector_callback
+# ============================================================================
+
+
+def test_selector_callback_registers() -> None:
+    """``@hook(selectors=...)`` declares a callback-carrying descriptor."""
+    @nt.hook(event="early", selectors={"target": "A|A"})
+    def fn(pop: TickContext, target: int) -> int:
+        _ = pop, target
+        return 0
+
+    pop = _build_pop("sel_register", [((fn,), {})])
+    assert len(pop.get_compiled_hooks("early")) == 1
+    desc = pop.get_compiled_hooks("early")[0]
+    assert desc.event == "early"
+    assert callable(desc.callback)
+
+
+def test_compile_selector_callback_direct() -> None:
+    """``compile_selector_callback`` builds the same descriptor directly."""
+    pop = _build_pop("sel_direct")
+
+    def fn(pop: TickContext, target: int) -> int:
+        _ = pop, target
+        return 0
+
+    desc = compile_selector_callback(fn, pop, "early", {"target": "A|A"})
+    assert callable(desc.callback)
+    assert desc.selectors["target"].tolist() == [0]
+    assert desc.selectors["target"].dtype == np.int32
+
+
+# ============================================================================
+# Selector resolution verification
 # ============================================================================
 
 
 class TestSelectorResolution:
     """Verify desc.selectors contains correctly resolved integer indices."""
 
-    @pytest.mark.numba_off
-    def test_single_genotype_resolves_to_int_array(self):
+    def test_single_genotype_resolves_to_int_array(self) -> None:
         """Single genotype selector → int32 array with one element."""
+        pop = _build_pop("sel_res_single")
 
-        @hook(event="early", selectors={"target": "A|A"})
-        def fn(state, config, target):
-            pass
+        @nt.hook(event="early", selectors={"target": "A|A"})
+        def fn(pop: TickContext, target: int) -> int:
+            _ = pop, target
+            return 0
 
-        desc = fn.register(_make_fake_pop())
+        desc = fn.register(pop)
         resolved = desc.selectors["target"]
         assert isinstance(resolved, np.ndarray)
         assert resolved.dtype == np.int32
-        assert resolved.tolist() == [0]  # AA → index 0
+        assert resolved.tolist() == [0]  # A|A → index 0
 
-    @pytest.mark.numba_off
-    def test_wildcard_resolves_to_all_indices(self):
+    def test_wildcard_resolves_to_all_indices(self) -> None:
         """'*' wildcard → int32 array with all genotype indices."""
+        pop = _build_pop("sel_res_wildcard")
 
-        @hook(event="early", selectors={"any": "*"})
-        def fn(state, config, any):
-            pass
+        @nt.hook(event="early", selectors={"any": "*"})
+        def fn(pop: TickContext, any: object) -> int:  # noqa: A002  # selector name mirrors the spec key
+            _ = pop, any
+            return 0
 
-        desc = fn.register(_make_fake_pop())
+        desc = fn.register(pop)
         resolved = desc.selectors["any"]
         assert resolved.tolist() == [0, 1, 2]
 
-    @pytest.mark.numba_off
-    def test_multiple_genotypes_resolve_to_int_array(self):
+    def test_multiple_genotypes_resolve_to_int_array(self) -> None:
         """List of genotype labels → int32 array of indices."""
+        pop = _build_pop("sel_res_multi")
 
-        @hook(event="early", selectors={"group": ["A|A", "a|a"]})
-        def fn(state, config, group):
-            pass
+        @nt.hook(event="early", selectors={"group": ["A|A", "a|a"]})
+        def fn(pop: TickContext, group: object) -> int:
+            _ = pop, group
+            return 0
 
-        desc = fn.register(_make_fake_pop())
+        desc = fn.register(pop)
         resolved = desc.selectors["group"]
-        assert resolved.tolist() == [0, 2]  # AA→0, aa→2
+        assert resolved.tolist() == [0, 2]  # A|A→0, a|a→2
 
-    @pytest.mark.numba_off
-    def test_int_selector_passthrough(self):
+    def test_int_selector_passthrough(self) -> None:
         """Bare int selector → int32 array wrapping it."""
+        pop = _build_pop("sel_res_int")
 
-        @hook(event="early", selectors={"idx": 1}, mode="expand")
-        def fn(state, config, idx):
-            pass
+        @nt.hook(event="early", selectors={"idx": 1})
+        def fn(pop: TickContext, idx: int) -> int:
+            _ = pop, idx
+            return 0
 
-        desc = fn.register(_make_fake_pop())
+        desc = fn.register(pop)
         assert desc.selectors["idx"].tolist() == [1]
 
 
 # ============================================================================
-# Python fallback end-to-end (actually calls py_wrapper)
+# End-to-end execution
 # ============================================================================
 
 
-class TestPythonFallbackEndToEnd:
-    """Verify the Python fallback wrapper forwards (state, config, deme_id)
-    and selector kwargs correctly to the user function."""
+class TestSelectorExecution:
+    """Verify the injected callback forwards resolved selectors correctly."""
 
-    @pytest.mark.numba_off
-    def test_expand_mode_modifies_state(self):
-        """mode='expand' — user function receives (state, config, target)."""
-        state = _MockState()
-        config = _MockConfig()
+    def test_single_selector_collapses_to_int(self) -> None:
+        """A single-index selector is injected as a plain int."""
+        seen: dict[str, object] = {}
 
-        @hook(event="early", selectors={"target": "A|A"}, mode="expand")
-        def fn(state, config, target):
-            # AA is genotype index 0 — zero it out
-            state.individual_count[:, :, target] = 0.0
+        @nt.hook(event="early", selectors={"target": "A|A"})
+        def fn(pop: object, target: int) -> int:
+            seen["target"] = target
+            pop.state.individual_count[0, 0, target] = 0.0
+            return 0
 
-        desc = fn.register(_make_fake_pop())
+        pop = _build_pop("sel_exec_int", [((fn,), {})])
+        pop.run(n_steps=1)
 
-        # Before: all cells are 42.0
-        assert state.individual_count[0, 0, 0] == 42.0
+        assert seen["target"] == 0
+        # A|A (index 0) was zeroed and survives aging into age 1.
+        assert float(pop.state.individual_count[0, 1, 0]) == 0.0
+        assert float(pop.state.individual_count[0, 1, 1]) == 42.0  # A|a untouched
+        assert float(pop.state.individual_count[0, 1, 2]) == 42.0  # a|a untouched
 
-        desc.py_wrapper(state, config, deme_id=0)
+    def test_multi_genotype_selector_passes_array(self) -> None:
+        """A selector resolving to multiple indices is passed as an array."""
+        seen: dict[str, object] = {}
 
-        # After: genotype 0 (AA) zeroed across all sexes and ages
-        assert state.individual_count[0, 0, 0] == 0.0
-        assert state.individual_count[1, 2, 0] == 0.0
-        # Other genotypes untouched
-        assert state.individual_count[0, 0, 1] == 42.0  # Aa
-        assert state.individual_count[0, 0, 2] == 42.0  # aa
+        @nt.hook(event="early", selectors={"group": ["A|A", "a|a"]})
+        def fn(pop: TickContext, group: object) -> int:
+            seen["group"] = group
+            assert isinstance(group, np.ndarray)
+            pop.state.individual_count[:, :, list(group)] = 0.0
+            return 0
 
-    @pytest.mark.numba_off
-    def test_aggregate_mode_modifies_state(self):
-        """mode='aggregate' — user function receives namedtuple via kwarg."""
-        state = _MockState()
-        config = _MockConfig()
+        pop = _build_pop("sel_exec_multi", [((fn,), {})])
+        pop.run(n_steps=1)
 
-        @hook(event="early", selectors={"a": "A|A", "b": "a|a"}, mode="aggregate")
-        def fn(state, config, sel):
-            state.individual_count[:, :, sel.a] = 10.0
-            state.individual_count[:, :, sel.b] = 20.0
+        assert seen["group"].dtype == np.int32
+        state = pop.state.individual_count
+        assert float(state[0, 1, 0]) == 0.0  # A|A
+        assert float(state[0, 1, 1]) == 42.0  # A|a untouched
+        assert float(state[0, 1, 2]) == 0.0  # a|a
 
-        desc = fn.register(_make_fake_pop())
-        desc.py_wrapper(state, config, deme_id=0)
+    def test_deme_id_is_forwarded(self) -> None:
+        """The TickContext handed to the callback carries the deme id."""
+        seen: list[int] = []
 
-        assert state.individual_count[0, 0, 0] == 10.0  # AA
-        assert state.individual_count[0, 0, 2] == 20.0  # aa
-        assert state.individual_count[0, 0, 1] == 42.0  # Aa untouched
+        @nt.hook(event="first", selectors={"target": "A|A"})
+        def fn(pop: TickContext, target: int) -> int:
+            _ = target
+            seen.append(pop.deme_id)
+            return 0
 
-    @pytest.mark.numba_off
-    def test_with_deme_id_forwarded(self):
-        """deme_id in user signature is forwarded correctly."""
-        received_deme: list[int] = []
+        pop = _build_pop("sel_deme_id", [((fn,), {})])
+        # Explicit event triggering forwards the requested deme id; the
+        # panmictic default inside per-deme lifecycles is 0.
+        pop.trigger_event("first", deme_id=5)
+        pop.run(n_steps=1)
 
-        @hook(event="early", selectors={"target": "A|A"})
-        def fn(state, config, deme_id, target):
-            received_deme.append(deme_id)
-            # target not used — just verify deme_id forwarding
-
-        desc = fn.register(_make_fake_pop())
-        state, config = _MockState(), _MockConfig()
-        desc.py_wrapper(state, config, deme_id=5)
-
-        assert received_deme == [5]
-
-    @pytest.mark.numba_off
-    def test_multi_genotype_selector_array(self):
-        """Selector resolving to multiple indices → array passed as kwarg."""
-        state = _MockState()
-        config = _MockConfig()
-
-        @hook(event="early", selectors={"group": ["A|A", "A|a"]})
-        def fn(state, config, group):
-            # group is an int32 array of [0, 1]
-            for g in group:
-                state.individual_count[:, :, int(g)] = 7.0
-
-        desc = fn.register(_make_fake_pop())
-        desc.py_wrapper(state, config, deme_id=0)
-
-        assert state.individual_count[0, 0, 0] == 7.0  # AA
-        assert state.individual_count[0, 0, 1] == 7.0  # Aa
-        assert state.individual_count[0, 0, 2] == 42.0  # aa untouched
+        assert seen == [5, 0]

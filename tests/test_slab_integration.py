@@ -3,7 +3,7 @@
 import numpy as np
 
 import natal as nt
-from natal.patterns import IndividualSelector
+from natal.frontend.patterns import IndividualSelector
 
 # ── helpers ────────────────────────────────────────────────────────────
 
@@ -290,7 +290,7 @@ class TestNSlabsFullRepair:
             .competition(juvenile_growth_mode=0)
             .build()
         )
-        # Set fitness for single slab via ztype_index — bypass Configurator.fitness()
+        # Set fitness for single slab via ztype_index — bypass PopulationBuilder.fitness()
         reg = pop.index_registry
         gm = pop.config.viability_fitness
         z_i = reg.ztype_index(sp.get_genotype_from_str("A|A"), "exposed")
@@ -342,10 +342,7 @@ class TestNSlabsFullRepair:
             .hooks(inject_exposed)
             .build()
         )
-        # Ensure the hook executor is built before manually triggering "first".
-        # Without this, trigger_event falls through to _hooks (empty for
-        # declarative hooks) and the hook never fires.
-        pop.ensure_hook_executor()
+        # Manual events use the same native session as lifecycle runs.
         pop.trigger_event("first")
         state = pop.state.individual_count
         reg = pop.index_registry
@@ -499,18 +496,12 @@ class TestModifierRegression:
             .presets(nt.Wolbachia(name="wMel", viability_scaling=1.0))
             .build()
         )
-        from natal.engine.simulation.age_structured import (
-            compute_offspring_probability_tensor,
-        )
+        from natal.frontend.data._engine import recompute_offspring_tensor
 
         cfg = pop.config
-        n_gtypes = cfg.zygotes_to_gametes_map.shape[2]
-        recomputed = compute_offspring_probability_tensor(
-            meiosis_f=cfg.zygotes_to_gametes_map[0],
-            meiosis_m=cfg.zygotes_to_gametes_map[1],
-            haplo_to_genotype_map=cfg.gametes_to_zygotes_map,
-            n_ztypes=cfg.n_ztypes,
-            n_gtypes=n_gtypes,
+        recomputed = recompute_offspring_tensor(
+            cfg.zygotes_to_gametes_map,
+            cfg.gametes_to_zygotes_map,
         )
         np.testing.assert_allclose(cfg.offspring_tensor, recomputed, atol=1e-10)
 

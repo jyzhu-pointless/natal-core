@@ -1,20 +1,30 @@
-# Builder → Configurator Migration Guide
+# Builder to Configurator Migration Guide
 
-In v0.2.0, `PopulationBuilder` and its subclasses (`DiscreteGenerationPopulationBuilder`, `AgeStructuredPopulationBuilder`, `SpatialBuilder`) were replaced by the `Configurator` chain API.
+> **Historical document.** This page records the v0.1 → v0.2.0 migration.
+> It does not describe the current API: the `Configurator` name has since
+> been retired — the build chain class is again named `PopulationBuilder`
+> (a single unified class in `natal.frontend.builder`), the spatial entry
+> is `SpatialPopulationBuilder`, and `pop.update()` / `ctx.update()` now
+> return a `RuntimeUpdater`. Current reference:
+> [population_builder.md](api/population_builder.md).
 
-## What Changed
+In v0.2.0, `PopulationBuilder` and its subclasses (`DiscreteGenerationPopulationBuilder`,
+`AgeStructuredPopulationBuilder`, `SpatialBuilder`) were replaced by the `Configurator`
+chain API, and there is **no** `legacy_path` escape hatch -- the old Builder classes and
+`setup(legacy_path=True)` do not exist.
+
+## Change Summary
 
 | Before (v0.1.x) | After (v0.2.0) |
 |---|---|
-| `PopulationBuilder(species).build()` | `DiscreteGenerationPopulation.setup(species).build()` |
-| `.competition(carrying_capacity=...)` returns Builder | Returns `Configurator` (same chain syntax) |
-| Parameters deferred until `build()` | Parameters written immediately to config arrays |
-| `SpatialBuilder` class | `SpatialConfigurator` via `pop.update()` |
-| `PopulationBuilder` class | Accessible via `setup(legacy_path=True)` |
+| `PopulationBuilder` / `setup()` returns a Builder | `setup()` returns a `Configurator`; `build()` produces the population object |
+| `.competition(...)` deferred to `build()` | parameters are written into the config arrays immediately (same chain syntax) |
+| `SpatialBuilder(species, topology)` | `SpatialPopulation.builder(species, n_demes, pop_type)` returns a `SpatialConfigurator` |
+| Hook signature `(ind_count, tick)` | `(state, config, deme_id)` (njit era) replaced by single-parameter `TickContext` callbacks / declarative `Op`s |
 
-## What Stays the Same
+## What Did Not Change
 
-The chain API syntax is **identical** — code like this still works unchanged:
+The chain-API syntax is **identical** -- the following code needs no changes:
 
 ```python
 pop = (nt.DiscreteGenerationPopulation
@@ -28,65 +38,68 @@ pop = (nt.DiscreteGenerationPopulation
 
 ## API Differences
 
-### 1. Import Paths
+### 1. Import paths
 
 ```python
-# v0.1.x (removed)
-from natal.population_builder import PopulationBuilder
-from natal.genetic_presets import HomingDrive
-
-# v0.2.0
-from natal import HomingDrive  # or nt.HomingDrive
+# The top-level user API is unchanged: import from natal (or `import natal as nt`)
+from natal import Species, HomingDrive, Op
 ```
 
-### 2. `setup()` Returns a Configurator
+Concrete module paths live under `natal.frontend.*` (genetics structures/entities/patterns
+are in `natal.frontend.genetics`, `natal.frontend.patterns`, ...).
+
+### 2. `setup()` returns a Configurator
 
 ```python
-# v0.2.0 — setup() returns a Configurator, not a Builder
+# v0.2.0 -- setup() returned a Configurator, not a Builder
 configurator = nt.DiscreteGenerationPopulation.setup(species=sp)
-print(type(configurator))  # <class 'natal.configurator.discrete.DiscreteConfigurator'>
+print(type(configurator))
+# then: <class 'natal.frontend.configurator._base.Configurator'>
+# now:  <class 'natal.frontend.builder._base.PopulationBuilder'>
 ```
 
-### 3. Legacy Builder Path
+### 3. Runtime modification (new)
 
-If you depend on the old Builder API, pass `legacy_path=True` to `setup()`:
-
-```python
-builder = nt.DiscreteGenerationPopulation.setup(species=sp, legacy_path=True)
-```
-
-### 4. New Runtime Modification
-
-Configurator supports runtime modification that the old Builder couldn't:
+The Configurator enables runtime modification the old Builder could not do:
 
 ```python
-# After build, modify parameters without rebuilding
+# modify parameters after build without rebuilding
 pop.update().competition(carrying_capacity=5000)
 pop.update().reproduction(eggs_per_female=100)
+
+# preferred parameter surface: pop.params (bounds-validated + snapshot log)
+pop.params.sex_ratio = 0.55
 ```
 
-### 5. Parameter Changes
+### 4. Parameter renames
 
-- `female_age_based_survival_rates` → `female_age_based_survival` (all `_rates` suffixes dropped)
+- `female_age_based_survival_rates` -> `female_age_based_survival` (all `_rates` suffixes removed)
 - `species_scale`, `base_carrying_capacity`, `base_expected_num_new_adult_females` removed
-- `carrying_capacity` is now a direct 0-d ndarray
+- `carrying_capacity` is now a direct plain scalar
 
-### 6. `SpatialBuilder` → `SpatialConfigurator`
+### 5. `SpatialBuilder` -> `SpatialConfigurator`
 
 ```python
-# v0.1.x
-builder = SpatialBuilder(species, topology)
-pop = builder.build()
+# v0.2.0 -- declare the deme count and population type first, then the spatial chain
+from natal.frontend.spatial import SpatialPopulation
 
-# v0.2.0
-from natal.spatial import SpatialPopulation
-pop = SpatialPopulation.setup(species=sp, topology=grid).build()
+pop = (
+    SpatialPopulation.builder(species=sp, n_demes=4, pop_type="age_structured")
+    .setup(name="demo", stochastic=False)
+    .age_structure(n_ages=4, new_adult_age=1)
+    ...
+    .migration(adjacency=adjacency, migration_rate=0.1)
+    .build()
+)
 ```
 
-## Key Behavioral Changes
+Note: there is no `SpatialPopulation.setup(...)` static method -- the entry point is
+`SpatialPopulation.builder(...)`.
 
-1. **Immediate writes**: Configurator chain methods write to NumPy arrays immediately, not deferred to `build()`. This is invisible for most code.
-2. **Default `Species.unordered=True`**: `A|a` and `a|A` now produce the same `Genotype` instance. Set `unordered=False` if parent-of-origin tracking is needed.
-3. **Hook signature unified**: `(state, config, deme_id=-1)`. Old `(ind_count, tick)` no longer works.
-4. **Default survival**: Age-structured models default to 100% survival at all ages (was decaying values).
-5. **`set_param()` / `hook_set_param()`**: New low-level APIs for runtime modification by parameter name.
+## Key Behavior Changes
+
+1. **Immediate writes**: Configurator chain methods write into the NumPy arrays immediately rather than deferring to `build()`. Transparent to most code.
+2. **`Species.unordered=True` by default**: `A|a` and `a|A` now produce the same `Genotype` instance. Set `unordered=False` to track parental origin.
+3. **Unified hook shapes**: declarative (no params, returns `List[HookOp]`), single-parameter callback (`TickContext`), and selector callback (`selectors={...}`); the `(state, config, deme_id)` three-parameter signature is no longer available.
+4. **Default survival**: age-structured models default to 100% survival at adult ages (`age >= new_adult_age`) and 0 at juvenile ages — without an explicit `female_age0_survival` / `male_age0_survival` the population dies out quickly (the discrete model defaults to `age0=1`, `age1=0`).
+5. **Runtime parameter writes**: `pop.params.<name> = v` / `pop.update().<method>(...)` / `pop.params.tensor_write(...)` / `Op.set_param(...)`; every actual change is recorded in `pop.params_log`. `set_param(draft, name, value)` is a draft-level function (rebind the return value): it neither writes a running population nor logs a row; use `pop.params_log_details` for the complete audit.

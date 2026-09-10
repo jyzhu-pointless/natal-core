@@ -1,401 +1,272 @@
 # 高级 Hook 教程
 
 [基础教程](2_hooks.md) 介绍了声明式 Hook（`Op.add`、`Op.scale` 等），适合大多数常规场景。
-当需要直接操作 NumPy 数组进行更灵活的状态修改时（例如条件分支、循环、自定义计算），
-可以使用自定义 Hook 或 Selector-based Hook。
+当需要直接操作 NumPy 数组进行更灵活的状态修改时（例如条件分支、循环、自定义计算、
+钩子内运行时参数写入），可以使用单参数回调 Hook 或 Selector-based Hook。
 
-## 自定义 Hook
+## 单参数回调 Hook（TickContext）
 
-自定义 Hook 允许你直接编写代码操作模拟状态，在 Numba 编译后执行。
+回调 Hook 允许你直接编写代码操作模拟状态，在每次触发时被调用。参数是一个
+`TickContext` 对象，公开成员见下表：
+
+| 成员 | 类型 / 语义 |
+|---|---|
+| `pop.tick` | 当前模拟 tick（只读）。 |
+| `pop.deme_id` | 本次调用的 deme 索引（panmictic 为 `0`，空间模型为实际 deme 下标，只读）。 |
+| `pop.state` | 可写事务候选，首次访问 state 或 metrics 时物化，回调成功后提交。 |
+| `pop.params` | 可写参数面（与 `pop.params` 相同的写入器栈；属性写入在候选中经过校验，回调成功后进入 Rust 会话与审计日志）。 |
+| `pop.blueprint` | 只读维度、名称目录与引擎开关（`n_sexes`、`n_ages`、`n_ztypes`、`discrete`、`stochastic`、`continuous_sampling`、`extreme_speed_mode`、`ztype_names`、`gtype_names`）。 |
+| `pop.metrics` | 按需计算的指标视图（每次访问重新计算）。 |
+| `pop.rng` | 该 deme 持久 Rust 随机流的受控采样器；从不触碰全局 `numpy.random`。 |
+| `pop.update()` | 返回绑定到所属种群的运行时 `RuntimeUpdater`（域方法与构建链同语法）。 |
+| `pop.stop()` / `pop.stop_requested` | 在事件边界请求/查询终止当前 run。 |
+
+只有回调访问参数或配置时，参数候选才会复制到 Python。仅统计调用次数、查看状态或抽取随机数的回调不会传输参数张量。经过校验的写入直接更新原生事务；回调抛出异常时，该回调的候选会被丢弃。
 
 ### 基本用法
 
 ```python
-from natal.hooks import hook
+from natal.frontend.hooks import hook
+from natal.frontend.hooks.tick_context import TickContext
 
 
-@hook(event="late", custom=True, priority=10)
-def custom_release_hook(state, config, deme_id=-1):
-    # state.individual_count 是个体数量的 NumPy 数组
+@hook(event="late", priority=10)
+def custom_release_hook(pop: TickContext) -> int:
+    # pop.state.individual_count 是个体数量的 NumPy 数组
     # 形状为 (sex, age, genotype)
     # sex=0 对应雌性，sex=1 对应雄性
 
     # 每 10 个 tick 释放 100 个个体
-    if state.n_tick % 10 == 0:
-        # 假设 Drive|WT 的基因型索引是 1
-        state.individual_count[:, :, 1] += 100
+    if pop.tick % 10 == 0:
+        # 假设 Var|WT 的基因型索引是 1
+        pop.state.individual_count[:, :, 1] += 100
 
     return 0  # 0 表示继续模拟
 ```
 
-### 函数签名
-
-自定义 Hook 当前约定的签名为 `(state, config, deme_id=-1)`：
-
-- `state` — `DiscretePopulationState` 或 `PopulationState`，提供 `individual_count` 数组和 `n_tick`
-- `config` — `PopulationConfig` 或 `DiscretePopulationConfig`，可直接原地修改参数
-- `deme_id` — deme 索引（空间种群），默认 -1
-
-也接受简化两参数形式 `(state, config)`（省略 deme_id）。
-
 ### 数组索引注意事项
 
-`state.individual_count` 的维度顺序为 `(sex, age, genotype)`：
+`pop.state.individual_count` 的维度顺序为 `(sex, age, genotype)`：
 
 - `sex=0` 对应雌性（FEMALE），`sex=1` 对应雄性（MALE）
-- 在 Numba 模式下，不能使用 `Sex.MALE` 等枚举类型直接索引，必须使用整数值或 `.value`
+- 直接使用整数索引；枚举值需取 `.value`（`Sex.MALE.value`）
 
 ```python
 # 正确做法
-male_count = state.individual_count[1, :, :].sum()
-female_count = state.individual_count[0, :, :].sum()
+male_count = pop.state.individual_count[1, :, :].sum()
+female_count = pop.state.individual_count[0, :, :].sum()
 
 # 或者使用 .value
-male_count = state.individual_count[Sex.MALE.value, :, :].sum()
+male_count = pop.state.individual_count[Sex.MALE.value, :, :].sum()
 ```
 
-### 完整示例
+### 完整示例（含运行时参数写入）
 
 ```python
-from natal.hooks import hook
+from natal.frontend.hooks import hook
+from natal.frontend.hooks.tick_context import TickContext
 
 
-@hook(event="early", custom=True, priority=5)
-def custom_culling_hook(state, config, deme_id=-1):
+@hook(event="early", priority=5)
+def custom_culling_hook(pop: TickContext) -> int:
     # 对特定基因型进行选择性剔除
-    if state.n_tick > 50:
+    if pop.tick > 50:
         # WT|WT 的基因型索引是 0
-        wt_wt_count = state.individual_count[:, :, 0].sum()
+        wt_wt_count = pop.state.individual_count[:, :, 0].sum()
         if wt_wt_count > 10000:
-            state.individual_count[:, :, 0] = state.individual_count[:, :, 0] * 0.9
+            pop.state.individual_count[:, :, 0] = pop.state.individual_count[:, :, 0] * 0.9
 
+    # hook 内修改运行时参数：立即生效并记录到 params_log
+    pop.params.carrying_capacity = float(pop.params.carrying_capacity) * 0.5
     return 0
 ```
 
+- 返回值 `0`（或 `RESULT_CONTINUE`）继续模拟；非零值（或 `RESULT_STOP`）立即停止。
+- `pop.params.<name> = v` 是 hook 内唯一的推荐参数写入通道：写入经过 jsonc 边界校验，
+  同一 tick 后续阶段立即可见，并追加一条 `(tick, name, old, new)` 到 `pop.params_log`。
+- `stop()` 在 **late 事件中调用时立即停止在事件边界**（本 tick 的其余过程不再执行、
+  tick 不递增）；`stop_requested` 可查询该状态。
+
 ## Selector-based Hook
 
-Selector-based Hook 是自定义 Hook 的一种形式，允许你通过符号名称（如 `"Drive|WT"`）
-指定目标基因型，框架在注册时自动将符号解析为整数索引并烘焙到编译后的代码中。
+Selector-based Hook 是回调 Hook 的一种形式，允许你通过符号名称（如 `"Var|WT"`）
+指定目标基因型。框架在注册时自动将符号解析为整数索引；单值选择器折叠为 `int`，
+多值选择器以 `int32` ndarray 注入：
 
 ### 基本用法
 
 ```python
-from natal.hooks import hook
+from natal.frontend.hooks import hook
+from natal.frontend.hooks.tick_context import TickContext
 
 
-@hook(event="late", custom=True, selectors={"target_gt": "Drive|WT"}, priority=10)
-def cap_target(state, config, target_gt):
-    # target_gt 是通过选择器解析得到的基因型索引（整数）
-    if state.n_tick % 10 == 0:
-        state.individual_count[:, :, target_gt] *= 0.95
+@hook(event="late", selectors={"target_gt": "Var|WT"}, priority=10)
+def cap_target(pop: TickContext, target_gt: int) -> int:
+    # target_gt 是通过选择器解析得到的基因型索引（单值时是 int）
+    if pop.tick % 10 == 0:
+        pop.state.individual_count[:, :, target_gt] *= 0.95
+    return 0
 ```
 
 ### 选择器解析规则
 
 `selectors` 的值支持以下类型：
 
-| 类型 | 示例 | 解析结果 |
+| 类型 | 示例 | 注入值 |
 |------|------|---------|
-| `str`（基因型标签） | `"WT\|WT"` | 单个索引 |
-| `str`（通配符） | `"*"` | 所有基因型索引 |
-| `int` | `3` | 直接用作索引 |
-| `range` | `range(3)` | `[0, 1, 2]` |
-| `list` / `tuple` | `["WT\|Dr", 4]` | 多个索引 |
-| `Genotype` 对象 | `species.genotypes[0]` | 对应索引 |
+| `str`（基因型标签） | `"WT\|WT"` | 单个索引（`int`） |
+| `str`（通配符） | `"*"` | 所有基因型索引（`int32` 数组） |
+| `int` | `3` | 直接用作索引（`int`） |
+| `range` | `range(3)` | `[0, 1, 2]`（`int32` 数组） |
+| `list` / `tuple` | `["WT\|Dr", 4]` | 多个索引（`int32` 数组） |
+| `Genotype` 对象 | `species.genotypes[0]` | 对应索引（`int`） |
 
-> **注意**：选择器使用 `IndexRegistry.resolve_genotype_index()` 做精确字符串匹配。
-> 不支持 pattern 语法（`::`、`|*` 等）。如需 pattern 匹配，请在注册前自行调用
-> `GenotypeSelector` 转换为索引数组。
+单值选择器自动拆箱为 `int`，多值选择器保留为 `np.ndarray[int32]`。
+函数签名形如 `def hook(pop: TickContext, <selector 名>) -> int`——选择器名即关键字参数名。
 
-### 参数传递模式（mode）
-
-Selector Hook 提供三种参数传递模式，通过 `mode` 参数指定：
-
-| mode | 行为 | 函数签名示例 |
-|------|------|------------|
-| `"auto"`（默认） | 自动检测：参数名不在 selector key 中则打包 | 见下方 |
-| `"expand"` | 每个 selector 作为独立关键字参数 | `fn(state, config, a, b)` |
-| `"aggregate"` | 所有 selector 打包为一个 namedtuple | `fn(state, config, ctx)` |
-
-#### mode="expand"（展开模式）
-
-每个 selector key 成为函数的一个独立参数：
+### 多选择器示例
 
 ```python
-@hook(event="early", custom=True, selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="expand")
-def balance_population(state, config, drive, wt):
-    # drive 和 wt 都是 int（基因型索引）
-    drive_count = state.individual_count[:, :, drive].sum()
-    wt_count = state.individual_count[:, :, wt].sum()
+@hook(event="early", selectors={"drive": "Var|WT", "wt": "WT|WT"})
+def balance_population(pop: TickContext, drive: int, wt: int) -> int:
+    drive_count = pop.state.individual_count[:, :, drive].sum()
+    wt_count = pop.state.individual_count[:, :, wt].sum()
 
     if drive_count > wt_count * 2:
-        state.individual_count[:, :, drive] *= 0.8
+        pop.state.individual_count[:, :, drive] *= 0.8
 
     return 0
 ```
 
-#### mode="aggregate"（聚合模式）
+> **注意**：选择器使用精确字符串匹配，不支持 pattern 语法（`::`、`|*` 等）。
+> 如需 pattern 匹配，请在注册前自行调用 `GenotypeSelector` 转换为索引数组。
 
-所有 selector 打包为一个 namedtuple，通过属性访问：
+## Hook 内随机采样
 
-```python
-@hook(event="early", custom=True, selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="aggregate")
-def balance_population(state, config, sel):
-    # sel.drive 和 sel.wt 都是 int（基因型索引）
-    # namedtuple 的属性访问在 Numba 中完全支持
-    drive_count = state.individual_count[:, :, sel.drive].sum()
-    wt_count = state.individual_count[:, :, sel.wt].sum()
-
-    if drive_count > wt_count * 2:
-        state.individual_count[:, :, sel.drive] *= 0.8
-
-    return 0
-```
-
-**优点**：新增 selector 只需要在 `selectors` 字典中添加键值对，无需修改函数签名。
-参数名可以是任意合法的 Python 标识符（如 `sel`、`ctx`、`params` 等）。
-
-#### mode="auto"（自动检测，默认）
-
-当不指定 `mode` 时，框架根据函数签名自动选择模式：
-
-- 额外位置参数（`state`, `config` 之后）的名字**不在** selector key 中 → 聚合模式
-- 额外位置参数的名字**在** selector key 中 → 展开模式
+回调 Hook 内的随机性必须来自 `pop.rng`（受控 Rust 采样器）。任何
+`np.random` 全局状态都不会被触碰：
 
 ```python
-# 参数名 "ctx" 不在 selectors key 中 → 自动聚合
-@hook(event="early", custom=True, selectors={"drive": "Dr|WT", "wt": "WT|WT"})
-def hook_agg(state, config, ctx):
-    ctx.drive, ctx.wt  # namedtuple 属性
-
-# 参数名 "wt" 匹配 selector key "wt" → 自动展开
-@hook(event="early", custom=True, selectors={"wt": "WT|WT"})
-def hook_exp(state, config, wt):
-    # wt 是单独的 int 参数
-```
-
-### 配合 deme_id
-
-三种模式都支持 `deme_id` 参数，适用于空间种群：
-
-```python
-# 展开模式 + deme_id
-@hook(event="early", custom=True, selectors={"target": "Dr|Dr"}, mode="expand")
-def hook1(state, config, deme_id, target):
-    if deme_id == 0:
-        state.individual_count[:, :, target] = 0
-
-# 聚合模式 + deme_id
-@hook(event="early", custom=True, selectors={"target": "Dr|Dr"}, mode="aggregate")
-def hook2(state, config, deme_id, sel):
-    if deme_id == 0:
-        state.individual_count[:, :, sel.target] = 0
-```
-
-### 特点
-
-- 选择器在注册时解析，得到的索引值烘焙到生成的 Numba 代码中
-- `aggregate` 模式使用 `collections.namedtuple`，字段访问在 Numba 中原生支持
-- 单值选择器（如 `"WT|WT"`）自动拆箱为 `int`，多值选择器保留为 `np.ndarray[int32]`
-- 适合需要基于特定目标执行逻辑的场景
-
-## Numba 兼容的随机采样
-
-在自定义 Hook 中进行随机采样时，推荐使用 `natal.numba` 模块提供的函数。这些函数经过优化，可以在 Numba 模式和纯 Python 模式下都保持高效：
-
-```python
-from natal.numba import (
-    binomial,
-    binomial_2d,
-    continuous_binomial,
-    continuous_multinomial,
-    set_numba_seed,
-)
-from natal.hooks import hook
+from natal.frontend.hooks import hook
+from natal.frontend.hooks.tick_context import TickContext
 
 
-@hook(event="late", custom=True, priority=10)
-def stochastic_culling_hook(state, config, deme_id=-1):
-    if state.n_tick > 50:
-        # 使用二项分布随机剔除
-        # 假设对基因型 0 进行 10% 的剔除概率
-        n_current = state.individual_count[:, :, 0]
+@hook(event="late", priority=10)
+def stochastic_culling_hook(pop: TickContext) -> int:
+    if pop.tick > 50:
+        # 随机采样推进该 deme 的持久 Rust 流。
+        # 恢复检查点也会恢复随机流位置。
         survival_prob = 0.9
-
-        # continuous_binomial 对大数量更高效
-        state.individual_count[:, :, 0] = continuous_binomial(n_current, survival_prob)
-
+        n_current = pop.state.individual_count[:, :, 0]
+        pop.state.individual_count[:, :, 0] = pop.rng.binomial(
+            n_current.astype(int), survival_prob
+        ).astype(float)
     return 0
 ```
 
-### 主要 API
+采样器支持 `random`、`uniform`、`normal`、`integers` 和 `binomial`；binomial 的计数和概率可以按数组广播。同一回调中重复访问使用同一随机流；失败回调的候选采样被丢弃。使用相同 hook 和参数恢复检查点，可重放之后的采样。回调结束后，保留的 RNG、参数和 update 句柄拒绝访问。
 
-| 函数 | 说明 |
-|------|------|
-| `binomial(n, p)` | 二项分布采样，返回 n 次试验中成功的次数 |
-| `binomial_2d(n, p, n_rows, n_cols)` | 对 2D 数组进行逐元素二项分布采样 |
-| `continuous_binomial(n, p)` | 连续化二项分布，返回浮点数（对大数量更高效） |
-| `continuous_multinomial(n, p_array, out_counts)` | 连续化多项分布 |
-| `multinomial(n, pvals)` | 多项分布采样 |
-| `set_numba_seed(seed)` | 设置随机数种子（确保可复现性） |
-| `clamp01(x)` | 将值限制在 [0, 1] 范围内 |
+## 执行路径
 
-### 使用场景
-
-- **确定性操作后添加随机性**：先确定性缩放，再用随机采样添加噪声
-- **条件性随机剔除**：根据当前状态动态决定剔除概率
-- **批量采样操作**：使用 `binomial_2d` 对整个数组进行批量采样
-
-```python
-@hook(event="late", custom=True, priority=10)
-def age_specific_mortality(state, config, deme_id=-1):
-    if state.n_tick % 10 == 0:
-        # 对每个年龄组应用不同的存活概率
-        survival_rates = np.array([0.8, 0.9, 0.95, 0.98, 0.99])
-
-        # 使用 binomial_2d 进行批量采样
-        n_ages = state.individual_count.shape[1]
-        for age in range(n_ages):
-            n_survivors = binomial_2d(
-                state.individual_count[:, age, :],
-                np.array([survival_rates[age]]),
-                2,  # sex
-                state.individual_count.shape[2]  # n_genotypes
-            )
-            state.individual_count[:, age, :] = n_survivors
-
-    return 0
-```
-
-## 执行模式与兼容性
-
-NATAL Core 的 Hook 系统根据全局 `NUMBA_ENABLED` 开关自动选择执行路径：
-
-| `NUMBA_ENABLED` | 自定义 Hook 行为 |
-|----------------|-----------------|
-| `True`（默认） | Hook 代码必须遵循 Numba 语法，系统自动进行 Numba 编译 |
-| `False` | Hook 可以使用纯 Python 语法，通过 `HookExecutor` 统一调度执行 |
-
-### 为什么强调 Numba 语法？
-
-框架默认开启 Numba 优化，这意味着：
-
-1. 自定义 Hook 默认会通过 `njit_switch` 装饰器进行 Numba 编译
-2. 如果代码包含不支持的 Python 特性，会在注册或首次执行时出错
-3. 性能优势在大规模模拟中尤为明显
-
-### 如果需要在 Numba 关闭时使用 Hook？
-
-当 `NUMBA_ENABLED=False` 时：
-
-- 所有 Hook（declarative、selector、custom）都会通过 `HookExecutor` 统一调度
-- 系统会根据 `priority` 按顺序执行所有 Hook
-- 无需修改 Hook 定义代码，即可切换执行路径
-
-```python
-from natal.configurator import Configurator
-from natal.numba import numba_disabled
-
-with numba_disabled():
-    # 在这个上下文中，NUMBA_ENABLED 为 False
-    pop = Configurator.for_discrete(species).hooks(my_custom_hook).build()
-    pop.run(n_steps=100)
-```
+Rust 原生引擎是唯一的执行后端。声明式 Op 编译为 CSR 计划，在引擎会话内执行；
+单参数 Python 回调跨桥进入会话（每个调用获得独立的上下文封装）。
+带外入口——`trigger_event` 与 finish 事件——由 Rust 侧解释器执行同一份 CSR 计划。
 
 ## 混合使用不同类型的 Hook
 
-NATAL Core 允许在同一事件中混合使用不同类型的 Hook：
+同一事件可以混合声明式与回调形态。同一事件内，两类 Hook 按 `priority`（值越小越先执行）跨类型统一排序执行——声明式操作与 Python 回调互相可比，`priority` 更小者先执行，同 priority 时按注册顺序：
 
 ```python
-from natal.configurator import Configurator
-from natal.hooks import hook, Op
+from natal.frontend.hooks import hook, Op
 
 
 # 声明式 Hook：定期释放个体
 @hook(event="first", priority=10)
 def release_hook():
-    return [Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 10 == 0")]
+    return [Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 10 == 0")]
 
 
-# Selector-based Hook（聚合模式）：基于选择器的操作
-@hook(event="first", custom=True, priority=7, selectors={"drive": "Drive|WT"}, mode="aggregate")
-def check_drive_threshold(state, config, sel):
-    drive_count = state.individual_count[:, :, sel.drive].sum()
+# Selector-based Hook：基于选择器的操作
+@hook(event="first", priority=7, selectors={"drive": "Var|WT"})
+def check_drive_threshold(pop, drive):
+    drive_count = pop.state.individual_count[:, :, drive].sum()
     if drive_count > 10000:
-        # 可以在这里添加日志或状态记录
         pass
     return 0
 
 
-# 自定义 Hook：高效计算和修改状态（deme_id=-1 表示 non-spatial 默认值）
-@hook(event="first", custom=True, priority=5)
-def custom_process_hook(state, config, deme_id=-1):
-    # 执行密集计算
-    for age in range(state.individual_count.shape[1]):
-        state.individual_count[:, age, :] *= 0.99  # 轻微死亡率
+# 回调 Hook：轻量死亡率
+@hook(event="first", priority=5)
+def custom_process_hook(pop):
+    for age in range(pop.state.individual_count.shape[1]):
+        pop.state.individual_count[:, age, :] *= 0.99
     return 0
 
 
-pop = Configurator.for_age_structured(species).hooks(release_hook, check_drive_threshold, custom_process_hook).build()
+pop = (
+    nt.AgeStructuredPopulation.setup(species=sp)
+    .hooks(release_hook, check_drive_threshold, custom_process_hook)
+    .build()
+)
 ```
 
-### 执行顺序
+同一优先级的 Hook 按注册顺序执行（稳定排序）；tick 内、`trigger_event` 与 finish 事件三种入口的优先级语义一致。
 
-当混合使用不同类型的 Hook 时：
+## 形态选择
 
-- 系统会根据 `priority` 值排序（值越小，优先级越高）
-- 同一优先级的 Hook 执行顺序不确定
-- `NUMBA_ENABLED=True` 时，selector 和 custom Hook 会被合并为单个 Numba 函数执行
+| Hook 类型 | 灵活性 | 可读性 | 适用场景 |
+|----------|--------|--------|----------|
+| 声明式 Hook | 中 | 高 | 大多数常规场景 |
+| Selector-based Hook | 高（索引烘焙） | 中 | 需要基于特定目标执行逻辑的场景 |
+| 回调 Hook | 高 | 中 | 计算密集型、需要读写参数或自定义逻辑的场景 |
 
-## 性能比较
-
-| Hook 类型 | 性能 | 灵活性 | 可读性 | 适用场景 |
-|----------|------|--------|--------|----------|
-| 声明式 Hook | 高 | 中 | 高 | 大多数常规场景 |
-| Selector-based Hook | 高 | 高 | 中 | 需要基于特定目标执行逻辑的场景 |
-| 自定义 Hook | 最高 | 高 | 中 | 计算密集型操作 |
+本表是定性指引，不含测量数据。声明式 Op 完全在引擎会话内执行；回调 Hook 每次
+触发跨一次 Python↔Rust 边界。实际性能取决于模型规模与回调内容，请以自己的
+工作负载实测为准。
 
 ## 运行时修改参数
 
-Hook 可以直接修改种群配置参数——`config` 作为参数传入，原地写入立即生效：
+Hook 内修改参数的推荐通道是 `pop.params`：
 
 ```python
 import natal as nt
-from natal.data import DiscretePopulationConfig
-from natal.data import DiscretePopulationState
+from natal.frontend.hooks.tick_context import TickContext
 
-@nt.hook(event="early", custom=True)
-def heatwave(state: DiscretePopulationState,
-             config: DiscretePopulationConfig,
-             deme_id: int) -> int:
-    if state.n_tick == 10:
-        # 直接写 0-d ndarray——最快路径
-        config.carrying_capacity[()] = 2000
-        # 读写自定义字段——hook 和外部共享数据
-        config.custom['temperature'][()] = 40.0
+@nt.hook(event="early")
+def heatwave(pop: TickContext) -> int:
+    if pop.tick == 10:
+        pop.params.carrying_capacity = 2000.0
+        pop.params.sex_ratio = 0.55
     return 0
 ```
 
-Hook 签名统一为 `(state, config, deme_id) → int`。`config` 允许原地修改，修改后的值对当前 tick 的后续 hook 和流程立即可见。
+语义（各入口统一）：
 
-如果需要字符串参数名路由，可以用 `hook_set_param`——它封装了 `objmode` + `set_param`：
+- 写入经过 jsonc 边界校验，超出 `parameters.jsonc` 中声明的 `bounds` 抛 `ValueError`；
+- 同 tick 后续阶段立即生效（tick 内和显式 `trigger_event` 写入都通过所属 Rust 会话提交）；
+- 每条实际变化追加到 `pop.params_log`，格式 `(tick, name, old, new)`；
+- 向量/张量参数用 `pop.params.tensor_write(name, values)`。
 
-```python
-from natal.configurator import hook_set_param
+自定义字段在回调外用 `pop.config.custom['name']` 读取（查询快照），构建时用
+`.custom(temperature=25.0)` 初始化，运行时用 `pop.update().custom(...)` 修改。
+自定义值保留 bool/int/float 类型以及任意维数数组的形状；空间模型按 deme 独立保存，并纳入检查点。
 
-@nt.hook(event="early", custom=True)
-def recovery_hook(state, config, deme_id):
-    if state.n_tick == 10:
-        hook_set_param(config, "carrying_capacity", 5000.0)
-        hook_set_param(config, "eggs_per_female", 100.0)
-    return 0
-```
+回调内**没有公开的读取入口**：`TickContext` 不提供 `config`，`ctx.state` 也没有 `config` 属性，`ctx.params` 只接受注册参数。回调内可写（`ctx.update().custom(...)`，随事件事务提交），读取请在回调外进行。自定义字段不在参数路由表中，因此 `Op.set_param` 在编译期拒绝它们（`ValueError`）。
 
-性能介于直接写（nopython）和裸 `with objmode()` 之间。自定义字段通过 `config.custom['name'][()]` 读写，构建时通过 `.custom(temperature=25.0)` 初始化，运行时可通过 `pop.update().custom(...)` 修改。
+Hook 内如需链式更新，可用 `pop.update()` 返回的 `RuntimeUpdater`（域方法与构建链同语法）。
+
+## 事件事务
+
+- 每个 Python 回调统一提交状态、生态、遗传参数、自定义值和 RNG 位置。非法状态或异常会丢弃该回调的候选；此前成功回调的提交保留。
+- 事件内所有 Hook（声明式与回调）按跨类型 `priority` 顺序执行，后面的 Hook 能看到前面的写入。声明式操作写入的最终参数变化按原生事件提交，同一参数多次写入合并为一条从初值到终值的审计记录；每个 Python 回调逐个独立提交并分别记录日志。
+- 普通和空间模型中的成功参数更新，对同一 tick 的后续回调和阶段立即可见。Rust 保存当前值和参数日志，Python 配置读取返回隔离快照。空间 `ctx.params.tensor_write()` 和 deme 参数写入由原生会话为变化的遗传数据建立独立变体，不影响其他 deme。
+- 回调异常保留原始 Python 异常类型。失败会话必须 reset 或恢复检查点后才能再次运行。
+- `stop()` 在当前事件边界停止，保留该阶段的状态和位置，tick 不递增；继续运行需要 reset 或恢复一个 Ready 检查点。
+- 只有回调访问 state 或 metrics 时才生成 Python 状态数组。仅使用参数或 RNG 的回调不会创建 Python 状态数组。
 
 ## 相关章节
 
 - [Hook 系统](2_hooks.md) - 基础 Hook 概念和声明式 Hook 使用
+- [运行时参数修改](3_runtime_modification.md)
 - [Modifier 机制](3_modifiers.md) - 遗传修饰器机制
 - [模拟内核深度解析](4_simulation_engine.md) - 模拟内核的工作原理
-- [Numba 优化指南](4_numba_optimization.md) - Numba 优化技巧

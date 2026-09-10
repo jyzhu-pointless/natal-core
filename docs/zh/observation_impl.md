@@ -7,10 +7,10 @@
 Observation 只定义“怎样从种群状态得到观测结果”，History 只定义“保存哪一种快照”。两者在构建阶段由 RecordingPlan 连接，但仍是独立概念：
 
 ```text
-Configurator.with_observation(...)
+PopulationBuilder.with_observation(...)
   → 编译不可变的 canonical Observation
 
-Configurator.record_history(mode=...)
+PopulationBuilder.record_history(mode=...)
   → 选择 raw 或 observation History schema
 
 Population state
@@ -27,23 +27,26 @@ Population state
 | `output/observation.py` | 定义 `Observation`、`ObservationResult`、`ObservationFilter` 与恒等观测 |
 | `output/history.py` | 定义不可变 schema、类型化数组视图、raw History 的事后投影 |
 | `output/_recording.py` | 在构建阶段编译 `RecordingPlan`、行宽与空间布局 |
-| `output/record.py` | 为非空间引擎提供统一的观测行编码 |
-| `engine/templates/spatial_lifecycle_*.tmpl.py` | 运行空间生命周期并传回规则化 raw batch |
-| `spatial/population.py` | 在空间容器边界应用 canonical Observation，再提交 History |
+| `rust/src/output/history.rs` | 拥有历史环形存储、行数据、保留预算及共享历史句柄 |
+| `rust/src/output/observation.rs` | 拥有数值投影及当前状态观测入口 |
+| `rust/src/output/parameter_log.rs` | 拥有参数日志及日志值转换 |
+| `rust/src/sessions/spatial.rs` | 批量运行空间生命周期，在 Rust 内记录边界 |
+| `spatial/population.py` | 传递运行控制与 selector，包装 Rust 观测查询结果 |
 
 ## 构建阶段的公开接口
 
-非空间 Configurator 使用：
+非空间 PopulationBuilder 使用：
 
 ```text
-.with_observation(groups, collapse_age=False)
+.with_observation(groups, *, collapse_age=False)
 ```
 
-空间 Configurator 额外接受 deme 选择与处理方式：
+空间 PopulationBuilder 额外接受 deme 选择与处理方式：
 
 ```text
 .with_observation(
     groups,
+    *,
     collapse_age=False,
     demes=None,
     deme_mode="preserve",
@@ -63,7 +66,7 @@ Population state
 
 `demes` 必须是非空、无重复且位于 Population 范围内的整数序列。所有 group 共享同一个有序 deme 选择；不能为不同 group 指定不同的 deme 集合。`deme_mode` 只接受 `"preserve"` 和 `"aggregate"`。
 
-Observation 和 History schema 在 `build()` 时冻结。运行时 Configurator 不允许更换 `with_observation()` 或 `record_history()` 规则。
+Observation 和 History schema 在 `build()` 时冻结。运行时 PopulationBuilder 不允许更换 `with_observation()` 或 `record_history()` 规则。
 
 ## Canonical Observation
 
@@ -160,22 +163,17 @@ Observation History 已经丢弃未记录的 ZType 与未选择的 deme 信息�
 
 ## 空间记录路径
 
-空间记录不在 Numba wrapper 内执行 Observation。wrapper 的职责是运行生命周期、迁移，并在稳定 tick 边界返回规则化 raw batch：
+空间会话在 Rust 内运行生命周期与迁移，在记录边界直接写入 Rust HistoryStore：raw 模式保存完整状态，observation 模式使用已编译的 selector 投影后仅保存观测值。
 
 ```text
-Numba spatial wrapper
-  → [tick, all deme individual_count, all deme sperm_storage]
-  → SpatialPopulation._process_kernel_history(...)
-       ├─ raw History: 验证并提交完整 batch
-       └─ observation History:
-            reshape 为规则化空间 count
-            → canonical Observation.apply(...)
-            → 提交固定形状的投影行
+Rust spatial session
+  → lifecycle and migration
+  → raw state or native observation projection
+  → bounded HistoryStore and raw checkpoints
+  → Python query: independent result arrays
 ```
 
-Python fallback 在相同的稳定 tick 边界调用 `_record_snapshot()`。raw mode 提交完整空间状态；observation mode 调用同一个 `Observation.apply()`。因此两个后端共享相同的 Observation 语义和 History schema，只是 raw batch 的产生位置不同。
-
-空间 wrapper 传 raw batch 的原因是保持 engine transport 规则且固定：生命周期内核不需要理解 group、deme selection 或 aggregate 规则。Observation 的所有语义集中在 canonical `Observation` 和空间容器边界，避免 engine、Python fallback 与事后投影各自实现一套规则。
+当前状态观测、raw 历史的事后投影与运行时观测记录共享同一套 Rust 数值实现。Python 编译 selector、维护标签并提供只读查询出口；无 Python 回调的批量运行不逐 tick 返回 Python，也不往返传输完整状态。手动快照同样直接从会话记录。`max_rows` 在逐条写入时淘汰旧记录及其检查点，避免先积累整个运行批次。
 
 ## 已删除的 compact 空间布局
 
@@ -199,7 +197,7 @@ Python fallback 在相同的稳定 tick 边界调用 `_record_snapshot()`。raw 
 4. `collapse_age=True` 与未折叠结果沿 age 轴求和逐元素相等。
 5. raw History 保留所有 deme、ZType 及适用的 sperm storage。
 6. raw History 的事后投影与同 tick 的 `Observation.apply()` 逐元素相等。
-7. Numba 路径与 Python fallback 在确定性模拟中产生相同 ticks 和相同 payload。
+7. 引擎内批次与带外快照在确定性模拟中，对同一 tick 产生相同 payload；注意批次记录包含 tick 0 的初始边界，而带外 `record_snapshot()` 记录当前 tick。
 8. 未选择的 deme 不依赖 sentinel 表示，真实零计数不会与选择状态混淆。
 
 断言应比较明确的轴和逐坐标值；只比较总和或排序后的扁平数组无法发现轴交换和 deme 顺序错误。

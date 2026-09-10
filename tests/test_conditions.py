@@ -1,9 +1,9 @@
-"""Tests for natal.modifiers.conditions — all Condition subclasses and combinators."""
+"""Tests for natal.frontend.modifiers.conditions — all Condition subclasses and combinators."""
 
 from __future__ import annotations
 
 import natal as nt
-from natal.modifiers.conditions import (
+from natal.frontend.modifiers.conditions import (
     _And,
     _Maternal,
     _Or,
@@ -17,7 +17,7 @@ from natal.modifiers.conditions import (
     slab,
     ztype_has,
 )
-from natal.registry.index import IndexRegistry
+from natal.frontend.registry.index import IndexRegistry
 
 # ---------------------------------------------------------------------------
 # Shared test data (module-level — Species is a singleton by name)
@@ -88,7 +88,7 @@ def test_sex_mismatch():
 
 def test_sex_int_index():
     """sex() also works via resolve_sex_label with int 0/1 directly."""
-    from natal.modifiers.conditions import _Sex
+    from natal.frontend.modifiers.conditions import _Sex
     c = _Sex(0)
     assert c._matches(sex_idx=0, ztype_idx=0, genotype=_G_AA, slab="default", registry=_registry(_G_AA))
     assert not c._matches(sex_idx=1, ztype_idx=0, genotype=_G_AA, slab="default", registry=_registry(_G_AA))

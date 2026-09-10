@@ -64,9 +64,12 @@ sp = nt.Species.from_dict(
 ```python
 # 查看所有可能的基因型
 all_genotypes = sp.get_all_genotypes()
-print(f"总共有 {len(all_genotypes)} 种基因型")
-# 输出: 总共有 6 种基因型
+print(f"总共有 {len(all_genotypes)} 个基因型枚举项")
+# 输出: 总共有 9 个基因型枚举项
+# 枚举按母本|父本的有序组合展开，默认 unordered=True 下会规范化，去重后为 6 种：
 # (WT|WT, WT|Drive, WT|Resistance, Drive|Drive, Drive|Resistance, Resistance|Resistance)
+print(f"去重后: {len(set(all_genotypes))} 种")
+# 输出: 去重后: 6 种
 
 # 获取特定基因型
 wt_wt = sp.get_genotype_from_str("WT|WT")
@@ -196,7 +199,7 @@ pop = (nt.DiscreteGenerationPopulation
 
 ### 使用其他预设
 
-目前预设系统包括 [HomingDrive](api/presets.md#natal.presets.HomingDrive) 和 [ToxinAntidoteDrive](api/presets.md#natal.presets.ToxinAntidoteDrive) 两类，未来会持续扩展更多预设类型。
+目前预设系统包括 [HomingDrive](api/presets.md#natal.frontend.presets.HomingDrive) 和 [ToxinAntidoteDrive](api/presets.md#natal.frontend.presets.ToxinAntidoteDrive) 两类，未来会持续扩展更多预设类型。
 
 你也可以自定义预设，详见 [设计你自己的预设](3_custom_presets.md)。
 
@@ -207,7 +210,7 @@ pop = (nt.DiscreteGenerationPopulation
 ```python
 pop = (nt.AgeStructuredPopulation
     .setup(species=sp, name="MyPop")
-    .age_structure(n_ages=8)
+    .age_structure(n_ages=8, new_adult_age=2)
     .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
     .fitness(viability={
         "Resistance|Resistance": {"female": 0.7},   # 抗性纯合子生存率降低
@@ -227,7 +230,7 @@ pop = (nt.AgeStructuredPopulation
 **Hook 系统**允许你在模拟循环的关键节点（如每步开始、生存筛选后等）注入自定义干预或监测逻辑。使用声明式 `Op` 语法最为高效直观：
 
 ```python
-from natal.hooks import hook, Op
+from natal.frontend.hooks import hook, Op
 
 @hook(event='first')
 def release_drive_males():
@@ -254,7 +257,7 @@ pop = (nt.AgeStructuredPopulation
 )
 ```
 
-> **💡 提示**: 对于需要高性能或复杂逻辑的高级用户，可以使用原生 Numba Hook。详见 [Hook 系统](2_hooks.md)
+> **💡 提示**: 对于需要高性能或复杂逻辑的高级用户，可以注册单参数回调 Hook 或选择器 Hook；它们与声明式 Hook 执行同一套事件语义。详见 [Hook 系统](2_hooks.md)
 
 ---
 
@@ -318,7 +321,7 @@ NATAL 提供了一个基于 NiceGUI 的实时可视化面板，可以在浏览�
 
 ```python
 import natal as nt
-from natal.ui import launch
+from natal.frontend.ui import launch
 
 # ... 定义遗传架构、构建种群 ...
 
@@ -338,16 +341,17 @@ launch(pop, port=8080, title="My Simulation")
 2. **映射矩阵生成**: 根据遗传预设和遗传映射的 `modifiers` 生成两个关键矩阵：
    - `基因型→配子`: 规定每个基因型产生什么配子
    - `配子→合子`: 规定配子组合产生什么基因型
-3. **配置编译**: 所有参数被编译成 `PopulationConfig` NamedTuple，为 Numba JIT 优化做准备
+3. **配置编译**: 所有参数被编译成 `ModelDraft` NamedTuple，由 Rust 原生引擎消费
 4. **Hooks 编译**: 用户自定义的 Hooks 被编译为执行计划，将在对应的时机被调用
 5. **状态初始化**: 根据初始分布创建 `PopulationState` NamedTuple（包含 numpy 数组）
 
 这个过程对用户透明，但理解它很重要。详见：
 - [Index registry](4_index_registry.md)
-- [PopulationState & PopulationConfig](4_population_state_config.md)
+- [PopulationState & ModelDraft](4_population_state_config.md)
 - [Modifiers 系统](3_modifiers.md) 和 [预设系统](2_genetic_presets.md)
 - [Hooks 系统](2_hooks.md)
-- [Numba 优化指南](4_numba_optimization.md)---
+
+---
 
 ## 📊 完整示例
 
@@ -356,7 +360,7 @@ launch(pop, port=8080, title="My Simulation")
 ```python
 import natal as nt
 from natal import HomingDrive
-from natal.hooks import hook, Op
+from natal.frontend.hooks import hook, Op
 
 sp = nt.Species.from_dict(
     name="FruitFly",
@@ -380,6 +384,8 @@ pop = (nt.DiscreteGenerationPopulation
     .setup(species=sp, name="FruitFlyPop", stochastic=True)
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .reproduction(eggs_per_female=50, sex_ratio=0.5)
+    .competition(low_density_growth_rate=6.0, carrying_capacity=100000,
+                 juvenile_growth_mode="beverton_holt")   # 密度制约，避免种群指数爆炸
     .presets(drive)
     .hooks(release_drive)              # 注册 Hook
     .build()
@@ -395,7 +401,7 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 ```python
 import natal as nt
 from natal import HomingDrive
-from natal.hooks import hook, Op
+from natal.frontend.hooks import hook, Op
 
 sp = nt.Species.from_dict(
     name="AnophelesGambiae",
@@ -453,7 +459,6 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 2. **理解遗传架构**：[遗传结构与实体](2_genetics.md) - 深入了解Species、Chromosome等概念
 3. **掌握高级功能**：[Hook 系统](2_hooks.md) - 学习如何注入自定义模拟逻辑
 4. **需要自定义遗传规则**：[Modifier 机制](3_modifiers.md) - 手动编写gamete/zygote修饰器
-5. **性能优化**：[Numba 优化指南](4_numba_optimization.md) - 提升模拟性能
 
 ---
 
@@ -463,7 +468,7 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 **A**: 用来标记配子的附加维度。例如 "default" 和 "Cas9_deposited" 可以区分有没有 Cas9 蛋白沉积的配子。在计算合子时，会同时考虑配子的等位基因和标签。
 
 ### Q: 为什么初始化较慢？
-**A**: 初始化时要生成两个映射矩阵，复杂度与基因型数量的 3-4 次方有关，根据 numba 缓存情况可能还需要不同程度的编译。对于相对简单（仅有几十种基因型）的遗传学设定，预计需要数秒至数十秒时间。这只发生一次。之后的每个 tick 速度很快。
+**A**: 初始化时要生成两个映射矩阵，复杂度与基因型数量的 3-4 次方有关，首次构建需要数秒至数十秒（与基因型数量相关）。这只发生一次。之后的每个 tick 很快。
 
 ### Q: 什么时候使用离散世代种群？
 **A**: 当你的模型不需要年龄结构时，使用`DiscreteGenerationPopulation`更简单，适用于：

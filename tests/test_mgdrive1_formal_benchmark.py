@@ -242,7 +242,7 @@ def test_natal_trajectory_seed_axes_release_order_and_summary(
         "build_hex_benchmark_scenario",
         lambda **_kwargs: scenario,
     )
-    monkeypatch.setattr(trajectory, "set_numba_seed", seeds.append)
+    monkeypatch.setattr(trajectory, "seed_rng", seeds.append)
 
     def preserve_state(*args: object, **kwargs: object) -> SpatialPatchState:
         """Record the scheduled release and preserve exact state values."""

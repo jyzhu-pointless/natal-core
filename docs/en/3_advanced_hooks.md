@@ -1,403 +1,265 @@
 # Advanced Hook Tutorial
 
-The [Basic Tutorial](2_hooks.md) introduced declarative Hooks (`Op.add`, `Op.scale`, etc.), which are suitable for most common scenarios.
-When you need to directly manipulate NumPy arrays for more flexible state modifications (e.g., conditional branching, loops, custom calculations),
-you can use Custom Hooks or Selector-based Hooks.
+The [basic tutorial](2_hooks.md) covers declarative hooks (`Op.add`, `Op.scale`, etc.), which fit most routine scenarios.
+When you need to operate on NumPy arrays directly for more flexible state changes (conditional branches, loops, custom arithmetic, hook-side runtime parameter writes), use the single-parameter callback hook or the selector-based hook.
 
-## Custom Hooks
+## Single-Parameter Callback Hook (TickContext)
 
-Custom Hooks allow you to directly write code to manipulate the simulation state, executed after Numba compilation.
+Callback hooks let you write code that operates on the simulation state directly; they are invoked on every firing. The parameter is a `TickContext` object with this public surface:
+
+| Member | Type / semantics |
+|---|---|
+| `pop.tick` | Current simulation tick (read-only). |
+| `pop.deme_id` | Deme index of this invocation (`0` panmictic, the live deme index under a SpatialPopulation, read-only). |
+| `pop.state` | Writable transaction candidate, materialized on first state or metrics access; commits when the callback succeeds. |
+| `pop.params` | Writable parameter surface (same writer stack as `pop.params`; attribute writes are validated in the candidate and reach the Rust session and audit log when the callback succeeds). |
+| `pop.blueprint` | Read-only dimensions, name catalogs, and engine switches (`n_sexes`, `n_ages`, `n_ztypes`, `discrete`, `stochastic`, `continuous_sampling`, `extreme_speed_mode`, `ztype_names`, `gtype_names`). |
+| `pop.metrics` | On-demand metrics view (recomputed on every access). |
+| `pop.rng` | Controlled sampler of the persistent Rust RNG stream for this deme; never touches global `numpy.random`. |
+| `pop.update()` | Returns a runtime `RuntimeUpdater` bound to the owning population (same domain-method syntax as the build chain). |
+| `pop.stop()` / `pop.stop_requested` | Request/query run termination at the event boundary. |
+
+Parameter candidates are copied into Python only when the callback accesses parameters or configuration. Callbacks that only count visits, inspect state, or draw random numbers do not transfer parameter tensors. Validated writes update the native transaction directly, and an exception discards that callback's candidate.
 
 ### Basic Usage
 
 ```python
-from natal.hooks import hook
+from natal.frontend.hooks import hook
+from natal.frontend.hooks.tick_context import TickContext
 
 
-@hook(event="late", custom=True, priority=10)
-def custom_release_hook(state, config, deme_id=-1):
-    # state.individual_count is a NumPy array of individual counts
-    # Shape: (sex, age, genotype)
-    # sex=0 corresponds to female, sex=1 corresponds to male
+@hook(event="late", priority=10)
+def custom_release_hook(pop: TickContext) -> int:
+    # pop.state.individual_count is the individual-count NumPy array
+    # with shape (sex, age, genotype)
+    # sex=0 is female, sex=1 is male
 
-    # Release 100 individuals every 10 ticks
-    if state.n_tick % 10 == 0:
-        # Assume the genotype index for Drive|WT is 1
-        state.individual_count[:, :, 1] += 100
+    # release 100 individuals every 10 ticks
+    if pop.tick % 10 == 0:
+        # assume the genotype index of Var|WT is 1
+        pop.state.individual_count[:, :, 1] += 100
 
-    return 0  # 0 means continue simulation
+    return 0  # 0 continues the simulation
 ```
 
-### Function Signature
+### Array-Indexing Notes
 
-Custom hooks use the signature `(state, config, deme_id=-1)`:
+`pop.state.individual_count` is dimension-ordered `(sex, age, genotype)`:
 
-- `state` — `DiscretePopulationState` or `PopulationState`, provides `individual_count` and `n_tick`
-- `config` — `PopulationConfig` or `DiscretePopulationConfig`, supports in-place mutation
-- `deme_id` — deme index (spatial populations), defaults to -1
-
-A shorter 2-argument form `(state, config)` is also accepted (omits deme_id).
-
-### Array Indexing Notes
-
-The dimension order of `state.individual_count` is `(sex, age, genotype)`:
-
-- `sex=0` corresponds to FEMALE, `sex=1` corresponds to MALE
-- In Numba mode, `Sex.MALE` and similar enum types cannot be used directly for indexing; integer values or `.value` must be used
+- `sex=0` is female (FEMALE), `sex=1` is male (MALE)
+- use integer indices directly; take `.value` for enums (`Sex.MALE.value`)
 
 ```python
-# Correct approach
-male_count = state.individual_count[1, :, :].sum()
-female_count = state.individual_count[0, :, :].sum()
+# correct
+male_count = pop.state.individual_count[1, :, :].sum()
+female_count = pop.state.individual_count[0, :, :].sum()
 
-# Or using .value
-male_count = state.individual_count[Sex.MALE.value, :, :].sum()
+# or use .value
+male_count = pop.state.individual_count[Sex.MALE.value, :, :].sum()
 ```
 
-### Complete Example
+### Full Example (with runtime parameter writes)
 
 ```python
-from natal.hooks import hook
+from natal.frontend.hooks import hook
+from natal.frontend.hooks.tick_context import TickContext
 
 
-@hook(event="early", custom=True, priority=5)
-def custom_culling_hook(state, config, deme_id=-1):
-    # Selective culling of specific genotypes
-    if state.n_tick > 50:
-        # The genotype index for WT|WT is 0
-        wt_wt_count = state.individual_count[:, :, 0].sum()
+@hook(event="early", priority=5)
+def custom_culling_hook(pop: TickContext) -> int:
+    # selective culling of one genotype
+    if pop.tick > 50:
+        # genotype index of WT|WT is 0
+        wt_wt_count = pop.state.individual_count[:, :, 0].sum()
         if wt_wt_count > 10000:
-            state.individual_count[:, :, 0] = state.individual_count[:, :, 0] * 0.9
+            pop.state.individual_count[:, :, 0] = pop.state.individual_count[:, :, 0] * 0.9
 
+    # hook-side runtime parameter write: takes effect immediately and lands in params_log
+    pop.params.carrying_capacity = float(pop.params.carrying_capacity) * 0.5
     return 0
 ```
 
-## Selector-based Hooks
+- Return `0` (or `RESULT_CONTINUE`) to continue; a non-zero value (or `RESULT_STOP`) stops immediately.
+- `pop.params.<name> = v` is the recommended parameter-write channel inside hooks: the write is jsonc-bounds-validated, visible to later stages of the same tick, and appends one `(tick, name, old, new)` row to `pop.params_log`.
+- `stop()` called **in the late event stops at the event boundary immediately** (the rest of the tick does not execute and the tick does not advance); `stop_requested` queries that state.
 
-Selector-based Hooks allow you to specify target genotypes by symbolic name (e.g. ``"Drive|WT"``).
-The framework resolves symbols to integer indices at registration time and bakes them into
-the compiled code.
+## Selector-Based Hooks
+
+Selector-based hooks are a callback-hook variant where genotypes are addressed symbolically (e.g. `"Var|WT"`). The framework resolves the symbols to integer indices at registration; single-value selectors collapse to `int`, multi-value selectors are injected as `int32` ndarrays:
 
 ### Basic Usage
 
 ```python
-from natal.hooks import hook
+from natal.frontend.hooks import hook
+from natal.frontend.hooks.tick_context import TickContext
 
 
-@hook(event="late", selectors={"target_gt": "Drive|WT"}, custom=True, priority=10)
-def cap_target(state, config, target_gt):
-    # target_gt is the genotype index (integer) resolved by the selector
-    if state.n_tick % 10 == 0:
-        state.individual_count[:, :, target_gt] *= 0.95
+@hook(event="late", selectors={"target_gt": "Var|WT"}, priority=10)
+def cap_target(pop: TickContext, target_gt: int) -> int:
+    # target_gt is the selector-resolved genotype index (int for single values)
+    if pop.tick % 10 == 0:
+        pop.state.individual_count[:, :, target_gt] *= 0.95
+    return 0
 ```
 
 ### Selector Resolution Rules
 
-`selectors` values support the following types:
+`selectors` values accept:
 
-| Type | Example | Resolution |
-|------|---------|-----------|
-| `str` (genotype label) | `"WT\|WT"` | single index |
-| `str` (wildcard) | `"*"` | all genotype indices |
-| `int` | `3` | used directly |
-| `range` | `range(3)` | `[0, 1, 2]` |
-| `list` / `tuple` | `["WT\|Dr", 4]` | multiple indices |
-| `Genotype` object | `species.genotypes[0]` | corresponding index |
+| Type | Example | Injected value |
+|------|---------|-----------------|
+| `str` (genotype label) | `"WT\|WT"` | single index (`int`) |
+| `str` (wildcard) | `"*"` | all genotype indices (`int32` array) |
+| `int` | `3` | used as index (`int`) |
+| `range` | `range(3)` | `[0, 1, 2]` (`int32` array) |
+| `list` / `tuple` | `["WT\|Dr", 4]` | multiple indices (`int32` array) |
+| `Genotype` object | `species.genotypes[0]` | matching index (`int`) |
 
-> **Note**: Selectors use `IndexRegistry.resolve_genotype_index()` for exact string
-> matching. Pattern syntax (`::`, `|*`, etc.) is not supported. Use `GenotypeSelector`
-> to pre-resolve patterns to index arrays if needed.
+Single-value selectors collapse to `int`, multi-value selectors stay `np.ndarray[int32]`.
+The function signature is `def hook(pop: TickContext, <selector name>) -> int` -- selector names are the keyword-argument names.
 
-### Parameter Passing Mode
-
-Selector Hooks support three parameter passing modes via the `mode` argument:
-
-| mode | Behavior | Example signature |
-|------|---------|-------------------|
-| `"auto"` (default) | Auto-detect: pack if param name not in keys | See below |
-| `"expand"` | Each selector as an individual keyword argument | `fn(state, config, a, b)` |
-| `"aggregate"` | All selectors packed into a single namedtuple | `fn(state, config, ctx)` |
-
-#### mode="expand"
-
-Each selector key becomes a separate function parameter:
+### Multi-Selector Example
 
 ```python
-@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="expand", custom=True)
-def balance_population(state, config, drive, wt):
-    # drive and wt are both int (genotype indices)
-    drive_count = state.individual_count[:, :, drive].sum()
-    wt_count = state.individual_count[:, :, wt].sum()
+@hook(event="early", selectors={"drive": "Var|WT", "wt": "WT|WT"})
+def balance_population(pop: TickContext, drive: int, wt: int) -> int:
+    drive_count = pop.state.individual_count[:, :, drive].sum()
+    wt_count = pop.state.individual_count[:, :, wt].sum()
 
     if drive_count > wt_count * 2:
-        state.individual_count[:, :, drive] *= 0.8
+        pop.state.individual_count[:, :, drive] *= 0.8
 
     return 0
 ```
 
-#### mode="aggregate"
+> **Note**: selectors use exact string matching and do not support pattern syntax (`::`, `|*`, ...). For pattern matching, convert to index arrays with `GenotypeSelector` before registration.
 
-All selectors are packed into a namedtuple, accessed via attributes:
+## Random Sampling Inside Hooks
 
-```python
-@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"}, mode="aggregate", custom=True)
-def balance_population(state, config, sel):
-    # sel.drive and sel.wt are both int (genotype indices)
-    # namedtuple attribute access is fully supported in Numba
-    drive_count = state.individual_count[:, :, sel.drive].sum()
-    wt_count = state.individual_count[:, :, sel.wt].sum()
-
-    if drive_count > wt_count * 2:
-        state.individual_count[:, :, sel.drive] *= 0.8
-
-    return 0
-```
-
-**Advantage**: Adding a new selector only requires updating the `selectors` dict,
-not the function signature. The parameter name can be any valid identifier
-(e.g. `sel`, `ctx`, `params`).
-
-#### mode="auto" (default)
-
-When no `mode` is specified, the framework detects the style from the function
-signature:
-
-- Extra positional parameter name **not in** selector keys → aggregate mode
-- Extra positional parameter name **in** selector keys → expand mode
+Randomness inside callback hooks must come from `pop.rng` (the controlled Rust sampler). Global `np.random` state is never touched:
 
 ```python
-# "ctx" ∉ {"drive", "wt"} → auto aggregate
-@hook(event="early", selectors={"drive": "Dr|WT", "wt": "WT|WT"}, custom=True)
-def hook_agg(state, config, ctx):
-    ctx.drive, ctx.wt  # namedtuple attributes
-
-# "wt" ∈ {"wt"} → auto expand
-@hook(event="early", selectors={"wt": "WT|WT"}, custom=True)
-def hook_exp(state, config, wt):
-    ...  # wt is a plain int parameter
-```
-
-### Using deme_id
-
-All three modes support the `deme_id` parameter for spatial populations:
-
-```python
-# Expand + deme_id
-@hook(event="early", selectors={"target": "Dr|Dr"}, mode="expand", custom=True)
-def hook1(state, config, deme_id, target):
-    if deme_id == 0:
-        state.individual_count[:, :, target] = 0
-
-# Aggregate + deme_id
-@hook(event="early", selectors={"target": "Dr|Dr"}, mode="aggregate", custom=True)
-def hook2(state, config, deme_id, sel):
-    if deme_id == 0:
-        state.individual_count[:, :, sel.target] = 0
-```
-
-### Features
-
-- Selectors are resolved at registration time and baked into generated Numba code
-- Aggregate mode uses `collections.namedtuple`; field access is natively supported in Numba
-- Single-value selectors (e.g. `"WT|WT"`) are unboxed to `int`; multi-value selectors remain `np.ndarray[int32]`
-- Suitable for scenarios requiring logic based on specific targets
-
-## Numba-Compatible Random Sampling
-
-When performing random sampling in custom Hooks, it is recommended to use functions provided by the `natal.numba` module. These functions are optimized to remain efficient in both Numba mode and pure Python mode:
-
-```python
-from natal.numba import (
-    binomial,
-    binomial_2d,
-    continuous_binomial,
-    continuous_multinomial,
-    set_numba_seed,
-)
-from natal.hooks import hook
+from natal.frontend.hooks import hook
+from natal.frontend.hooks.tick_context import TickContext
 
 
-@hook(event="late", custom=True, priority=10)
-def stochastic_culling_hook(state, config, deme_id=-1):
-    if state.n_tick > 50:
-        # Use binomial distribution for random culling
-        # Assume 10% culling probability for genotype 0
-        n_current = state.individual_count[:, :, 0]
+@hook(event="late", priority=10)
+def stochastic_culling_hook(pop: TickContext) -> int:
+    if pop.tick > 50:
+        # Draws advance this deme's persistent Rust stream.
+        # Checkpoint restoration also restores the stream position.
         survival_prob = 0.9
-
-        # continuous_binomial is more efficient for large counts
-        state.individual_count[:, :, 0] = continuous_binomial(n_current, survival_prob)
-
+        n_current = pop.state.individual_count[:, :, 0]
+        pop.state.individual_count[:, :, 0] = pop.rng.binomial(
+            n_current.astype(int), survival_prob
+        ).astype(float)
     return 0
 ```
 
-### Main API
+The sampler supports `random`, `uniform`, `normal`, `integers`, and `binomial`; binomial counts and probabilities can broadcast over arrays. Repeated accesses within a callback use the same stream. Failed callbacks discard their candidate draws. Replaying a checkpoint with the same hooks and parameters reproduces the subsequent draws. Retained RNG, parameter, and update handles reject access after the callback ends.
 
-| Function | Description |
-|----------|-------------|
-| `binomial(n, p)` | Binomial distribution sampling, returns number of successes in n trials |
-| `binomial_2d(n, p, n_rows, n_cols)` | Element-wise binomial distribution sampling on a 2D array |
-| `continuous_binomial(n, p)` | Continuous binomial distribution, returns floating point (more efficient for large counts) |
-| `continuous_multinomial(n, p_array, out_counts)` | Continuous multinomial distribution |
-| `multinomial(n, pvals)` | Multinomial distribution sampling |
-| `set_numba_seed(seed)` | Set random seed (ensures reproducibility) |
-| `clamp01(x)` | Clamp value to range [0, 1] |
+## Execution Paths
 
-### Use Cases
+The native Rust engine is the only execution backend. Declarative Ops
+compile into a CSR plan that runs inside the engine session; single-parameter
+Python callbacks are bridged into the session (each invocation gets its own
+context wrapper). Out-of-band surfaces -- `trigger_event` and finish events --
+run the same CSR plan through the Rust-side interpreter.
 
-- **Adding randomness after deterministic operations**: First scale deterministically, then add noise with random sampling
-- **Conditional random culling**: Dynamically determine culling probability based on current state
-- **Batch sampling operations**: Use `binomial_2d` for batch sampling across entire arrays
+## Mixing Hook Types
+
+A single event may mix declarative and callback shapes. Within one event, both kinds execute interleaved in one cross-type `priority` order (lower values first; ties keep registration order):
 
 ```python
-@hook(event="late", custom=True, priority=10)
-def age_specific_mortality(state, config, deme_id=-1):
-    if state.n_tick % 10 == 0:
-        # Apply different survival probabilities to each age group
-        survival_rates = np.array([0.8, 0.9, 0.95, 0.98, 0.99])
-
-        # Use binomial_2d for batch sampling
-        n_ages = state.individual_count.shape[1]
-        for age in range(n_ages):
-            n_survivors = binomial_2d(
-                state.individual_count[:, age, :],
-                np.array([survival_rates[age]]),
-                2,  # sex
-                state.individual_count.shape[2]  # n_genotypes
-            )
-            state.individual_count[:, age, :] = n_survivors
-
-    return 0
-```
-
-## Execution Mode and Compatibility
-
-NATAL Core's Hook system automatically selects the execution path based on the global `NUMBA_ENABLED` switch:
-
-| `NUMBA_ENABLED` | Custom Hook Behavior |
-|----------------|---------------------|
-| `True` (default) | Hook code must follow Numba syntax; the system automatically compiles with Numba |
-| `False` | Hooks can use pure Python syntax, dispatched uniformly through `HookExecutor` |
-
-### Why Numba Syntax Is Emphasized?
-
-The framework enables Numba optimization by default, which means:
-
-1. Custom Hooks are by default compiled with Numba via the `njit_switch` decorator
-2. If the code contains unsupported Python features, it will error during registration or first execution
-3. The performance advantage is particularly noticeable in large-scale simulations
-
-### What If You Need to Use Hooks with Numba Disabled?
-
-When `NUMBA_ENABLED=False`:
-
-- All Hooks (declarative, selector, custom) are dispatched uniformly through `HookExecutor`
-- The system executes all Hooks in order based on their `priority`
-- No need to modify Hook definition code to switch execution paths
-
-```python
-from natal.numba import numba_disabled
-import natal as nt
-
-with numba_disabled():
-    # In this context, NUMBA_ENABLED is False
-    pop = nt.DiscreteGenerationPopulation.setup(species).hooks(my_custom_hook).build()
-    pop.run(n_steps=100)
-```
-
-## Mixing Different Types of Hooks
-
-NATAL Core allows mixing different types of Hooks in the same event:
-
-```python
-from natal.hooks import hook, Op
+from natal.frontend.hooks import hook, Op
 
 
-# Declarative Hook: periodically release individuals
+# declarative hook: periodic release
 @hook(event="first", priority=10)
 def release_hook():
-    return [Op.add(genotypes="Drive|WT", ages=[2, 3, 4], delta=100, when="tick % 10 == 0")]
+    return [Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 10 == 0")]
 
 
-# Selector-based Hook (aggregate mode): selector-driven operations
-@hook(event="first", priority=7, selectors={"drive": "Drive|WT"}, mode="aggregate", custom=True)
-def check_drive_threshold(state, config, sel):
-    drive_count = state.individual_count[:, :, sel.drive].sum()
+# selector-based hook
+@hook(event="first", priority=7, selectors={"drive": "Var|WT"})
+def check_drive_threshold(pop, drive):
+    drive_count = pop.state.individual_count[:, :, drive].sum()
     if drive_count > 10000:
-        # Log or record state here
         pass
     return 0
 
 
-# Custom Hook: efficient computation and state modification (deme_id=-1 is default for non-spatial)
-@hook(event="first", custom=True, priority=5)
-def custom_process_hook(state, config, deme_id=-1):
-    # Perform intensive computation
-    for age in range(state.individual_count.shape[1]):
-        state.individual_count[:, age, :] *= 0.99  # Slight mortality
+# callback hook: light mortality
+@hook(event="first", priority=5)
+def custom_process_hook(pop):
+    for age in range(pop.state.individual_count.shape[1]):
+        pop.state.individual_count[:, age, :] *= 0.99
     return 0
 
 
-pop = nt.DiscreteGenerationPopulation.setup(species).hooks(release_hook, check_drive_threshold, custom_process_hook).build()
+pop = (
+    nt.AgeStructuredPopulation.setup(species=sp)
+    .hooks(release_hook, check_drive_threshold, custom_process_hook)
+    .build()
+)
 ```
 
-### Execution Order
+Same-priority hooks run in registration order (stable sort); priority semantics are consistent across all three entry points: in-tick, `trigger_event`, and finish events.
 
-When mixing different types of Hooks:
+## Choosing a Hook Shape
 
-- The system sorts Hooks by their `priority` value (smaller values have higher priority)
-- Hooks with the same priority have an undefined execution order
-- When `NUMBA_ENABLED=True`, selector and custom Hooks are merged into a single Numba function for execution
+| Hook type | Flexibility | Readability | Typical use |
+|----------|--------|--------|----------|
+| Declarative | medium | high | most routine scenarios |
+| Selector-based | high (baked indices) | medium | scenarios targeting specific genotypes |
+| Callback | high | medium | compute-heavy logic, parameter or custom writes |
 
-## Performance Comparison
+This table is qualitative guidance and carries no measured numbers. Declarative Ops
+execute entirely inside the engine session; callback hooks cross a Python<->Rust
+boundary per firing. Actual performance depends on model size and callback content —
+measure it on your own workload.
 
-| Hook Type | Performance | Flexibility | Readability | Use Cases |
-|-----------|-------------|-------------|-------------|-----------|
-| Declarative Hook | High | Medium | High | Most common scenarios |
-| Selector-based Hook | High | High | Medium | Scenarios requiring logic based on specific targets |
-| Custom Hook | Highest | High | Medium | Computationally intensive operations |
+## Modifying Parameters at Runtime
 
-## Runtime Parameter Modification
-
-Hooks can modify population parameters directly — `config` is passed as an argument
-and writes are in-place and immediate:
+Inside hooks, the recommended parameter-write channel is `pop.params`:
 
 ```python
 import natal as nt
-from natal.data import DiscretePopulationConfig
-from natal.data import DiscretePopulationState
+from natal.frontend.hooks.tick_context import TickContext
 
-@nt.hook(event="early", custom=True)
-def heatwave(state: DiscretePopulationState,
-             config: DiscretePopulationConfig,
-             deme_id: int) -> int:
-    if state.n_tick == 10:
-        # Direct write to 0-d ndarray — fastest path
-        config.carrying_capacity[()] = 2000
-        # Read/write custom fields — shared state between hooks and external code
-        config.custom['temperature'][()] = 40.0
+@nt.hook(event="early")
+def heatwave(pop: TickContext) -> int:
+    if pop.tick == 10:
+        pop.params.carrying_capacity = 2000.0
+        pop.params.sex_ratio = 0.55
     return 0
 ```
 
-The hook signature is unified as `(state, config, deme_id) → int`. Changes to `config`
-are immediately visible to subsequent hooks and simulation steps within the same tick.
+Semantics (uniform across entry points):
 
-For string-name parameter routing, use `hook_set_param` — it wraps `objmode` + `set_param`:
+- Writes are jsonc-bounds-validated; values outside the `parameters.jsonc` `bounds` raise `ValueError`;
+- Visible to later stages of the same tick (both in-tick and explicit `trigger_event` writes commit through the owning Rust session);
+- Every actual change appends to `pop.params_log` as `(tick, name, old, new)`;
+- Vector/tensor parameters use `pop.params.tensor_write(name, values)`.
 
-```python
-from natal.configurator import hook_set_param
+Outside a callback, read custom fields through `pop.config.custom['name']` (a query snapshot); initialize them at build time with `.custom(temperature=25.0)` and change them at runtime with `pop.update().custom(...)`. Custom values preserve bool/int/float types and the shape of arrays of any rank. Spatial custom values belong to their own deme and are included in checkpoints.
 
-@nt.hook(event="early", custom=True)
-def recovery_hook(state, config, deme_id):
-    if state.n_tick == 10:
-        hook_set_param(config, "carrying_capacity", 5000.0)
-        hook_set_param(config, "eggs_per_female", 100.0)
-    return 0
-```
+Callbacks have **no public read path** for custom fields: `TickContext` exposes no `config`, `ctx.state` has no `config` attribute, and `ctx.params` accepts registered parameters only. Callbacks can write them (`ctx.update().custom(...)`, committed with the event transaction); read them outside callbacks. Custom fields are not in the parameter route table, so `Op.set_param` rejects them at compile time with `ValueError`.
 
-## Related Chapters
+For chain-style updates inside a hook, use the `RuntimeUpdater` returned by `pop.update()` (same domain-method syntax as the build chain).
 
-- [Hook System](2_hooks.md) - Basic Hook concepts and declarative Hook usage
-- [Modifier Mechanism](3_modifiers.md) - Genetic modifier mechanism
-- [the Simulation Engine Deep Dive](4_simulation_engine.md) - How simulation engine work
-- [Numba Optimization Guide](4_numba_optimization.md) - Numba optimization techniques
+## Event transactions
+
+- A callback commits state, ecology, genetic parameters, custom values, and RNG position together. Invalid state or an exception discards that callback's candidate; earlier successful callbacks remain committed.
+- All hooks of an event (declarative and callback) execute in one cross-type `priority` order and see earlier writes. Declarative parameter writes commit once per native event — repeated writes to one parameter produce one audit row from its initial to final value — while each Python callback commits separately and produces its own rows.
+- A successful parameter update is visible to later callbacks and stages of the same tick in ordinary and spatial models. Rust owns the current values and the parameter log; Python configuration reads return isolated snapshots. Spatial `ctx.params.tensor_write()` and deme parameter writes fork changed genetics inside the native session and leave other demes unchanged.
+- Callback exceptions preserve their original Python type. A failed session requires reset or checkpoint restoration before another run.
+- `stop()` halts at the current event boundary and preserves its state and phase. The tick does not advance; continuing requires reset or restoration of a Ready checkpoint.
+- State arrays cross into Python only when a callback accesses state or metrics. A callback using only parameters or RNG creates no Python state arrays.
+
+## Related Sections
+
+- [Hook System](2_hooks.md) - basic hook concepts and declarative hooks
+- [Runtime Parameter Modification](3_runtime_modification.md)
+- [Modifier Mechanism](3_modifiers.md)
+- [Simulation Engine Deep Dive](4_simulation_engine.md)

@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.data import DiscretePopulationState, PopulationConfig
+from natal.frontend.data import DiscretePopulationState, ModelDraft
+from tests._config_assertions import assert_config_equal
 
 
 def _make_species(name: str = "DiscSp"):
@@ -33,12 +34,12 @@ def _minimal_pop(sp, *, pop_name: str = "DiscPop", stochastic: bool = False):
     )
 
 
-def _build_age_structured_config(sp: nt.Species) -> PopulationConfig:
-    """Build a minimal ``PopulationConfig`` via the age-structured builder.
+def _build_age_structured_config(sp: nt.Species) -> ModelDraft:
+    """Build a minimal age-structured ``ModelDraft`` via the builder.
 
     Used by the negative-contract tests to obtain a real ``PopulationConfig``
     (independent model) that must be rejected by the discrete-generation
-    entry points.  Building via the public Configurator path is less brittle
+    entry points.  Building via the public PopulationBuilder path is less brittle
     than hand-constructing the 40-field NamedTuple.
     """
     age_pop = (
@@ -53,7 +54,7 @@ def _build_age_structured_config(sp: nt.Species) -> PopulationConfig:
         )
         .reproduction(eggs_per_female=10)
         .competition(carrying_capacity=1000, low_density_growth_rate=6.0,
-                     juvenile_growth_mode="concave")
+                     juvenile_growth_mode="beverton_holt")
         .build()
     )
     return age_pop.export_config()
@@ -72,7 +73,7 @@ class TestBuildAndSetup:
         sp = _make_species("Disc_tick0")
         pop = _minimal_pop(sp, pop_name="Disc_tick0_pop")
         assert pop._tick == 0
-        n_genotypes = len(pop._registry.index_to_genotype)
+        n_genotypes = len(pop.registry.index_to_genotype)
         assert pop.state.individual_count.shape == (2, 2, n_genotypes), (
             f"expected shape (2, 2, {n_genotypes}), got {pop.state.individual_count.shape}"
         )
@@ -80,7 +81,7 @@ class TestBuildAndSetup:
     def test_registry_has_expected_genotypes(self):
         sp = _make_species("Disc_gtypes")
         pop = _minimal_pop(sp, pop_name="Disc_gtypes_pop")
-        genotype_strs = [str(g) for g in pop._registry.index_to_genotype]
+        genotype_strs = [str(g) for g in pop.registry.index_to_genotype]
         assert "WT|WT" in genotype_strs
         # Unordered genotypes: WT|WT, WT|Dr, Dr|Dr = 3
         assert len(genotype_strs) == 3, (
@@ -191,11 +192,11 @@ class TestStateAndConfigInterop:
         assert pop._tick == 11
 
     def test_import_config_rejects_non_normalized_discrete_config(self):
-        """import_config rejects a DiscretePopulationConfig with n_ages != 2.
+        """import_config rejects a non-discrete (overlapping) draft.
 
         The discrete-generation engine hardcodes a 2-age lifecycle; a config
         with violated invariants is rejected with ValueError rather than
-        silently normalised.  The population's config must be unchanged
+        silently normalized.  The population's config must be unchanged
         after the exception (error-path state invariant).
         """
         sp = _make_species("Disc_config_reject_nages")
@@ -212,7 +213,7 @@ class TestStateAndConfigInterop:
             pop.import_config(bad)
 
         # State unchanged after the exception.
-        assert pop.export_config() is original_config
+        assert_config_equal(pop.export_config(), original_config)
         assert pop.export_config().n_ages == 2
         assert pop.export_config().new_adult_age == 1
 
@@ -230,7 +231,7 @@ class TestStateAndConfigInterop:
         with pytest.raises(ValueError, match="adult_ages"):
             pop.import_config(bad)
 
-        assert pop.export_config() is original_config
+        assert_config_equal(pop.export_config(), original_config)
         np.testing.assert_array_equal(pop.state.individual_count, original_counts)
 
     def test_import_config_rejects_population_config(self):
@@ -246,9 +247,9 @@ class TestStateAndConfigInterop:
         age_config = _build_age_structured_config(sp)
 
         original_config = pop.export_config()
-        with pytest.raises(TypeError, match="DiscretePopulationConfig"):
+        with pytest.raises(ValueError, match="zero adult survival"):
             pop.import_config(age_config)
-        assert pop.export_config() is original_config
+        assert_config_equal(pop.export_config(), original_config)
 
     def test_import_config_rejects_dict(self):
         """import_config rejects a dict with TypeError — no dict path exists."""
@@ -256,9 +257,9 @@ class TestStateAndConfigInterop:
         pop = _minimal_pop(sp, pop_name="Disc_config_reject_dict_pop")
 
         original_config = pop.export_config()
-        with pytest.raises(TypeError, match="DiscretePopulationConfig"):
+        with pytest.raises(TypeError):
             pop.import_config({"n_ages": 2})  # type: ignore[arg-type]
-        assert pop.export_config() is original_config
+        assert_config_equal(pop.export_config(), original_config)
 
     def test_constructor_rejects_population_config(self):
         """DiscreteGenerationPopulation.__init__ rejects PopulationConfig."""
@@ -266,7 +267,7 @@ class TestStateAndConfigInterop:
 
         age_config = _build_age_structured_config(sp)
 
-        with pytest.raises(TypeError, match="DiscretePopulationConfig"):
+        with pytest.raises(ValueError, match="zero adult survival"):
             nt.DiscreteGenerationPopulation(
                 species=sp,
                 population_config=age_config,
@@ -284,7 +285,7 @@ class TestStateAndConfigInterop:
         new_config = pop.export_config()._replace(stochastic=True)
         pop.import_config(new_config)
 
-        assert pop.export_config() is new_config
+        assert_config_equal(pop.export_config(), new_config)
         assert pop.export_config().stochastic is True
 
 
@@ -307,7 +308,7 @@ class TestMixedGenotypes:
             .build()
         )
         pop.run(1)
-        genotype_strs = [str(g) for g in pop._registry.index_to_genotype]
+        genotype_strs = [str(g) for g in pop.registry.index_to_genotype]
         assert "WT|Dr" in genotype_strs or "Dr|WT" in genotype_strs
 
     def test_all_wt_parents_produce_only_wt_offspring(self):
@@ -317,7 +318,7 @@ class TestMixedGenotypes:
         pop.run(3)
 
         wt_wt_idx = next(
-            i for i, g in enumerate(pop._registry.index_to_genotype) if str(g) == "WT|WT"
+            i for i, g in enumerate(pop.registry.index_to_genotype) if str(g) == "WT|WT"
         )
         # Both sexes, adult age (index 1)
         for sex in (0, 1):
@@ -370,7 +371,7 @@ class TestHomingDriveIntegration:
             .competition(
                 low_density_growth_rate=6.0,
                 carrying_capacity=100000,
-                juvenile_growth_mode="concave",
+                juvenile_growth_mode="beverton_holt",
             )
             .presets(drive)
             .build()
@@ -391,7 +392,7 @@ class TestHomingDriveIntegration:
         expected_drive = [0.10000, 0.18000, 0.29664, 0.45772, 0.63992]
         expected_r2 = [0.00000, 0.01000, 0.02458, 0.04472, 0.06749]
 
-        from natal.presets import count_allele_copies
+        from natal.frontend.presets import count_allele_copies
 
         for i, row in enumerate(history[:5]):
             tick = int(row[0])
@@ -510,7 +511,7 @@ class TestHomingDriveIntegration:
         assert pop._state.individual_count.sum() > 0, (
             "stochastic population should not be empty after 10 ticks"
         )
-        n_genotypes = len(pop._registry.index_to_genotype)
+        n_genotypes = len(pop.registry.index_to_genotype)
         assert pop._state.individual_count.shape == (2, 2, n_genotypes), (
             f"expected shape (2, 2, {n_genotypes}), "
             f"got {pop._state.individual_count.shape}"

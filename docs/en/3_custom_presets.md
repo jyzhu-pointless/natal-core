@@ -33,7 +33,7 @@ Think of it as:
 ### Minimal Working Example
 
 ```python
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 ruleset = GameteConversionRuleSet(name="homing_drive")
 ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
@@ -59,7 +59,7 @@ Allele conversion can also occur at the zygote (fertilized egg) stage, typically
 #### Using ZygoteConversionRuleSet
 
 ```python
-from natal.modifiers import ZygoteConversionRuleSet
+from natal.frontend.modifiers import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
@@ -88,15 +88,15 @@ Drive systems typically use both types of rules simultaneously:
 gamete_ruleset = GameteConversionRuleSet("gamete_drive")
 gamete_ruleset.add_allele_convert("W", "D", rate=0.99)
 
-# Zygote stage: copy conversion (ensure homozygosity)
+# Zygote stage: allele conversion (ensure homozygosity)
 zygote_ruleset = ZygoteConversionRuleSet("zygote_copy")
-zygote_ruleset.add_convert(
+zygote_ruleset.add_allele_convert(
     "W", "D",
     rate=0.95,
     genotype_filter=lambda g: "D" in str(g)
 )
 
-pop.set_gamete_modifier(gamete_ruleset.to_gamete_modifier(pop))
+pop.add_gamete_modifier(gamete_ruleset.to_gamete_modifier(pop))
 pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 ```
 
@@ -111,8 +111,8 @@ pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 Before designing complex conversion rules, it is important to understand the basic template of `GeneticPreset`:
 
 ```python
-from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.modifiers import GameteModifier, ZygoteModifier
+from natal.frontend.presets import GeneticPreset, PresetFitnessPatch
+from natal.frontend.modifiers import GameteModifier, ZygoteModifier
 from typing import Optional
 
 class MyCustomPreset(GeneticPreset):
@@ -123,17 +123,17 @@ class MyCustomPreset(GeneticPreset):
         # Custom parameters
         self.custom_param = 0.5
 
-    def gamete_modifier(self, population) -> Optional[GameteModifier]:
+    def gamete_modifier(self, host) -> Optional[GameteModifier]:
         """Define modification logic at the gamete stage"""
         # Return GameteModifier or None
         return None
 
-    def zygote_modifier(self, population) -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host) -> Optional[ZygoteModifier]:
         """Define modification logic at the zygote stage"""
         # Return ZygoteModifier or None
         return None
 
-    def fitness_patch(self) -> PresetFitnessPatch:
+    def fitness_patch(self) -> Optional[PresetFitnessPatch]:
         """Define fitness effects"""
         # Return fitness configuration dictionary or None
         return None
@@ -141,18 +141,19 @@ class MyCustomPreset(GeneticPreset):
 
 Implementation notes:
 
-1. **All methods are optional** - you can implement 1-3 methods
-2. **At least one method must be implemented** - otherwise the preset will have no effect
+1. **`gamete_modifier` and `zygote_modifier` are abstract methods** - both must be implemented (they may return `None`); otherwise the subclass cannot be instantiated (`TypeError`)
+2. **`fitness_patch` is optional** - the default implementation returns `None`
 3. **Can return None** - indicates no modification needed at that stage
 4. **Supports deferred species binding** - can create without specifying `Species`
+5. **The parameter of `gamete_modifier` / `zygote_modifier` is `host`** - one uniform entry point (interface contract `natal.frontend.genetics.compile.RecipeHost`): at runtime it points to the live Population, during compilation it points to the in-progress PopulationBuilder; both expose the same four read-only attributes — `species`, `config`, `registry`, `index_registry`
 
 ### Simple Examples
 
 #### Simple Point Mutation
 
 ```python
-from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.presets import GeneticPreset, PresetFitnessPatch
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 class PointMutation(GeneticPreset):
     """Simple point mutation: WT mutates to Mutant at a certain frequency"""
@@ -161,14 +162,17 @@ class PointMutation(GeneticPreset):
         super().__init__(name="PointMutation")
         self.mutation_rate = mutation_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("PointMutation")
         ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 
     def fitness_patch(self):
         return {
-            "viability_allele": {"Mutant": 0.98}  # Slightly deleterious
+            "viability_per_allele": {"Mutant": 0.98}  # Slightly deleterious
         }
 ```
 
@@ -183,8 +187,8 @@ class BidirectionalMutation(GeneticPreset):
         self.forward_rate = forward_rate
         self.backward_rate = backward_rate
 
-    def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+    def gamete_modifier(self, host):
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 
@@ -193,7 +197,10 @@ class BidirectionalMutation(GeneticPreset):
         # B -> A (back mutation)
         ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 ## 2. Using genotype_filter to Control Rule Scope
@@ -217,7 +224,7 @@ def my_filter(genotype):
 ### Core Example: W->D Only in W::D Heterozygotes
 
 ```python
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 
 def is_wd_heterozygote(genotype) -> bool:
@@ -244,7 +251,7 @@ This clearly defines the scope of the mechanism.
 
 ### Integration with Pattern Matching Syntax
 
-When rule conditions are complex, it is recommended to reuse the pattern syntax from the documentation rather than writing manual string containment checks.
+When rule conditions are complex, it is recommended to reuse the pattern matching syntax (see [Genotype Pattern Matching](2_genotype_patterns.md)) rather than writing manual string containment checks.
 
 ```python
 def build_filter_from_pattern(species, pattern: str):
@@ -286,11 +293,11 @@ class PatternBasedPreset(GeneticPreset):
         self.pattern = pattern
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+    def gamete_modifier(self, host):
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("PatternBased")
-        pattern_filter = population.species.parse_genotype_pattern(self.pattern)
+        pattern_filter = host.species.parse_genotype_pattern(self.pattern)
 
         ruleset.add_allele_convert(
             from_allele="WT",
@@ -298,7 +305,10 @@ class PatternBasedPreset(GeneticPreset):
             rate=self.conversion_rate,
             genotype_filter=pattern_filter,
         )
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 Practical advice:
@@ -318,8 +328,8 @@ class ConditionalMutation(GeneticPreset):
         self.target_allele = target_allele
         self.required_background = required_background
 
-    def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+    def gamete_modifier(self, host):
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("ConditionalMutation")
 
@@ -331,7 +341,10 @@ class ConditionalMutation(GeneticPreset):
             genotype_filter=lambda gt: self.required_background in str(gt)
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
 ### Maintaining Statistical Consistency with Observations
@@ -383,8 +396,8 @@ A practical Preset should include:
 ### Example: Encapsulating a Minimal DrivePreset
 
 ```python
-from natal.presets import GeneticPreset
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 
 class DrivePreset(GeneticPreset):
@@ -392,7 +405,7 @@ class DrivePreset(GeneticPreset):
         super().__init__(name="DrivePreset")
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("drive_rules")
 
         def is_wd_heterozygote(genotype) -> bool:
@@ -406,17 +419,25 @@ class DrivePreset(GeneticPreset):
             genotype_filter=is_wd_heterozygote,
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
-### Applying Presets in the Builder
+### Applying Presets in the PopulationBuilder Build Chain
 
 ```python
+import natal as nt
+
+# The species must declare the W and D alleles used by DrivePreset
+species = nt.Species.from_dict(name="DriveExpSpecies", structure={"chr1": {"A": ["W", "D"]}})
+
 pop = (
     nt.AgeStructuredPopulation
     .setup(species=species, name="DriveExperiment", stochastic=True)
-    .age_structure(n_ages=8)
-    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
+    .age_structure(n_ages=8, new_adult_age=2)
+    .initial_state({"female": {"W|W": 500}, "male": {"W|W": 500}})
     .presets(DrivePreset(conversion_rate=0.55))
     .build()
 )
@@ -432,7 +453,7 @@ Before conducting large-scale experiments, at least complete the following check
 2. Filter check: Does the `genotype_filter` hit range match expectations?
 3. Conservation check: Is frequency normalization valid?
 4. Control check: Is the trend reasonable compared to a baseline without Preset?
-5. Stability check: Are conclusions robust when changing random seeds?
+5. Stability check: for stochastic models (`stochastic=True`), are conclusions robust across repeated runs? (No public random-seed API is exposed yet.)
 
 ### Experiment Recording Advice
 
@@ -441,15 +462,15 @@ It is recommended to write Preset configuration into experiment metadata:
 - Preset name
 - Key parameters (e.g., `conversion_rate`)
 - Code version or commit
-- Random seed
+- Randomness settings (e.g. `stochastic`) and runtime environment
 
 This significantly reduces the risk of "results cannot be reproduced."
 
 ### Complex Gene Drive Example
 
 ```python
-from natal.presets import GeneticPreset
-from natal.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
 
 class ComplexDrive(GeneticPreset):
     """Complex gene drive with multi-stage conversion"""
@@ -457,7 +478,7 @@ class ComplexDrive(GeneticPreset):
     def __init__(self):
         super().__init__(name="ComplexDrive")
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # Stage 1: Drive conversion (WT -> Drive)
@@ -468,9 +489,9 @@ class ComplexDrive(GeneticPreset):
         ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 
-    def zygote_modifier(self, population):
+    def zygote_modifier(self, host):
         ruleset = ZygoteConversionRuleSet("ComplexDrive_Embryo")
 
         # Additional modification at the embryo stage
@@ -481,7 +502,7 @@ class ComplexDrive(GeneticPreset):
             maternal_glab="cas9"  # Requires maternal Cas9 deposition
         )
 
-        return ruleset.to_zygote_modifier(population)
+        return ruleset.to_zygote_modifier(host)
 
     def fitness_patch(self):
         return {
@@ -517,9 +538,9 @@ class ComplexDrive(GeneticPreset):
 
 ```python
 class DebugPreset(GeneticPreset):
-    def gamete_modifier(self, population):
-        print(f"Applying preset to species: {population.species.name}")
-        print(f"Available alleles: {list(population.species.gene_index.keys())}")
+    def gamete_modifier(self, host):
+        print(f"Applying preset to species: {host.species.name}")
+        print(f"Available alleles: {list(host.species.gene_index.keys())}")
 
         # Create modifier and return
         # ...

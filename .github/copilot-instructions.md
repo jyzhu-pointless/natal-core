@@ -17,6 +17,7 @@ Before finalizing any code change, run and pass:
 - pytest
 - pyright
 - ruff check src demos
+- python scripts/check_rust.py (cargo fmt --check, cargo clippy -- -D warnings, cargo check --all-targets; rust-analyzer diagnostics are optional)
 
 If public exports changed, also run:
 - python scripts/generate_init_pyi.py

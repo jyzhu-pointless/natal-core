@@ -10,16 +10,15 @@ import numpy as np
 import pytest
 
 import natal as nt
-import natal.ui.spatial_dashboard as spatial_dashboard_module
-from natal.output import (
+import natal.frontend.ui.spatial_dashboard as spatial_dashboard_module
+from natal.frontend.output import (
     population_observation_history_to_readable_dict,
     spatial_population_history_to_readable_dict,
     spatial_population_observation_history_to_readable_dict,
 )
-from natal.output.observation import ObservationFilter
-from natal.patterns import IndividualSelector
-from natal.spatial.configurator import batch_setting
-from natal.ui.spatial_dashboard import SpatialDashboard
+from natal.frontend.output.observation import ObservationFilter
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.ui.spatial_dashboard import SpatialDashboard
 
 
 def _species(name: str) -> nt.Species:
@@ -63,7 +62,7 @@ def _build_discrete(
     Returns:
         A configured discrete-generation population.
     """
-    configurator = (
+    builder = (
         nt.DiscreteGenerationPopulation.setup(
             species=_species(f"{name}_species"),
             name=name,
@@ -78,17 +77,17 @@ def _build_discrete(
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2.0)
         .competition(
-            juvenile_growth_mode="concave",
+            juvenile_growth_mode="beverton_holt",
             low_density_growth_rate=2.0,
             carrying_capacity=1000.0,
         )
     )
     if history_mode == "observation":
-        configurator.with_observation(
+        builder.with_observation(
             groups=_groups(),
             collapse_age=collapse_age,
         )
-    return configurator.record_history(mode=history_mode).build()
+    return builder.record_history(mode=history_mode).build()
 
 
 def _build_age(name: str) -> nt.AgeStructuredPopulation:
@@ -149,7 +148,7 @@ def _build_spatial(
     Returns:
         A two-deme spatial population.
     """
-    configurator = (
+    builder = (
         nt.SpatialPopulation.builder(
             _species(f"{name}_species"),
             n_demes=2,
@@ -159,8 +158,8 @@ def _build_spatial(
         .setup(name=name, stochastic=False)
     )
     if pop_type == "age_structured":
-        configurator = (
-            configurator.age_structure(n_ages=2, new_adult_age=1)
+        builder = (
+            builder.age_structure(n_ages=2, new_adult_age=1)
             .initial_state(
                 individual_count={
                     "female": {"WT|WT": [1.0, 2.0]},
@@ -180,8 +179,8 @@ def _build_spatial(
             .competition(juvenile_growth_mode=nt.NO_COMPETITION)
         )
     else:
-        configurator = (
-            configurator.initial_state(
+        builder = (
+            builder.initial_state(
                 individual_count={
                     "female": {"WT|WT": 30.0, "WT|Dr": 20.0},
                     "male": {"WT|WT": 10.0, "Dr|Dr": 40.0},
@@ -190,19 +189,19 @@ def _build_spatial(
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=2.0)
             .competition(
-                juvenile_growth_mode="concave",
+                juvenile_growth_mode="beverton_holt",
                 low_density_growth_rate=2.0,
                 carrying_capacity=1000.0,
             )
         )
     if history_mode == "observation":
-        configurator.with_observation(
+        builder.with_observation(
             groups=_groups(),
             collapse_age=collapse_age,
             demes=[0, 1],
             deme_mode=deme_mode,
         )
-    return configurator.record_history(mode=history_mode).build()
+    return builder.record_history(mode=history_mode).build()
 
 
 def _numeric_leaves(value: object) -> list[float]:
@@ -547,16 +546,17 @@ def test_spatial_lifecycle_errors_clear_reset_and_finish_are_exact() -> None:
 
 
 def test_spatial_runtime_batch_updates_assign_exact_per_deme_values() -> None:
-    """The public spatial updater expands batch values by deme."""
+    """The public write channel assigns exact per-deme ecology values."""
     population = _build_spatial("spatial_batch_update", history_mode="raw")
 
-    population.update().competition(
-        carrying_capacity=batch_setting([111.0, 222.0])
-    )
+    for deme_index, k_value in enumerate((111.0, 222.0)):
+        population.deme(deme_index).write_ecology("carrying_capacity", k_value)
     assert [float(deme.config.carrying_capacity) for deme in population.demes] == [
         111.0,
         222.0,
     ]
+    # The ecology column mirrors the per-deme values.
+    assert population.params.carrying_capacity.tolist() == [111.0, 222.0]
 
 class _FakeUI:
     """Capture spatial dashboard downloads without starting NiceGUI."""

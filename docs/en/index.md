@@ -6,13 +6,13 @@
 [![PyPI](https://img.shields.io/pypi/v/natal-core.svg?label=PyPI&color=yellow)](https://pypi.org/project/natal-core/)
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![NumPy](https://img.shields.io/badge/NumPy-2.0.0+-green.svg)](https://numpy.org/)
-[![Numba](https://img.shields.io/badge/Numba-0.60.0+-orange.svg)](https://numba.pydata.org/)
+[![Rust](https://img.shields.io/badge/engine-Rust-red.svg)](https://www.rust-lang.org/)
 [![Docs](https://img.shields.io/readthedocs/natal-core?label=docs)](https://natal-core.readthedocs.io/en/latest/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](https://github.com/jyzhu-pointless/natal-core/blob/main/LICENSE)
 
 ![NATAL logo](https://raw.githubusercontent.com/jyzhu-pointless/natal-core/main/natal-brand.svg)
 
-**NATAL Core** is a high-performance forward-time population genetics simulation engine with configurable species lifecycles. Rather than tracking individuals one by one, it adopts a **numerical aggregation** approach: individuals are grouped by age, sex, and genotype, their dynamics computed mathematically, and randomness introduced through probability distributions — avoiding the overhead of per-individual iteration. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and a Numba-accelerated computation core. NATAL Core is especially suited for **modeling gene drive systems in insect populations**, but its flexible architecture also makes it applicable to a wide range of population genetics scenarios.
+**NATAL Core** is a high-performance forward-time population genetics simulation engine with configurable species lifecycles. Rather than tracking individuals one by one, it adopts a **numerical aggregation** approach: individuals are grouped by age, sex, and genotype, their dynamics computed mathematically, and randomness introduced through probability distributions — avoiding the overhead of per-individual iteration. It supports age-structured and discrete-generation populations, sperm storage, genetic presets, hook-based interventions, and a Rust-native computation core as its only execution engine. NATAL Core is especially suited for **modeling gene drive systems in insect populations**, but its flexible architecture also makes it applicable to a wide range of population genetics scenarios.
 
 NATAL Core is part of the NATAL project. The full project also includes **NATAL Inferencer**, a toolkit for inferring population genetics model parameters based on NATAL Core.
 
@@ -20,7 +20,7 @@ NATAL Core is part of the NATAL project. The full project also includes **NATAL 
 
 - 🪲 Forward-time simulation with flexible population lifecycles (age-structured and discrete-generation populations)
 - 🧬 Definable genetic structures including chromosomes, loci, and alleles
-- 🚀 Numerical aggregation engine, Numba-accelerated.
+- 🚀 Numerical aggregation engine, Rust-native accelerated.
 - 🧩 Built-in gene drive presets, especially homing drive and toxin-antidote drive
 - 🪝 Hook system for inserting custom intervention logic during simulation
 - 🔍 Observation and filtering tools for downstream analysis
@@ -70,7 +70,7 @@ pip install natal-core
 
 ```python
 import natal as nt
-from natal.ui import launch
+from natal.frontend.ui import launch
 
 # 1. Define the species' genetic architecture
 sp = nt.Species.from_dict(
@@ -124,7 +124,7 @@ pop = (nt.DiscreteGenerationPopulation
     .competition(
         low_density_growth_rate=6.0,
         carrying_capacity=100000,
-        juvenile_growth_mode="concave"
+        juvenile_growth_mode="beverton_holt"
     )
     .presets(drive).hooks(release_drive_carriers).build())
 
@@ -172,10 +172,9 @@ It is recommended to start with Part 1 to get up to speed, then use Part 2 as a 
 
 
 14. [IndexRegistry Indexing Mechanism](4_index_registry.md)
-15. [PopulationState and PopulationConfig](4_population_state_config.md)
+15. [PopulationState and ModelDraft](4_population_state_config.md)
 16. [the Simulation Engine in Depth](4_simulation_engine.md)
-17. [Numba Optimization Guide](4_numba_optimization.md)
-18. [Observation History Recording Implementation](observation_impl.md)
+17. [Observation History Recording Implementation](observation_impl.md)
 
 ## API Documentation
 

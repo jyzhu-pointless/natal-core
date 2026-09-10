@@ -1,5 +1,7 @@
 # SpatialPopulation 初始化优化计划
 
+> **历史方案（Historical Design）**：本页记录 SpatialConfigurator 立项时的瓶颈分析与实施规划，**不是当前行为保证**；其中的阶段划分、性能预期和 API 设想未必都已实现。当前实现入口见 [SpatialPopulationBuilder：空间种群批量构造](spatial_population_builder.md)。
+
 ## 现状与瓶颈
 
 ### 1. 每个 deme 独立走 builder 流程
@@ -11,7 +13,7 @@ demes = [build_deme(species, idx, ...) for idx in range(2601)]
 
 每个 `build_deme` 调用经过：
 - Species genotype 解析（索引查找）
-- Numba hook 编译（`_compile_hooks` → `CompiledEventHooks.from_compiled_hooks`）
+- Hook 计划编译（`_compile_hooks` → `CompiledEventHooks.from_compiled_hooks`）
 - config/fitness 数组分配与填充
 - `_finalize_hooks` 触发 codegen
 
@@ -26,7 +28,7 @@ for deme in demes[1:]:
 ```
 
 - 忘记调用时每个 deme 持有独立 config，浪费内存
-- `import_config` 只能共享 scalar 字段，Numba 编译产物各自独立
+- `import_config` 只能共享 scalar 字段，Hook 计划各自独立
 
 ### 3. 异构配置缺乏批量表达
 
@@ -56,7 +58,7 @@ def build_deme(..., idx):
 
 ---
 
-## 核心设计：SpatialConfigurator + batch_setting
+## 核心设计：SpatialPopulationBuilder + batch_setting
 
 ### `batch_setting` 包装器
 
@@ -75,7 +77,7 @@ batch_setting({
 
 当 builder 的某个参数是 `batch_setting` 对象时，内部自动切换为 spatial 批量模式。
 
-### SpatialConfigurator 链式 API
+### SpatialPopulationBuilder 链式 API
 
 ```python
 pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, cols=N)) \
@@ -87,7 +89,7 @@ pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, col
     .reproduction(eggs_per_female=50) \
     .competition(
         carrying_capacity=batch_setting(spatial=lambda i, x, y: 10000 if x < N//2 else 5000),
-        juvenile_growth_mode="concave",
+        juvenile_growth_mode="beverton_holt",
         low_density_growth_rate=6.0,
     ) \
     .presets(drive) \
@@ -96,7 +98,7 @@ pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, col
     .build()
 ```
 
-### SpatialConfigurator 内部流程
+### SpatialPopulationBuilder 内部流程
 
 ```
 build() 调用时:
@@ -115,9 +117,9 @@ build() 调用时:
 
 ## 实施路径
 
-### Phase 1a：同构 SpatialConfigurator（无 batch_setting）
+### Phase 1a：同构 SpatialPopulationBuilder（无 batch_setting）
 
-没有 `batch_setting` 时，所有 deme 完全一致。此时 SpatialConfigurator 只需 build 一个 template，然后 N 次浅拷贝。
+没有 `batch_setting` 时，所有 deme 完全一致。此时 SpatialPopulationBuilder 只需 build 一个 template，然后 N 次浅拷贝。
 
 ```python
 pop = SpatialPopulation.builder(species, n_demes=2601, ...) \
@@ -132,7 +134,7 @@ pop = SpatialPopulation.builder(species, n_demes=2601, ...) \
 
 预期：2601 demes ~50ms（不含 template 首次 build 的 2-3ms）。
 
-### Phase 1b：异构 SpatialConfigurator（含 batch_setting）
+### Phase 1b：异构 SpatialPopulationBuilder（含 batch_setting）
 
 检测到至少一个 `batch_setting` 参数时，按 config 等价性分组。
 
@@ -156,7 +158,7 @@ batch_setting.spatial(lambda x, y: 10000 if abs(x) < 5 else 5000, topology=hex_g
 
 接收拓扑坐标，隐式填充所有 deme 位置。
 
-### Phase 1d：`set_hook` 在 SpatialConfigurator 中的集成
+### Phase 1d：`set_hook` 在 SpatialPopulationBuilder 中的集成
 
 ```python
 SpatialPopulation.builder(...) \
@@ -180,7 +182,7 @@ Deme 选择器自动展开为每个目标 deme 的 `set_hook` 调用。
 DemeFactory.quick(
     species=species,
     individual_count=np.array(...),  # (n_sexes, n_ages, n_genotypes)
-    config=PopulationConfig(...),
+    config=ModelDraft(...),
     registry=shared_registry,
 )
 ```
@@ -275,8 +277,8 @@ for i in range(n_demes):
 |------|------|
 | batch 展开后 config 分组 key 不可哈希（含 NumPy 数组）| 用 `id(arr)` 或序列化摘要 |
 | 克隆 demes 时 `compiled_hook_descriptors` / `hook_entries` 共享引用导致状态泄漏 | Copy-on-write：`set_hook` 子集注册时按需复制 |
-| `PopulationConfig` 是否支持 `_replace`？ | 目测是 NamedTuple，确认后可用 |
-| SpatialConfigurator 与现有 `Configurator` 的关系 | SpatialConfigurator 内部持有 per-deme builder，复用其校验逻辑 |
+| `ModelDraft` 是否支持 `_replace`？ | 目测是 NamedTuple，确认后可用 |
+| SpatialPopulationBuilder 与现有 `PopulationBuilder` 的关系 | SpatialPopulationBuilder 内部持有 per-deme builder，复用其校验逻辑 |
 
 ---
 

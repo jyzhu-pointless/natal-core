@@ -1,6 +1,6 @@
 # `IndexRegistry` 索引机制
 
-`IndexRegistry` 是 NATAL 框架中负责将遗传学对象（如 Genotype、HaploidGenotype 等）与整数索引建立关联的核心组件。它作为连接"高层对象世界"与"底层数值计算世界"的关键桥梁，确保用户能够使用直观的遗传学对象，同时底层计算能够高效处理整数索引。
+`IndexRegistry` 是 NATAL 框架中负责将遗传学对象（如 Genotype、HaploidGenotype 等）与整数索引建立关联的核心组件。它作为连接"高层对象世界"与"底层数值计算世界"的关键桥梁，确保用户能够使用直观的遗传学对象，同时底层计算能够高效处理整数索引。注册表为二倍体 ZType 和单倍体 GType 建立索引，并包含体细胞与配子标签；下面的 `ZygoteTypePattern` 示例先解析模式，再通过注册表解析匹配索引。
 
 ## 核心概念
 
@@ -50,7 +50,7 @@ GType = (HaploidGenotype, glab_label)
 - 如果未指定，会自动创建一个单一的 `"default"` 标签。
 - 引擎会将每个基因型/单倍型与每个标签做叉积，生成完整的 ZType/GType 空间。
 
-Slab 被具体的 Preset 使用，例如 **Wolbachia**（通过 `"wolbachia_infected"` slab 建模细胞质不兼容性）和 **TransgenicBackground**（按个体追踪标记表达）。如果没有这些 Preset，大多数模拟只有一个 `"default"` slab，slab 系统对用户不可见。
+Slab 被具体的 Preset 使用，例如 **Wolbachia**（默认使用 `infected` / `normal` slab 建模细胞质不兼容性，并要求 gamete label `wolbachia`）和 **TransgenicBackground**（按个体追踪标记表达）。如果没有这些 Preset，大多数模拟只有一个 `"default"` slab，slab 系统对用户不可见。
 
 ### 索引注册表结构
 
@@ -73,6 +73,19 @@ class IndexRegistry:
     glab_labels: List[str] = []
 ```
 
+### 与旧 API 的关系
+
+兼容属性会从 ZType/GType 空间重建旧的扁平列表（下面是示意写法，`Genotype(...)` 请用 `species.get_genotype_from_str(...)` 得到）：
+
+```python
+# 旧式：唯一基因型（从 ZType 空间去重）
+registry.index_to_genotype  # [<Genotype A|A>, <Genotype A|a>, ...]
+registry.haplo_to_index     # {<HaploidGenotype A>: 0, <HaploidGenotype a>: 1, ...}
+
+# 新式：带标签维度
+registry.index_to_ztype     # [(<Genotype A|A>, "default"), (<Genotype A|A>, "infected"), ...]
+registry.index_to_gtype     # [(<HaploidGenotype A>, "default"), (<HaploidGenotype A>, "cas9_deposited"), ...]
+```
 
 计算出的 `N_ztype` 是 `_index_to_ztype` 的长度——这是引擎 `individual_count` 数组最后一个轴（ZType 维度）所消耗的值。
 
@@ -100,6 +113,7 @@ ZType 条目：(A1|A2, "default"), (A1|A2, "infected"), ...
 ### 注册 API
 
 ```python
+# 示意：Genotype 对象请通过 species.get_genotype_from_str("A|a") 获得
 # 底层：注册单个（基因型, slab）配对
 registry.register_ztype(Genotype("A|a"), "default")       # 返回 ZType 索引
 
@@ -125,7 +139,7 @@ registry.register_gamete_label("cas9_deposited")           # 返回 glab 索引
 "Drive|WT"          → Genotype("Drive|WT") 无 slab 约束（见下文）
 ```
 
-`@slab` 后缀由 `ZygoteTypePattern`（定义在 `natal.patterns.elements.diploid` 中）解析。基础基因型模式是最后一个 `@` 之前的所有内容。
+`@slab` 后缀由 `ZygoteTypePattern`（定义在 `natal.frontend.patterns.elements.diploid` 中）解析。基础基因型模式是最后一个 `@` 之前的所有内容。
 
 ### 命名约定：`genotypes` 接受 ZType 字符串
 
@@ -167,7 +181,7 @@ Op.add(genotypes="Drive|WT@infected", delta=500)
 
 #### 重要：`initial_state` 键必须精确
 
-传递给 `initial_state()` 的键必须是精确的基因型字符串——像 `"*|*"` 或 `"Drive|*"` 这样的模糊模式不会按预期工作。这样的模式可能只会静默匹配注册顺序中的**第一个** ZType，这几乎可以肯定是不正确的。如果你需要为初始状态使用模式风格的匹配，请改用 `first` 事件 hook 配合 `Op.set_count()`。
+传递给 `initial_state()` 的键必须是精确的基因型字符串。模糊模式（如 `"*|*"`、`"Drive|*"`）会在解析阶段直接抛 `ValueError`（例如 `Cannot parse haplotype segment string '*'`），不会静默匹配任何 ZType。如果你需要为初始状态使用模式风格的匹配，请改用 `first` 事件 hook 配合 `Op.set_count()`。
 
 ## 索引压缩（可达性 BFS）
 
@@ -177,12 +191,12 @@ Op.add(genotypes="Drive|WT@infected", delta=500)
 
 ### BFS 算法
 
-压缩使用不动点 BFS（在 `natal.genetics.structures._helpers` 的 `build_compression_mask` 中实现）。该算法对 GType 和 ZType 层次是对称的：
+压缩使用不动点 BFS（在 `natal.frontend.genetics.structures._helpers` 的 `build_compression_mask` 中实现）。该算法对 GType 和 ZType 层次是对称的：
 
 ```
 1. 种子：收集可达基因型
    a. initial_individual_count > 0  （初始时就有个体的基因型）
-   b. 声明的基因型                     （来自 .declare() 的种子，见下文）
+   b. 声明的基因型与 hook 引用的基因型   （见下文「Declare 语义」）
 
 2. 从可达基因型推导可达单倍型：
    for each 可达基因型 g:
@@ -203,15 +217,15 @@ Op.add(genotypes="Drive|WT@infected", delta=500)
    - ZType 掩码：-1 表示已修剪的（基因型, slab）配对，≥0 表示幸存者
 ```
 
-关键洞察：一旦可达集稳定下来，压缩掩码将旧索引映射到新的压缩后索引。被修剪的条目通过 `registry.compress(mask)` 从注册表中永久移除。
+关键洞察：一旦可达集稳定下来，压缩掩码将旧索引映射到新的压缩后索引。被修剪的条目通过 `registry.compress(ztype_mask, gtype_mask)` 从注册表中永久移除。
 
 ### Declare 语义
 
-`declare` 机制（`setup(compress=True, declared_zygote_types={"AA"})` 或已弃用的 `compress_genotypes(True).declare("AA")` 链式方法）向 BFS 添加**种子**，而不仅仅是基因型列表中的最终条目。
+`declare` 机制（`setup(compress=True, declared_zygote_types={"AA"})`）向 BFS 添加**种子**，而不仅仅是基因型列表中的最终条目。
 
 示例：如果初始状态只有 `aa` 个体，而某个 hook 会在第 100 tick 释放 `AA` 个体：
 
-1. 不使用 declare：BFS 仅从 `aa` 开始。可达单倍型是 `{a}`。不动点立即达到——`A` 从未被发现。当 hook 在运行时尝试释放 `AA` 时，其 ZType 索引为 -1（已修剪），导致错误。
+1. 不使用 declare 且 hook 未被收集到：BFS 仅从 `aa` 开始。可达单倍型是 `{a}`。不动点立即达到——`A` 从未被发现。压缩后注册表中不含 `AA`，运行时按名字查索引会失败。（注意：构建链会自动把声明式/选择器 hook 里出现的基因型收集为种子，所以这条路径主要影响收集器看不到的引入方式，例如纯回调直接写计数。）
 
 2. 使用 `declare("AA")`：`AA` 是一个种子。可达单倍型变为 `{a, A}`。BFS 组合 `A` + `a` → 发现 `Aa`，它又产生 `{A, a}`。不动点：`{AA, Aa, aa}` 全部可达，压缩保留全部三个。
 
@@ -235,7 +249,7 @@ Op.add(genotypes="Drive|WT@infected", delta=500)
 - `declared_zygote_types` 在 `.setup(compress=True, declared_zygote_types=...)` 上设置。
 - BFS 是**对称的**——声明一个基因型也会引入它产生的所有单倍型，这些单倍型可能组合形成未显式声明的其他基因型。
 - 声明的基因型会扩展到**所有 slab 变体**用于 BFS（在内部，它们被视为跨所有 slabs 的可达 ZType）。
-- 已弃用的 `.compress_genotypes(True).declare("AA")` 链式方法仍然有效，但推荐使用 `.setup(compress=True, declared_zygote_types={"AA"})`。
+- 旧链式入口 `.compress_genotypes(True)` 仍可用但已弃用（没有 `.declare()` 方法）；声明种子请用 `.setup(compress=True, declared_zygote_types={...})`。
 
 ## 用户接口说明
 
@@ -245,20 +259,21 @@ Op.add(genotypes="Drive|WT@infected", delta=500)
 
 ```python
 # 通过 IndexRegistry 获取基因型索引后访问
-idx = pop.index_registry.genotype_to_index["A1|A2"]
+gt = pop.species.get_genotype_from_str("A1|A2")
+idx = pop.index_registry.ztype_index(gt, "default")
 pop.state.individual_count[0, 3, idx]
 ```
 
-### 使用 GenotypeSelector 模式匹配
+### 使用 ZygoteTypePattern 模式匹配
 
 ```python
-# 使用 GenotypeSelector 进行模式匹配操作
-from natal.patterns import GenotypeSelector
-selector = GenotypeSelector("A1|*", pop.index_registry)
-indices = selector.select()  # 返回匹配的整数索引数组
+# 用 ZygoteTypePattern 解析模式，再交给注册表解析索引
+from natal.frontend.patterns import ZygoteTypePattern
+pattern = ZygoteTypePattern.parse("A1|*", pop.species)
+indices = list(pop.index_registry.resolve_ztype_indices(pattern))  # 匹配的整数索引
 ```
 
-**注意**：旧的导入路径 `from natal.genetic_patterns import GenotypeSelector` 已更新为 `from natal.patterns import GenotypeSelector`。
+**注意**：当前这条注册表解析路径使用 `ZygoteTypePattern` 作为模式解析器。
 
 ## 框架内部使用
 
@@ -279,13 +294,13 @@ indices = selector.select()  # 返回匹配的整数索引数组
 
 ### 3. Hook 系统
 
-- Numba Hook 使用预计算的索引进行高效操作。
+- Hook 使用预计算的索引（选择器在注册时解析）在引擎侧高效操作。
 - 避免在编译时访问动态注册表。
 - 通过选择器模式避免硬编码索引。
 
 ### 4. 索引压缩
 
-- `rebuild_config_maps()`（在 `natal.configurator._registry_builder` 中）运行 BFS。
+- `rebuild_config_maps()`（在 `natal.frontend.builder._registry_builder` 中）运行 BFS。
 - 生成的掩码通过 `registry.compress(ztype_mask, gtype_mask)` 应用。
 - 压缩后，所有注册表属性只反映幸存的条目。
 
@@ -308,7 +323,7 @@ indices = selector.select()  # 返回匹配的整数索引数组
 ```
 字符串 "A1|A2"
     ↓ Species.get_genotype_from_str()
-全局缓存 Species.genotype_cache
+结构缓存 Species.structure_cache
     ↓ [命中]
 Genotype 对象（唯一）
     ↓ IndexRegistry.register_genotype()
@@ -320,10 +335,10 @@ ZType 条目（每个 slab 一个）
 ## 相关章节
 
 - [遗传结构与实体](2_genetics.md) — Genotype 和 HaploidGenotype 的创建
-- [PopulationState & PopulationConfig](4_population_state_config.md) — 配置中的索引应用
+- [PopulationState & ModelDraft](4_population_state_config.md) — 配置中的索引应用
 - [Modifier 机制](3_modifiers.md) — Modifier 中的 IndexRegistry 使用
 - [Hook 系统](2_hooks.md) — 高级 Hook 选择器模式
 
 ---
 
-**准备进入配置编译细节了吗？** [前往下一章：PopulationState & PopulationConfig →](4_population_state_config.md)
+**准备进入配置编译细节了吗？** [前往下一章：PopulationState & ModelDraft →](4_population_state_config.md)

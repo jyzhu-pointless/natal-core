@@ -1,0 +1,72 @@
+{
+  "adjacency_dense": {
+    "t0": "85832684331e29e8",
+    "t1": "22a9a10d91530978",
+    "t2": "458b7dafcb7296b1",
+    "t3": "709b31a11cd3e518",
+    "t4": "9911bd46d6e42ec4"
+  },
+  "age_structured": {
+    "t0": "0445d9e76ef311e0",
+    "t1": "2efe47f2a85558b2",
+    "t2": "dc2e19ce000dbecc",
+    "t3": "3604bef1f293e8ba",
+    "t4": "9574b1ff4cb3774a"
+  },
+  "discrete_generation": {
+    "t0": "aba251a6520526b6",
+    "t1": "678851507cb51dc4",
+    "t2": "7aff7b58dcb434d4",
+    "t3": "7d934cd380eb3ff2",
+    "t4": "08eea91150b2e5d1"
+  },
+  "heterogeneous_ecology": {
+    "t0": "c6588ea02eee8866",
+    "t1": "7b9b240392e6f360",
+    "t2": "b0b977f514ef21c3",
+    "t3": "2d7368984e26545d",
+    "t4": "32fb628709f3f21a"
+  },
+  "homogeneous_discrete": {
+    "t0": "f0711ad477816710",
+    "t1": "b17d9a0c72f72f2e",
+    "t2": "2f4965dedd21b84f",
+    "t3": "0f6f62d946e512ec",
+    "t4": "1a3c9f5b052d9f7c"
+  },
+  "homogeneous_kernel": {
+    "t0": "68a936bdc759f432",
+    "t1": "6fead0945c2ac93a",
+    "t2": "258d96c65064d563",
+    "t3": "e55164a5ede118f6",
+    "t4": "4143ec529df0f6f3"
+  },
+  "rust_adjacency_dense": {
+    "t0": "cf04430c6613c8bf",
+    "t1": "aefd8c08ee28c409",
+    "t2": "f0efa2c43e5f99f1",
+    "t3": "5a1209cfc8dddfe8",
+    "t4": "b9d7a5975da0d271"
+  },
+  "rust_age_structured": {
+    "t0": "0445d9e76ef311e0",
+    "t1": "2efe47f2a85558b2",
+    "t2": "dc2e19ce000dbecc",
+    "t3": "3604bef1f293e8ba",
+    "t4": "9574b1ff4cb3774a"
+  },
+  "rust_discrete_generation": {
+    "t0": "aba251a6520526b6",
+    "t1": "678851507cb51dc4",
+    "t2": "7aff7b58dcb434d4",
+    "t3": "7d934cd380eb3ff2",
+    "t4": "08eea91150b2e5d1"
+  },
+  "rust_homogeneous_kernel": {
+    "t0": "cf04430c6613c8bf",
+    "t1": "08af5d774d1c1a33",
+    "t2": "0b471796979a7452",
+    "t3": "8c9180dd55beaa0d",
+    "t4": "343e061a5fadf8d5"
+  }
+}

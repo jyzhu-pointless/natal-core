@@ -1,4 +1,4 @@
-"""Tests for natal.patterns.individual_selector.IndividualSelector.
+"""Tests for natal.frontend.patterns.individual_selector.IndividualSelector.
 
 Every assertion proves a mathematical invariant — exact mask comparisons,
 coordinate-set cardinalities, or algebraic laws (commutativity, associativity,
@@ -11,9 +11,9 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.patterns import IndividualSelector
-from natal.registry.index import IndexRegistry
-from natal.utils.types import Sex
+from natal.frontend.patterns import IndividualSelector
+from natal.frontend.registry.index import IndexRegistry
+from natal.frontend.utils.types import Sex
 
 # ── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -124,7 +124,7 @@ class TestConstructionZtype:
         _assert_mask_equal(mask, expected)
 
     def test_ztype_as_genotype_tuple_with_slab(self, simple_species, simple_registry):
-        """ztype=(Genotype, slab_label) → normalised to string with @slab.
+        """ztype=(Genotype, slab_label) → normalized to string with @slab.
         A non-existent slab (e.g. 'infected') resolves to nothing → ValueError."""
         gt = simple_species.get_genotype_from_str("WT|WT")
         s = IndividualSelector(ztype=(gt, "infected"))
@@ -132,7 +132,7 @@ class TestConstructionZtype:
             s.compile(simple_registry, n_sexes=2, n_ages=1)
 
     def test_ztype_as_genotype_tuple_without_slab(self, simple_species, simple_registry):
-        """ztype=(Genotype, '') → normalised to genotype string without slab."""
+        """ztype=(Genotype, '') → normalized to genotype string without slab."""
         gt = simple_species.get_genotype_from_str("WT|WT")
         s = IndividualSelector(ztype=(gt, ""))
         mask = s.compile(simple_registry, n_sexes=2, n_ages=1)
@@ -142,10 +142,10 @@ class TestConstructionZtype:
         _assert_mask_equal(mask, expected)
 
     def test_ztype_as_zygote_type_pattern_normalizes_via_str(self, simple_species, simple_registry):
-        """ztype=ZygoteTypePattern → normalised via str() (produces repr).
+        """ztype=ZygoteTypePattern → normalized via str() (produces repr).
         The repr of a ZygoteTypePattern is not a valid pattern syntax,
         so _resolve_ztype will raise PatternParseError at compile time."""
-        from natal.patterns import PatternParseError, ZygoteTypePattern
+        from natal.frontend.patterns import PatternParseError, ZygoteTypePattern
         pattern = ZygoteTypePattern.parse("*|Dr", simple_species)
         s = IndividualSelector(ztype=pattern)
         # _to_tuple_ztype calls str(value) which gives the repr string

@@ -18,7 +18,7 @@ NATAL Core 提供两种主要的种群类型：
 
 ## 创建种群
 
-通过链式 API 创建种群。
+通过链式 API 创建种群；默认 `PopulationBuilder` 路径会立即写入参数，详见[种群初始化](2_population_initialization.md)。
 
 ```python
 import natal as nt
@@ -43,8 +43,8 @@ pop = (
         "male":   {"WT|WT": [0, 0, 100, 100, 80, 60, 40, 20]},
     })
     .survival(
-        female=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
-        male=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0],
+        female_age_based_survival=[1.0, 0.95, 0.9, 0.85, 0.8, 0.7, 0.5, 0.0],
+        male_age_based_survival=[1.0, 0.9, 0.85, 0.8, 0.7, 0.5, 0.3, 0.0],
     )
     .reproduction(
         eggs_per_female=100,
@@ -67,22 +67,26 @@ pop.update().competition(carrying_capacity=5000)
 # 链式修改多个参数
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
-# 自定义字段——Hook 内可通过 config.custom['name'][()] 读写
+# 自定义字段——回调内用 ctx.update().custom(...) 写入，回调外读 pop.config.custom
 pop.update().custom(temperature=35.0)
 ```
 
-修改通过 `set_param(config, name, value)` 原地写入 0-d ndarray，立即生效。
+`pop.update()` 每次调用都经路由表校验后提交到运行种群（draft 与 Rust 会话同步），并在值实际变化时追加一条参数日志。
 
-### 底层 set_param
+### 底层 set_param（草稿层）
+
+`set_param()` 只写传入的 draft，不会提交到运行种群；生态标量走 `NamedTuple._replace`，必须接住返回值。修改运行种群请用 `pop.update()` 或 `pop.params`：
 
 ```python
-from natal.configurator import set_param
+from natal.frontend.builder import set_param
 
-# 支持全名、短名、别名
-set_param(config, "competition.carrying_capacity", 5000.0)
-set_param(config, "carrying_capacity", 5000.0)      # 短名
-set_param(config, "eggs_per_female", 100.0) # 别名
+draft = pop.config                       # 查询快照
+draft = set_param(draft, "competition.carrying_capacity", 5000.0)
+draft = set_param(draft, "carrying_capacity", 5000.0)      # 短名
+draft = set_param(draft, "eggs_per_female", 100.0)         # 别名
 ```
+
+完整说明见[运行时参数修改](3_runtime_modification.md)。
 
 ## 启动模拟
 
@@ -194,7 +198,7 @@ print("观测轴:", result.axes)
 print("观测值:", result.values)
 
 # 使用 IndividualSelector 在构建时定义自定义 observation
-from natal.patterns import IndividualSelector
+from natal.frontend.patterns import IndividualSelector
 
 pop = (
     nt.DiscreteGenerationPopulation.setup(sp)
@@ -254,7 +258,7 @@ pop.finish_simulation()
 
 ## Wright-Fisher 极速模式
 
-离散世代种群支持 Wright-Fisher 极速模式：用单次多项分布抽样替代逐步的 mate→fertilize→survive 管线。适用于有效种群大小建模，计算量降低 10-100 倍。
+离散世代引擎内置 Wright-Fisher 极速模式：用单次多项分布抽样替代逐步的 mate→fertilize→survive 管线，面向有效种群大小建模。
 
 ### 三种采样模式
 
@@ -264,22 +268,46 @@ pop.finish_simulation()
 | MULTINOMIAL (1) | 标准 Wright-Fisher 单次多项分布 |
 | POISSON (2) | 独立泊松抽样（大 N 近似） |
 
-### 启用方式
+### 公开的底层入口
 
-通过 `Configurator` 在构建时设置：
-
-```python
-pop = nt.DiscreteGenerationPopulation.setup(
-    species=sp, stochastic=False,
-).initial_state(...).competition(...).build()
-```
-
-目前通过 `_replace` 修改配置启用（后续将添加链式 API）：
+公开的底层工厂接受 `extreme_speed_mode`，并将其写入不可变的
+`ModelDraft`。将该 draft 传给公开的
+`DiscreteGenerationPopulation` 构造函数；Rust 后端在种群创建时读取这个标志。
 
 ```python
-object.__setattr__(pop, "_config", pop.config._replace(extreme_speed_mode=3))
-pop.run(100)
+import natal as nt
+
+species = nt.Species.from_dict(
+    "WFExample",
+    {"chr1": {"L": ["WT", "Drive"]}},
+)
+base = (
+    nt.DiscreteGenerationPopulation.setup(species, stochastic=False)
+    .initial_state({"female": {"WT|WT": 50}, "male": {"Drive|Drive": 50}})
+    .build()
+)
+config = base.config
+
+engine_config = nt.build_discrete_engine_config(
+    n_genotypes=config.n_ztypes,
+    n_gtypes=config.n_gtypes,
+    n_glabs=config.n_glabs,
+    n_slabs=config.n_slabs,
+    zygotes_to_gametes_map=config.zygotes_to_gametes_map,
+    gametes_to_zygotes_map=config.gametes_to_zygotes_map,
+    stochastic=False,
+    extreme_speed_mode=3,
+)
+pop = nt.DiscreteGenerationPopulation(
+    species=species,
+    population_config=engine_config,
+    initial_individual_count={"female": {"WT|WT": 50}, "male": {"Drive|Drive": 50}},
+)
+pop.run(1)
 ```
+
+这是底层构造路径。常规 `PopulationBuilder` 构建流程没有
+`extreme_speed_mode` 链式方法。
 
 ### 竞争与 Hook 支持
 

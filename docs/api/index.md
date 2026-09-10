@@ -1,6 +1,6 @@
 # API Reference Overview
 
-This section provides module-level API references, organized by the package's 17 subpackages.
+This section provides module-level API references, organized by subpackage.
 
 ## Population
 
@@ -8,9 +8,9 @@ This section provides module-level API references, organized by the package's 17
 - [AgeStructuredPopulation](age_structured_population.md)
 - [DiscreteGenerationPopulation](discrete_generation_population.md)
 
-## Configurator
+## PopulationBuilder
 
-- [Configurator](configurator.md)
+- [PopulationBuilder](population_builder.md)
 
 ## Genetics
 
@@ -27,13 +27,8 @@ This section provides module-level API references, organized by the package's 17
 
 ## Data
 
-- [PopulationConfig](population_config.md)
+- [ModelDraft](population_config.md)
 - [PopulationState](population_state.md)
-
-## Engine
-
-- [Simulation Engine](simulation_engine.md)
-- [Algorithms](algorithms.md)
 
 ## Hooks
 
@@ -46,6 +41,8 @@ This section provides module-level API references, organized by the package's 17
 ## Output
 
 - [State Translation](state_translation.md)
+- [History](history.md)
+- [Observation](observation.md)
 
 ## Spatial
 
@@ -54,10 +51,6 @@ This section provides module-level API references, organized by the package's 17
 ## Fitness
 
 - [Fitness System](fitness.md)
-
-## Numba
-
-- [Numba Utilities](numba.md)
 
 ## Registry
 

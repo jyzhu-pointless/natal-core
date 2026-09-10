@@ -1,13 +1,13 @@
 import numpy as np
 
 import natal as nt
-from natal.data import (
+from natal.frontend.data import (
     NO_COMPETITION,
     build_discrete_engine_config,
     initialize_gamete_map,
     initialize_zygote_map,
 )
-from natal.population.discrete_generation import DiscreteGenerationPopulation
+from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
 
 
 def _has_chromosome(haploid: object, chromosome: object) -> bool:
@@ -123,9 +123,10 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
             "male": {male_parent: parent_count},
         },
     )
+    pop._initialize_session(seed=0)
 
     pop.run(1)
-    state = pop._state.individual_count
+    state = pop.state.individual_count
 
     female_age1 = state[0, 1, :]
     male_age1 = state[1, 1, :]
@@ -135,7 +136,7 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
     female_by_phase: dict[str, float] = {"A|A": 0.0, "A|a": 0.0, "a|A": 0.0, "a|a": 0.0}
     male_by_phase: dict[str, float] = {"A|A": 0.0, "A|a": 0.0, "a|A": 0.0, "a|a": 0.0}
 
-    ztype_lookup = pop._registry.index_to_ztype
+    ztype_lookup = pop.registry.index_to_ztype
     for idx in range(len(female_age1)):
         count_f = float(female_age1[idx])
         if count_f == 0.0:
@@ -290,9 +291,10 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
             "male": {male_parent: 1000.0},
         },
     )
+    pop._initialize_session(seed=0)
 
     pop.run(1)
-    state = pop._state.individual_count
+    state = pop.state.individual_count
 
     female_age1 = state[0, 1, :]
     male_age1 = state[1, 1, :]
@@ -300,7 +302,7 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
     female_by_maternal_x: dict[str, float] = {"X1": 0.0, "X2": 0.0}
     male_by_maternal_x: dict[str, float] = {"X1": 0.0, "X2": 0.0}
 
-    ztype_lookup = pop._registry.index_to_ztype
+    ztype_lookup = pop.registry.index_to_ztype
     for idx in range(len(female_age1)):
         count_f = float(female_age1[idx])
         if count_f == 0.0:
@@ -386,9 +388,10 @@ def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:
             "male": {male_parent: 1000.0},
         },
     )
+    pop._initialize_session(seed=0)
 
     pop.run(1)
-    state = pop._state.individual_count
+    state = pop.state.individual_count
     age1_total = float(state[:, 1, :].sum())
 
     assert np.isfinite(age1_total)

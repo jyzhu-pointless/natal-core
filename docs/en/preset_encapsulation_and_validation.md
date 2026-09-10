@@ -29,8 +29,8 @@ A practical Preset should include:
 ## Example: Encapsulating a Minimal DrivePreset
 
 ```python
-from natal.presets import GeneticPreset
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 
 class DrivePreset(GeneticPreset):
@@ -38,7 +38,7 @@ class DrivePreset(GeneticPreset):
         super().__init__(name="DrivePreset")
         self.conversion_rate = conversion_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("drive_rules")
 
         def is_wd_heterozygote(genotype) -> bool:
@@ -46,19 +46,28 @@ class DrivePreset(GeneticPreset):
             return name in {"W|D", "D|W"}
 
         ruleset.add_allele_convert(
+            from_allele="W",
+            to_allele="D",
+            rate=self.conversion_rate,
+            genotype_filter=is_wd_heterozygote,
         )
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None
 ```
 
-## Applying a Preset in the Builder
+## Applying a Preset in the PopulationBuilder chain
 
 ```python
+import natal as nt
+
 pop = (
-    nt.AgeStructuredPopulation.setup(species=species)
-    .setup(name="DriveExperiment", stochastic=True)
-    .age_structure(n_ages=8)
-    .initial_state({...})
+    nt.AgeStructuredPopulation
+    .setup(species=species, name="DriveExperiment", stochastic=True)
+    .age_structure(n_ages=8, new_adult_age=1)
+    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
     .presets(DrivePreset(conversion_rate=0.55))
     .build()
 )
@@ -74,7 +83,7 @@ Before conducting large-scale experiments, at least complete the following check
 2. Filter check: does the `genotype_filter` hit the expected scope?
 3. Conservation check: is frequency normalization valid?
 4. Control check: is the trend reasonable compared to a baseline without the Preset?
-5. Stability check: are conclusions robust when the random seed changes?
+5. Stability check: are conclusions robust across repeated runs under the stochastic model (`stochastic=True`)? (There is no public random-seed API; see the RNG section of [the Simulation Engine Deep Dive](4_simulation_engine.md).)
 
 ## Experiment Recording Recommendations
 
@@ -83,15 +92,15 @@ It is recommended to write Preset configuration into experiment metadata:
 - Preset name
 - Key parameters (e.g., `conversion_rate`)
 - Code version or commit
-- Random seed
+- Stochastic settings (e.g. `stochastic=True`) and run environment
 
 This significantly reduces the risk of "results cannot be reproduced."
 
 ## Complex Gene Drive Example
 
 ```python
-from natal.presets import GeneticPreset
-from natal.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet, ZygoteConversionRuleSet
 
 class ComplexDrive(GeneticPreset):
     """Complex gene drive with multi-stage conversion"""
@@ -99,7 +108,7 @@ class ComplexDrive(GeneticPreset):
     def __init__(self):
         super().__init__(name="ComplexDrive")
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # Stage 1: Drive conversion (WT → Drive)
@@ -110,9 +119,9 @@ class ComplexDrive(GeneticPreset):
         ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
                            genotype_filter=lambda gt: "Drive" in str(gt))
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
 
-    def zygote_modifier(self, population):
+    def zygote_modifier(self, host):
         ruleset = ZygoteConversionRuleSet("ComplexDrive_Embryo")
 
         # Additional embryonic stage modification
@@ -123,7 +132,7 @@ class ComplexDrive(GeneticPreset):
             maternal_glab="cas9"  # requires maternal Cas9 deposition
         )
 
-        return ruleset.to_zygote_modifier(population)
+        return ruleset.to_zygote_modifier(host)
 
     def fitness_patch(self):
         return {
@@ -159,12 +168,16 @@ class ComplexDrive(GeneticPreset):
 
 ```python
 class DebugPreset(GeneticPreset):
-    def gamete_modifier(self, population):
-        print(f"Applying preset to species: {population.species.name}")
-        print(f"Available alleles: {list(population.species.gene_index.keys())}")
+    def gamete_modifier(self, host):
+        print(f"Applying preset to species: {host.species.name}")
+        print(f"Available alleles: {list(host.species.gene_index.keys())}")
 
         # Create modifier and return
         # ...
+        return None
+
+    def zygote_modifier(self, host):
+        return None  # no zygote-stage modification
 ```
 
 ## Pre-release Checklist

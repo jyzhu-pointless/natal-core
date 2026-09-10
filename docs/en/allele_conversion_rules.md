@@ -29,7 +29,7 @@ This can be understood as:
 ## Minimal Working Example
 
 ```python
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 ruleset = GameteConversionRuleSet(name="homing_drive")
 ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
@@ -55,7 +55,7 @@ Allele conversion can also occur at the zygote (fertilized egg) stage, typically
 ### Using ZygoteConversionRuleSet
 
 ```python
-from natal.modifiers import ZygoteConversionRuleSet
+from natal.frontend.modifiers import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
@@ -107,8 +107,8 @@ pop.add_zygote_modifier(zygote_ruleset.to_zygote_modifier(pop))
 Before designing complex conversion rules, it is important to understand the basic template of `GeneticPreset`:
 
 ```python
-from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.modifiers import GameteModifier, ZygoteModifier
+from natal.frontend.presets import GeneticPreset, PresetFitnessPatch
+from natal.frontend.modifiers import GameteModifier, ZygoteModifier
 from typing import Optional
 
 class MyCustomPreset(GeneticPreset):
@@ -119,17 +119,17 @@ class MyCustomPreset(GeneticPreset):
         # Custom parameters
         self.custom_param = 0.5
 
-    def gamete_modifier(self, population) -> Optional[GameteModifier]:
+    def gamete_modifier(self, host) -> Optional[GameteModifier]:
         """Define gamete-stage modification logic"""
         # Return GameteModifier or None
         return None
 
-    def zygote_modifier(self, population) -> Optional[ZygoteModifier]:
+    def zygote_modifier(self, host) -> Optional[ZygoteModifier]:
         """Define zygote-stage modification logic"""
         # Return ZygoteModifier or None
         return None
 
-    def fitness_patch(self) -> PresetFitnessPatch:
+    def fitness_patch(self) -> Optional[PresetFitnessPatch]:
         """Define fitness effects"""
         # Return fitness configuration dict or None
         return None
@@ -137,18 +137,19 @@ class MyCustomPreset(GeneticPreset):
 
 Implementation highlights:
 
-1. **All methods are optional** - you can implement 1-3 methods
-2. **At least implement one method** - otherwise the preset will have no effect
+1. **`gamete_modifier` and `zygote_modifier` are required** - `GeneticPreset` is an abstract base class, and a subclass missing either one cannot be instantiated (returning `None` is fine when that stage needs no modification)
+2. **`fitness_patch` is optional** - omit it for no fitness effect; it may also return `None`
 3. **Can return None** - indicating no modification is needed at that stage
 4. **Supports deferred species binding** - `Species` can be unspecified at creation time
+5. **The parameter of `gamete_modifier` / `zygote_modifier` is `host`** - one uniform entry point (interface contract `natal.frontend.genetics.compile.RecipeHost`): at runtime it points to the live Population, during compilation it points to the in-progress PopulationBuilder; both expose the same four read-only attributes — `species`, `config`, `registry`, `index_registry`
 
 ## Simple Examples
 
 ### Simple Point Mutation
 
 ```python
-from natal.presets import GeneticPreset, PresetFitnessPatch
-from natal.modifiers import GameteConversionRuleSet
+from natal.frontend.presets import GeneticPreset, PresetFitnessPatch
+from natal.frontend.modifiers import GameteConversionRuleSet
 
 class PointMutation(GeneticPreset):
     """Simple point mutation: WT mutates to Mutant at a certain frequency"""
@@ -157,14 +158,17 @@ class PointMutation(GeneticPreset):
         super().__init__(name="PointMutation")
         self.mutation_rate = mutation_rate
 
-    def gamete_modifier(self, population):
+    def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("PointMutation")
         ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None  # no zygote-stage modification
 
     def fitness_patch(self):
         return {
-            "viability_allele": {"Mutant": 0.98}  # Slightly deleterious
+            "viability_per_allele": {"Mutant": 0.98}  # Slightly deleterious
         }
 ```
 
@@ -179,8 +183,8 @@ class BidirectionalMutation(GeneticPreset):
         self.forward_rate = forward_rate
         self.backward_rate = backward_rate
 
-    def gamete_modifier(self, population):
-        from natal.modifiers import GameteConversionRuleSet
+    def gamete_modifier(self, host):
+        from natal.frontend.modifiers import GameteConversionRuleSet
 
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 
@@ -189,7 +193,10 @@ class BidirectionalMutation(GeneticPreset):
         # B → A (back mutation)
         ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
 
-        return ruleset.to_gamete_modifier(population)
+        return ruleset.to_gamete_modifier(host)
+
+    def zygote_modifier(self, host):
+        return None  # no zygote-stage modification
 ```
 
 ## Chapter Summary

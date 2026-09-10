@@ -30,6 +30,17 @@ pop = (
 )
 ```
 
+### Runtime Modification
+
+After the build completes, parameters can still be changed at any time through `pop.update()` — no rebuild needed:
+
+```python
+pop.update().competition(carrying_capacity=5000)
+pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
+```
+
+See the [PopulationBuilder API Reference](api/population_builder.md).
+
 ## Configuration Flow
 
 The complete configuration flow is as follows:
@@ -37,7 +48,7 @@ The complete configuration flow is as follows:
 ```text
 Population.setup() → chainable configuration method calls
   → build()
-  → PopulationConfig / PopulationState
+  → ModelDraft / PopulationState
   → run_tick / run
   → reproduction → survival → aging (and hooks)
 ```
@@ -168,7 +179,19 @@ Competition parameters take effect during the survival phase of the population.
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
 | `competition_strength` | `float` | Relative competition factor for old juveniles (age=1) | `5.0` | Juvenile density regulation | Competition weights vary by age: age=0 fixed at `1.0`, age=1 uses `competition_strength` |
-| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"logistic"` | Juvenile density regulation | Supports `"logistic"`, `"beverton_holt"`, etc.; usually `"logistic"` |
+| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"logistic"` | Juvenile density regulation | Supports `"logistic"`, `"beverton_holt"`, `"ricker"`, etc.; usually `"logistic"` |
+
+**Density-regulation curves** (`x` = actual competition strength / expected competition strength; `s` = expected survival; `r` = low-density growth rate):
+
+| Mode | Integer | g(x) | Notes |
+|---|---|---|---|
+| `no_competition` | 0 | 1.0 | no density regulation |
+| `fixed` | 1 | `min(1, K/N)` | fixed clamp on the total age-0 count |
+| `linear` (`"logistic"` is a historical alias) | 2 | `max(0, r - (r-1)·x) · s` | growth rate declines linearly with competition |
+| `beverton_holt` | 3 | `r / (x·(r-1) + 1) · s` | hyperbolic (concave) curve; the legacy aliases `"concave"` and the integer constant `CONCAVE` have both been removed (using them raises a `ValueError` / `AttributeError` with a migration hint) |
+| `ricker` | 4 | `r^(1-x) · s` | exponential overcompensation; oscillates for `r > e` |
+
+Three acceptance bottom lines: (1) at the equilibrium point x=1 all curves converge to `s` (g(1)=s); (2) at low density x->0, g(0)=r·s (the curves share values at the joint equilibrium point); (3) deterministic simulations produce bitwise-reproducible curve scaling.
 | `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
 | `age_1_carrying_capacity` | `Optional[int]` | Carrying capacity at the age=1 stage | `None` | Juvenile density regulation | If explicitly specified, takes highest priority |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | Legacy parameter name (deprecated) with same function as `age_1_carrying_capacity` | `None` | Juvenile density regulation | `age_1_carrying_capacity` recommended; when both are set, `age_1_carrying_capacity` takes precedence |
@@ -376,7 +399,7 @@ Key differences between the discrete generation model and the age-structured mod
 
 ### `setup(...)`
 
-Parameters are consistent with the age-structured model: `name`, `stochastic`, `continuous_sampling`, `fixed_egg_count`, `species`. `species` is required to define the genetic structure of the population.
+Parameters are consistent with the age-structured model: `name`, `stochastic`, `continuous_sampling`, `fixed_egg_count`, and `species` (required, defines the genetic structure of the population).
 
 ### `initial_state(...)`
 
@@ -472,8 +495,8 @@ The semantics of these methods are fully consistent with the age-structured mode
 
 ## Implementation Principles
 
-The chainable API is powered by a `Configurator` object. Each chain method writes immediately to
-`PopulationConfig` NumPy arrays — no deferred execution, no intermediate accumulation.
+The chainable API is powered by a `PopulationBuilder` object. Each chain method writes immediately to
+`ModelDraft` NumPy arrays — no deferred execution, no intermediate accumulation.
 
 1. **Basic config**: `setup()` and `age_structure()` set flags and dimensions
 2. **State config**: `initial_state()` resolves dicts to 3-D arrays and writes to config
@@ -484,13 +507,13 @@ The chainable API is powered by a `Configurator` object. Each chain method write
 
 ## Summary
 
-The `Configurator` chainable API writes parameters immediately to `PopulationConfig` arrays. `build()` creates the `Population` object. The same API serves both build-time and runtime (`pop.update()`) modification.
+The `PopulationBuilder` chainable API writes parameters immediately to `ModelDraft` arrays. `build()` creates the `Population` object. Runtime modification uses the dedicated `RuntimeUpdater` returned by `pop.update()` — same domain-method syntax, no build capability.
 
 ## Related Chapters
 
 - [Hook System](2_hooks.md) - Detailed usage of hook functions
 - [Genotype Pattern Matching](2_genotype_patterns.md) - Detailed genotype matching rules
-- [PopulationState & PopulationConfig: Compilation and Configuration](4_population_state_config.md) - Detailed underlying configuration objects
+- [PopulationState & ModelDraft: Compilation and Configuration](4_population_state_config.md) - Detailed underlying configuration objects
 - [the Simulation Engine Deep Dive](4_simulation_engine.md) - Simulation execution flow and algorithm implementation
 
 ***

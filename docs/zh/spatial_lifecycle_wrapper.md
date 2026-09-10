@@ -1,287 +1,75 @@
-# Spatial Model 生命周期包装器重构
+# 空间生命周期执行
 
-## 背景
+本文描述 `SpatialPopulation` 的运行时执行架构（slice-5 数据面落地后的形态）。
+此前基于 njit codegen 的 spatial wrapper 管线（`compile_spatial_lifecycle_wrapper`、
+`NUMBA_ENABLED`、`numba`/`prange` 导入、`natal.numba` 工具层）已全部移除——
+Rust 原生扩展是唯一的执行引擎，所有路径共享同一套 hook 计划
+与迁移数据面。
 
-原有的 spatial simulation kernel（`run_spatial_tick_with_migration`）是一个"半成品"：
+## 执行模型
 
-1. **不支持 hooks** — 只能在每个 deme 内部运行生命周期阶段（reproduction → survival → aging），无法执行用户注册的 hook 事件（first/early/late）
-2. **不支持异构 config** — 只能接受一个共享的 `PopulationConfig`，所有 deme 必须使用完全相同的参数
-3. **Python dispatch 回退过宽** — 只要有 hooks 或异构 config，整个 spatial run 就退化为逐 deme 的 Python 循环，完全无法利用 Numba 加速
+一次空间 tick 分两个阶段：
 
-此前 panmictic（单种群）路径已经通过 `compile_lifecycle_wrapper` 解决了 hooks + njit 共存的问题。本次修改将同样的思路扩展到 spatial 路径。
+```
+各 deme 生命周期（per-deme 粒度并行/顺序：first hook → 繁殖 → early hook
+  → 密度调节 + 存活 → late hook → 年龄推进）
+      ↓
+统一迁移（runtime 迁移率列 × 冻结的 CSR 折叠）
+```
 
-## 重构目标
+- **引擎会话**：`build()` 自动创建 Rust 会话；per-deme 生命周期与迁移核都在会话内
+  执行。deme `d` 的随机流以 `seed ^ d` 派生，生命周期与迁移持续使用同一条流。
 
-消除 spatial 生命周期序列与 panmictic 的重复：让 spatial 的 prange 体内**直接调用 panmictic 的 lifecycle tick 函数**，而不是重写阶段调用序列。
+## 迁移数据面（slice-5）
 
-## 修改内容
+构建时 `fold_migration_csr()` 把迁移配置折叠为 CSR
+（`indptr` / `dest_idx` / `weights` / `stay_after_send`），运行时只做 `outbound * weight`：
 
-### 1. compiler.py — Panmictic tick 增加 `deme_id` 参数
+- **adjacency 模式**：每个源行按目标升序存原始邻接值，**不做行归一化**；行的迁出
+  总量取决于邻接矩阵本身（`build_adjacency_matrix(..., row_normalize=False)` 是默认值）。
+- **kernel 模式**：按 kernel row-major 访问顺序复现历史 per-source 构建器；
+  无效（越界）偏移丢弃或回绕；条目按 `1/kernel_total` 缩放——当
+  `adjust_on_edge=True` 时按 `1/valid_row_total` 缩放；折叠时再对已缩放条目做一次
+  emitted-row 求和除法，因此 kernel 模式的行权重和为 1，**边界 deme 与内部 deme 一样
+  把全部迁出配额送往有效目标**。`adjust_on_edge` 的意义是保持与旧管线对位的历史位级
+  运算顺序，而不是改变目的地分布。
+- `stay_after_send` 区分记账顺序：adjacency 模式为 `False`（先扣后发），kernel 模式为
+  `True`（先发后扣），用于保持各自的确定性运算顺序。
+- 迁移率与 CSR 分离：运行时 `migration_rate` 是 `(n_demes, S, A)` 列（写保护
+  视图），实际出流量 = 率 × 权重。
+- **换拓扑 = 重建**：CSR 在构建时折叠；修改拓扑/邻接/核参数后必须重建种群
+  （`pop.params.tensor_write("migration_rate", ...)` 只改率列，不改拓扑）。
 
-在 `_gen_lifecycle_source` 中，tick 函数签名增加 `deme_id=-1`：
+## Hook 执行
+
+- 声明式 hook 编译为 CSR 计划，在每条路径上按事件边界执行；
+- 回调 hook（`TickContext`）跨桥进入引擎会话执行；带外入口（`trigger_event`、finish 事件）直接调用；
+- deme 级 `priority` 只在 deme 内部生效，跨 deme 无全局顺序；
+- `@hook(..., deme=[0, 2])` 按 deme 选择器限定目标 deme（默认 `"*"` 全部）。
+
+## 用户 API
 
 ```python
-# 重构前
-def _lifecycle_tick_<hash>(state, config, registry):
-    ...
-    result = _FIRST_HOOK(state, config)
+from natal.frontend.spatial import batch_setting
+from natal.frontend.spatial.population import SpatialPopulation
+from natal.frontend.spatial.topology import build_adjacency_matrix
 
-# 重构后
-def _lifecycle_tick_<hash>(state, config, registry, deme_id=-1):
-    ...
-    result = _FIRST_HOOK(state, config, deme_id)
-```
-
-对应的 tick body 中对 `_FIRST_HOOK`/`_EARLY_HOOK`/`_LATE_HOOK` 的调用和 `execute_csr_event_program_with_state` 的调用都传递了 `deme_id`。
-
-这样 spatial 路径可以传入真实的 deme 索引（`d`），使 hooks 能感知 deme 上下文；而 panmictic 路径不传此参数（默认 `-1`），行为不变。
-
-### 2. compiler.py — Spatial lifecycle wrapper 委托给 panmictic tick
-
-spatial 的 prange 体不再自行排列生命周期阶段，改为**导入 panmictic lifecycle tick 函数并在 prange 内调用**：
-
-```
-# 重构前
-for d in prange(n_demes):
-    cfg = config_bank[deme_config_ids[d]]
-    ind = ind_all[d].copy()
-    execute_csr(FIRST, ...)    ← 重复 stage
-    _FIRST_HOOK(...)
-    run_reproduction(...)       ← 重复 stage
-    execute_csr(EARLY, ...)
-    _EARLY_HOOK(...)
-    run_survival(...)
-    execute_csr(LATE, ...)
-    _LATE_HOOK(...)
-    run_aging(...)
-
-# 重构后
-for d in prange(n_demes):
-    cfg = config_bank[deme_config_ids[d]]
-    ind = ind_all[d].copy()
-    sperm = sperm_all[d].copy()
-    state = PopulationState(tick, ind, sperm)    ← 构造 State 对象
-    (ind, sperm, _), result = _run_deme_tick(state, cfg, registry, d)
-```
-
-spatial 模块不再包含自己的 `_FIRST_HOOK`/`_EARLY_HOOK`/`_LATE_HOOK` 全局变量——hook globals 只在 panmictic 模块上设置，spatial 模块导入的 panmictic tick 函数通过其自身模块的全局变量解析 hooks。
-
-### 3. compiler.py — Spatial source 生成简化
-
-`_gen_spatial_lifecycle_source` 现在接受 `panmictic_stem` 和 `panmictic_tick_fn_name` 参数。生成的模块源码大幅简化：
-
-```python
-# 重构前：6 个 import、3 个 hook 全局变量
-import numpy as np
-from natal.engine.age_structured_simulator import (run_reproduction, ...)
-from natal.engine.spatial_migrator import run_spatial_migration
-from natal.hooks.runtime.csr_kernel import execute_csr_event_program_with_state
-from natal.hooks.types import EVENT_FIRST, EVENT_EARLY, EVENT_LATE, ...
-from natal.numba import njit_switch
-from numba import prange
-
-_FIRST_HOOK = None
-_EARLY_HOOK = None
-_LATE_HOOK = None
-
-# 重构后：3 个 import + 1 个 panmictic tick import
-import numpy as np
-from natal.engine.spatial_migrator import run_spatial_migration
-from natal.hooks.types import RESULT_CONTINUE, RESULT_STOP
-from natal.numba import njit_switch
-from numba import prange
-from natal.data import PopulationState
-from natal._hook_codegen_lifecycle_structured_<key> import _lifecycle_tick_<key> as _run_deme_tick
-```
-
-### 4. compiler.py — CompiledEventHooks 扩展
-
-在 `CompiledEventHooks` 中新增了 4 个槽位：
-
-- `spatial_tick_fn` / `spatial_run_fn` — age-structured 的 spatial 生命周期包装器
-- `spatial_discrete_tick_fn` / `spatial_discrete_run_fn` — discrete-generation 的 spatial 生命周期包装器
-
-在 `from_compiled_hooks()` 中，当 Numba 启用时，除了原有的 panmictic wrapper，还会**预编译** spatial wrapper：
-
-```python
-if NUMBA_ENABLED:
-    # Panmictic wrappers
-    result.run_tick_fn, result.run_fn = compile_lifecycle_wrapper(...)
-    result.run_discrete_tick_fn, result.run_discrete_fn = compile_lifecycle_wrapper(...)
-    # Spatial wrappers（委托给上述 panmictic wrappers）
-    result.spatial_tick_fn, result.spatial_run_fn = compile_spatial_lifecycle_wrapper(...)
-    result.spatial_discrete_tick_fn, result.spatial_discrete_run_fn = compile_spatial_lifecycle_wrapper(...)
-```
-
-### 5. spatial_population.py — 运行时适配
-
-#### `_should_use_python_dispatch()` 收缩
-
-原有的条件：
-```python
-if not is_numba_enabled(): return True
-if has_python_hooks() or has_compiled_hooks(): return True  # ← 过宽
-return has_heterogeneous_configs()                           # ← 过宽
-```
-
-新的条件：
-```python
-if not is_numba_enabled(): return True
-if has_python_hooks(): return True     # 只有纯 Python callback 才回退
-return False                           # 其余全部走 njit
-```
-
-这意味着：
-- **CSR registry hooks**（声明式 Op、njit selector hooks）→ 可通过 `execute_csr_event_program_with_state` 在 njit 内执行
-- **用户 njit hooks** → 通过模块级全局变量在 njit 内执行
-- **异构 configs** → 通过 `config_bank` 在 njit 内按 deme 索引查找
-- 纯 Python callable hooks → 仍需回退 Python dispatch
-
-#### `_is_discrete_demes()` 辅助方法
-
-通过检查第一个 deme 的 state 是否包含 `sperm_storage` 属性来判断 deme 类型，从而选择 structured 或 discrete 的 spatial wrapper。
-
-#### `_run_codegen_wrapper_tick()` 替换
-
-从调用 `run_spatial_tick_with_migration(single_config)` 改为调用 `spatial_tick_fn(config_bank, deme_config_ids, registry, ...)`：
-
-1. 调用 `_stack_deme_state_arrays()` 堆叠所有 deme 的状态
-2. 调用 `_heterogeneous_config_bank_and_ids()` 构建 config bank
-3. 根据 `_is_discrete_demes()` 选择 structured 或 discrete 的 tick 函数
-4. 传入 registry（CSR hook 数据）和 migration 参数
-5. 写回状态
-
-#### `_run_codegen_wrapper_steps()` 替换
-
-同上，但使用 `spatial_run_fn` 一次性执行多个 tick，支持 `record_interval` 历史记录。
-
-## Spatial Model 完整工作流程
-
-### 构建阶段
-
-```
-Species + Drive + Demes → IndexRegistry / PopulationConfig / PopulationState
-                          ↓
-SpatialPopulation.__init__()
-                          ↓
-_compile_spatial_hooks_from_demes()
-    → _collect_effective_compiled_hooks()     ← 收集所有 deme 的 hook
-    → _build_hook_program()                   ← 编译 CSR HookProgram
-    → CompiledEventHooks.from_compiled_hooks()
-        → compile_combined_hook()             ← 合并同事件 njit hooks
-        → compile_lifecycle_wrapper()         ← 预编译 panmictic wrapper
-        → compile_spatial_lifecycle_wrapper() ← 预编译 spatial wrapper
-```
-
-### 运行阶段 — `run_tick()`
-
-```
-spatial.run_tick()
-  │
-  ├─ _should_use_python_dispatch()?
-  │    ├─ True  → _run_python_dispatch_tick()
-  │    │            for deme in demes: deme.run_tick()
-  │    │            run_spatial_migration(stacked_state)
-  │    │
-  │    └─ False → _run_codegen_wrapper_tick()
-  │                  _stack_deme_state_arrays()
-  │                  _heterogeneous_config_bank_and_ids()
-  │                  spatial_tick_fn(config_bank, registry, ...)
-```
-
-### njit prange 内部流程（一次 tick）
-
-```
-_spatial_tick_<hash>(ind_all, sperm_all, config_bank, deme_config_ids, registry, tick, ...)
-  │
-  ├─ n_demes = ind_all.shape[0]
-  ├─ stopped = zeros(n_demes, bool)
-  │
-  ├─ for d in prange(n_demes):              ← 并行执行每个 deme
-  │    │
-  │    ├─ cfg = config_bank[deme_config_ids[d]]  ← 异构 config 查找
-  │    │
-  │    ├─ 构造 PopulationState(tick, ind, sperm)
-  │    │
-  │    ├─ (ind, sperm, _), result = _run_deme_tick(state, cfg, registry, d)
-  │    │    │                                    ← 委托给 panmictic tick
-  │    │    ├─ [FIRST 事件]                        （带 deme_id=d）
-  │    │    │    execute_csr_event_program(registry, FIRST, ind, sperm, tick, d)
-  │    │    │    _FIRST_HOOK(state, config, d)
-  │    │    │
-  │    │    ├─ Reproduction（繁殖）
-  │    │    │
-  │    │    ├─ [EARLY 事件]
-  │    │    │    execute_csr_event_program(registry, EARLY, ind, sperm, tick, d)
-  │    │    │    _EARLY_HOOK(state, config, d)
-  │    │    │
-  │    │    ├─ Survival / Competition（生存/竞争）
-  │    │    │
-  │    │    ├─ [LATE 事件]
-  │    │    │    execute_csr_event_program(registry, LATE, ind, sperm, tick, d)
-  │    │    │    _LATE_HOOK(state, config, d)
-  │    │    │
-  │    │    └─ Aging（老化）→ 返回 (ind, sperm, tick+1), result
-  │    │
-  │    ├─ if result != CONTINUE: stopped[d] = True
-  │    ├─ ind_all[d] = ind
-  │    └─ sperm_all[d] = sperm
-  │
-  ├─ run_spatial_migration(                 ← prange 完成后统一迁移
-  │      ind_all, sperm_all, ...,
-  │      config_bank[0], ...)
-  │
-  └─ 检查 stopped[] → 返回 was_stopped
-```
-
-### 关键设计决策
-
-1. **Panmictic tick 作为唯一事实源**：spatial 的 prange 体不再重复生命周期阶段序列，而是**委托给 panmictic lifecycle tick**。生命周期顺序（FIRST → reproduction → EARLY → survival → LATE → aging）**只在一个地方定义**，新增/调整阶段不会漏掉 spatial 路径
-
-2. **deme_id 传递**：panmictic tick 的 `deme_id=-1` 默认参数让两种调用路径都能正常工作：
-   - Panmictic 调用：不传 deme_id → 默认 -1 → 行为不变
-   - Spatial 调用：传 `d`（deme 索引）→ hooks 能感知 deme 上下文
-
-3. **Config bank 始终使用**：即使所有 deme 共用同一个 config，也通过 config bank 传递，保持生成模块的签名统一
-
-4. **Migration 使用 config_bank[0]**：migration kernel 只需要读取 `stochastic` 和 `continuous_sampling` 两个参数，这些在 spatial population 构建时已验证为所有 deme 一致
-
-5. **Stop 信号收集**：prange 内无法直接 break 回主线程，使用 `stopped[n_demes]` 布尔数组在每个 deme 的生命周期中标记。prange 结束后串行扫描 stopped 数组
-
-6. **Hook globals 集中在 panmictic 模块**：spatial 模块不再设置 `_FIRST_HOOK` 等全局变量。这些只在 panmictic 模块上设置，spatial 导入的 panmictic tick 通过其自身模块的全局变量解析 hooks。每个唯一 hook 组合对应一个唯一的源码 hash，确保 Numba `cache=True` 跨进程工作
-
-## 用户 API：简化后的 `@hook`
-
-`@hook()` 装饰器的 `deme_selector` 参数已重命名为 `deme`，语义更直观：
-
-```python
-@hook(event="early", custom=True, deme="*")    # 所有 deme（默认）
-@hook(event="early", custom=True, deme=3)       # 仅 deme 3
-@hook(event="early", custom=True, deme=[0,2,4]) # 指定列表
-```
-
-不需要手动加 `@njit` — 装饰器自动处理：
-
-```python
-@hook(event="early", custom=True)
-def my_hook(state, config, deme_id=-1):
-    """Spatial 模型中如需按 deme 分支，加可选的 deme_id 参数。
-    绝大多数 hook 只需 (state, config) 即可。"""
-    if deme_id % 2 == 0:
-        state.individual_count[0, 0, 0] *= 0.5
-```
-
-配合 Configurator 使用：
-
-```python
 pop = (
-    nt.DiscreteGenerationPopulation
-    .setup(species=sp, name="demo")
-    .initial_state(...)
-    .reproduction(...)
-    .competition(...)
-    .presets(drive)
-    .hooks(my_hook)       # @hook 装饰过的函数直接传入
+    SpatialPopulation.builder(species=sp, n_demes=4, pop_type="age_structured")
+    .setup(name="demo", stochastic=False)
+    ...
+    .migration(adjacency=..., migration_rate=0.1)
     .build()
 )
+pop.run(n_steps=10, record_every=1)
+pop.params.tensor_write("migration_rate", {"F": 0.2, "M": 0.05})  # 运行时改迁移率
 ```
+
+构建后运行时参数写入只有两个入口：`pop.params.tensor_write(...)`（批量、
+推荐）与 `deme(i).write_ecology(...)` / `write_genetics(...)`（单 deme）。
+**`SpatialPopulation.update()` 链已删除**。
+
+> **注意**：空间容器的 `pop.params` 每次访问都返回**新的** `SpatialParamsView`。
+> 因此 `pop.params.carrying_capacity = 5` 只会写到这个临时视图上，对引擎无效
+> （实测参数值不变）。空间参数写入必须用 `pop.params.tensor_write(...)` 或
+> `deme(i).write_ecology(...)`。

@@ -1,4 +1,4 @@
-"""Unit tests for natal.hooks.entry.declarative — Op factories, selectors, and compilation."""
+"""Unit tests for natal.frontend.hooks.entry.declarative — Op factories, selectors, and compilation."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.configurator import Configurator
-from natal.hooks.entry.declarative import (
+from natal.frontend.builder import PopulationBuilder
+from natal.frontend.hooks.entry.declarative import (
     Op,
     _resolve_ages,
     _resolve_genotypes,
     _resolve_sex,
     compile_declarative_hook,
 )
-from natal.hooks.types import HookOp, OpType
-from natal.registry.index import IndexRegistry
+from natal.frontend.hooks.types import HookOp, OpType
+from natal.frontend.registry.index import IndexRegistry
 
 # ══════════════════════════════════════════════════════════════════════════
 # TestOpFactories
@@ -156,7 +156,7 @@ class TestResolveGenotypes:
 
     def test_unknown_string_raises(self, registry_with_genotypes):
         reg = registry_with_genotypes
-        from natal.patterns import PatternParseError
+        from natal.frontend.patterns import PatternParseError
         with pytest.raises(PatternParseError):
             _resolve_genotypes("UNKNOWN", reg, reg.index_to_genotype[0].species, reg.num_genotypes())
 
@@ -231,7 +231,7 @@ class TestCompileDeclarativeHook:
     def _build_pop(self, species: nt.Species):
         """Build a minimal age-structured population for hook compilation tests."""
         return (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})

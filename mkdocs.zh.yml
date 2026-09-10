@@ -111,32 +111,40 @@ nav:
   - 内部实现:
     - 4_index_registry.md
     - 4_simulation_engine.md
-    - 4_numba_optimization.md
     - 4_population_state_config.md
+    - 空间异构配置共享: spatial_config_replace.md
   - 附录:
     - 等位基因转换规则: allele_conversion_rules.md
-    - 缓存与代码生成: caching_and_codegen.md
+    - 执行引擎: caching_and_codegen.md
     - 基因型筛选器: genotype_filter.md
     - 迁移: migration_builder_to_configurator.md
-    - 迁移核实现: migration_kernel_impl.md
     - 观测实现: observation_impl.md
     - 预设封装与验证: preset_encapsulation_and_validation.md
-    - 空间构建器: spatial_builder.md
-    - 空间配置替换: spatial_config_replace.md
+    - 空间种群构建器（批量构造）: spatial_population_builder.md
+    - 空间生命周期执行: spatial_lifecycle_wrapper.md
+  - 历史设计:
+    - 迁移核实现（历史）: migration_kernel_impl.md
+    - 空间构建器（已被取代）: spatial_builder.md
     - 空间初始化方案: spatial_initialization_plan.md
-    - 空间生命周期包装器: spatial_lifecycle_wrapper.md
   - API 参考:
     - API 概览: api/index.md
     - 遗传结构: api/genetic_structures.md
     - 遗传实体: api/genetic_entities.md
-    - 遗传模式: api/patterns.md
-    - 遗传预设: api/presets.md
     - 种群状态: api/population_state.md
     - 状态转换: api/state_translation.md
     - 种群配置: api/population_config.md
+    - 历史记录: api/history.md
+    - 观测: api/observation.md
     - 基础种群: api/base_population.md
-    - 离散代种群: api/discrete_generation_population.md
     - 年龄结构种群: api/age_structured_population.md
-    - 配置器 (Configurator): api/configurator.md
+    - 离散代种群: api/discrete_generation_population.md
+    - 种群构建器 (PopulationBuilder): api/population_builder.md
+    - 遗传模式: api/patterns.md
+    - 遗传预设: api/presets.md
     - 修饰器: api/modifiers.md
-    - 算法: api/algorithms.md
+    - Hooks: api/hooks.md
+    - 空间种群: api/spatial.md
+    - 适应度: api/fitness.md
+    - 索引注册表: api/registry.md
+    - 仪表盘与启动: api/ui.md
+    - 工具函数: api/utils.md

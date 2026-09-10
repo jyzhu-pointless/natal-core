@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.spatial.topology import SquareGrid, build_adjacency_matrix
+from natal.frontend.spatial.topology import SquareGrid, build_adjacency_matrix
 
 
 def _make_sp(name: str) -> nt.Species:
@@ -270,8 +270,6 @@ class TestHeterogeneousUnionSeeds:
 
 class TestCompressMigrationInvariants:
     """Compressed registries are compatible with cross-deme migration."""
-
-    @pytest.mark.numba_off
     def test_migration_conservation(self, simple_species):
         """Migration preserves total individuals (conservation invariant)."""
         sp = simple_species
@@ -279,6 +277,11 @@ class TestCompressMigrationInvariants:
         def _make_deme(name: str, count: float) -> nt.AgeStructuredPopulation:
             return nt.AgeStructuredPopulation.setup(
                 species=sp, name=name, stochastic=False, compress=True,
+                # All demes must compress to the same zygote axis: the
+                # shared config is imported by every deme, so each deme
+                # declares the full genotype set regardless of its own
+                # occupancy.
+                declared_zygote_types=["WT|WT", "WT|Dr", "Dr|Dr"],
             ).age_structure(n_ages=4, new_adult_age=1).initial_state(
                 individual_count={
                     "female": {"WT|WT": [0.0, count, 0.0, 0.0]},
@@ -322,10 +325,13 @@ class TestCompressMigrationInvariants:
         # Conservation invariant.
         assert sum(after) == pytest.approx(200.0, abs=1e-6)
 
-        # Non-trivial migration: source lost, sinks gained.
+        # Non-trivial migration: the source loses mass and its two direct
+        # neighbors on the 2x2 grid gain; the opposite corner (deme 3) is
+        # not reachable from deme 0 in one step and stays empty.
         assert after[0] < 200.0
         assert all(a >= 0 for a in after)
-        assert all(a > 0 for a in after[1:])
+        assert after[1] > 0.0 and after[2] > 0.0
+        assert after[3] == 0.0
 
     def test_compress_uncompress_same_initial_total(self):
         """Compressed and uncompressed builds have same initial state total."""
@@ -564,19 +570,19 @@ class TestSpatialSelectorHookPatterns:
 
 
 class TestSpatialCustomHookSkipped:
-    """Custom hooks (custom=True) are explicitly NOT auto-collected."""
+    """Callback hooks are explicitly NOT auto-collected for compression."""
 
     def test_custom_hook_not_collected(self):
-        """Custom hook referencing Dr|Dr — genotype is pruned."""
+        """Callback hook referencing Dr|Dr — genotype is pruned."""
         sp = nt.Species.from_dict(
             "shc_custom", {"c1": {"l1": ["WT", "Dr"]}},
             unordered=True, gamete_labels=["default"],
         )
 
-        @nt.hook(event="first", custom=True)
-        def custom_release(state, config, deme_id=-1):
+        @nt.hook(event="first")
+        def custom_release(pop):
             # Reference Dr|Dr only in the body — not detectable statically
-            _ = (state, config, deme_id)
+            _ = pop
 
         pop = nt.SpatialPopulation.builder(
             species=sp, n_demes=1, pop_type="discrete_generation",

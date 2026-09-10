@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from natal.spatial.topology import HexGrid, SquareGrid
-from natal.ui.spatial_dashboard import SpatialDashboard
+from natal.frontend.spatial.topology import HexGrid, SquareGrid
+from natal.frontend.ui.spatial_dashboard import SpatialDashboard
 
 
 class _FakeGenotype:
@@ -151,7 +151,7 @@ def test_large_landscape_mode_threshold_and_click_fallback() -> None:
     assert dashboard._use_large_landscape_mode() is True
 
     clicked: list[int] = []
-    dashboard._select_deme = clicked.append  # type: ignore[method-assign]
+    dashboard._select_deme = clicked.append  # type: ignore[method-assign]  # test double: capturing stub replaces the private click handler
     event = SimpleNamespace(args={"points": [{"x": 3, "y": 4}]})
     dashboard._on_landscape_click(event)
     assert clicked == [dashboard.pop.topology.to_index((4, 3))]

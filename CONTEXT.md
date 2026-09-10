@@ -24,9 +24,10 @@
 | 遗传预设 | GeneticPreset | 预定义的遗传修饰规则组合（如基因驱动 HomingDrive） |
 | 修饰器 | Modifier | 改变配子或合子生成频率的规则（GameteModifier / ZygoteModifier） |
 | 适应度 | Fitness | 基因型的生存/繁殖优势（viability、fecundity、sexual_selection、zygote_viability） |
-| 种群配置 | PopulationConfig | 引擎的静态配置（不可变 NamedTuple），包含所有生态和遗传参数 |
-| 种群状态 | PopulationState | 引擎的可变状态（数组容器），记录当前个体分布 |
-| 配置器 | Configurator | 构建和修改 PopulationConfig 的链式 API |
+| 模型草稿 | ModelDraft | 构建期声明草稿（不可变结构），编译为 Rust 会话的 Blueprint/Params/遗传表 |
+| 种群状态 | PopulationState | 状态快照（数组容器）；Rust 会话拥有权威运行状态，读取返回独立拷贝 |
+| 配置器 | Configurator | 用户链式 DSL；将声明编译为会话输入并支持运行时更新 |
+| Rust 会话 | EngineSession / SpatialEngineSession 变体 | 唯一运行时权威：拥有计数、tick、生态、遗传、随机流、历史与检查点 |
 | 索引注册表 | IndexRegistry | 将基因型/单倍型映射为引擎使用的整数索引 |
 | Hook | Hook | 模拟过程中的事件干预点（first / early / late / finish） |
 | 种群 | Population | 具体的种群模型实例（年龄结构型 / 离散代型 / 空间型） |
@@ -40,125 +41,45 @@
 ## 目录结构
 
 > `_` 前缀 = 内部模块，不通过 `__init__.py` 暴露
-> 🔴 = 标记后续重构
+> 顶层只有三个实体包树：`frontend/`、`backends/`、`contracts/`。
+> 垫片目录（`natal.data`、`natal.hooks` …）与 numba 后端已在 ⑥ 全部移除；
+> 顶层惰性导出按规则扫描这三个包树中声明了字面量 `__all__` 的子包。
 
 ```
 src/natal/
 │
-├── __init__.py                # 惰性加载入口
+├── __init__.py                # 惰性加载入口（AST 扫描 frontend/backends/contracts 的 __all__）
+├── __init__.pyi               # 生成器产物（scripts/generate_init_pyi.py）
+├── parameters.jsonc           # 参数注册表（ParamDescriptor 的数据源）
+├── _engine_rs.*               # Rust 原生扩展（maturin 构建）
 │
-├── genetics/                  # 🧬 遗传结构定义 ✅
-│   ├── structures/
-│   │   ├── _base.py           # GeneticStructure 基类
-│   │   ├── _registry.py       # RegistryBase / EntityRegistry / ChildStructureRegistry
-│   │   ├── _types.py          # SexChromosomeType + 类型别名
-│   │   ├── species.py         # Species 核心（构造、CRUD、缓存）
-│   │   ├── species_dict.py    # from_dict + 字符串解析方法
-│   │   ├── species_iteration.py  # 基因型/单倍型迭代枚举
-│   │   ├── species_pattern.py # 模式匹配方法
-│   │   ├── species_maps.py    # gamete/zygote maps + 配置蓝图 + 辅助函数
-│   │   ├── chromosome.py      # Chromosome 核心
-│   │   ├── chromosome_map.py  # RecombinationMap
-│   │   └── locus.py           # Locus
-│   ├── entities/
-│   │   ├── _base.py           # GeneticEntity 基类
-│   │   ├── gene.py            # Gene
-│   │   ├── haplotype.py       # Haplotype + HaploidGenotype
-│   │   └── genotype.py        # Genotype + 重组逻辑
-│   └── __init__.py
+├── frontend/                  # 🖥️ 用户面 ✅
+│   ├── genetics/              # 遗传结构/实体（structures/, entities/ + __init__）
+│   ├── patterns/              # 基因型模式匹配（elements/, parser, selector）
+│   ├── registry/              # IndexRegistry
+│   ├── configurator/          # Configurator 链式 API（_base/_factory/_params/_routes/_writers/...）
+│   ├── data/                  # ModelDraft + PopulationState/DiscretePopulationState（NamedTuple）
+│   ├── utils/                 # Sex/Age/GameteLabel 类型、helpers、参数注册表 loader
+│   ├── population/            # BasePopulation/AgeStructuredPopulation/DiscreteGenerationPopulation
+│   ├── spatial/               # SpatialPopulation/DemeSlice/SpatialParamsView/topology/migration(CSR 折叠)
+│   ├── modifiers/             # 配子/合子转换规则（conditions/gamete_conversion/zygote_conversion）
+│   ├── presets/               # HomingDrive/ToxinAntidoteDrive/Wolbachia/...（_base/_types/cytoplasmic/...）
+│   ├── fitness/               # 适应度补丁（_patch/_writer/_types）
+│   ├── hooks/                 # @hook + Op（entry/、compile/（CSR 容器）、runtime/、tick_context.py、types.py）
+│   ├── output/                # History/Observation/record/translation
+│   └── ui/                    # Dashboard/可视化（依赖 matplotlib 等，可选导入）
 │
-├── patterns/                  # 🔍 基因型模式匹配 ✅
-│   ├── elements/
-│   │   ├── _base.py           # PatternElement(ABC) + PatternParseError
-│   │   ├── atom.py            # AllelePattern, WildcardPattern, SetPattern, LabPattern, LocusPattern
-│   │   ├── chromosome.py      # HaplotypePath, ChromosomePairPattern
-│   │   ├── haploid.py         # HaploidGenomePattern, GameteTypePattern
-│   │   └── diploid.py         # GenotypePattern, ZygoteTypePattern
-│   ├── parser.py              # GenotypePatternParser
-│   ├── selector.py            # GenotypeSelector + resolve_zygote_type
-│   ├── individual_selector.py # IndividualSelector：基于模式的个体过滤索引
-│   └── __init__.py
+├── backends/                  # 🔌 引擎适配层
+│   └── rust/                  # Rust 原生扩展适配（rust_backend.py：会话桥 + 检查点/错误转换；唯一执行引擎）
 │
-├── presets/                   # 🎯 遗传预设 ✅
-│   ├── _types.py              # 配置类型别名 + TypeGuard
-│   ├── _fitness.py            # fitness patch 构建/应用引擎
-│   ├── _base.py               # GeneticPreset(ABC) + apply_preset_to_population
-│   ├── homing.py              # HomingDrive
-│   ├── toxin_antidote.py      # ToxinAntidoteDrive
-│   ├── cytoplasmic.py         # CytoplasmicPreset + Wolbachia + TransgenicBackground
-│   ├── gamete_conversion.py   # 配子等位基因转换
-│   ├── zygote_conversion.py   # 合子等位基因转换
-│   └── __init__.py
+├── contracts/                 # 前后端契约（blueprint/params/state/materialize 等）
 │
-├── configurator/              # 🔧 种群配置器 ✅
-│   ├── _base.py               # Configurator 基类
-│   ├── _factory.py            # PopulationConfigBuilder build() 逻辑（旧 Builder 废弃）
-│   ├── _params.py             # 参数解析辅助
-│   ├── discrete.py            # DiscreteConfigurator
-│   ├── age_structured.py      # AgeStructuredConfigurator
-│   └── __init__.py
-│
-├── data/                      # 📦 引擎面数据结构 ✅
-│   ├── config.py              # PopulationConfig + DiscretePopulationConfig (NamedTuple)
-│   ├── state.py               # PopulationState + DiscretePopulationState
-│   ├── _builders.py           # build_population_config 等工厂函数
-│   ├── _extract.py            # extract_gamete_frequencies 等提取函数
-│   ├── constants.py           # 增长模式常量 (NO_COMPETITION, FIXED, LOGISTIC, CONCAVE...)
-│   └── __init__.py
-│
-├── registry/                  # 📋 索引注册表 ✅
-│   ├── index.py               # IndexRegistry
-│   └── __init__.py
-│
-├── population/                # 👥 种群模型 ✅
-│   ├── base.py                # BasePopulation(ABC) 🔴
-│   ├── age_structured.py      # AgeStructuredPopulation
-│   ├── discrete_generation.py # DiscreteGenerationPopulation
-│   └── __init__.py
-│
-├── spatial/                   # 🗺️ 空间模型 ✅
-│   ├── population.py          # SpatialPopulation 🔴
-│   ├── configurator.py        # SpatialConfigurator 🔴
-│   ├── topology.py            # SpatialTopology
-│   └── __init__.py
-│
-├── output/                    # 📤 数据输出 ✅
-│   ├── observation.py         # Observation 类、GroupsInput、过滤规则
-│   ├── history.py             # History / HistorySchema / HistoryBatch 自描述存储
-│   ├── _recording.py          # RecordingPlan：冻结的记录计划
-│   ├── record.py              # CompactMeta、引擎端记录构建器
-│   ├── translation.py         # 状态格式化输出
-│   └── __init__.py
-│
-├── modifiers/                 # 🔀 遗传修饰器 ✅
-│   ├── module.py              # GameteModifier / ZygoteModifier Protocol
-│   ├── gamete_conversion.py   # 配子转换规则（从 presets/ 迁入）
-│   ├── zygote_conversion.py   # 合子转换规则（从 presets/ 迁入）
-│   └── __init__.py
-│
-├── fitness/                   # 💪 适应度系统 ✅
-│   ├── _types.py              # FitnessPopulationView Protocol
-│   ├── _patch.py              # 唯一写入层（apply_preset_fitness_patch）
-│   ├── _writer.py             # DSL 解析层（write_fitness_field）
-│   └── __init__.py
-│
-├── numba/                     # ⚡ Numba 基础设施 ✅
-│   ├── utils.py               # njit_switch, enable/disable, cache 管理
-│   ├── compat.py              # 双实现兼容层
-│   └── __init__.py
-│
-├── utils/                     # 🛠 通用工具 ✅
-│   ├── types.py               # Sex(IntEnum), Age, GameteLabel
-│   ├── helpers.py             # resolve_sex_label, validate_name
-│   ├── parameters.py          # ParamDescriptor + JSONC 注册表
-│   └── __init__.py
-│
-├── hooks/                     # 🪝 Hook 系统（保持现有结构）
-├── engine/                    # ⚙️ 模拟引擎 🔴 后续按生命周期阶段拆分
-└── ui/                        # 🖥️ Web 界面 🔴 后续拆分
+└── py.typed
 ```
 
----
+> 注意：`natal.frontend.spatial.migration` 中的 migration CSR 折叠与
+> `natal.contracts` 的契约层共同构成 slice-5 数据面；
+> `natal.backends.reference` / `natal.engine` / `natal.numba` 等旧路径已不存在。
 
 ## 依赖方向
 
@@ -178,7 +99,7 @@ hooks → engine → population
 4. **`fitness/` 已激活**：fitness 逻辑已从 presets 和 configurator 提取到独立的 `fitness/` 子包，使用 `FitnessPopulationView` Protocol 作为统一接口，`_patch.py` 为唯一写入层，`_writer.py` 为 DSL 解析层。
 5. **`modifiers/` 独立**：修饰器是连接 presets 和引擎的独立抽象层。
 6. **500 行单模块上限**：每个 `.py` 文件不超过 500 行，超限需拆分。
-7. **Numba cache 位于工作目录**：`numba/utils.py` 中 `NUMBA_CACHE_DIR` 默认指向 `cwd/.numba_cache`，而非项目根目录。
+7. **执行引擎只有一个**：`backends.rust`（原生扩展 `natal._engine_rs`）；引擎会话拥有运行状态，`backends.reference` 与 `auto` 选择器已删除。
 8. **旧 Builder 已废弃**：`population_builder.py` 中的 Builder 类已删除，统一使用 Configurator API。
 9. **旧模块导入路径已全部更新**：`genetic_structures`、`genetic_entities`、`genetic_patterns`、`population_config`、`population_state` 等旧路径不再存在。
 
@@ -248,10 +169,8 @@ BasePopulation 从 1743 行拆分为一组 mixin + 532 行核心 ABC：
 | 文件 | 行数 | 理由 |
 |---|---|---|
 | `configurator/_base.py` | 1,164 | Configurator 是完整 DSL 类，内聚性高 |
-| `configurator/_factory.py` | 783 | PopulationConfigBuilder 是装配类 |
+| `configurator/_base.py` | （见上） | Configurator 是完整 DSL 类，内聚性高 |
 | `genetics/entities/genotype.py` | 649 | 基因型构造 + 重组逻辑，单一职责 |
 | `patterns/parser.py` | 613 | GenotypePatternParser 是递归下降解析器 |
-| `numba/utils.py` | 709 | 工具函数库，内聚性高 |
-| `numba/compat.py` | 616 | 同上 |
-| `modifiers/gamete_conversion.py` | 675 | 配子转换规则集，内聚性高（从 presets/ 迁入） |
-| `modifiers/zygote_conversion.py` | 654 | 合子转换规则集，内聚性高（从 presets/ 迁入） |
+| `frontend/modifiers/gamete_conversion.py` | 675 | 配子转换规则集，内聚性高（从 presets/ 迁入） |
+| `frontend/modifiers/zygote_conversion.py` | 654 | 合子转换规则集，内聚性高（从 presets/ 迁入） |

@@ -4,11 +4,45 @@
 
 ### Breaking Changes
 
+- **The Rust engine is the only execution backend**: the pure-Python
+  reference package (`natal.backends.reference`) is deleted together with
+  the `backend=` selector and the `disable_rust_backend` /
+  `refresh_rust_backend` / `using_rust_backend` facades;
+  `enable_rust_backend` remains the engine-session init entry, called by
+  `build()` and lazily at the first run/tick boundary. Populations that
+  skipped `build()` (clones, direct `SpatialPopulation` construction)
+  create their session from their current state on the first run.
+- **Numba backend removed**: the `natal.numba` package, the `backend="numba"`
+  selector, `njit_switch`, `enable_numba/disable_numba`, the numba cache and
+  codegen pipeline are gone. `backend="numba"` raises `ValueError` with a
+  migration hint.
+- **Spatial `pop.update()` chain removed**: `SpatialPopulation.update()` and the
+  private `_SpatialUpdate` facade are gone; runtime spatial writes go through
+  `pop.params.tensor_write(...)` and `deme(i).write_ecology(...)` /
+  `write_genetics(...)`.
 - **History / Observation API**: replace mutable runtime observation creation
   and legacy output helpers with a canonical build-time `Observation`, a
   self-describing `History`, `pop.observe()`, `pop.record_snapshot()`, and raw
   checkpoint restoration. Deleted legacy interfaces are not retained as
   compatibility aliases.
+- **Forwarding shims removed**: the legacy top-level packages
+  (`natal.data`, `natal.hooks`, `natal.engine`, ...) are gone; import from
+  `natal.frontend.*`, `natal.backends.*`, `natal.contracts`, or the top-level
+  lazy API (`nt.Op`, `nt.Species`, ...).
+
+### Removed
+
+- **Backend-selection documentation and tooling**: `docs/{en,zh}/4_backend_selection.md`
+  and the API pages for the reference simulators are gone; guides now describe
+  the single native engine. `demos/bench_backends.py` is deleted, the three
+  `benchmarks/rust_backend_*.py` scripts measure the engine's own `run(n)`
+  vs `run_tick()` paths, and the demos no longer pass the removed
+  `backend=` selector. The MGDrivE1 cross-engine benchmark family keeps its
+  validation/statistics plumbing but its engine entry points now document
+  that they raise on invocation (the reference engine retired).
+- **Directory auto-discovery of top-level exports**: `natal`'s public API is
+  an explicit `_PUBLIC_EXPORTS` list; a module export reaches the top level
+  only by being added to that list. `__init__.pyi` is generated from it.
 
 ### New Features
 
@@ -26,12 +60,64 @@
 - **Preset modifier refresh**: rebuild gamete and zygote conversions from the
   Mendelian baseline so repeated refresh or runtime reconfiguration cannot
   compound drive rates; preserve build-time preset registration after `build()`.
+- **Discrete Poisson lambda ceiling**: the Rust Poisson helper now returns the
+  mean for lambdas at or above the library sampling ceiling instead of
+  panicking between that ceiling (1.844e19) and the 2^104 resolution guard;
+  a stochastic run whose per-pair egg total lands in that window (e.g. a
+  census explosion under a large-scale configuration) now completes.
+- **Spatial RNG streams**: per-deme streams were rebuilt from `seed ^ deme`
+  every tick (and stochastic migration re-seeded per call), reusing identical
+  random numbers across ticks; streams are now a persistent per-deme bank
+  advancing across ticks.  Same-seed reproducibility and segmented-run
+  bitwise identity hold; stochastic spatial trajectories differ from the
+  defective old streams (plan R1).
 
 ### Changed
 
 - **Spatial update internals**: replace the private `_SpatialUpdate` facade and
   method-name batching table with typed Configurator dispatch and explicit
   `batch_setting()` values.
+- **Hook program literal pool rebasing**: declarative `set_param` value
+  expressions carry per-hook RPN literal indices; concatenating hooks into
+  one program (panmictic and spatial builders) now rebases those indices
+  onto the shared pool, so a second literal-bearing hook no longer
+  evaluates an earlier hook's literal.
+- **Bounded recording memory (plan S4)**: plain populations now wire their
+  `max_history` bound (default 5000 rows) into History; `record_history(max_rows=None)`
+  applies the population default instead of unbounded growth, and evicted
+  history rows drop their paired session checkpoints (plain, discrete, and
+  spatial) so the checkpoint store stays bounded by the same budget.
+- **Spatial full checkpoint restore (plan S4 CheckpointStore)**: the spatial
+  session now stores restorable boundaries (stacked state, every per-deme RNG
+  stream, and the ecology columns) at record-aligned raw-history ticks;
+  `restore_checkpoint` rewinds state, randomness, and ecology so
+  `restore -> run` replays the original stochastic trajectory bitwise, and
+  restores the runnable state after a stop.  Demes whose drafts project the
+  rolled-back ecology read the checkpoint values.
+- **Python callbacks on the spatial Rust path**: deme hooks (``@nt.hook``)
+  now run inside the spatial session's ticks — stable deme-order execution,
+  private per-fire array copies, graceful stop, and ``ctx.update()`` param
+  writes deferred to the next tick (plain-backend semantics).  The former
+  "keep the reference backend for callback hooks" refusal is gone.
+- **One spatial session for every model**: discrete-generation spatial
+  populations now share the session-owned heterogeneous kernel with
+  age-structured (per-deme RNG banks, declarative hooks and Python-callback
+  registration, migration inside the tick).  The hook-less per-config-bank
+  discrete backends, the homogeneous `SpatialEngineSession` /
+  `RustSpatialLifecycleBackend` pair, and the `RustSpatialLifecycleBackend.run`
+  state round trip are deleted; discrete spatial `reset()` now also restores
+  the random source.  Fixes defect R2 (declarative hooks were silently
+  skipped on the discrete spatial Rust path).
+- **Rust spatial session owns the run state**: the heterogeneous session holds
+  the stacked counts, sperm storage, tick, and per-deme RNG bank;
+  `RustHeterogeneousSpatialLifecycleBackend.run(ind, sperm, tick)` is replaced
+  by control-only `run_tick()` plus `state_snapshot()` / `set_state()` /
+  `set_deme_state()` / `set_migration_rate()`; lifecycle then migration run
+  inside Rust with the zero-rate skip preserved.  A hook stop now freezes the
+  tick keeping the boundary state instead of raising `RuntimeError`.  Spatial
+  `deme.state` returns an independent snapshot (the live write-through is
+  retired — `deme.import_state(...)` is the write channel), and
+  `SpatialPopulation.reset()` reseeds the RNG bank.
 
 ## v0.2.0b (2026.7.14)
 
