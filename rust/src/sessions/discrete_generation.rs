@@ -452,6 +452,11 @@ impl DiscreteGenerationSession {
         )
     }
 
+    /// Read the authoritative session tick without exporting state arrays.
+    fn current_tick(&self) -> i64 {
+        self.state_tick
+    }
+
     fn snapshot_state<'py>(&self, py: Python<'py>) -> PyResult<DiscreteSnapshot<'py>> {
         let ind_flat = PyArray1::from_slice(py, &self.state_ind);
         let rng_words = self.rng.state_words().to_vec();

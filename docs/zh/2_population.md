@@ -254,6 +254,11 @@ else:
 
 # 手动结束模拟
 pop.finish_simulation()
+
+# 检查上一次运行是否失败（Hook 异常或引擎错误会把 session 标记为
+# Failed；restore_checkpoint() 或 reset() 可以清除）
+if pop.is_failed:
+    print("上一次运行失败")
 ```
 
 ## Wright-Fisher 极速模式

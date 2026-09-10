@@ -470,7 +470,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             individual_count=ind_flat.reshape(2, n_ages, n_ztypes).copy(),
             sperm_storage=sperm_flat.reshape(n_ages, n_ztypes, n_ztypes).copy(),
         )
-        self._tick = int(tick)
         self._state_cache_stale = False
 
     def _snapshot_state(self) -> PopulationState:
@@ -497,8 +496,6 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._tick = 0
         if self._history_obj is not None:
             self._history_obj.clear()
-        self._finished = False
-        self._failed = False
         if hasattr(self, "_initial_population_snapshot"):
             ind_copy, sperm_copy, _ = self._initial_population_snapshot
             assert sperm_copy is not None
@@ -577,6 +574,20 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             return counts[2]
         return self._live_state().individual_count[Sex.MALE.value, :, :].sum()
 
+    def _native_adult_counts(self) -> tuple[float, float, float] | None:
+        """Sum adult per-sex counts natively when a live session owns the state.
+
+        Returns:
+            ``(total, female, male)`` restricted to ages
+            ``>= new_adult_age``, or ``None`` when no session exists yet
+            (the local container is then authoritative and stays the
+            numpy-sum fallback source).
+        """
+        backend = self._rust_lifecycle_backend
+        if backend is None:
+            return None
+        return backend.adult_counts()
+
     def get_adult_count(self, sex: str = "both") -> int:
         """Return the number of adult individuals for the given sex.
 
@@ -591,6 +602,14 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         if sex not in ("female", "male", "both", "F", "M"):
             raise ValueError(f"sex must be 'female', 'male', or 'both', got '{sex}'")
+
+        counts = self._native_adult_counts()
+        if counts is not None:
+            if sex in ("female", "F"):
+                return int(counts[1])
+            if sex in ("male", "M"):
+                return int(counts[2])
+            return int(counts[0])
 
         total = 0
 
@@ -680,7 +699,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             state_obj = state
         elif isinstance(state, dict):
             state_obj = PopulationState(
-                n_tick=int(state.get("n_tick", self._tick)),
+                n_tick=int(state.get("n_tick", self.tick)),
                 individual_count=np.asarray(
                     state["individual_count"], dtype=np.float64
                 ),
@@ -690,7 +709,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             if len(state) != 2:
                 raise ValueError(f"Tuple state must have length 2, got {len(state)}")
             state_obj = PopulationState(
-                n_tick=self._tick,
+                n_tick=self.tick,
                 individual_count=np.asarray(state[0], dtype=np.float64),
                 sperm_storage=np.asarray(state[1], dtype=np.float64),
             )
@@ -865,17 +884,16 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             else 0
         )
 
+        if history_obj is not None and clear_history_on_start:
+            self.clear_history()
         if history_obj is not None:
-            if clear_history_on_start:
-                self.clear_history()
-            if history_obj.schema.mode == "observation":
-                history_obj._configure_observation(self.observation)
-            backend.bind_history(history_obj._store, self._params_log)
-            history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+            # Observation selector, history ownership, and the checkpoint
+            # pruner bind once per (population, History); later runs skip.
+            self._bind_history_recording(backend)
 
         self._rust_run_active = True
         try:
-            final_tick, _history_new, was_stopped = backend.run(
+            _final_tick, _history_new, was_stopped = backend.run(
                 n_steps=n_steps,
                 record_every=record_every,
                 observation_mask=self._observation_mask,
@@ -884,14 +902,13 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         finally:
             self._rust_run_active = False
 
-        # The session owns the state: only the mirror tick updates eagerly;
-        # the cached container refreshes lazily on the next read.
-        self._tick = int(final_tick)
+        # The session owns the state, the tick, and the finished marker:
+        # ``pop.tick``/``is_finished`` read them natively, and the cached
+        # container refreshes lazily on the next read.
         self._mark_state_cache_stale()
         # Bound native HistoryStore receives records during the session run.
 
         if was_stopped:
-            self._finished = True
             self.trigger_event("finish", deme_id=self._deme_id)
         elif finish:
             self.finish_simulation()
@@ -926,9 +943,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._require_standalone_owner("run")
         if getattr(self, "_running", False):
             raise RuntimeError("Nested run is forbidden")
-        if getattr(self, "_failed", False):
+        if self.is_failed:
             raise RuntimeError("Population has failed; restore a checkpoint or reset before run")
-        if self._finished:
+        if self.is_finished:
             raise RuntimeError(
                 f"Population '{self.name}' has finished. "
                 "Cannot run() again after finish=True."
@@ -946,7 +963,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 clear_history_on_start=clear_history_on_start,
             )
         except BaseException:
-            self._failed = True
+            # The session itself marks the execution Failed when the native
+            # run or an in-run callback aborts; only the cached state needs
+            # a staleness mark here.
             self._mark_state_cache_stale()
             raise
         finally:

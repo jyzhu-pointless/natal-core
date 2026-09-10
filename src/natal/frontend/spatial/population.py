@@ -925,6 +925,10 @@ class SpatialPopulation:
         # Self-describing history model and recording plan (frozen at build time).
         self._history_obj: Optional[History] = None
         self._recording_plan: Optional[object] = None
+        # One-time native recording binding: the (History, backend) pair
+        # whose observation selector, history ownership, and checkpoint
+        # pruner were already installed (see _bind_history_recording).
+        self._history_binding: tuple[History, RustHeterogeneousSpatialLifecycleBackend] | None = None
 
         # History config
         self.max_history: int = 5000  # Default rolling window size
@@ -1490,6 +1494,33 @@ class SpatialPopulation:
     # Observation infrastructure
     # ========================================================================
 
+    def _bind_history_recording(
+        self, backend: RustHeterogeneousSpatialLifecycleBackend
+    ) -> None:
+        """Bind the native recording surfaces once per (container, History).
+
+        The observation selector compiled into the History store, the
+        store/log ownership handed to the spatial session, and the
+        checkpoint pruner paired with history capacity are installed at
+        the first recording boundary and re-bound only when the History
+        object or the session changes — the Observation rule and the
+        schema are frozen at build time.
+
+        Args:
+            backend: The live spatial session adapter.
+        """
+        history_obj = self._history_obj
+        if history_obj is None:
+            return
+        binding = self._history_binding
+        if binding is not None and binding[0] is history_obj and binding[1] is backend:
+            return
+        if history_obj.schema.mode == "observation":
+            history_obj._configure_observation(self.observation)  # pyright: ignore[reportPrivateUsage]  # container binds recording selector
+        backend.bind_history(history_obj._store, [deme._params_log for deme in self._demes])  # pyright: ignore[reportPrivateUsage]  # share native ownership
+        history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+        self._history_binding = (history_obj, backend)
+
     def _record_snapshot(self, *, allow_existing: bool) -> None:
         """Manually record the current stacked spatial state as a history entry.
 
@@ -1510,11 +1541,8 @@ class SpatialPopulation:
         if backend is None:
             self._initialize_session()
             backend = self._rust_spatial_backend
-        history_obj = self.history
-        if history_obj.schema.mode == "observation":
-            history_obj._configure_observation(self.observation)  # pyright: ignore[reportPrivateUsage]  # container binds recording selector
-        backend.bind_history(history_obj._store, [deme._params_log for deme in self._demes])  # pyright: ignore[reportPrivateUsage]  # share native ownership
-        history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+        assert backend is not None  # _initialize_session either installs or raises
+        self._bind_history_recording(backend)
         backend.record_history(allow_existing)
 
     def record_snapshot(self) -> None:
@@ -1617,9 +1645,10 @@ class SpatialPopulation:
         n_demes = len(self._demes)
         for deme_id, deme in enumerate(self._demes):
             self._rollback_deme_draft(deme, columns, deme_id, restored_tick)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
-            status, _ = backend.execution_state()
-            deme._finished = status == "Stopped"  # pyright: ignore[reportPrivateUsage]  # restore exact lifecycle marker
-            deme._failed = status == "Failed"  # pyright: ignore[reportPrivateUsage]  # partial snapshots retain failure metadata
+        # The checkpoint carries the shared execution status: every managed
+        # deme projects it through the owning session's read channels, so
+        # ``deme.is_finished``/``is_failed`` follow the restore with no
+        # per-deme flag reconciliation.
         # The session state was rewound: refresh the deme caches from it.
         self._rust_states_dirty = True
         self._ensure_rust_states_fresh()
@@ -1890,9 +1919,9 @@ class SpatialPopulation:
             self._rust_states_dirty = True
             for deme in self._demes:
                 deme._tick = 0  # pyright: ignore[reportPrivateUsage]  # metadata follows the shared native clock
-                deme._finished = False  # pyright: ignore[reportPrivateUsage]
-                deme._failed = False  # pyright: ignore[reportPrivateUsage]
-        self._failed = False
+        # set_state restored the shared Ready boundary, so deme
+        # ``is_finished``/``is_failed`` are clear again through their
+        # session read channels.
         history_obj = getattr(self, "_history_obj", None)
         if history_obj is not None:
             history_obj.clear()
@@ -2183,7 +2212,13 @@ class SpatialPopulation:
     def _ensure_demes_runnable(self, *, context: str) -> None:
         """Raise if any deme is already finished before execution."""
         for idx, deme in enumerate(self._demes):
-            if getattr(deme, "_finished", False):
+            # Real demes derive the finished marker from the owning
+            # session through their read channels; lightweight doubles
+            # carry the raw attribute instead.
+            finished = getattr(deme, "is_finished", None)
+            if finished is None:
+                finished = bool(getattr(deme, "_finished", False))
+            if finished:
                 raise RuntimeError(f"deme[{idx}] has finished; cannot {context}")
 
     def _assert_consistent_migration_flags(self) -> None:
@@ -2221,9 +2256,14 @@ class SpatialPopulation:
                 )
 
     def _mark_all_demes_stopped(self) -> None:
-        """Mark all demes finished and emit the finish event."""
+        """Emit the finish event on every deme of a stopped spatial run.
+
+        The finished marker itself is the shared session's Stopped status
+        (set natively by the stop or by the stopping hook); every deme
+        projects it through its read channel, so only the finish events
+        remain to fire here — once, with each firing deme's own index.
+        """
         for deme in self._demes:
-            deme._finished = True  # type: ignore[attr-defined]
             deme.trigger_event("finish", deme_id=deme._deme_id)  # pyright: ignore[reportPrivateUsage]  # SpatialPopulation owns its demes; finish hooks must observe the firing deme's own index.
 
     def _initialize_session(self, seed: int = 0) -> SpatialPopulation:
@@ -2301,6 +2341,12 @@ class SpatialPopulation:
             deme._runtime_state_reader = self._ensure_rust_states_fresh  # pyright: ignore[reportPrivateUsage]  # retained deme objects share the owning session's lazy read boundary
             deme._runtime_config_reader = channel.config_snapshot  # pyright: ignore[reportPrivateUsage]  # owning container binds the native read projection
             deme._runtime_parameter_writer = channel  # pyright: ignore[reportPrivateUsage]  # owning container binds the native write channel
+            # Lifecycle status and tick project the shared spatial session:
+            # demes have no private session, so their ``tick`` /
+            # ``is_finished`` / ``is_failed`` answers resolve through these
+            # injected readers instead of mirrored per-deme flags.
+            deme._runtime_execution_state_reader = channel.execution_state  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # duck-typed deme hosts share the owning session's status
+            deme._runtime_tick_reader = channel.current_tick  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # duck-typed deme hosts share the owning session's clock
             deme._rust_lifecycle_backend = None  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # ownership was transferred; no second standalone session may remain. The backend attribute is subclass-owned (no base declaration), so this lone None write needs the access rule.
         self._rust_spatial_seed = seed
         self._rust_states_dirty = False
@@ -2408,7 +2454,7 @@ class SpatialPopulation:
         self._rebuild_stale_spatial_session()
         backend = self._rust_spatial_backend
         assert backend is not None
-        backend.bind_history(self.history._store, [deme._params_log for deme in self._demes])  # pyright: ignore[reportPrivateUsage]  # explicit events use the same native stores as run.
+        self._bind_history_recording(backend)
 
     def _invalidate_rust_states(self) -> None:
         """Invalidate every deme snapshot after a native explicit event."""
@@ -2452,11 +2498,9 @@ class SpatialPopulation:
         self._rebuild_stale_spatial_session()
         backend = self._rust_spatial_backend
         assert backend is not None
-        history = self.history
-        if history.schema.mode == "observation":
-            history._configure_observation(self.observation)  # pyright: ignore[reportPrivateUsage]  # configure native recording once per run
-        backend.bind_history(history._store, [deme._params_log for deme in self._demes])  # pyright: ignore[reportPrivateUsage]  # share native history and log ownership
-        history._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+        # Observation selector, history ownership, and the checkpoint
+        # pruner bind once per (container, History); later runs skip.
+        self._bind_history_recording(backend)
         tick, stopped = backend.run_steps(n_steps, record_every)
         self._tick = tick
         for deme in self._demes:
@@ -2508,8 +2552,15 @@ class SpatialPopulation:
         """
         if getattr(self, "_running", False):
             raise RuntimeError("Nested run is forbidden")
-        if getattr(self, "_failed", False):
-            raise RuntimeError("Population has failed; restore or reset before run")
+        backend = getattr(self, "_rust_spatial_backend", None)
+        if backend is not None:
+            # The shared session carries the failed marker (set natively
+            # when a kernel tick or a deme callback aborts); the container
+            # deliberately keeps no is_finished/is_failed surface of its
+            # own — per-deme views and the gates below read the session.
+            status, _ = backend.execution_state()
+            if status == "Failed":
+                raise RuntimeError("Population has failed; restore or reset before run")
         if n_steps < 0:
             raise ValueError("n_steps must be >= 0")
 
@@ -2535,7 +2586,8 @@ class SpatialPopulation:
 
             return self
         except BaseException:
-            self._failed = True
+            # The session marks itself Failed for native kernel errors; the
+            # state caches are stale on any abort either way.
             self._rust_states_dirty = True
             raise
         finally:

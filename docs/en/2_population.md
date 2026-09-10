@@ -252,6 +252,11 @@ else:
 
 # Manually finish simulation
 pop.finish_simulation()
+
+# Check whether the last run failed (a failing hook or engine error
+# marks the session Failed; restore_checkpoint() or reset() clears it)
+if pop.is_failed:
+    print("Last run failed")
 ```
 
 ## Wright-Fisher Extreme Speed Mode

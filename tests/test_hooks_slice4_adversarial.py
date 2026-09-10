@@ -142,7 +142,7 @@ def test_first_stop_prevents_downstream_events_and_tick() -> None:
 
     assert events == ["first"]  # early/late never fired, no retry
     assert pop.tick == 0
-    assert pop._finished
+    assert pop.is_finished
     ic = pop.state.individual_count
     # The first-event marker (+1) applied; the early (+10) and late (+100)
     # markers did not.  Aging did not run either (age 1 still empty).
@@ -181,7 +181,7 @@ def test_early_stop_skips_late_and_aging() -> None:
 
     assert events == ["first", "early"]
     assert pop.tick == 0
-    assert pop._finished
+    assert pop.is_finished
     ic = pop.state.individual_count
     # Late marker absent (+100), aging skipped (age 1 empty).  The early
     # marker added exactly 1 per sex to the 100+100 Dr|Dr juveniles.
@@ -213,7 +213,7 @@ def test_late_stop_halts_at_event_boundary_before_aging() -> None:
 
     assert events == ["late"]  # fired once; the run ended, no second tick
     assert pop.tick == 0
-    assert pop._finished
+    assert pop.is_finished
     ic = pop.state.individual_count
     # Late marker applied to both sexes; aging skipped (age 1 empty).
     assert float(ic[:, 0, 2].sum()) == 206.0  # 200 Dr|Dr juveniles +3+3
@@ -235,7 +235,7 @@ def test_stop_guard_blocks_rerun_until_reset() -> None:
 
     pop = _build("s4x_guard", hooks=[stop_once])
     pop.run(n_steps=3)
-    assert pop._finished
+    assert pop.is_finished
     assert calls == [0]
 
     with pytest.raises(RuntimeError, match="has finished"):
@@ -243,12 +243,12 @@ def test_stop_guard_blocks_rerun_until_reset() -> None:
 
     pop.reset()  # the sanctioned recovery: clears flag, restores state
     assert pop.tick == 0
-    assert not pop._finished
+    assert not pop.is_finished
     pop.run(n_steps=2)
     # The hook ran once per tick after the reset (stop did not leak).
     assert calls == [0, 0, 1]
     assert pop.tick == 2
-    assert not pop._finished
+    assert not pop.is_finished
 
 
 def test_nonzero_return_stops_on_rust_backend() -> None:
@@ -265,7 +265,7 @@ def test_nonzero_return_stops_on_rust_backend() -> None:
 
     assert calls == [0]
     assert pop.tick == 0
-    assert pop._finished
+    assert pop.is_finished
 
 
 # ---------------------------------------------------------------------------

@@ -89,6 +89,7 @@ T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationStat
 if TYPE_CHECKING:
     from typing import Protocol, Self
 
+    from natal._engine_rs import HistoryStore, ParameterLog
     from natal.frontend.builder import RuntimeUpdater
     from natal.frontend.builder._writers import AuditValue, SessionChannel
     from natal.frontend.hooks.tick_context import HookRunner, TickContext
@@ -109,6 +110,17 @@ if TYPE_CHECKING:
             finish: List[Callable[..., int]] | None = None,
         ) -> None:
             """Register per-event callback lists."""
+            ...
+
+    class _RecordingBackend(Protocol):
+        """Structural type of the backend surfaces the History binds to."""
+
+        def bind_history(self, store: HistoryStore, log: ParameterLog) -> None:
+            """Attach the native history store and its parameter log."""
+            ...
+
+        def retain_checkpoints_from(self, from_tick: int) -> None:
+            """Drop checkpoints older than *from_tick* (eviction pair)."""
             ...
 
 # A parameter snapshot row: (tick, parameter name, old value, new value).
@@ -186,12 +198,24 @@ class BasePopulation(ABC, Generic[T_State]):
     # callback.  ``None`` outside callbacks.
     _active_event: TickContext | None = None
 
-    # Failure marker owned by the run lifecycle: set when a run aborts
-    # or a checkpoint restore observes a Failed execution status, and
-    # cleared by reset()/restore.  Annotation only — the attribute is
-    # created lazily by the owning lifecycle paths, so readers probe it
-    # with ``getattr(..., False)``.
-    _failed: bool
+    # Run-state authority is the native session: ``tick``, ``is_finished``,
+    # and ``is_failed`` read the session's execution state (or, inside a
+    # callback, the event context's tick).  ``_tick`` below is only the
+    # session-less fallback for populations that never created a session.
+
+    # Owning-container read channels for managed spatial demes: demes have
+    # no private session, so their lifecycle status and tick project the
+    # shared spatial session through these injected readers.  The
+    # annotations carry ``None`` defaults so duck-typed hosts without the
+    # channels degrade instead of raising.
+    _runtime_execution_state_reader: Callable[[], tuple[str, int]] | None = None
+    _runtime_tick_reader: Callable[[], int] | None = None
+
+    # The (History, backend) pair whose native recording surfaces were
+    # already bound once (observation selector, history store, checkpoint
+    # pruner).  Holding the objects themselves (not ids) keeps the
+    # identity comparison safe against garbage collection.
+    _history_binding: tuple[History, object] | None = None
 
     # Subclass-owned native session factory (each model creates its own
     # Rust session type there); the base recording and manual-event
@@ -276,8 +300,14 @@ class BasePopulation(ABC, Generic[T_State]):
         # PopulationState container.
         self._state: Optional[T_State] = None
 
-        # Evolution status flag: whether simulation is finished.
-        self._finished = False
+        # Session-less fallback clock: the native session owns the
+        # authoritative tick whenever one exists; this field only answers
+        # queries for populations that never initialized a session (raw
+        # construction, clones before their first run).
+        self._tick = 0
+
+        # One-time native recording binding (see the class annotation).
+        self._history_binding = None
 
         # Re-entrancy guard flag.
         self._running = False
@@ -352,6 +382,7 @@ class BasePopulation(ABC, Generic[T_State]):
             ("_rust_run_active", False),
             ("_state_cache_stale", False),
             ("_rust_needs_rebuild", False),
+            ("_history_binding", None),
         ):
             object.__setattr__(clone, _attr, _value)
 
@@ -365,7 +396,9 @@ class BasePopulation(ABC, Generic[T_State]):
         # --- shared identity ---
         clone._species = self._species
         clone._name = name
-        clone._tick = int(self._tick)
+        # The fallback clock must match the template even when the template
+        # already owns a session (the clone lazily creates its own).
+        clone._tick = int(self.tick)
         # Clones are built via __new__ (no __init__), so the deme index
         # must be copied explicitly; a spatial deme's clone keeps its id
         # until SpatialPopulation.__init__ restamps the whole list.
@@ -452,7 +485,6 @@ class BasePopulation(ABC, Generic[T_State]):
                 source_history.schema,
                 max_rows=source_history.max_rows,
             )
-        clone._finished = False
         clone._running = False
         clone.record_every = int(self.record_every)
         clone.max_history = int(self.max_history)
@@ -558,9 +590,65 @@ class BasePopulation(ABC, Generic[T_State]):
         """Set the population name."""
         self._name = value
 
+    def _native_lifecycle_state(self) -> tuple[str, int] | None:
+        """Return the owning session's ``(status, tick)``, or ``None``.
+
+        The native session is the single authority for the execution
+        status and the clock.  Managed spatial demes have no private
+        session; their status and tick project the shared spatial session
+        through the injected container readers.  Inside a callback (or
+        while a run holds the session borrow) no native call is made —
+        the caller resolves the value from the event context or the
+        session-less fallback instead, so a hook can never re-enter the
+        borrowed session.
+
+        Returns:
+            The native ``(status name, tick)``, or ``None`` when no
+            session answer is available right now.
+        """
+        if self._active_event is not None or getattr(self, "_rust_run_active", False):
+            return None
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None:
+            state_reader = getattr(backend, "execution_state", None)
+            tick_reader = getattr(backend, "current_tick", None)
+            if callable(state_reader) and callable(tick_reader):
+                # cast: the backend attribute is subclass-owned and every
+                # adapter (panmictic, discrete) exposes the same
+                # ``(status, phase)`` / tick pair, which the base class
+                # cannot see statically.
+                status, _phase = cast("tuple[str, int]", state_reader())
+                return (str(status), int(cast("int", tick_reader())))
+            return None
+        state_reader = getattr(self, "_runtime_execution_state_reader", None)
+        tick_reader = getattr(self, "_runtime_tick_reader", None)
+        if state_reader is not None and tick_reader is not None:
+            status, _phase = state_reader()
+            return (str(status), int(tick_reader()))
+        return None
+
+    def _native_tick(self) -> int | None:
+        """Return the session tick, or ``None`` without a live session."""
+        state = self._native_lifecycle_state()
+        if state is not None:
+            return state[1]
+        return None
+
     @property
     def tick(self) -> int:
-        """The current simulation tick or generation index (read-only)."""
+        """The current simulation tick or generation index (read-only).
+
+        The tick is read from the owning native session; inside a hook
+        callback it is the tick the event fired at.  Only populations
+        that never initialized a session fall back to the local clock.
+        Assigning raises instead (see the setter).
+        """
+        event = self._active_event
+        if event is not None:
+            return int(event.tick)
+        native = self._native_tick()
+        if native is not None:
+            return native
         return self._tick
 
     @tick.setter
@@ -748,7 +836,7 @@ class BasePopulation(ABC, Generic[T_State]):
             new: Value after the commit, or None for a removed field.
             event: Responsible update operation or lifecycle event.
         """
-        self._params_log.append_value(int(self._tick), name, old, new, event, self._deme_id)
+        self._params_log.append_value(int(self.tick), name, old, new, event, self._deme_id)
 
     def log_param_change(self, name: str, old: float, new: float) -> None:
         """Append one parameter snapshot row at the current tick.
@@ -762,7 +850,7 @@ class BasePopulation(ABC, Generic[T_State]):
             new: Committed value after the write.
         """
         if old != new:
-            self._params_log.append_detail((int(self._tick), name, float(old), float(new)), "update", self._deme_id)
+            self._params_log.append_detail((int(self.tick), name, float(old), float(new)), "update", self._deme_id)
 
     # ========================================================================
     # Modifier and preset management
@@ -1305,6 +1393,33 @@ class BasePopulation(ABC, Generic[T_State]):
     # History recording and checkpoint restore
     # ========================================================================
 
+    def _bind_history_recording(self, backend: _RecordingBackend) -> None:
+        """Bind the native recording surfaces once per (population, History).
+
+        Three surfaces travel together: the observation selector compiled
+        into the History store, the store/log ownership handed to the
+        session, and the checkpoint pruner paired with history capacity.
+        They are bound at the first recording boundary (first run,
+        snapshot, or explicit event) and re-bound only when the History
+        object or the session changes — the Observation rule and the
+        schema are frozen at build time, so re-installing them per run
+        would repeat identical work.
+
+        Args:
+            backend: The live lifecycle session adapter.
+        """
+        history_obj = self._history_obj
+        if history_obj is None:
+            return
+        binding = self._history_binding
+        if binding is not None and binding[0] is history_obj and binding[1] is backend:
+            return
+        if history_obj.schema.mode == "observation":
+            history_obj._configure_observation(self.observation)  # pyright: ignore[reportPrivateUsage]  # Population binds its recording selector
+        backend.bind_history(history_obj._store, self._params_log)  # pyright: ignore[reportPrivateUsage]  # share native ownership
+        history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+        self._history_binding = (history_obj, backend)
+
     def _record_current_snapshot(self, *, allow_existing: bool) -> None:
         """Commit the current state to the unique History container.
 
@@ -1336,11 +1451,7 @@ class BasePopulation(ABC, Generic[T_State]):
             # Unreachable with the model implementations: their
             # _initialize_session either installs the backend or raises.
             raise RuntimeError("Population session initialization failed.")
-        observation = self._observation
-        if history_obj.schema.mode == "observation" and observation is not None:
-            history_obj._configure_observation(observation)  # pyright: ignore[reportPrivateUsage]  # Population binds its recording selector
-        backend.bind_history(history_obj._store, self._params_log)  # pyright: ignore[reportPrivateUsage]  # share native ownership
-        history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+        self._bind_history_recording(backend)
         backend.record_history(allow_existing)
 
     def clear_history(self) -> None:
@@ -1407,15 +1518,15 @@ class BasePopulation(ABC, Generic[T_State]):
                 # Frozen-surface message: checkpoints are record-aligned with the
                 # history rows, so the frozen "not found in history" wording stays.
                 raise ValueError(f"Tick {tick} not found in history.")
-            restored_tick, ecology = result
+            _restored_tick, ecology = result
             self._restore_ecology_to_draft(ecology)
-            self._tick = restored_tick
             self._mark_state_cache_stale()
             backend.truncate_checkpoints(tick)
             history_obj.truncate(retain_until_tick=tick)
-            status, _ = backend.execution_state()
-            self._finished = status == "Stopped"
-            self._failed = status == "Failed"
+            # The native checkpoint carries the recorded execution status
+            # and the restored tick, so ``tick``/``is_finished``/
+            # ``is_failed`` follow the restore with no Python-side
+            # reconciliation.
             return
         restored_tick, ic, ss = history_obj.restore_state(tick)
         state = self._state
@@ -1553,7 +1664,7 @@ class BasePopulation(ABC, Generic[T_State]):
         ic = getattr(state, "individual_count", None)
         if ic is None:
             raise RuntimeError("Population state has no individual_count.")
-        return obs.project(ic, tick=self._tick)
+        return obs.project(ic, tick=self.tick)
 
     # ========================================================================
     # Hook dispatch and introspection
@@ -1604,8 +1715,7 @@ class BasePopulation(ABC, Generic[T_State]):
             # state/RNG (manual events use the same native log as run
             # checkpoints).
             if getattr(self, "_runtime_parameter_writer", None) is None:
-                native.bind_history(self.history._store, self._params_log)  # pyright: ignore[reportPrivateUsage]  # manual events use the same native log as run checkpoints.
-                self.history._bind_checkpoint_pruner(native.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+                self._bind_history_recording(native)
                 native.configure_program(self._hook_program, self.config)
                 self._register_rust_callbacks(native)
             if getattr(self, "_runtime_parameter_writer", None) is None:
@@ -1717,34 +1827,81 @@ class BasePopulation(ABC, Generic[T_State]):
 
     @property
     def is_finished(self) -> bool:
-        """Whether the population is marked as finished (``finish=True``)."""
-        return self._finished
+        """Whether the owning session recorded a stopped execution.
+
+        A run ends Stopped when a hook requested a stop or
+        :meth:`finish_simulation` locked the population; the marker
+        lives on the native session, so a checkpoint restore restores it
+        together with the rest of the recorded boundary and ``reset()``
+        clears it.  Populations that never initialized a session are
+        never finished.
+
+        Inside a hook callback the session cannot be queried (the run
+        holds its borrow), so the answer comes from the event scope: the
+        ``finish`` event executes while the population is being locked,
+        and finish hooks observe the finished population like they did
+        before the status moved into the session.
+        """
+        state = self._native_lifecycle_state()
+        if state is not None:
+            return state[0] == "Stopped"
+        event = self._active_event
+        if event is not None:
+            return event.event == "finish"
+        return False
+
+    @property
+    def is_failed(self) -> bool:
+        """Whether the owning session recorded a failed execution.
+
+        A session marks itself Failed when a run or explicit event
+        aborted; ``restore_checkpoint`` or :meth:`reset` returns it to a
+        runnable boundary.  Populations that never initialized a session
+        are never failed.
+        """
+        state = self._native_lifecycle_state()
+        if state is not None:
+            return state[0] == "Failed"
+        return False
 
     def finish_simulation(self) -> None:
         """
         End simulation, trigger the ``finish`` event, and lock the population.
 
-        This method may be called by hooks for early termination.
         After calling it, ``step()``, ``run_tick()``, and ``run()`` cannot run again.
+        From inside a hook callback, request the same outcome through the
+        context's ``stop()`` — the stopped run marks the session Stopped
+        and the ``finish`` event fires, so the population locks the same
+        way; calling this method on the population while a run holds the
+        session borrow would re-enter the native session.
 
         Raises:
             RuntimeError: If the population is already finished.
 
         Examples:
             >>> builder = nt.DiscreteGenerationPopulation.setup(species, name="demo")
-            >>> def check_extinction(pop):
-            ...     if pop.get_total_count() == 0:
-            ...         print("Population extinct, finishing simulation.")
-            ...         pop.finish_simulation()
-            >>> pop = builder.hooks(check_extinction, event='late').build()
+            >>> def finish_early(ctx):
+            ...     ctx.stop()
+            >>> pop = builder.hooks(finish_early, event='late').build()
         """
         self._require_standalone_owner("finish_simulation")
-        if self._finished:
+        if self.is_finished:
             raise RuntimeError(
                 f"Population '{self.name}' has already finished."
             )
 
-        self._finished = True
+        # The finished marker is the session's Stopped status.  Stop the
+        # session *before* the finish event so finish hooks already
+        # observe ``is_finished``, and stop even when the event itself
+        # fails (the population must stay locked on either path).
+        backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is None and getattr(self, "_initialize_session", None) is not None:
+            # The finish event lazily creates the session below; create it
+            # here so the Stopped marker lands natively first.
+            self._initialize_session(seed=int(getattr(self, "_rust_backend_seed", 0) or 0))
+            backend = getattr(self, "_rust_lifecycle_backend", None)
+        if backend is not None:
+            backend.stop()
         self.trigger_event("finish", deme_id=self._deme_id)
 
     # ========================================================================

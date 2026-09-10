@@ -334,7 +334,7 @@ def test_spatial_population_run_stop_marks_finish():
     # The stopped tick does not advance; every deme is finished and the
     # container's mark-all pass fired each deme's finish exactly once.
     assert sp.tick == 0
-    assert all(deme._finished for deme in demes)
+    assert all(deme.is_finished for deme in demes)
     assert finish_events == [0, 1]
 
 
@@ -377,7 +377,7 @@ def test_spatial_stop_path_finish_hooks_see_own_deme_ids() -> None:
     # mark-all pass then fires every deme's finish in list order with
     # each deme's own index.
     assert finish_ids == [0, 1, 2]
-    assert all(deme._finished for deme in demes)  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
+    assert all(deme.is_finished for deme in demes)
 
 
 def test_spatial_population_stochastic_discrete_migration_preserves_integer_counts():
@@ -650,7 +650,7 @@ def test_spatial_compiled_local_hooks_still_take_effect() -> None:
     spatial._initialize_session(seed=0)
     spatial.run_tick()
 
-    assert d0._finished and d1._finished
+    assert d0.is_finished and d1.is_finished
     with pytest.raises(RuntimeError):
         spatial.run_tick()
 

@@ -437,17 +437,16 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             else 0
         )
 
+        if history_obj is not None and clear_history_on_start:
+            self.clear_history()
         if history_obj is not None:
-            if clear_history_on_start:
-                self.clear_history()
-            if history_obj.schema.mode == "observation":
-                history_obj._configure_observation(self.observation)
-            backend.bind_history(history_obj._store, self._params_log)
-            history_obj._bind_checkpoint_pruner(backend.retain_checkpoints_from)  # pyright: ignore[reportPrivateUsage]  # capacity changes synchronously release native checkpoints.
+            # Observation selector, history ownership, and the checkpoint
+            # pruner bind once per (population, History); later runs skip.
+            self._bind_history_recording(backend)
 
         self._rust_run_active = True
         try:
-            final_tick, _history_new, was_stopped = backend.run(
+            _final_tick, _history_new, was_stopped = backend.run(
                 n_steps=n_steps,
                 record_every=record_every,
                 observation_mask=self._observation_mask,
@@ -456,14 +455,13 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         finally:
             self._rust_run_active = False
 
-        # The session owns the state: only the mirror tick updates eagerly;
-        # the cached container refreshes lazily on the next read.
-        self._tick = int(final_tick)
+        # The session owns the state, the tick, and the finished marker:
+        # ``pop.tick``/``is_finished`` read them natively, and the cached
+        # container refreshes lazily on the next read.
         self._mark_state_cache_stale()
         # Bound native HistoryStore receives records during the session run.
 
         if was_stopped:
-            self._finished = True
             self.trigger_event("finish", deme_id=self._deme_id)
         elif finish:
             self.finish_simulation()
@@ -497,9 +495,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._require_standalone_owner("run")
         if getattr(self, "_running", False):
             raise RuntimeError("Nested run is forbidden")
-        if getattr(self, "_failed", False):
+        if self.is_failed:
             raise RuntimeError("Population has failed; restore a checkpoint or reset before run")
-        if self._finished:
+        if self.is_finished:
             raise RuntimeError(
                 f"Population '{self.name}' has finished. Cannot run() again after finish=True."
             )
@@ -517,7 +515,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 clear_history_on_start=clear_history_on_start,
             )
         except BaseException:
-            self._failed = True
+            # The session itself marks the execution Failed when the native
+            # run or an in-run callback aborts; only the cached state needs
+            # a staleness mark here.
             self._mark_state_cache_stale()
             raise
         finally:
@@ -537,8 +537,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         self._tick = 0
         if self._history_obj is not None:
             self._history_obj.clear()
-        self._finished = False
-        self._failed = False
         # Guard against calls before __init__ finishes (e.g. during
         # BasePopulation.__init__ -> _initialize -> reset chain).
         if hasattr(self, "_initial_population_snapshot"):
@@ -664,7 +662,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             state_obj = state
         else:
             state_obj = DiscretePopulationState(
-                n_tick=int(state.get("n_tick", self._tick)),
+                n_tick=int(state.get("n_tick", self.tick)),
                 individual_count=np.asarray(
                     state["individual_count"], dtype=np.float64
                 ),
@@ -703,7 +701,6 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             n_tick=int(tick),
             individual_count=ind_flat.reshape(2, 2, n_ztypes).copy(),
         )
-        self._tick = int(tick)
         self._state_cache_stale = False
 
     def _snapshot_state(self) -> DiscretePopulationState:
@@ -726,5 +723,5 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def __repr__(self) -> str:
         """Return a string summary of the discrete-generation population."""
-        status = "Finished" if self._finished else "Active"
+        status = "Finished" if self.is_finished else "Active"
         return f"<DiscreteGenerationPopulation(name='{self.name}', tick={self.tick}, status={status})>"

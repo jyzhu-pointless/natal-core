@@ -60,7 +60,7 @@ class TestBuildAndSetup:
     def test_initial_tick_is_zero(self):
         sp = _make_species("Age_tick0")
         pop = _minimal_pop(sp, pop_name="Age_tick0_pop")
-        assert pop._tick == 0
+        assert pop.tick == 0
         # individual_count shape: (n_sexes, n_ages, n_genotypes) = (2, 4, 3)
         assert pop.state.individual_count.shape == (2, 4, 3)
 
@@ -84,7 +84,7 @@ class TestRunTicks:
         sp = _make_species("Age_run")
         pop = _minimal_pop(sp, pop_name="Age_run_pop")
         pop.run(5)
-        assert pop._tick == 5
+        assert pop.tick == 5
         assert pop.state.individual_count.sum() > 0
 
     def test_run_zero_ticks(self):
@@ -92,7 +92,7 @@ class TestRunTicks:
         pop = _minimal_pop(sp, pop_name="Age_run0_pop")
         initial = pop.state.individual_count.copy()
         pop.run(0)
-        assert pop._tick == 0
+        assert pop.tick == 0
         np.testing.assert_array_equal(pop.state.individual_count, initial)
 
     def test_run_single_tick(self):
@@ -100,7 +100,7 @@ class TestRunTicks:
         pop = _minimal_pop(sp, pop_name="Age_run1_pop")
         initial_total = pop.state.individual_count.sum()
         pop.run(1)
-        assert pop._tick == 1
+        assert pop.tick == 1
         # Total count changes after one tick (reproduction + survival + aging)
         assert pop.state.individual_count.sum() != initial_total
 

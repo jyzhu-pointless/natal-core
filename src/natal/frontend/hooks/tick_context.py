@@ -303,6 +303,7 @@ class TickContext:
         state: Any,
         hook_index: int = 0,
         transaction: EventTransaction | None = None,
+        event: str | None = None,
     ) -> None:
         """Bind the context to one event invocation.
 
@@ -316,6 +317,8 @@ class TickContext:
                 the RNG stream so same-tick hooks get independent draws.
             transaction: The callback's owned native transaction, when the
                 event runs inside a native session.
+            event: The executing event's name, when the invocation is
+                bridge-driven (``None`` for manually built contexts).
         """
         self._active = True
         self._transaction = transaction
@@ -325,6 +328,7 @@ class TickContext:
         self._deme_id = deme_id
         self._state = state
         self._hook_index = hook_index
+        self._event = event
         self._stop_requested = False
         self._metrics: Optional[TickMetrics] = None
         self._blueprint: Optional[BlueprintView] = None
@@ -359,6 +363,11 @@ class TickContext:
     def deme_id(self) -> int:
         """Deme index for this invocation (``0`` panmictic)."""
         return self._deme_id
+
+    @property
+    def event(self) -> str | None:
+        """The executing event's name (``None`` without a bridge build)."""
+        return self._event
 
     # -- blueprint / params / state / metrics -----------------------------------
 
@@ -876,8 +885,6 @@ class HookRunner:
             pop = self._pop
             from natal.frontend.hooks.types import EVENT_NAMES
 
-            original_tick = pop._tick  # pyright: ignore[reportPrivateUsage]  # event logs and pop.tick read the native tick
-            pop._tick = int(tick)  # pyright: ignore[reportPrivateUsage]
             original_active = getattr(pop, "_rust_run_active", False)
             pop._rust_run_active = True  # pyright: ignore[reportAttributeAccessIssue]  # native callback holds the session borrow
             previous_event = getattr(pop, "_active_event", None)
@@ -894,6 +901,7 @@ class HookRunner:
                 state=state_factory,
                 hook_index=only_index if only_index is not None else 0,
                 transaction=transaction,
+                event=EVENT_NAMES[event_id],
             )
             pop._active_event = context  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]  # single scoped registration; no field redress
             try:
@@ -916,7 +924,6 @@ class HookRunner:
             finally:
                 pop._active_event = previous_event  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
                 pop._rust_run_active = original_active  # pyright: ignore[reportAttributeAccessIssue]
-                pop._tick = original_tick  # pyright: ignore[reportPrivateUsage]
 
         bridge.__natal_transaction__ = True  # pyright: ignore[reportFunctionMemberAccess]  # native bridge ABI discriminator
 

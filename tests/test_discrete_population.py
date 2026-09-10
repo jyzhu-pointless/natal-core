@@ -72,7 +72,7 @@ class TestBuildAndSetup:
     def test_initial_tick_is_zero(self):
         sp = _make_species("Disc_tick0")
         pop = _minimal_pop(sp, pop_name="Disc_tick0_pop")
-        assert pop._tick == 0
+        assert pop.tick == 0
         n_genotypes = len(pop.registry.index_to_genotype)
         assert pop.state.individual_count.shape == (2, 2, n_genotypes), (
             f"expected shape (2, 2, {n_genotypes}), got {pop.state.individual_count.shape}"
@@ -102,7 +102,7 @@ class TestRunTicks:
         sp = _make_species("Disc_run_tick")
         pop = _minimal_pop(sp, pop_name="Disc_run_tick_pop")
         pop.run(5)
-        assert pop._tick == 5
+        assert pop.tick == 5
         assert pop.state.individual_count.sum() == pytest.approx(3125000.0)
 
     def test_run_zero_ticks(self):
@@ -110,7 +110,7 @@ class TestRunTicks:
         pop = _minimal_pop(sp, pop_name="Disc_run0_pop")
         initial_ind = pop.state.individual_count.copy()
         pop.run(0)
-        assert pop._tick == 0
+        assert pop.tick == 0
         np.testing.assert_array_equal(
             pop.state.individual_count, initial_ind,
             err_msg="run(0) should not change population state",
@@ -121,7 +121,7 @@ class TestRunTicks:
         pop = _minimal_pop(sp, pop_name="Disc_run1_pop")
         initial_total = pop.state.individual_count.sum()
         pop.run(1)
-        assert pop._tick == 1
+        assert pop.tick == 1
         assert pop.state.individual_count.sum() > initial_total, (
             "population should grow after one tick (eggs_per_female=10)"
         )
@@ -133,7 +133,7 @@ class TestRunTicks:
         pop_a.run(5)
         pop_b.run(3)
         pop_b.run(2)
-        assert pop_b._tick == 5
+        assert pop_b.tick == 5
         np.testing.assert_array_almost_equal(
             pop_a.state.individual_count,
             pop_b.state.individual_count,
@@ -165,12 +165,11 @@ class TestStateAndConfigInterop:
         original_counts = pop._state.individual_count.copy()
 
         pop._state.individual_count.fill(0.0)
-        pop._tick = 9
 
         pop.import_state(state_flat)
 
         np.testing.assert_array_equal(pop._state.individual_count, original_counts)
-        assert pop._tick == int(state_flat[0])
+        assert pop.tick == int(state_flat[0])
         assert pop.history.is_empty
 
     def test_import_state_accepts_state_object(self):
@@ -189,7 +188,7 @@ class TestStateAndConfigInterop:
         pop.import_state(custom_state)
 
         np.testing.assert_array_equal(pop._state.individual_count, custom_counts)
-        assert pop._tick == 11
+        assert pop.tick == 11
 
     def test_import_config_rejects_non_normalized_discrete_config(self):
         """import_config rejects a non-discrete (overlapping) draft.
@@ -504,7 +503,7 @@ class TestHomingDriveIntegration:
         """Sanity check: stochastic drive simulation completes without crash."""
         pop, _ = self._build_drive_pop(stochastic=True)
         pop.run(10)
-        assert pop._tick == 10
+        assert pop.tick == 10
         assert not np.any(np.isnan(pop._state.individual_count)), (
             "stochastic run should not produce NaN"
         )
