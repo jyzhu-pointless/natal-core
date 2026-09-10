@@ -2,23 +2,63 @@
 
 from __future__ import annotations
 
-from typing import Any
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
-from natal.frontend.population.base import BasePopulation
+from natal.contracts.materialize import SpatialMigration  # noqa: F401  # construction contract exercises materialize through the container
+from natal.frontend.data import DiscretePopulationState, ModelDraft
 from natal.frontend.genetics import Species
+from natal.frontend.population.base import BasePopulation
+from natal.frontend.population.discrete_generation import (
+    DiscreteGenerationPopulation,
+)
 from natal.frontend.spatial.population import DemeSlice, SpatialPopulation
 
 
+def _reference_draft(species: Species) -> ModelDraft:
+    """Return a real built draft as the doubles' declaration surface.
+
+    The double satisfies the explicit population contract, so its
+    ``export_config`` must hand out a genuine ``ModelDraft`` (the spatial
+    contract pair materializes from it); building one real population
+    keeps the draft consistent with the species without the test
+    hand-rolling tensor shapes.
+    """
+    population = (
+        DiscreteGenerationPopulation.setup(species=species, stochastic=False)
+        .initial_state(
+            individual_count={"female": {"WT|WT": 10}, "male": {"WT|WT": 10}}
+        )
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=2, sex_ratio=0.5)
+        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        .build()
+    )
+    return population.export_config()
+
+
 class _DummyDemePopulation(BasePopulation):
+    """Contract-satisfying lightweight deme double.
+
+    Implements the aligned population surface pieces the container and
+    the slice read at construction and in these tests; everything else
+    stays a read-only stub.
+    """
+
     def __init__(self, species: Species, name: str):
         self._species = species
         self._name = name
         self._tick = 0
         self._history = []
-        self._state = type("S", (), {"individual_count": np.zeros((2, 1, 1), dtype=np.float64)})()
+        self._config = _reference_draft(species)
+        self._state = DiscretePopulationState.create(
+            n_sexes=int(self._config.n_sexes),
+            n_ages=int(self._config.n_ages),
+            n_ztypes=int(self._config.n_ztypes),
+            n_tick=0,
+        )
 
     def clear_history(self) -> None:
         self._history.clear()
@@ -45,6 +85,14 @@ class _DummyDemePopulation(BasePopulation):
 
     def update(self) -> Any:  # type: ignore[no-untyped-def,any-return]  # duck-typed double: mirrors the untyped base-class hook; never called on this stub
         raise NotImplementedError
+
+    def export_config(self) -> ModelDraft:
+        """Aligned surface: hand out the double's declaration draft."""
+        return self._config
+
+    def export_state(self) -> np.ndarray:
+        """Aligned surface: flatten the stub state (tick + counts)."""
+        return self._state.flatten_all()
 
     def _snapshot_state(self):
         """Snapshot hook: return the stub container itself (read-only stub)."""

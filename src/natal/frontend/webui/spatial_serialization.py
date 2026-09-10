@@ -109,20 +109,20 @@ def spatial_landscape(population: SpatialPopulation) -> SpatialLandscapePayload:
 
         if not genotype_counts:
             genotype_counts = [
-                [] for _ in range(len(deme.registry.index_to_genotype))
+                [] for _ in range(len(deme.index_registry.index_to_genotype))
             ]
-        for g_idx, gt in enumerate(deme.registry.index_to_genotype):
-            z_indices = deme.registry.ztype_indices_for(gt)
+        for g_idx, gt in enumerate(deme.index_registry.index_to_genotype):
+            z_indices = deme.index_registry.ztype_indices_for(gt)
             genotype_counts[g_idx].append(float(counts[:, :, z_indices].sum()))
 
-        freqs = compute_allele_frequencies(deme.registry, species, counts)
+        freqs = compute_allele_frequencies(deme.index_registry, species, counts)
         for a_idx, allele in enumerate(allele_names):
             if a_idx >= len(allele_frequencies):
                 allele_frequencies.append([])
             allele_frequencies[a_idx].append(freqs.get(allele, 0.0))
 
     genotype_labels = (
-        [str(g) for g in population.demes[0].registry.index_to_genotype]
+        [str(g) for g in population.demes[0].index_registry.index_to_genotype]
         if population.n_demes
         else []
     )
@@ -183,7 +183,7 @@ def spatial_deme_detail(population: SpatialPopulation, index: int) -> SpatialDem
         is_age_structured=counts.shape[1] > 2,
         female_per_age=counts[0].sum(axis=1).tolist(),
         male_per_age=counts[1].sum(axis=1).tolist(),
-        genotypes=genotype_rows_builder(deme.registry, deme.config, counts),
+        genotypes=genotype_rows_builder(deme.index_registry, deme.config, counts),
     )
 
 
@@ -304,7 +304,7 @@ def spatial_history_series(
     }
     allele_names = known_allele_names(population.species)
 
-    registry = population.demes[0].registry if population.n_demes else None
+    registry = population.demes[0].index_registry if population.n_demes else None
     for kept_index in range(len(kept_ticks)):
         aggregate = aggregates[kept_index * stride]
         totals.append(float(aggregate.sum()))

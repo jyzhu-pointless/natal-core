@@ -475,7 +475,8 @@ def test_equilibrium_presence_clear_and_checkpoint_restore() -> None:
     control.run(1)
     np.testing.assert_array_equal(pop.demes[1].export_state(), control.demes[1].export_state())
     pop.restore_checkpoint(0)
-    np.testing.assert_array_equal(pop._ecology_columns["equilibrium_declared"], [0, 1])
+    # Derived read: the restored session columns are the authority.
+    np.testing.assert_array_equal(pop.params.equilibrium_declared, [0, 1])
     assert native.get_deme_tensor(0, "equilibrium_distribution").size == 0
     assert pop.demes[0].config.equilibrium_individual_distribution is None
     np.testing.assert_array_equal(pop.demes[1].config.equilibrium_individual_distribution, declared)
@@ -657,13 +658,38 @@ def test_retained_deme_scalar_writer_preserves_native_sibling_values() -> None:
 
 
 @pytest.mark.parametrize("model", ["age_structured", "discrete_generation"])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "step", "record_snapshot", "clear_history", "finish_simulation",
+        "import_config", "tick", "run", "reset", "restore_checkpoint",
+        "finish", "clone", "trigger_event", "history", "observe", "is_finished",
+    ],
+)
+def test_deme_slice_hides_lifecycle_controls(model: str, operation: str) -> None:
+    """The aligned slice surface carries no lifecycle or container controls.
+
+    Lifecycle, state import, and history management belong to the
+    container; the slice exposes only the aligned population surface plus
+    ``index``/``write_ecology``/``write_genetics``, so every control name
+    is absent (AttributeError) instead of being forwarded dynamically.
+    """
+    import natal as nt
+    species = nt.Species.from_dict(name=f"SliceHides_{model}_{operation}", structure={"chr": {"locus": ["WT"]}})
+    pop = nt.SpatialPopulation.builder(species, n_demes=2, pop_type=model).build()
+    deme = pop.demes[0]
+    with pytest.raises(AttributeError):
+        getattr(deme, operation)
+
+
+@pytest.mark.parametrize("model", ["age_structured", "discrete_generation"])
 @pytest.mark.parametrize("operation", ["step", "record_snapshot", "clear_history", "finish_simulation", "import_config", "tick"])
 def test_managed_deme_rejects_independent_control_without_mutation(model: str, operation: str) -> None:
-    """Facade calls cannot revive the released standalone owner or alter its clock."""
+    """Raw managed-deme slots cannot revive a standalone owner or alter the clock."""
     import natal as nt
     species = nt.Species.from_dict(name=f"ManagedControl_{model}_{operation}", structure={"chr": {"locus": ["WT"]}})
     pop = nt.SpatialPopulation.builder(species, n_demes=2, pop_type=model).build()
-    deme = pop.demes[0]
+    deme = pop._deme_object(0)  # pyright: ignore[reportPrivateUsage]  # the raw slot carries the standalone-owner guard
     pop.record_snapshot()
     before = deme.export_state().copy()
     with pytest.raises(RuntimeError, match="managed deme"):
@@ -677,7 +703,7 @@ def test_managed_deme_rejects_independent_control_without_mutation(model: str, o
     assert not deme.is_finished
     np.testing.assert_array_equal(deme.export_state(), before)
     assert len(pop.history.ticks) == 1
-    assert pop._demes[0]._rust_lifecycle_backend is None
+    assert pop._demes[0]._rust_lifecycle_backend is None  # pyright: ignore[reportPrivateUsage]  # single-owner guarantee
     deme.update().competition(carrying_capacity=77.)
     assert deme.params.carrying_capacity == 77.
 
@@ -689,15 +715,15 @@ def test_container_finish_and_reset_preserve_single_owner_and_replay_rng() -> No
     pop.run(2)
     expected = [deme.export_state().copy() for deme in pop.demes]
     pop.run(0, finish=True)
-    assert all(deme.is_finished for deme in pop.demes)
+    assert all(deme.is_finished for deme in pop._demes)  # pyright: ignore[reportPrivateUsage]  # lifecycle status projects the raw managed slots
     assert pop._rust_spatial_backend.execution_state()[0] == "Stopped"
     pop.reset()
-    assert pop.tick == 0 and all(not deme.is_finished for deme in pop.demes)
+    assert pop.tick == 0 and all(not deme.is_finished for deme in pop._demes)  # pyright: ignore[reportPrivateUsage]  # reset restores the shared Ready boundary
     assert pop.history.is_empty
     pop.run(2)
-    for deme, state in zip(pop.demes, expected):
+    for deme, state in zip(pop._demes, expected):  # pyright: ignore[reportPrivateUsage]  # raw slot ownership check
         np.testing.assert_array_equal(deme.export_state(), state)
-        assert deme._rust_lifecycle_backend is None
+        assert deme._rust_lifecycle_backend is None  # pyright: ignore[reportPrivateUsage]  # single-owner guarantee survived the replay
 
 
 @pytest.mark.parametrize("model", ["age", "discrete"])

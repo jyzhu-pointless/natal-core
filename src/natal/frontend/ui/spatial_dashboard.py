@@ -90,10 +90,10 @@ class SpatialDashboard:
 
         self.obs_panel = ObservationPanel(
             genotype_labels=get_unordered_genotype_labels(
-                self.pop.deme(0).registry.index_to_genotype
+                self.pop.deme(0).index_registry.index_to_genotype
             ),
             get_state=lambda: _StateRef(self.pop),
-            get_registry=lambda: self.pop.deme(0).registry,
+            get_registry=lambda: self.pop.deme(0).index_registry,
         )
 
         self._rebuild_chart_history()
@@ -101,7 +101,7 @@ class SpatialDashboard:
 
     def _discrete_display(self) -> bool:
         """Whether individual counts should be displayed as integers."""
-        config = self.pop.deme(0)._config
+        config = self.pop.deme(0).config
         return bool(getattr(config, "stochastic", True)) and not bool(
             getattr(config, "continuous_sampling", False)
         )
@@ -357,7 +357,7 @@ class SpatialDashboard:
     def _on_landscape_metric_change(self) -> None:
         """Update target dropdown options and re-render landscape."""
         metric = self.landscape_metric.value
-        registry = self.pop.deme(0).registry
+        registry = self.pop.deme(0).index_registry
         if metric == "genotype":
             labels = get_unordered_genotype_labels(registry.index_to_genotype)
             options = {label: label for label in labels}
@@ -391,7 +391,7 @@ class SpatialDashboard:
             return [float(deme.state.individual_count.sum()) for deme in self.pop.demes]
 
         if metric == "genotype":
-            registry = self.pop.deme(0).registry
+            registry = self.pop.deme(0).index_registry
             # Resolve pattern (supports :: unordered, | ordered, * wildcards)
             from natal.frontend.patterns import GenotypeSelector
 
@@ -409,9 +409,12 @@ class SpatialDashboard:
                 return vals  # type: ignore[reportUnknownVariableType]
 
         if metric == "allele":
+            # compute_allele_frequencies is a container query: per-deme
+            # allele shares are read through the deme's raw slot (the
+            # slice surface is the aligned population one only).
             vals = []
-            for deme in self.pop.demes:
-                freqs = deme.compute_allele_frequencies()
+            for deme_index in range(self.pop.n_demes):
+                freqs = self.pop._deme_object(deme_index).compute_allele_frequencies()
                 vals.append(float(freqs.get(target_val, 0.0)))  # type: ignore[reportUnknownMemberType]
             return vals  # type: ignore[reportUnknownVariableType]
 
@@ -841,7 +844,7 @@ class SpatialDashboard:
         """Return genotype cards for the selected deme."""
         deme_idx = self.selected_deme_idx if 0 <= self.selected_deme_idx < len(self.pop.demes) else 0
         deme = self.pop.demes[deme_idx]
-        registry = deme.registry
+        registry = deme.index_registry
         genotypes = registry.index_to_genotype
         ind_count = state.individual_count
         n_ages = ind_count.shape[1]
@@ -914,7 +917,7 @@ class SpatialDashboard:
             return
 
         first_deme = self.pop.deme(0)
-        registry = first_deme.registry
+        registry = first_deme.index_registry
 
         # Collect known allele names for zero-filling
         known_alleles: set[str] = set()
@@ -987,7 +990,7 @@ class SpatialDashboard:
         import plotly.express as px  # type: ignore[reportUnknownVariableType]
 
         config = self.pop.deme(0).export_config()  # type: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-        registry = self.pop.deme(0).registry
+        registry = self.pop.deme(0).index_registry
         z2g = config.zygotes_to_gametes_map  # type: ignore[reportUnknownMemberType, reportUnknownVariableType]
         n_glabs = config.n_glabs  # type: ignore[reportUnknownMemberType]
         genotypes = registry.index_to_genotype
@@ -1020,7 +1023,7 @@ class SpatialDashboard:
         import plotly.express as px  # type: ignore[reportUnknownVariableType]
 
         config = self.pop.deme(0).export_config()  # type: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-        registry = self.pop.deme(0).registry
+        registry = self.pop.deme(0).index_registry
         g2z = config.gametes_to_zygotes_map  # type: ignore[reportUnknownMemberType]
         n_hg_glabs = int(config.n_gtypes)  # type: ignore[reportUnknownArgumentType]
         genotypes = registry.index_to_genotype
@@ -1279,7 +1282,7 @@ class SpatialDashboard:
 
         deme = self.pop.deme(self.selected_deme_idx)
         config = deme.export_config()  # type: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-        registry = deme.registry
+        registry = deme.index_registry
         genotypes = registry.index_to_genotype
 
         with self.config_container:
@@ -1354,8 +1357,10 @@ class SpatialDashboard:
         with self.hooks_container:
             # Collect per-deme hooks
             per_deme_hooks: list[tuple[int, Any]] = []
-            for deme_id, deme in enumerate(self.pop.demes):
-                for desc in deme.get_compiled_hooks():
+            for deme_id in range(self.pop.n_demes):
+                # Hook plans live on the deme slot (build-time compiled),
+                # not on the aligned slice surface.
+                for desc in self.pop._deme_object(deme_id).get_compiled_hooks():
                     per_deme_hooks.append((deme_id, desc))
 
             if not per_deme_hooks:

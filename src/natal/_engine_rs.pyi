@@ -226,6 +226,10 @@ class HeterogeneousSpatialEngineSession:
     def state_snapshot(
         self,
     ) -> tuple[int, NDArray[np.float64], NDArray[np.float64]]: ...
+    def state_snapshot_deme(
+        self, deme: int
+    ) -> tuple[int, NDArray[np.float64], NDArray[np.float64]]: ...
+    def counts(self, deme: int) -> tuple[float, float, float]: ...
     def set_state(
         self,
         individual_count_all: NDArray[np.float64],

@@ -1040,6 +1040,40 @@ class RustHeterogeneousSpatialLifecycleBackend:
         tick, ind, sperm = self._session.state_snapshot()
         return int(tick), ind, sperm
 
+    def state_snapshot_deme(
+        self, deme: int
+    ) -> tuple[int, NDArray[np.float64], NDArray[np.float64]]:
+        """Return ``(tick, ind_flat, sperm_flat)`` for one deme only.
+
+        Single-deme readers stay O(deme): the session copies just that
+        deme's contiguous planes instead of the whole stacked state.
+
+        Args:
+            deme: Zero-based deme index.
+
+        Raises:
+            ValueError: When *deme* is out of range.
+        """
+        tick, ind, sperm = self._session.state_snapshot_deme(int(deme))
+        return int(tick), ind, sperm
+
+    def counts(self, deme: int) -> tuple[float, float, float]:
+        """Sum one deme's live per-sex counts natively, without a state export.
+
+        Args:
+            deme: Zero-based deme index.
+
+        Returns:
+            ``(total, female, male)`` — bitwise identical to the NumPy
+            reductions the deme's count queries previously performed over
+            its state slice.
+
+        Raises:
+            ValueError: When *deme* is out of range.
+        """
+        total, female, male = self._session.counts(int(deme))
+        return (float(total), float(female), float(male))
+
     def stop(self) -> None:
         """Stop the shared spatial lifecycle while preserving its current phase."""
         self._session.stop()

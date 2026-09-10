@@ -169,7 +169,7 @@ print(pop.config.custom["temperature"])  # 35.0
 
 ### 6.1 `pop.params` (recommended for between-tick bulk writes)
 
-`pop.params` exposes write-protected `(n_demes, ...)` ecology column views for reads; `tensor_write` validates the shape and routes values per deme through the shared write channel (column + deme draft + Rust session column stay in lockstep):
+`pop.params` derives the `(n_demes, ...)` ecology columns on demand and returns write-protected views (from the session columns when a session is enabled, otherwise from the deme drafts); `tensor_write` validates the shape and routes values per deme through the shared write channel (the session's authoritative column and the deme draft declaration are written; reads derive on demand):
 
 ```python
 from natal.frontend.spatial import batch_setting
@@ -191,9 +191,9 @@ print(pop.params.migration_rate.shape)  # (n_demes, S, A)
 
 ### 6.2 `deme(i).write_ecology` / `write_genetics` (single-deme writes)
 
-`pop.deme(i)` returns a `DemeSlice` view: reads of `config`/`state`/`registry`/`name`/... are delegated to the underlying deme object; writes go through two dedicated methods:
+`pop.deme(i)` returns a `DemeSlice` view whose surface is aligned with `Population` — reads (`name`, `species`, `config`, `state`, `params`, `params_log`, `index_registry`, `presets`, `definition`), queries (`get_total_count`, `get_female_count`, `get_male_count`, `export_config`, `export_state`), and `update()` (returning the same `RuntimeUpdater`, committing through the parent spatial session) — plus the deme-specific `index`, `write_ecology`, and `write_genetics`. Every read resolves against the parent session. Unlisted attributes raise `AttributeError` (no dynamic forwarding); single-deme writes go through two dedicated methods:
 
-- `write_ecology(field, value)`: writes both the ecology column and that deme's draft (per-field clone-on-write), so every execution path -- Python dispatch and the Rust session columns -- sees the same value.
+- `write_ecology(field, value)`: writes the session's authoritative column and that deme's draft declaration (per-field clone-on-write), so every execution path -- Python reads and the Rust session columns -- sees the same value.
 - `write_genetics(field, values)`: first forks the deme's genetics variant (Rust side) and detaches the draft tables, so demes that previously shared those tables stay bitwise unchanged.
 
 ```python

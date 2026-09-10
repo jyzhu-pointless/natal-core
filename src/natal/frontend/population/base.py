@@ -211,6 +211,19 @@ class BasePopulation(ABC, Generic[T_State]):
     _runtime_execution_state_reader: Callable[[], tuple[str, int]] | None = None
     _runtime_tick_reader: Callable[[], int] | None = None
 
+    # True while an owning lifecycle run holds the native session borrow.
+    # Panmictic models set it around their backend run; a spatial
+    # container publishes the window on every managed deme.  While set,
+    # session reads degrade to last-published values instead of touching
+    # the borrowed session.
+    _rust_run_active: bool = False
+
+    # True when the cached state container is behind the owning session.
+    # Managed spatial demes share the flag: the container invalidates it
+    # at run/restore/reset boundaries and the per-deme reader re-derives
+    # the cache from the deme's native plane on the next read.
+    _state_cache_stale: bool = False
+
     # The (History, backend) pair whose native recording surfaces were
     # already bound once (observation selector, history store, checkpoint
     # pruner).  Holding the objects themselves (not ids) keeps the
@@ -1129,6 +1142,27 @@ class BasePopulation(ABC, Generic[T_State]):
             >>> pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
         .. versionadded:: NEXT
+        """
+        ...
+
+    @abstractmethod
+    def export_config(self) -> ModelDraft:
+        """Export a detached snapshot of the model configuration.
+
+        Each model flattens its own draft; the abstract declaration keeps
+        the aligned population surface (shared with the spatial
+        ``DemeSlice`` via its internal protocol) complete on the base
+        class so type checking catches surface drift on either side.
+        """
+        ...
+
+    @abstractmethod
+    def export_state(self) -> NDArray[np.float64]:
+        """Export the state as a flattened ``[tick, counts..., sperm...]`` array.
+
+        Each model defines its own flat layout; the abstract declaration
+        keeps the aligned population surface complete on the base class
+        so type checking catches surface drift on either side.
         """
         ...
 

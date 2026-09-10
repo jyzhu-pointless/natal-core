@@ -82,14 +82,17 @@ def _panmictic(request: Request) -> PanmicticPopulation:
 def _structure(request: Request) -> GeneticStructureLike:
     """Return the genetic-structure surface for either dashboard kind.
 
-    Spatial populations expose deme 0 (a ``DemeSlice``): the slice forwards
-    genetic reads (registry/config/species/modifiers/hooks) to its underlying
-    deme via ``__getattr__`` at runtime — statically invisible, hence the
-    cast to the structural protocol.
+    Genetic structure (registry/species/modifiers/compiled hooks) is shared
+    across demes.  The spatial container serves it through its internal
+    deme slot — the public ``DemeSlice`` surface is aligned-only and no
+    longer forwards unlisted members.
     """
     population = _session(request).population
     if isinstance(population, SpatialPopulation):
-        return cast("GeneticStructureLike", population.demes[0])
+        return cast(
+            "GeneticStructureLike",
+            population._deme_object(0),  # pyright: ignore[reportPrivateUsage]  # shared-structure slot; the slice surface is aligned-only
+        )
     return population
 
 

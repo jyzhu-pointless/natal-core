@@ -173,6 +173,31 @@ def test_panmictic_population_gets_404_on_spatial_endpoints() -> None:
         assert client.get("/api/spatial/series").status_code == 404
 
 
+def test_spatial_dashboard_genetic_structure_endpoints_serve() -> None:
+    """The shared genetic-structure endpoints must serve spatial dashboards.
+
+    Requirement: the spatial dashboard frontend boots through the domain and
+    registry stores (``SpatialDashboard.vue`` -> ``domain.initialize()`` /
+    ``registry.initialize()``), fetching ``/api/config``, ``/api/hooks``,
+    ``/api/genetics/matrices``, and ``/api/registry``.  These endpoints
+    serialize the spatial population through deme 0, so whatever access
+    route they use must keep working after the DemeSlice surface became
+    explicit (unlisted slice members raise ``AttributeError``).  A 500 here
+    breaks the whole spatial webui dashboard at boot.
+    """
+    client, _ = _make_client("genstruct", SquareGrid(2, 2))
+    with client:
+        config = client.get("/api/config")
+        assert config.status_code == 200, config.text
+        assert config.json()["scalars"]["carrying_capacity"] == pytest.approx(1000.0)
+        assert client.get("/api/hooks").status_code == 200
+        assert client.get("/api/genetics/matrices").status_code == 200
+        registry = client.get("/api/registry")
+        assert registry.status_code == 200, registry.text
+        labels = {row["label"] for row in registry.json()["genotypes"]}
+        assert {"WT|WT", "WT|Dr", "Dr|Dr"} <= labels
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: spatial debug endpoints
 # ---------------------------------------------------------------------------

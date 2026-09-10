@@ -310,6 +310,14 @@ class TestConstructorDictAndSpermForms:
             def update(self) -> Any:
                 return self
 
+            def export_config(self) -> Any:
+                """Aligned-surface stub: never read on this host."""
+                return None
+
+            def export_state(self) -> Any:
+                """Aligned-surface stub: never read on this host."""
+                return None
+
         host = object.__new__(_BareHost)
         object.__setattr__(host, "_state", "sentinel")
         with pytest.raises(NotImplementedError, match="_snapshot_state"):

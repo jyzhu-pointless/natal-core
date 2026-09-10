@@ -384,7 +384,7 @@ def test_spatial_age_restore_checkpoint_restores_all_demes_and_truncates() -> No
 
     assert population.tick == 1
     assert population.history.ticks == (0, 1)
-    for deme_index, deme in enumerate(population.demes):
+    for deme_index, deme in enumerate(population._demes):  # noqa: SLF001 — slot-level clock projection check
         assert deme.tick == 1
         assert deme.state.n_tick == 1
         np.testing.assert_array_equal(

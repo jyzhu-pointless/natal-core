@@ -204,7 +204,7 @@ class TestSessionOwnership:
         )
         spatial.run(2)
         assert float(spatial.get_total_count()) > 0.0
-        for deme in spatial.demes:
+        for deme in spatial._demes:  # noqa: SLF001 — slot-level clock projection check
             assert deme.tick == 2
 
 

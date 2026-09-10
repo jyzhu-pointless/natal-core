@@ -434,7 +434,7 @@ aggregate = pop.aggregate_individual_count()
 # Get deme by index
 deme_0 = pop.deme(0)
 print(deme_0.get_total_count())
-print(deme_0.compute_allele_frequencies())
+print(pop.compute_allele_frequencies())   # allele frequencies are a container query
 
 # Iterate over all demes
 for i in range(pop.n_demes):
@@ -442,11 +442,15 @@ for i in range(pop.n_demes):
     print(f"deme {i}: {d.get_total_count()}")
 ```
 
-Each deme is accessed through a `DemeSlice` view (reads delegate to the
-underlying `AgeStructuredPopulation` / `DiscreteGenerationPopulation`,
-writes go through the `write_ecology` / `write_genetics` channels). The
-spatial container itself provides the canonical `observation`, `observe()`,
-and typed `history` interfaces.
+Each deme is accessed through a `DemeSlice` view whose surface is aligned
+with `Population`: reads (`name`, `species`, `config`, `state`, `params`,
+`params_log`, `index_registry`, `presets`, `definition`), queries
+(`get_total_count`, `get_female_count`, `get_male_count`, `export_config`,
+`export_state`), `update()` (committing through the parent spatial
+session), plus the deme-specific `index`, `write_ecology`, and
+`write_genetics`. Unlisted attributes raise `AttributeError`. The spatial
+container itself provides the canonical `observation`, `observe()`, and
+typed `history` interfaces.
 
 ### Reset and Control
 
@@ -454,24 +458,22 @@ and typed `history` interfaces.
 # Reset all demes to their initial state (clears finished marks)
 pop.reset()
 
-# Finished state is checked per deme — the container has no
-# is_finished of its own (DemeSlice delegates to the underlying deme)
-any(d.is_finished for d in pop.demes)
-
 # Finish the shared run without advancing its clock
 pop.run(0, finish=True)
 ```
 
-The container has no `is_finished` / `finish_simulation()` of its own:
-once any deme has finished, `run()` / `run_tick()` raise `RuntimeError`;
-when a hook requests a stop, the container marks every deme finished.
+Neither the container nor the aligned deme surface exposes
+`is_finished` / `finish_simulation()`: finished state is owned by the
+shared native session, and once any deme has finished, `run()` /
+`run_tick()` raise `RuntimeError`; when a hook requests a stop, the
+session as a whole enters the Stopped state.
 
-Managed deme handles support queries, parameter updates, and scoped
-``trigger_event`` calls. They reject independent ``run``/``step``, ``reset``,
-state/config import, checkpoint restore, recording, history clearing, and
-``finish_simulation`` with ``RuntimeError``. These operations must use the
-spatial container; initial states belong to builder declarations, and a
-mid-run state change uses the selected deme's ``TickContext.state``.
+Managed deme handles expose only the aligned surface above: lifecycle and
+container controls such as ``run``, ``reset``, ``restore_checkpoint``,
+``finish``, ``clone``, ``trigger_event``, ``history``, and ``observe`` do
+not exist on them (access raises ``AttributeError``). These operations must
+use the spatial container; initial states belong to builder declarations,
+and a mid-run state change uses the selected deme's ``TickContext.state``.
 
 ### Data Output
 
@@ -505,10 +507,10 @@ For detailed usage, see [Extracting Population Simulation Data](2_data_output.md
 
 The internal execution order of each `run_tick()`:
 
-1. Check whether each deme has `is_finished`.
-2. Concatenate all demes' state into a unified array, build a config bank.
-3. Run the spatial lifecycle: each deme's lifecycle executes in parallel at the deme granularity -> unified migration, all inside one engine session.
-4. Write the updated state back to each deme.
+1. Check the shared session's execution state (a finished run is rejected).
+2. The session owns the stacked state and the config bank; the run stays inside one engine session.
+3. Spatial lifecycle: each deme's lifecycle executes at the deme granularity -> unified migration.
+4. The updated state remains session-owned; Python reads derive it on demand.
 
 If a deme triggers a termination condition first (e.g., population extinction), the entire `SpatialPopulation` stops advancing. For detailed execution flow, see [Spatial Lifecycle Wrapper](spatial_lifecycle_wrapper.md).
 

@@ -15,7 +15,9 @@ from tests.test_review_history_regressions import _history_population
 def test_every_mutable_config_field_is_detached(model: Literal["age", "discrete", "spatial"]) -> None:
     """Mutating any exported metadata/native array cannot reach later snapshots."""
     owner = _history_population(f"ConfigSnapshotAllFields_{model}", model)
-    pop = owner.demes[0] if isinstance(owner, nt.SpatialPopulation) else owner
+    # raw managed slot: the test inspects the private draft mirror, which
+    # lives on the deme object, not on the aligned slice surface
+    pop = owner._deme_object(0) if isinstance(owner, nt.SpatialPopulation) else owner  # pyright: ignore[reportPrivateUsage]
     pop.update().custom(flag=True, cohort=7, temperature=2.5, grid=np.arange(12.0).reshape(2, 2, 3))
     expected = pop.config
     before_draft = deepcopy(pop._config)
@@ -73,8 +75,8 @@ def test_spatial_reinitialization_rejects_missing_export_before_replacing_sessio
     seed = owner._rust_spatial_seed
     before = [deme.export_state().copy() for deme in owner.demes]
     with monkeypatch.context() as patch:
-        patch.setattr(owner.demes[1], "export_config", None)
-        with pytest.raises(TypeError, match=r"deme\[1\].*export_config"):
+        patch.setattr(owner._deme_object(1), "_config", None)  # pyright: ignore[reportPrivateUsage]  # malformed-slot handoff guard; the declaration draft is the handoff authority
+        with pytest.raises(TypeError, match=r"deme\[1\].*declaration draft"):
             owner._initialize_session(seed=19)
     assert owner._rust_spatial_backend is backend
     assert owner._rust_spatial_seed == seed
@@ -97,3 +99,36 @@ def test_compact_handoff_sharing_is_confined_to_detached_internal_arrays() -> No
     for deme, snapshot in zip(owner.demes, ordinary, strict=True):
         np.testing.assert_array_equal(deme.config.viability_fitness, expected.viability_fitness)
         np.testing.assert_array_equal(snapshot.viability_fitness, expected.viability_fitness)
+
+
+def test_export_deme_drafts_detaches_custom_slots() -> None:
+    """The declaration-draft export never aliases the live ``custom`` mapping.
+
+    Requirement: the P8 handoff gathers declaration drafts from
+    ``deme._config`` (the session-less write authority).  The export
+    seam's isolation contract ("exports never alias the deme's live
+    draft") and the pre-handoff-repair behavior (``export_config()``
+    returned detached copies, ``custom`` included) require the mutable
+    ``custom`` dict and its array values to be copied too — a shared
+    dict lets any consumer-side write silently corrupt the live
+    declaration draft.
+    """
+    owner = _history_population("ConfigSnapshotCustomDetach", "spatial")
+    assert isinstance(owner, nt.SpatialPopulation)
+    live = owner._deme_object(0)._config  # pyright: ignore[reportPrivateUsage]  # declaration-draft authority under test
+    # Inject into EVERY deme's live draft: the loop below asserts on each
+    # deme's export, so each live draft must carry the array.
+    for slot in owner._demes:  # pyright: ignore[reportPrivateUsage]  # live declaration drafts under test
+        slot._config.custom["grid"] = np.arange(4.0)  # pyright: ignore[reportPrivateUsage]  # custom values may be arrays
+    for exported in (
+        *owner._export_deme_drafts(compact=True),  # pyright: ignore[reportPrivateUsage]  # export-seam isolation contract
+        *owner._export_deme_drafts(),  # pyright: ignore[reportPrivateUsage]
+    ):
+        assert exported.custom is not live.custom
+        assert exported.custom["grid"] is not live.custom["grid"]
+        exported.custom["probe_leak"] = 1
+        exported.custom["grid"] = exported.custom["grid"] + 1.0
+        exported.custom["grid"][0] = 99.0
+    for slot in owner._demes:  # pyright: ignore[reportPrivateUsage]  # every live draft stays uncorrupted
+        assert "probe_leak" not in slot._config.custom  # pyright: ignore[reportPrivateUsage]
+        assert slot._config.custom["grid"][0] == 0.0  # pyright: ignore[reportPrivateUsage]

@@ -14,6 +14,9 @@ use crate::model::genetics::GeneticsTensors;
 use crate::model::genetics::GENETICS_TENSORS;
 use crate::output::history::{HistoryStore, SharedHistory};
 
+/// Session state readout: ``(tick, individual_count_flat, sperm_flat)``.
+type StateReadout<'py> = (i64, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
+
 /// Convert internal kernel error strings into ``PyRuntimeError``.
 fn map_lifecycle_error(err: String) -> PyErr {
     crate::hooks::transaction::map_error(err)
@@ -964,6 +967,69 @@ impl SpatialSession {
             PyArray1::from_slice(py, &self.state_ind),
             PyArray1::from_slice(py, &self.state_sperm),
         )
+    }
+
+    /// Copy one deme's state planes without exporting the whole stack.
+    ///
+    /// Single-deme readers stay O(deme): the session keeps the
+    /// authoritative stacked state, and a slice read must not copy the
+    /// other demes' planes.
+    ///
+    /// ## Errors
+    /// Returns ``PyValueError`` when *deme* is out of range.
+    fn state_snapshot_deme<'py>(
+        &self,
+        py: Python<'py>,
+        deme: usize,
+    ) -> PyResult<StateReadout<'py>> {
+        let n_demes = self.deme_variants.len();
+        if deme >= n_demes {
+            return Err(PyValueError::new_err(format!(
+                "deme {deme} out of range for {n_demes} demes"
+            )));
+        }
+        let ind_stride = 2 * self.blueprint.n_ages * self.blueprint.n_ztypes;
+        let sperm_stride =
+            self.blueprint.n_ages * self.blueprint.n_ztypes * self.blueprint.n_ztypes;
+        Ok((
+            self.state_tick,
+            PyArray1::from_slice(
+                py,
+                &self.state_ind[deme * ind_stride..(deme + 1) * ind_stride],
+            ),
+            PyArray1::from_slice(
+                py,
+                &self.state_sperm[deme * sperm_stride..(deme + 1) * sperm_stride],
+            ),
+        ))
+    }
+
+    /// Sum one deme's live per-sex counts without exporting state arrays.
+    ///
+    /// Each sex plane of the deme's contiguous slice sums in NumPy's
+    /// pairwise order and ``total`` is the pairwise sum of the whole
+    /// deme slice, matching the retired per-deme NumPy reductions
+    /// bitwise (P1 ``counts`` pattern applied to one spatial deme).
+    ///
+    /// ## Errors
+    /// Returns ``PyValueError`` when *deme* is out of range.
+    fn counts(&self, deme: usize) -> PyResult<(f64, f64, f64)> {
+        let n_demes = self.deme_variants.len();
+        if deme >= n_demes {
+            return Err(PyValueError::new_err(format!(
+                "deme {deme} out of range for {n_demes} demes"
+            )));
+        }
+        let z = self.blueprint.n_ztypes;
+        let plane = self.blueprint.n_ages * z;
+        let slice = &self.state_ind[deme * 2 * plane..(deme + 1) * 2 * plane];
+        let female = crate::kernels::state_reduce::numpy_pairwise_sum(&slice[..plane]);
+        let male = crate::kernels::state_reduce::numpy_pairwise_sum(&slice[plane..2 * plane]);
+        Ok((
+            crate::kernels::state_reduce::numpy_pairwise_sum(slice),
+            female,
+            male,
+        ))
     }
 
     /// Install a full stacked live state (build/import handoff).

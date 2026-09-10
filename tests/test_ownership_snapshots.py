@@ -19,6 +19,7 @@ from __future__ import annotations
 import gc
 import tracemalloc
 import weakref
+from typing import Any
 
 import numpy as np
 import pytest
@@ -26,10 +27,6 @@ import pytest
 import natal as nt
 from natal.contracts.blueprint import Blueprint
 from natal.contracts.materialize import SpatialMigration, materialize
-from natal.frontend.spatial.migration import MigrationCSR
-from natal.frontend.spatial.population import (
-    _minimal_contract,  # pyright: ignore[reportPrivateUsage]  # frozen-discipline target under test
-)
 from tests.spatial_test_state import set_deme_state
 
 _BLUEPRINT_ARRAY_FIELDS = (
@@ -390,20 +387,6 @@ def _defaulted_blueprint() -> Blueprint:
     )
 
 
-def _minimal_migration() -> MigrationCSR:
-    """Return a two-deme symmetric migration CSR for spatial contracts.
-
-    Returns:
-        A CSR with one outbound edge per deme (0 -> 1 and 1 -> 0).
-    """
-    return MigrationCSR(
-        indptr=np.array([0, 1, 2], dtype=np.int64),
-        dest_idx=np.array([1, 0], dtype=np.int64),
-        weights=np.array([0.1, 0.1]),
-        stay_after_send=False,
-    )
-
-
 class TestR4FreezeBypassAttacks:
     """Attack the frozen-discipline enforcement through non-obvious channels.
 
@@ -531,25 +514,53 @@ class TestR4FreezeBypassAttacks:
         assert bp.migration_indptr.tolist() == [0, 1, 2]
         assert bp.migration_weights.tolist() == pytest.approx([0.1, 0.1])
 
-    def test_spatial_test_double_blueprint_is_frozen(self) -> None:
-        """The lightweight spatial double's blueprint arrays reject writes.
+    def test_spatial_construction_requires_the_contract_surface(self) -> None:
+        """Demes without a declaration draft are rejected loudly.
 
-        Attack vector: ``_minimal_contract`` builds a Blueprint outside
-        ``materialize``; a regression could skip ``frozen`` there and the
-        test-double demes would hand writable engine arrays to fixtures.
+        Attack vector: a deme that cannot ``export_config()`` used to
+        degrade the spatial contract pair to a shape-level minimum built
+        outside ``materialize``.  The degraded fallback is deleted — the
+        demes now must satisfy the explicit population contract, and a
+        contract-less double fails construction instead of silently
+        shrinking the frozen contract.
         """
-        bp, _params = _minimal_contract(
-            n_demes=2,
-            n_sexes=2,
-            n_ages=2,
-            migration_csr=_minimal_migration(),
-            rate3d=np.zeros((2, 2, 2)),
-        )
-        for field in _BLUEPRINT_ARRAY_FIELDS:
-            arr = getattr(bp, field)
-            assert not arr.flags.writeable, f"double blueprint {field} is writable"
-            with pytest.raises(ValueError, match="read-only"):
-                arr[0] = 1
+        from natal.frontend.population.base import BasePopulation
+
+        class _NoConfigDeme(BasePopulation):
+            """Minimal double that cannot export its configuration."""
+
+            def __init__(self) -> None:
+                self._species = _species("R4NoConfig")
+                self._name = "no-config"
+                self._tick = 0
+                self._state = None
+
+            def get_female_count(self) -> int:
+                return 0
+
+            def get_male_count(self) -> int:
+                return 0
+
+            def get_total_count(self) -> int:
+                return 0
+
+            def run_tick(self) -> Any:
+                return self
+
+            def run(self, n_steps: int, record_every: int = 1, finish: bool = False) -> Any:
+                return self
+
+            def reset(self) -> None:
+                return None
+
+            def update(self) -> Any:
+                raise NotImplementedError
+
+            def _snapshot_state(self) -> None:
+                return None
+
+        with pytest.raises(TypeError, match="export_config"):
+            nt.SpatialPopulation([_NoConfigDeme()], migration_rate=0.0)
 
     def test_class_level_default_write_raises_and_shared_object_stays_zero(
         self,
