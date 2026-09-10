@@ -143,11 +143,11 @@ impl EcologyParams {
     /// Spatial parallel ticks need a per-deme mutable write target for
     /// ``Op.set_param`` commits, but the session's ecology columns cannot
     /// be borrowed ``&mut`` by several demes at once.  Each deme therefore
-    /// ticks against this private single-column copy; ``assemble_deme``
-    /// reads position 0, whose contents are exactly the values the source
-    /// column held at this deme (so a fresh assembly is numerically
-    /// identical to the session's per-deme config).  Genetics are *not*
-    /// carried — the caller shares the immutable [`GeneticsTensors`].
+    /// ticks against this private single-column copy; the lifecycle kernels
+    /// read position 0, whose contents are exactly the values the source
+    /// column held at this deme (so a local-copy tick is numerically
+    /// identical to reading the session's per-deme segment).  Genetics are
+    /// *not* carried — the caller shares the immutable [`GeneticsTensors`].
     ///
     /// ## Parameters
     /// - `deme`: Deme whose column entries and vector segments are copied.

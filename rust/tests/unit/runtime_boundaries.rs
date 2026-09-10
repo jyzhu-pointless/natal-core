@@ -2,8 +2,6 @@
 use std::collections::HashMap;
 
 use crate::hooks::interpreter::HookProgram;
-use crate::kernels::config::AgeStructuredConfig;
-use crate::kernels::discrete_generation::DiscreteGenerationConfig;
 use crate::kernels::rng::new_rng;
 use crate::kernels::spatial;
 use crate::model::blueprint::Blueprint;
@@ -121,8 +119,6 @@ fn migration_rejects_missing_rng_stream_without_consuming_existing_stream() {
 #[test]
 fn spatial_kernels_reject_inconsistent_deme_metadata_before_mutation() {
     let (bp, mut params, genetics) = fixture();
-    let age = AgeStructuredConfig::assemble(&bp, &params, &genetics).unwrap();
-    let discrete = DiscreteGenerationConfig::assemble(&bp, &params, &genetics).unwrap();
     let mut rngs = vec![new_rng(7)];
     let words = rngs[0].state_words();
     let mut ind = vec![11.0; 8];
@@ -133,7 +129,6 @@ fn spatial_kernels_reject_inconsistent_deme_metadata_before_mutation() {
     let variants = [genetics];
     params.n_demes = 2;
     let age_result = spatial::run_spatial_tick_heterogeneous(
-        &[age],
         &hooks,
         &mut rngs,
         &mut ind,
@@ -150,7 +145,6 @@ fn spatial_kernels_reject_inconsistent_deme_metadata_before_mutation() {
         .unwrap_err()
         .contains("ecology columns, variant ids, and RNG streams"));
     let discrete_result = spatial::run_spatial_tick_discrete(
-        &[discrete],
         &hooks,
         &mut rngs,
         &mut ind,
@@ -166,7 +160,6 @@ fn spatial_kernels_reject_inconsistent_deme_metadata_before_mutation() {
         .unwrap_err()
         .contains("ecology columns, variant ids, and RNG streams"));
     let empty_result = spatial::run_spatial_tick_discrete(
-        &[],
         &hooks,
         &mut rngs,
         &mut ind,
@@ -175,12 +168,10 @@ fn spatial_kernels_reject_inconsistent_deme_metadata_before_mutation() {
         &bp,
         &params,
         &variants,
-        &[0],
+        &[],
         &mut journal,
     );
-    assert!(empty_result
-        .unwrap_err()
-        .contains("at least one config and one deme"));
+    assert!(empty_result.unwrap_err().contains("at least one deme"));
     assert_eq!(ind, vec![11.0; 8]);
     assert_eq!(sperm, vec![13.0; 8]);
     assert!(journal.is_empty());
