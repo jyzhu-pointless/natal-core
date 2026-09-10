@@ -7,6 +7,13 @@ This chapter covers three scenarios:
 - **Inside hooks**: via the callback hook's `pop.params` (`TickContext`), or declaratively via `Op.set_param`
 - **Spatial**: per-deme writes (`pop.params.tensor_write` / `deme(i).write_ecology`)
 
+**How to choose:** hook-based updates are the default recommendation — a hook
+states the tick, the event phase, and the execution order of every change,
+and its writes commit atomically with the event (rolled back on failure).
+Use the between-tick surfaces (`pop.update()` / `pop.params`) when you are
+between runs: interactive tuning, parameter sweeps, or pre-run adjustments.
+They are fully supported first-class scenarios, not deprecated paths.
+
 ---
 
 ## 1. Between-Tick Modification: `pop.update()`
@@ -39,7 +46,7 @@ Each call commits to the running population and appends a parameter-log row when
 
 ## 2. Between-Tick Modification: The `pop.params` Surface
 
-`pop.params.<name> = value` is the preferred runtime write channel: attribute writes are jsonc-bounds-validated and reach the draft, the live Rust session, and the parameter snapshot log. Reads return the current value:
+`pop.params.<name> = value` is the preferred channel for between-tick writes: attribute writes are jsonc-bounds-validated and reach the draft, the live Rust session, and the parameter snapshot log. Reads return the current value:
 
 ```python
 pop.params.carrying_capacity = 5000.0
@@ -160,7 +167,7 @@ print(pop.config.custom["temperature"])  # 35.0
 
 **The `SpatialPopulation.update()` chain API has been removed.** Runtime writes for spatial populations go through two entries:
 
-### 6.1 `pop.params` (bulk writes, recommended)
+### 6.1 `pop.params` (recommended for between-tick bulk writes)
 
 `pop.params` exposes write-protected `(n_demes, ...)` ecology column views for reads; `tensor_write` validates the shape and routes values per deme through the shared write channel (column + deme draft + Rust session column stay in lockstep):
 

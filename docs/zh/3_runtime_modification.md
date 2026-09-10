@@ -6,6 +6,11 @@
 - **hook 内**：通过回调 Hook 的 `pop.params`（`TickContext`）写入，或 `Op.set_param` 声明式调度
 - **spatial**：per-deme 写入（`pop.params.tensor_write` / `deme(i).write_ecology`）
 
+**怎么选：**默认使用 Hook 声明式更新——Hook 明确写出每次修改发生的 tick、
+事件阶段和执行顺序，写入随事件原子提交（失败自动回滚）。在两次运行之间调参、
+做参数扫描或运行前微调时，使用 between-tick 写入面（`pop.update()` /
+`pop.params`）——它们是完全支持的一等场景，不是弃用路径。
+
 ---
 
 ## 1. between-tick 修改：`pop.update()`
@@ -38,7 +43,7 @@ pop.update().custom(temperature=35.0)
 
 ## 2. between-tick 修改：`pop.params` 参数面
 
-`pop.params.<name> = value` 是运行时首选写入通道：属性写入经 jsonc 边界校验，
+`pop.params.<name> = value` 是 between-tick 写入的首选通道：属性写入经 jsonc 边界校验，
 同时到达 draft、Rust 会话与参数快照日志。读取返回当前值：
 
 ```python
@@ -155,7 +160,7 @@ print(pop.config.custom["temperature"])  # 35.0
 
 **`SpatialPopulation.update()` 链式接口已删除。** 空间种群的运行时写入走两个入口：
 
-### 6.1 `pop.params`（批量写入，推荐）
+### 6.1 `pop.params`（between-tick 批量写入推荐）
 
 `pop.params` 只读返回 `(n_demes, ...)` 生态列的写保护视图；`tensor_write` 校验形状后
 通过共享写入通道按 deme 路由（列 + deme draft + Rust 会话列同步）：

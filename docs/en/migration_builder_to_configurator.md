@@ -1,5 +1,13 @@
 # Builder to Configurator Migration Guide
 
+> **Historical document.** This page records the v0.1 → v0.2.0 migration.
+> It does not describe the current API: the `Configurator` name has since
+> been retired — the build chain class is again named `PopulationBuilder`
+> (a single unified class in `natal.frontend.builder`), the spatial entry
+> is `SpatialPopulationBuilder`, and `pop.update()` / `ctx.update()` now
+> return a `RuntimeUpdater`. Current reference:
+> [population_builder.md](api/population_builder.md).
+
 In v0.2.0, `PopulationBuilder` and its subclasses (`DiscreteGenerationPopulationBuilder`,
 `AgeStructuredPopulationBuilder`, `SpatialBuilder`) were replaced by the `Configurator`
 chain API, and there is **no** `legacy_path` escape hatch -- the old Builder classes and
@@ -43,9 +51,11 @@ are in `natal.frontend.genetics`, `natal.frontend.patterns`, ...).
 ### 2. `setup()` returns a Configurator
 
 ```python
-# v0.2.0 -- setup() returns a Configurator, not a Builder
+# v0.2.0 -- setup() returned a Configurator, not a Builder
 configurator = nt.DiscreteGenerationPopulation.setup(species=sp)
-print(type(configurator))  # <class 'natal.frontend.configurator._base.Configurator'>
+print(type(configurator))
+# then: <class 'natal.frontend.configurator._base.Configurator'>
+# now:  <class 'natal.frontend.builder._base.PopulationBuilder'>
 ```
 
 ### 3. Runtime modification (new)

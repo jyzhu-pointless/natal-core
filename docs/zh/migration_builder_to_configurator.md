@@ -1,5 +1,11 @@
 # Builder → Configurator 迁移指南
 
+> **历史文档。** 本页记录 v0.1 → v0.2.0 的迁移，不描述当前 API：`Configurator`
+> 名称现已退役——构建链类重新命名为 `PopulationBuilder`（统一单类，位于
+> `natal.frontend.builder`），空间入口为 `SpatialPopulationBuilder`，
+> `pop.update()` / `ctx.update()` 现返回 `RuntimeUpdater`。
+> 当前参考：[population_builder.md](api/population_builder.md)。
+
 v0.2.0 中，`PopulationBuilder` 及其子类（`DiscreteGenerationPopulationBuilder`、
 `AgeStructuredPopulationBuilder`、`SpatialBuilder`）已被 `Configurator` 链式 API 取代，
 且没有遗留的 `legacy_path` 逃逸舱——旧 Builder 类与 `setup(legacy_path=True)` 并**不存在**。
@@ -42,9 +48,11 @@ from natal import Species, HomingDrive, Op
 ### 2. `setup()` 返回 Configurator
 
 ```python
-# v0.2.0 — setup() 返回 Configurator，不是 Builder
+# v0.2.0 — setup() 当时返回 Configurator，不是 Builder
 configurator = nt.DiscreteGenerationPopulation.setup(species=sp)
-print(type(configurator))  # <class 'natal.frontend.configurator._base.Configurator'>
+print(type(configurator))
+# 当时：<class 'natal.frontend.configurator._base.Configurator'>
+# 现在：<class 'natal.frontend.builder._base.PopulationBuilder'>
 ```
 
 ### 3. 运行时修改（新增）

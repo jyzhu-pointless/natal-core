@@ -279,6 +279,43 @@ class TestPlanOwnership:
         assert calls == [1]
         assert float(pop.state.individual_count[1, 1, 0]) == 101.0
 
+    def test_mutating_resolved_selector_arrays_cannot_change_execution(self) -> None:
+        """NumPy arrays resolved into the plan are inert after build.
+
+        Selector hooks resolve their specs into int32 arrays at compile
+        time and the injected callback captures those values; mutating
+        the descriptor's resolved arrays (or the caller's declaration
+        list) after build must not retarget execution.  Catches a
+        runtime selector path that re-read the descriptor arrays.
+        """
+        received: list[object] = []
+
+        @nt.hook(event="first", selectors={"target": "WT|WT", "many": ["WT|WT", "Dr|Dr"]})
+        def selector_hook(ctx: TickContext, target: int, many: Any) -> int:
+            received.append((target, np.asarray(many).copy()))
+            return 0
+
+        pop = _build("own_sel_arrays", hooks=[selector_hook])
+        desc = pop.get_compiled_hooks("first")[0]
+        assert desc.selectors is not None
+
+        # Mutate the descriptor's resolved arrays after build.
+        desc.selectors["target"][0] = 999
+        desc.selectors["many"][:] = -1
+        pop.run(n_steps=1)
+
+        assert len(received) == 1
+        target, many = received[0]
+        wt = pop.index_registry.ztype_index(
+            pop.species.get_genotype_from_str("WT|WT"), "default"
+        )
+        dr = pop.index_registry.ztype_index(
+            pop.species.get_genotype_from_str("Dr|Dr"), "default"
+        )
+        # Execution used the compile-time values, not the mutated arrays.
+        assert target == int(wt)
+        np.testing.assert_array_equal(many, np.array([int(wt), int(dr)], dtype=np.int32))
+
 
 # ============================================================================
 # 3. Compression: hook-only genotypes survive with a correct mapping

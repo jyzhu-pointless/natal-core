@@ -490,3 +490,49 @@ def test_failed_callback_after_reconfiguration_restores_the_preset() -> None:
     assert drive.drive_conversion_rate == (0.9, 0.9)  # rollback restored the attribute
     assert pop.presets == []  # the preset registration never committed
     assert pop.reconfiguration_log == ()  # failed reconfiguration records nothing
+
+
+def test_event_metadata_bare_reads_stay_committed_until_success() -> None:
+    """Mid-callback bare reads see committed values; adoption waits for success.
+
+    Pins the no-re-dress contract from the population side: the event's
+    working copies live on the TickContext, so a bare ``pop.presets``
+    read inside the callback (after ``ctx.update().presets(...)``) sees
+    the pre-commit list, the updater target's own metadata read sees the
+    working list, and the population adopts only after the callback
+    returns.  The parameter log shows committed rows only.
+    """
+    observed: dict[str, object] = {}
+
+    def probe(ctx: TickContext) -> int:
+        pop = ctx.population
+        drive = nt.HomingDrive(
+            name="KUBare", drive_allele="Dr", target_allele="WT", drive_conversion_rate=0.9
+        )
+        ctx.update().presets(drive)
+        observed["bare_presets_mid"] = list(pop.presets)
+        observed["target_presets_mid"] = [
+            p.name
+            for p in ctx.update()._resolve_target().read_metadata("_presets")  # noqa: SLF001 — the metadata read IS the contract
+        ]
+        ctx.update().competition(carrying_capacity=123.0)
+        observed["bare_config_mid"] = float(pop.config.carrying_capacity)
+        observed["log_rows_mid"] = len(pop.params_log_details)
+        return 0
+
+    pop = _build(
+        "KUBareReads", hook_calls=[((probe,), {"event": "early"})]
+    )
+    pop.run(1, record_every=0)
+
+    # During the callback: no re-dress — bare reads see committed state.
+    assert observed["bare_presets_mid"] == []
+    assert observed["target_presets_mid"] == ["KUBare"]
+    # The candidate config IS visible through pop.config (lazy projection
+    # off the event scope, not a population field swap).
+    assert observed["bare_config_mid"] == 123.0
+    assert observed["log_rows_mid"] == 0
+    # After the callback: metadata and log adopt together.
+    assert [p.name for p in pop.presets] == ["KUBare"]
+    assert pop.params.carrying_capacity == 123.0
+    assert len(pop.params_log_details) > 0
