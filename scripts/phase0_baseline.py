@@ -45,9 +45,11 @@ def _species() -> nt.Species:
     )
 
 
-def _build_age_structured(mode: int, K: float, r: float = 3.0):
+def _build_age_structured(
+    mode: int, K: float, r: float = 3.0, hooks: Callable | None = None
+):
     sp = _species()
-    return (
+    builder = (
         nt.AgeStructuredPopulation.setup(sp, stochastic=False)
         .initial_state(individual_count={
             "female": {"A|A": 200, "A|B": 100},
@@ -65,8 +67,10 @@ def _build_age_structured(mode: int, K: float, r: float = 3.0):
         .survival(female_age_based_survival=0.9, male_age_based_survival=0.9)
         .competition(juvenile_growth_mode=mode, carrying_capacity=K,
                      low_density_growth_rate=r)
-        .build()
     )
+    if hooks is not None:
+        builder = hooks(builder)
+    return builder.build()
 
 
 def scenario_age_bh():
@@ -79,13 +83,17 @@ def scenario_age_fixed():
 
 
 def scenario_age_logistic_hook():
-    pop = _build_age_structured(mode=2, K=500, r=4.0)
-    pop.register_hooks([
-        nt.Op.scale(genotypes="*", ages="*", sex="both", factor=0.98),
-        nt.Op.add(genotypes="A|A", ages=1, sex="female", delta=5.0,
-                  when="tick >= 2"),
-    ], event="early", name="phase0_control")
-    return pop
+    return _build_age_structured(
+        mode=2, K=500, r=4.0,
+        hooks=lambda builder: builder.hooks(
+            [
+                nt.Op.scale(genotypes="*", ages="*", sex="both", factor=0.98),
+                nt.Op.add(genotypes="A|A", ages=1, sex="female", delta=5.0,
+                          when="tick >= 2"),
+            ],
+            event="early", name="phase0_control",
+        ),
+    )
 
 
 def scenario_discrete():

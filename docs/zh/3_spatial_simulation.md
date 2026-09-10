@@ -764,6 +764,14 @@ from natal.frontend.ui import launch
 launch(spatial, port=8080, title="Spatial Debug Dashboard")
 ```
 
+也可以使用 Vue 面板（六边形景观图、deme 点选检视、迁移面板、Debug 标签页）：
+
+```python
+from natal import launch_vue
+
+launch_vue(spatial, port=8000, title="Spatial Debug Dashboard")
+```
+
 ## 常见错误与排查
 
 ### 错误 1：deme 不是同一物种

@@ -1,0 +1,32 @@
+{
+  "name": "natal-webui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "echarts": "^6.1.0",
+    "naive-ui": "^2.45.0",
+    "pinia": "^4.0.0",
+    "vue": "^3.5.0",
+    "vue-echarts": "^8.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "eslint": "^9.39.0",
+    "eslint-plugin-vue": "^10.10.0",
+    "typescript": "~5.9.0",
+    "typescript-eslint": "^8.69.0",
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0",
+    "vue-tsc": "^3.3.11"
+  }
+}

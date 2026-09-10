@@ -1,6 +1,6 @@
 """Contract tests for the post-shim Phase-0/6 relocation state.
 
-The 15 legacy top-level forwarding shims (``natal.<mod>`` for every relocated
+The 16 legacy top-level forwarding shims (``natal.<mod>`` for every relocated
 frontend package plus ``natal.engine``) were removed when the Phase-0
 reorganization completed.  The real package tree is now
 ``natal.frontend.*``, ``natal.backends.*``, and ``natal.contracts``
@@ -14,7 +14,7 @@ classes:
    cycle is broken by PEP 562 deferral, so a clean interpreter must be able
    to import the involved modules in ANY order.
 3. Lazy-map completeness (axis combination): every name in the top-level
-   ``natal._lazy_map`` (208 names across 15 real owning modules) resolves
+   ``natal._lazy_map`` (209 names across 16 real owning modules) resolves
    through ``getattr(natal, name)`` to the very object its owning module
    exports, and legacy package keys (``natal.hooks`` etc.) resolve to the
    relocated module object.
@@ -55,6 +55,7 @@ _RELOCATED_PACKAGES: Tuple[str, ...] = (
     "population",
     "spatial",
     "ui",
+    "webui",
     "hooks",
     "utils",
 )
@@ -373,9 +374,9 @@ def test_lazy_map_every_name_resolves_to_owner_export() -> None:
 
 
 def test_lazy_map_owner_axes_and_size() -> None:
-    """The lazy map is built from exactly the 15 expected owning modules.
+    """The lazy map is built from exactly the 16 expected owning modules.
 
-    Invariant (axis combination): the owner set of the index must be the 14
+    Invariant (axis combination): the owner set of the index must be the 15
     relocated frontend packages plus ``contracts`` — the legacy shims are
     gone and no ``backends.*`` unit joined (their ``__all__`` is empty).
     """
