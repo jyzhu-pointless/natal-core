@@ -17,7 +17,6 @@ from typing import (
     TYPE_CHECKING,
     List,
     Protocol,
-    TypedDict,
     Union,
     cast,
     runtime_checkable,
@@ -25,6 +24,7 @@ from typing import (
 
 import numpy as np
 from numpy.typing import NDArray
+from typing_extensions import TypedDict
 
 from natal.frontend.data.config import ModelDraft
 from natal.frontend.data.state import DiscretePopulationState, PopulationState

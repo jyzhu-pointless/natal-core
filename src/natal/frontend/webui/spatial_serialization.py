@@ -7,10 +7,9 @@ running tick loop.
 
 from __future__ import annotations
 
-from typing import TypedDict
-
 import numpy as np
 from numpy.typing import NDArray
+from typing_extensions import TypedDict
 
 from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import HexGrid, SquareGrid
@@ -249,7 +248,9 @@ def spatial_migration_detail(
         )
         offset += 1
 
-    rate_row: NDArray[np.float64] = np.asarray(population.params.migration_rate[index])
+    # Typed property view (NDArray[np.float64]); no asarray round-trip so the
+    # declaration holds under any numpy stub resolution.
+    rate_row: NDArray[np.float64] = population.params.migration_rate[index]
     rate_mean = float(rate_row.mean()) if rate_row.size else 0.0
 
     return SpatialMigrationDetail(

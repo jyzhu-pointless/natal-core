@@ -8,9 +8,10 @@ pyright checks every construction site.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, TypedDict, Union
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 # ---------------------------------------------------------------------------
 # Client -> server commands
