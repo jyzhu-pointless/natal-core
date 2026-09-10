@@ -213,7 +213,12 @@ async def _post_observation(
             spec["age"] = [group.age_start, group.age_end]
         groups[f"group_{index}"] = spec
     with _session(request).engine_lock:
-        return apply_observation(population, groups, body.collapse_age)
+        try:
+            return apply_observation(population, groups, body.collapse_age)
+        except (ValueError, TypeError) as err:
+            # Client-supplied group specs: boundary validation failures are
+            # request errors (same convention as _int_query/_get_diff).
+            raise HTTPException(status_code=422, detail=str(err)) from err
 
 
 # -- debug handlers ----------------------------------------------------------

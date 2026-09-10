@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import numpy as np
 
@@ -26,6 +26,15 @@ if TYPE_CHECKING:
     from natal.frontend.population.base import BasePopulation
     from natal.frontend.registry.index import IndexRegistry
     from natal.frontend.spatial.population import SpatialPopulation
+
+ObservationGroups = Optional[
+    Union[Mapping[str, "IndividualSelector"], Mapping[str, Dict[str, Any]]]
+]
+"""
+Public observation-group input: a mapping of selectors, or a mapping of
+legacy dict group specs (both spellings are normalized at the boundary).
+"""
+
 
 __all__ = [
     "population_state_to_dict",
@@ -537,7 +546,7 @@ def _get_population_observation_payload(
     population: BasePopulation[Any],  # Any: duck-typed — accepts any BasePopulation subtype
     *,
     observation: Optional[Observation],
-    groups: Optional[Mapping[str, IndividualSelector]],
+    groups: ObservationGroups,
     collapse_age: bool,
     include_zero_counts: bool,
 ) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
@@ -739,7 +748,7 @@ def spatial_population_to_readable_json(
 def spatial_population_to_observation_dict(
     spatial_population: SpatialPopulation,
     *,
-    groups: Optional[Mapping[str, IndividualSelector]] = None,
+    groups: ObservationGroups = None,
     collapse_age: bool = False,
     include_zero_counts: bool = False,
 ) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
@@ -807,7 +816,7 @@ def spatial_population_to_observation_dict(
 def spatial_population_to_observation_json(
     spatial_population: SpatialPopulation,
     *,
-    groups: Optional[Mapping[str, IndividualSelector]] = None,
+    groups: ObservationGroups = None,
     collapse_age: bool = False,
     include_zero_counts: bool = False,
     indent: int = 2,

@@ -498,20 +498,28 @@ class ObservationPanel:
         entries = cast(  # legacy genotype spec: iterable spelling or falsy
             "Iterable[object]", genotype or []
         )
-        patterns = [
-            str(pattern)
-            for pattern in entries
-            if pattern and pattern != "*"
-        ]
+        if any(pattern == "*" for pattern in entries):
+            # Legacy short-circuit: a "*" alternative widens the genotype
+            # selection to every ztype instead of being dropped.
+            patterns: List[str] = []
+        else:
+            patterns = [
+                str(pattern)
+                for pattern in entries
+                if pattern and pattern != "*"
+            ]
         sex = spec.get("sex", "both")
         sex_value: Any = sex if sex and sex != "both" else None  # Any: selector sex spec (str or None)
         age_start = spec.get("age_start")
         age_end = spec.get("age_end")
-        age_value: Any = (  # Any: selector age spec (range or None)
-            range(int(age_start), int(age_end) + 1)
-            if age_start is not None and age_end is not None
-            else None
-        )
+        if age_start is not None and age_end is not None:
+            if int(age_start) > int(age_end):
+                raise ValueError(
+                    f"age range [{age_start}, {age_end}] selects no ages"
+                )
+            age_value: Any = range(int(age_start), int(age_end) + 1)  # Any: selector age spec (range or None)
+        else:
+            age_value = None  # Any: selector age spec (range or None)
         if not patterns:
             return IndividualSelector(sex=sex_value, age=age_value)
         merged = IndividualSelector(ztype=patterns[0], sex=sex_value, age=age_value)

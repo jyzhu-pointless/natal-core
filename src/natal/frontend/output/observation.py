@@ -12,6 +12,7 @@ boundary), :func:`apply_rule`
 
 from __future__ import annotations
 
+import numbers
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
@@ -57,7 +58,7 @@ GroupsInput = Optional[
     Union[
         List[GroupSpecDict],
         Tuple[GroupSpecDict, ...],
-        Dict[str, GroupSpecDict],
+        Mapping[str, GroupSpecDict],
         Mapping[str, "IndividualSelector"],
     ]
 ]
@@ -542,6 +543,13 @@ class ObservationFilter:
         """
         if value is None:
             return []
+        if isinstance(value, (list, tuple, set)):
+            container = cast("Sequence[object]", value)
+            if len(container) == 0:
+                raise ValueError(
+                    "genotype selector selects no genotypes (use None or "
+                    "'*' for a wildcard)"
+                )
         entries: List[Any] = (  # Any: heterogeneous legacy genotype entries
             list(cast("Iterable[Any]", value))
             if isinstance(value, (list, tuple, set))
@@ -553,18 +561,22 @@ class ObservationFilter:
                 return []
             if isinstance(entry, bool):
                 raise TypeError(f"Unsupported genotype selector: {entry!r}")
-            if isinstance(entry, int):
-                # Compressed genotype index: matches every slab of the
-                # genotype at that registry position (a bare pattern string
-                # resolves the same way — slab-less patterns match all slabs).
-                patterns.append(str(registry.index_to_genotype[entry]))
+            if isinstance(entry, numbers.Integral):
+                # Compressed genotype index (int or numpy integer): matches
+                # every slab of the genotype at that registry position (a
+                # bare pattern string resolves the same way — slab-less
+                # patterns match all slabs).
+                patterns.append(str(registry.index_to_genotype[int(entry)]))
             elif isinstance(entry, str):
                 patterns.append(entry)
             elif getattr(entry, "genotype", None) is not None:
                 # Duck-typed ZygoteTypePattern.
                 patterns.append(str(entry))
             else:
-                raise TypeError(f"Unsupported genotype selector: {entry!r}")
+                # Legacy acceptance: Genotype objects (and other stringable
+                # entries) parse through their label; invalid labels still
+                # fail loudly at pattern resolution.
+                patterns.append(str(entry))
         return patterns
 
     @staticmethod
@@ -585,6 +597,12 @@ class ObservationFilter:
         """
         if value is None:
             return []
+        if isinstance(value, (list, tuple, set)):
+            container = cast("Sequence[object]", value)
+            if len(container) == 0:
+                raise ValueError(
+                    "sex selector selects no sexes (use None for a wildcard)"
+                )
         if isinstance(value, str):
             try:
                 return [int(value)]
@@ -626,26 +644,38 @@ class ObservationFilter:
                 "Callable age selectors are not part of the unified "
                 f"IndividualSelector representation: {value!r}"
             )
+        if isinstance(value, (str, bytes)):
+            # Strings are iterable but are never age selectors; rejecting
+            # them here keeps the Iterable branch below from recursing.
+            raise TypeError(f"Unsupported age selector: {value!r}")
         if isinstance(value, bool):
             raise TypeError(f"Unsupported age selector: {value!r}")
-        if isinstance(value, int):
-            return [value]
+        if isinstance(value, numbers.Integral):
+            return [int(value)]
         if isinstance(value, (list, tuple)):
             items = cast("Sequence[object]", value)
+            if len(items) == 0:
+                raise ValueError(
+                    "age selector selects no ages (use None for a wildcard)"
+                )
             if len(items) == 2:
                 first: object = items[0]
                 second: object = items[1]
-                if (
-                    isinstance(first, int)
-                    and not isinstance(first, bool)
-                    and isinstance(second, int)
-                    and not isinstance(second, bool)
+                # Bools register as Integral at runtime (True would parse
+                # as age 1); reject them before the Integral narrowing.
+                if type(first) is bool or type(second) is bool:
+                    raise TypeError(
+                        f"Unsupported age selector: {[first, second]!r}"
+                    )
+                if isinstance(first, numbers.Integral) and isinstance(
+                    second, numbers.Integral
                 ):
-                    if second < first:
+                    start, end = int(first), int(second)
+                    if end < start:
                         raise ValueError(
-                            f"age range [{first}, {second}] selects no ages"
+                            f"age range [{start}, {end}] selects no ages"
                         )
-                    return list(range(first, second + 1))
+                    return list(range(start, end + 1))
             ages: List[int] = []
             for item in items:
                 ages.extend(ObservationFilter._age_selector_values(item))
@@ -656,6 +686,10 @@ class ObservationFilter:
             for element in elements:
                 flattened.extend(
                     ObservationFilter._age_selector_values(element)
+                )
+            if not flattened:
+                raise ValueError(
+                    "age selector selects no ages (use None for a wildcard)"
                 )
             return flattened
         raise TypeError(f"Unsupported age selector: {value!r}")
