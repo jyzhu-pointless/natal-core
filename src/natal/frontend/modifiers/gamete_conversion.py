@@ -25,8 +25,12 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.data import initialize_gamete_map
-from natal.frontend.genetics import Gene, Genotype, HaploidGenotype
+from natal.frontend.genetics import (
+    Gene,
+    Genotype,
+    HaploidGenotype,
+    initialize_gamete_map,
+)
 from natal.frontend.modifiers.conditions import Condition
 from natal.frontend.modifiers.module import (
     GameteModifier,

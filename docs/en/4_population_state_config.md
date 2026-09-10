@@ -64,7 +64,7 @@ Key differences from `PopulationState`:
 
 ## `ModelDraft`: Model Rules and Mapping Configuration
 
-`ModelDraft` is defined in `src/natal/frontend/data/config.py` and contains the fixed parameters and matrices required to run the model.
+`ModelDraft` is defined in `src/natal/frontend/model/draft.py` and contains the fixed parameters and matrices required to run the model.
 
 ### Configuration Groups
 

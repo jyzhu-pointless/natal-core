@@ -31,7 +31,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.data._engine import (
+from natal.frontend.model.ecology import (
     derive_equilibrium_metrics_from_draft,
 )
 from natal.frontend.spatial.population import DemeSlice, SpatialPopulation
@@ -641,7 +641,7 @@ class TestVariantEquilibriumDeclaration:
         on read): the declared distribution drives the competition mass
         and the egg override drives the expected survival rate.
         """
-        from natal.frontend.data._engine import (
+        from natal.frontend.model.ecology import (
             derive_equilibrium_metrics_from_draft,
         )
 

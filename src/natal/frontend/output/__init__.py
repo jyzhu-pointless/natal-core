@@ -5,7 +5,6 @@ from .history import (
     HistorySchema,
     ObservationMetadata,
     PopulationLayout,
-    SpatialHistoryLayout,
 )
 from .observation import (
     Observation,
@@ -41,7 +40,6 @@ __all__ = [
     "ObservationMetadata",
     "ObservationResult",
     "PopulationLayout",
-    "SpatialHistoryLayout",
     "apply_rule",
     "build_identity_observation",
     "discrete_population_state_to_dict",

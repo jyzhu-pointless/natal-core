@@ -14,7 +14,7 @@ from natal.frontend.builder._params import (
     compute_expected_eggs_from_females,
     resolve_carrying_capacity,
 )
-from natal.frontend.data._engine import (
+from natal.frontend.model.ecology import (
     derive_equilibrium_metrics_from_draft,
 )
 
@@ -224,8 +224,8 @@ class TestCarryingCapacityResolution:
             n_ages=n_ages,
         )
 
-        from natal.frontend.data import build_population_config
-        from natal.frontend.data._engine import equilibrium_metrics_dispatch
+        from natal.frontend.model import build_population_config
+        from natal.frontend.model.ecology import equilibrium_metrics_dispatch
 
         comp, surv = equilibrium_metrics_dispatch(
             K,
@@ -289,7 +289,7 @@ class TestCarryingCapacityResolution:
             n_ages=n_ages,
         )
 
-        from natal.frontend.data._engine import equilibrium_metrics_dispatch
+        from natal.frontend.model.ecology import equilibrium_metrics_dispatch
 
         comp, surv = equilibrium_metrics_dispatch(
             K,
@@ -626,7 +626,7 @@ class TestChamperModel:
     def test_competition_and_survival_consistency_explicit_dist(self) -> None:
         """End-to-end: the equilibrium kernel with an explicit distribution
         is self-consistent with the hand computation."""
-        from natal.frontend.data._engine import equilibrium_metrics_dispatch
+        from natal.frontend.model.ecology import equilibrium_metrics_dispatch
 
         dist = np.array([self.equilibrium_female, self.equilibrium_male], dtype=np.float64)
         mating = np.array([
@@ -659,7 +659,7 @@ class TestChamperModel:
 
     def test_competition_and_survival_external_eggs(self) -> None:
         """End-to-end: external_expected_eggs affects survival, not competition."""
-        from natal.frontend.data._engine import equilibrium_metrics_dispatch
+        from natal.frontend.model.ecology import equilibrium_metrics_dispatch
 
         dist = np.array([self.equilibrium_female, self.equilibrium_male], dtype=np.float64)
         mating = np.array([

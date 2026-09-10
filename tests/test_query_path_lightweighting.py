@@ -33,7 +33,7 @@ from natal.frontend.patterns import IndividualSelector
 
 if TYPE_CHECKING:
     from natal.backends.rust.rust_backend import RustLifecycleBackend
-    from natal.frontend.data import ModelDraft
+    from natal.frontend.model import ModelDraft
     from natal.frontend.population._params_view import ParamsView
     from natal.frontend.population.age_structured import AgeStructuredPopulation
     from natal.frontend.population.discrete_generation import (

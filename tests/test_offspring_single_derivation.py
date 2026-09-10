@@ -4,7 +4,7 @@ The derived tensor ``P[i,j,k] = Σ meiosis_f[i,a] · meiosis_m[j,b] ·
 fusion[a,b,k]`` used to be spelled independently at five call sites
 (writer channel, modifier refresh, registry compression, build-time
 maps, species blueprint).  The unification collapses them onto one wrapper,
-``natal.frontend.data._engine.recompute_offspring_tensor``, whose
+``natal.frontend.genetics.matrices.recompute_offspring_tensor``, whose
 ztype/gtype counts derive from the live table shapes.
 
 Every test here attacks one way that collapse could be wrong:
@@ -21,10 +21,11 @@ Every test here attacks one way that collapse could be wrong:
    that shares no memory with its inputs.
 4. **Negative contract**: no frontend module other than the wrapper
    spells the numeric kernel, and the writer re-exports *are* the
-   data-layer definitions (identity, not copies).
-5. **Module lifecycle**: importing ``data._config`` first (whose
-   kernel call is a lazy function-level import of ``data._engine``)
-   resolves cleanly even after ``_engine`` is evicted mid-session.
+   genetics-layer definitions (identity, not copies).
+5. **Module lifecycle**: importing the model assembly module first
+   resolves the kernel through ``genetics.matrices`` in any import
+   order — the P9 data-package split removed the former
+   ``data/_config`` ↔ ``data/_engine`` cycle, so no lazy seam remains.
 """
 
 from __future__ import annotations
@@ -417,7 +418,7 @@ class TestWrapperOwnership:
         buffer would let callers corrupt the live tables through the
         derived tensor.
         """
-        from natal.frontend.data._engine import recompute_offspring_tensor
+        from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
         meiosis, fusion = self._tables()
         meiosis_before, fusion_before = meiosis.copy(), fusion.copy()
@@ -436,7 +437,7 @@ class TestWrapperOwnership:
         contiguity guarantee would leak layout surprises into configs
         that are later written into the Rust session as flat buffers.
         """
-        from natal.frontend.data._engine import recompute_offspring_tensor
+        from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
         meiosis, fusion = self._tables()
         result = recompute_offspring_tensor(meiosis, fusion)
@@ -451,7 +452,7 @@ class TestWrapperOwnership:
         must copy; if it somehow kept a reference, mutating the result
         would scribble on the caller's table.
         """
-        from natal.frontend.data._engine import recompute_offspring_tensor
+        from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
         meiosis, fusion = self._tables()
         meiosis32 = meiosis.astype(np.float32)
@@ -475,7 +476,7 @@ class TestSingleSpellingContract:
     _FRONTEND_MODULES_THAT_MUST_NOT_SPELL_KERNEL = (
         "natal/frontend/builder/_writers.py",
         "natal/frontend/builder/_registry_builder.py",
-        "natal/frontend/data/_config.py",
+        "natal/frontend/model/assembly.py",
         "natal/frontend/genetics/structures/_mapping.py",
         "natal/frontend/spatial/population.py",
     )
@@ -498,23 +499,23 @@ class TestSingleSpellingContract:
     def test_no_frontend_module_outside_the_wrapper_spells_the_kernel(
         self,
     ) -> None:
-        """Whole-frontend scan: the kernel name exists only in ``_engine``.
+        """Whole-frontend scan: the kernel name exists only in ``matrices``.
 
-        Attack: new frontend code (not among the four replaced sites)
+        Attack: new frontend code (not among the replaced sites)
         importing the kernel directly would add a sixth spelling.
         """
         src_root = _REPO_ROOT / "src" / "natal" / "frontend"
         offenders = [
             str(path.relative_to(_REPO_ROOT / "src"))
             for path in sorted(src_root.rglob("*.py"))
-            if path.name != "_engine.py"
+            if path.name != "matrices.py"
             and "compute_offspring_probability_tensor"
             in path.read_text(encoding="utf-8")
         ]
         assert offenders == []
 
-    def test_writer_reexports_are_the_data_layer_definitions(self) -> None:
-        """``_writers`` re-exports ARE ``data._engine`` definitions.
+    def test_writer_reexports_are_the_genetics_layer_definitions(self) -> None:
+        """``_writers`` re-exports ARE ``genetics.matrices`` definitions.
 
         Attack: a re-export that accidentally redefined (or later
         shadowed) the functions locally would fork the spelling again
@@ -527,22 +528,21 @@ class TestSingleSpellingContract:
             recompute_offspring_tensor,
             validate_meiosis_table,
         )
-        from natal.frontend.data import _engine
+        from natal.frontend.genetics import matrices
 
-        assert _writers.recompute_offspring_tensor is _engine.recompute_offspring_tensor
-        assert _writers.validate_meiosis_table is _engine.validate_meiosis_table
-        assert recompute_offspring_tensor is _engine.recompute_offspring_tensor
-        assert validate_meiosis_table is _engine.validate_meiosis_table
-        # Definition point really moved to the data layer.
-        assert _engine.recompute_offspring_tensor.__module__ == (
-            "natal.frontend.data._engine"
+        assert _writers.recompute_offspring_tensor is matrices.recompute_offspring_tensor
+        assert _writers.validate_meiosis_table is matrices.validate_meiosis_table
+        assert recompute_offspring_tensor is matrices.recompute_offspring_tensor
+        assert validate_meiosis_table is matrices.validate_meiosis_table
+        # Definition point really lives in the genetics layer.
+        assert matrices.recompute_offspring_tensor.__module__ == (
+            "natal.frontend.genetics.matrices"
         )
-        assert _engine.validate_meiosis_table.__module__ == (
-            "natal.frontend.data._engine"
+        assert matrices.validate_meiosis_table.__module__ == (
+            "natal.frontend.genetics.matrices"
         )
         for name in ("recompute_offspring_tensor", "validate_meiosis_table"):
             assert name in _writers.__all__
-            assert name in _engine.__all__
 
     def test_helpers_stay_internal_to_the_package(self) -> None:
         """The moved helpers are not re-exported on the public ``natal``.
@@ -554,30 +554,38 @@ class TestSingleSpellingContract:
         assert not hasattr(nt, "validate_meiosis_table")
 
 
-# ── Module lifecycle: the lazy import inside data/_config.py ─────────────────
+# ── Module lifecycle: assembly ↔ kernel import order ─────────────────────────
 
 
 class TestModuleLifecycle:
-    """``data/_config.py`` imports the wrapper lazily; prove it resolves."""
+    """Model assembly resolves the kernel in any import order.
 
-    def test_config_first_import_and_engine_eviction_resolve(self) -> None:
-        """A fresh interpreter importing ``_config`` first stays healthy.
+    The P9 data-package split removed the former ``data/_config`` ↔
+    ``data/_engine`` import cycle (assembly now imports
+    ``genetics.matrices`` module-level, and the kernel module does not
+    import assembly), so both orders below must keep working and resolve
+    to the same definition object.
+    """
 
-        Attack: ``_config`` imports ``_engine`` only inside
-        ``build_config_maps`` while ``_engine`` imports ``_config`` at
-        module level — a real cycle if the lazy edge ever moved to
-        module scope.  Importing ``_config`` first, evicting ``_engine``
-        from ``sys.modules`` (simulating a partially initialized or
-        reloaded state), and re-resolving must produce a working
-        derivation whose module is the data layer's.
+    @pytest.mark.parametrize("order", ["assembly-first", "kernel-first"])
+    def test_import_order_resolves_single_kernel_definition(
+        self, order: str
+    ) -> None:
+        """Both import orders resolve one kernel definition (no stale copy).
+
+        Attack: a reintroduced import cycle could leave a partially
+        initialized module whose re-resolved function object differs from
+        the one the population build captured.
         """
+        first, second = (
+            ("natal.frontend.model.assembly", "natal.frontend.genetics.matrices")
+            if order == "assembly-first"
+            else ("natal.frontend.genetics.matrices", "natal.frontend.model.assembly")
+        )
         program = (
-            "import sys\n"
-            "import natal.frontend.data._config as cfg\n"
-            "assert 'natal.frontend.data._engine' in sys.modules\n"
-            "del sys.modules['natal.frontend.data._engine']\n"
-            "del sys.modules['natal.frontend.data._builders']\n"
-            "import natal.frontend.data._engine as eng\n"
+            f"import {first}\n"
+            f"import {second}\n"
+            "import natal.frontend.genetics.matrices as eng\n"
             "import numpy as np\n"
             "m = np.full((2, 3, 3), 1.0 / 3.0)\n"
             "f = np.zeros((3, 3, 3))\n"
@@ -585,11 +593,10 @@ class TestModuleLifecycle:
             "    f[a, a, a] = 1.0\n"
             "out = eng.recompute_offspring_tensor(m, f)\n"
             "assert eng.recompute_offspring_tensor.__module__ == "
-            "'natal.frontend.data._engine'\n"
+            "'natal.frontend.genetics.matrices'\n"
             "assert out.shape == (3, 3, 3)\n"
             "ref = np.einsum('ia,jb,abk->ijk', m[0], m[1], f)\n"
             "assert np.array_equal(out, ref)\n"
-            "assert cfg.build_config_maps is not None\n"
             "print('lifecycle-ok')\n"
         )
         result = subprocess.run(
@@ -602,17 +609,18 @@ class TestModuleLifecycle:
         assert result.returncode == 0, result.stderr
         assert "lifecycle-ok" in result.stdout
 
-    def test_config_first_import_builds_exact_tensor(self) -> None:
-        """Building via a ``_config``-first interpreter matches einsum.
+    def test_assembly_first_import_builds_exact_tensor(self) -> None:
+        """Building via an assembly-first interpreter matches einsum.
 
-        Attack: if the lazy import resolved to a different module object
-        than the one the population build uses, the build-time
-        derivation could silently route through a stale definition.
-        Importing ``_config`` before anything else and then building the
-        multi-label population must still produce the exact tensor.
+        Attack: if the assembly module resolved the kernel to a different
+        module object than the one the population build uses, the
+        build-time derivation could silently route through a stale
+        definition.  Importing the assembly module before anything else
+        and then building the multi-label population must still produce
+        the exact tensor.
         """
         program = (
-            "import natal.frontend.data._config\n"
+            "import natal.frontend.model.assembly\n"
             "import numpy as np\n"
             "import natal as nt\n"
             "sp = nt.Species.from_dict(\n"
@@ -666,17 +674,18 @@ class TestRustKernelSingleDispatch:
         fallback — with the extension unavailable the documented behavior
         is a loud failure, not a second numeric implementation.
         """
-        import natal.frontend.data._engine as engine_module
+        import natal.frontend.genetics.matrices as kernel_module
+        import natal.frontend.model.ecology as ecology_module
 
         saved = sys.modules.get("natal._engine_rs")
         sys.modules["natal._engine_rs"] = None  # import -> ImportError
         try:
             with pytest.raises(ImportError):
-                engine_module.recompute_offspring_tensor(
+                kernel_module.recompute_offspring_tensor(
                     np.ones((2, 3, 4)), np.zeros((4, 4, 3))
                 )
             with pytest.raises(ImportError):
-                engine_module.equilibrium_metrics_dispatch(
+                ecology_module.equilibrium_metrics_dispatch(
                     400.0,
                     30.0,
                     0.5,
@@ -702,7 +711,7 @@ class TestRustKernelSingleDispatch:
         the direct kernel call exactly (identity of code path, not just
         of values).
         """
-        from natal.frontend.data._engine import _rust_offspring_kernel
+        from natal.frontend.genetics.matrices import _rust_offspring_kernel
 
         rng = np.random.default_rng(99)
         meiosis = np.ascontiguousarray(rng.random((2, 4, 3)))
@@ -948,7 +957,7 @@ class TestRustKernelAdversarialParity:
         wrapper is documented pure, so inputs must survive the raise
         bit-identically on *both* dispatch branches.
         """
-        from natal.frontend.data._engine import recompute_offspring_tensor
+        from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
         meiosis = np.ones((2, 3, 4))
         fusion = np.zeros((4, 4, 4))
@@ -997,7 +1006,7 @@ class TestRustKernelAdversarialParity:
         values.  Comparing against the *independent* pure-Python spelling
         also catches a wrapper that merely round-trips its own output.
         """
-        from natal.frontend.data._engine import recompute_offspring_tensor
+        from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
         rng = np.random.default_rng(99)
         meiosis = rng.random((2, 4, 3))
@@ -1038,7 +1047,7 @@ class TestEquilibriumKernelParity:
         branches plus the None-vs-resolved draft comparison pins the row
         choice.
         """
-        from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
+        from natal.frontend.model.ecology import derive_equilibrium_metrics_from_draft
 
         sp = nt.Species.from_dict(
             name="__eq_none_repro_species__",
@@ -1533,7 +1542,7 @@ def _age_build_cases() -> list[_AgeBuildCase]:
 
 def _build_age_draft(case: _AgeBuildCase) -> nt.ModelDraft:
     """Run one matrix case through the public age-structured builder."""
-    from natal.frontend.data._config import build_population_config
+    from natal.frontend.model.assembly import build_population_config
 
     return build_population_config(
         n_genotypes=3,
@@ -1561,7 +1570,7 @@ def _pack_metrics(metrics: tuple[float, float]) -> tuple[bytes, bytes]:
 
 def _draft_metrics(draft: nt.ModelDraft) -> tuple[float, float]:
     """The equilibrium metrics derived from a draft's own ecology."""
-    from natal.frontend.data._engine import (
+    from natal.frontend.model.ecology import (
         derive_equilibrium_metrics_from_draft,
     )
 
@@ -1600,7 +1609,7 @@ class TestBuildPathEquilibriumDispatch:
         invariant, the built draft (reproduction stored non-None) is a
         fixed point of sync.
         """
-        from natal.frontend.data._engine import (
+        from natal.frontend.model.ecology import (
             derive_equilibrium_metrics_from_draft,
         )
 
@@ -1652,7 +1661,7 @@ class TestBuildPathEquilibriumDispatch:
         """
         if _load_equilibrium_kernel() is None:
             pytest.skip("rust extension not built")
-        from natal.frontend.data._engine import equilibrium_metrics_dispatch
+        from natal.frontend.model.ecology import equilibrium_metrics_dispatch
 
         survival = np.array([[0.9, 0.8, 0.7], [0.85, 0.75, 0.65]])
         reproduction = np.array([0.0, 0.8, 0.6])
@@ -1722,7 +1731,7 @@ class TestBuildPathEquilibriumDispatch:
         """
         if _load_equilibrium_kernel() is None:
             pytest.skip("rust extension not built")
-        from natal.frontend.data._engine import equilibrium_metrics_dispatch
+        from natal.frontend.model.ecology import equilibrium_metrics_dispatch
 
         survival = np.array([[0.9, 0.8, 0.7], [0.85, 0.75, 0.65]])
         reproduction = np.array([0.0, 0.8, 0.6])

@@ -29,6 +29,17 @@ from .entities.haplotype import (
     create_chromosome_from_allele_names,
     create_haplotype_from_allele_names,
 )
+from .extract import (
+    extract_gamete_frequencies,
+    extract_gamete_frequencies_by_glab,
+    extract_zygote_frequencies,
+)
+from .matrices import (
+    compress_hl,
+    decompress_hl,
+    initialize_gamete_map,
+    initialize_zygote_map,
+)
 from .structures._helpers import build_compression_mask
 from .structures._types import SexChromosomeType
 from .structures.chromosome import Chromosome
@@ -70,4 +81,13 @@ __all__ = [
     "compute_recombinant_haplotypes",
     "compute_recombinant_haplotypes_with_alleles",
     "build_compression_mask",
+    # matrices.py — inheritance-map constructors and compressed indexes
+    "initialize_zygote_map",
+    "initialize_gamete_map",
+    "compress_hl",
+    "decompress_hl",
+    # extract.py — frequency readers over the maps
+    "extract_gamete_frequencies",
+    "extract_gamete_frequencies_by_glab",
+    "extract_zygote_frequencies",
 ]

@@ -50,7 +50,7 @@ from natal.backends.rust.rust_backend import (
 )
 from natal.contracts.materialize import SpatialMigration, materialize
 from natal.contracts.params import Params
-from natal.frontend.data.config import ModelDraft
+from natal.frontend.model.draft import ModelDraft
 from natal.frontend.spatial.builder import batch_setting
 
 pytestmark = pytest.mark.skipif(

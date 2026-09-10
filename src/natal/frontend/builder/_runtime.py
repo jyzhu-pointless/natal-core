@@ -35,22 +35,22 @@ from natal.frontend.builder._writers import (
     AuditValue,
     CoreConfigWriter,
 )
-from natal.frontend.data import ModelDraft
 from natal.frontend.genetics.compile import next_modifier_id
 from natal.frontend.genetics.definition_compiler import (
     FITNESS_FIELDS,
     CompiledProducts,
     compile_definition,
 )
+from natal.frontend.model import ModelDraft
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
     from natal.frontend.builder._writers import SessionChannel
-    from natal.frontend.data.definition import ModelDefinition
     from natal.frontend.genetics import Species
     from natal.frontend.genetics.compile import GameteList, ZygoteList
     from natal.frontend.hooks._transaction import EventTransaction
     from natal.frontend.hooks.tick_context import TickContext
+    from natal.frontend.model.definition import ModelDefinition
     from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
     from natal.frontend.population.base import BasePopulation
     from natal.frontend.presets import GeneticPreset
@@ -707,7 +707,7 @@ def build_runtime_definition(
         The frozen declaration handed to the compiler or published as
         ``_current_definition``.
     """
-    from natal.frontend.data.definition import ModelDefinition
+    from natal.frontend.model.definition import ModelDefinition
 
     return ModelDefinition(
         species,
@@ -1321,7 +1321,7 @@ class RuntimeUpdater:
             TypeError: If a value's type is unsupported (zero writes).
             RuntimeError: If the commit target is unavailable.
         """
-        from natal.frontend.data import build_custom_slots
+        from natal.frontend.model import build_custom_slots
 
         target = self._resolve_target()
         current = target.live_draft()

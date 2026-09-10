@@ -70,9 +70,9 @@ from natal.frontend.builder._writers import (
     CoreConfigWriter,
     DraftWriter,
 )
-from natal.frontend.data import ModelDraft, build_population_config
+from natal.frontend.model import ModelDraft, build_population_config
 from natal.frontend.utils.parameters import ParamDescriptor
-from natal.frontend.data._engine import derive_equilibrium_metrics_from_draft
+from natal.frontend.model.ecology import derive_equilibrium_metrics_from_draft
 
 # ── markers and shared builders ───────────────────────────────────────────────
 

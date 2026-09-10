@@ -37,7 +37,7 @@ from natal.frontend.builder import PopulationBuilder
 from natal.frontend.builder import _base as builder_base
 from natal.frontend.builder import _registry_builder as registry_builder
 from natal.frontend.builder._registry_builder import rebuild_config_maps
-from natal.frontend.data import ModelDraft
+from natal.frontend.model import ModelDraft
 from natal.frontend.genetics.compile import RecipeHost
 from natal.frontend.modifiers.module import GameteModifier
 from natal.frontend.registry.index import IndexRegistry

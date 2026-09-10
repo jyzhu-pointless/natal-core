@@ -19,10 +19,12 @@ from natal._engine_rs import HistoryStore, ParameterLog
 from natal.contracts.materialize import Materialized, materialize
 from natal.frontend.data import (
     DiscretePopulationState,
-    ModelDraft,
     PopulationState,
 )
 from natal.frontend.hooks.types import ECO_PARAM_NAMES
+from natal.frontend.model import (
+    ModelDraft,
+)
 
 if TYPE_CHECKING:
     from natal.contracts.params import Params

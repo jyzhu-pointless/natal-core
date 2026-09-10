@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import natal as nt
 from natal.frontend.builder import set_param
-from natal.frontend.data import BEVERTON_HOLT
 from natal.frontend.hooks.tick_context import TickContext
+from natal.frontend.model import BEVERTON_HOLT
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 0. 准备 Species

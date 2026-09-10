@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Mapping
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.data import ModelDraft
 from natal.frontend.genetics import Species
+from natal.frontend.model import ModelDraft
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:

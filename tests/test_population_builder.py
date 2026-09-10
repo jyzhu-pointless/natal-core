@@ -7,8 +7,8 @@ from tests._config_assertions import assert_config_equal
 
 import natal as nt
 from natal.frontend.builder import PopulationBuilder, set_param
-from natal.frontend.data import build_custom_slots, build_population_config
-from natal.frontend.data._engine import (
+from natal.frontend.model import build_custom_slots, build_population_config
+from natal.frontend.model.ecology import (
     derive_equilibrium_metrics_from_draft,
 )
 from natal.frontend.patterns import IndividualSelector
@@ -748,7 +748,7 @@ class TestFitnessFormats:
 
 class TestFromSpeciesDiscrete:
     def test_returns_discrete_builder(self, species):
-        from natal.frontend.data import ModelDraft
+        from natal.frontend.model import ModelDraft
 
         cfg = PopulationBuilder.from_species(species, discrete=True)
         assert type(cfg) is PopulationBuilder

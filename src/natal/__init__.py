@@ -74,12 +74,7 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "dispatch", "set_param",
     ],
     "frontend.data": [
-        "ModelDefinition", "ModelDraft", "NO_COMPETITION", "FIXED", "LOGISTIC",
-        "LINEAR", "BEVERTON_HOLT", "PopulationState", "DiscretePopulationState",
-        "extract_gamete_frequencies", "extract_gamete_frequencies_by_glab",
-        "extract_zygote_frequencies", "build_population_config",
-        "build_discrete_engine_config", "build_custom_slots", "initialize_zygote_map",
-        "initialize_gamete_map", "compress_hl", "decompress_hl", "compress_config",
+        "PopulationState", "DiscretePopulationState",
         "parse_flattened_state", "parse_flattened_discrete_state",
     ],
     "frontend.fitness": ["apply_preset_fitness_patch", "write_fitness_field"],
@@ -90,7 +85,9 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "DiploidGenotype", "GenomeTemplate", "Karyotype",
         "create_haplotype_from_allele_names", "create_chromosome_from_allele_names",
         "compute_recombinant_haplotypes", "compute_recombinant_haplotypes_with_alleles",
-        "build_compression_mask",
+        "build_compression_mask", "initialize_zygote_map", "initialize_gamete_map",
+        "compress_hl", "decompress_hl", "extract_gamete_frequencies",
+        "extract_gamete_frequencies_by_glab", "extract_zygote_frequencies",
     ],
     "frontend.hooks": [
         "OpType", "DemeSelector", "deme_selector_matches", "HookLayout", "HookOp", "Op",
@@ -102,6 +99,11 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "COND_OP_OR", "COND_OP_NOT", "EVENT_FIRST", "EVENT_EARLY", "EVENT_LATE",
         "EVENT_FINISH", "EVENT_NAMES", "EVENT_ID_MAP", "NUM_EVENTS", "RESULT_CONTINUE",
         "RESULT_SKIP", "RESULT_STOP", "parse_condition",
+    ],
+    "frontend.model": [
+        "ModelDefinition", "ModelDraft", "NO_COMPETITION", "FIXED", "LOGISTIC",
+        "LINEAR", "BEVERTON_HOLT", "build_population_config",
+        "build_discrete_engine_config", "build_custom_slots", "compress_config",
     ],
     "frontend.modifiers": [
         "build_modifier_wrappers", "evaluate_genotype_filter",
@@ -115,7 +117,7 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     ],
     "frontend.output": [
         "History", "HistorySchema", "Observation", "ObservationMetadata",
-        "ObservationResult", "PopulationLayout", "SpatialHistoryLayout", "apply_rule",
+        "ObservationResult", "PopulationLayout", "apply_rule",
         "build_identity_observation", "discrete_population_state_to_dict",
         "discrete_population_state_to_json", "population_history_to_readable_dict",
         "population_history_to_readable_json",

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from natal.frontend.data import ModelDraft
+from natal.frontend.model import ModelDraft
 
 
 def assert_config_equal(actual: ModelDraft, expected: ModelDraft) -> None:

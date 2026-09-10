@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.data import DiscretePopulationState, ModelDraft
+from natal.frontend.model import ModelDraft
+from natal.frontend.data import DiscretePopulationState
 from tests._config_assertions import assert_config_equal
 
 

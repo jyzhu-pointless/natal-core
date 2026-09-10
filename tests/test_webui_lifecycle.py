@@ -357,6 +357,14 @@ def test_reset_then_play_reruns_from_zero() -> None:
                     break
             ws.send_json({"type": "play"})
             _wait_for_status(pump, "running")
+            # "running" only means the loop started; wait until at least one
+            # replayed tick lands so the pause cannot race the first step
+            # (the invariant below demands tick >= 1).
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                if client.get("/api/meta").json()["tick"] >= 1:
+                    break
+                time.sleep(0.01)
             ws.send_json({"type": "pause"})
             _wait_for_status(pump, "ready")
             tick = client.get("/api/meta").json()["tick"]

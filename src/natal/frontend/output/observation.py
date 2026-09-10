@@ -1,21 +1,23 @@
-"""Observation rules: compile group specs into numerical masks.
+"""Observation rules: compile selection rules into numerical masks.
 
 The module provides :class:`Observation` (frozen projection rule with
 baked mask), :class:`ObservationResult` (result of projecting current
-state), :class:`ObservationFilter` (compiler for group specs and
-:class:`IndividualSelector`-based groups), :func:`apply_rule`
+state), :class:`ObservationFilter` (compiler whose single selection
+representation is :class:`IndividualSelector`; legacy dictionary group
+spellings are normalized to selectors at the :meth:`ObservationFilter.build_filter`
+boundary), :func:`apply_rule`
 (standalone projection through the shared Rust implementation), and :func:`build_identity_observation`
 (identity observation, one group per active ZType).
 """
 
 from __future__ import annotations
 
+import numbers
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Dict,
     Iterable,
     List,
@@ -25,6 +27,7 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    cast,
 )
 
 import numpy as np
@@ -34,7 +37,6 @@ from natal.frontend.registry.index import IndexRegistry
 from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
-    from natal.frontend.genetics import Species
     from natal.frontend.patterns.individual_selector import IndividualSelector
 
 __all__ = [
@@ -45,24 +47,19 @@ __all__ = [
     "build_identity_observation",
 ]
 
-# ── Legacy type aliases (kept for backward compat) ───────────────────────────
+# ── Input type aliases (boundary spellings) ──────────────────────────────────
 
-AgeSpec = Optional[
-    Union[
-        Iterable[int],
-        Tuple[int, int],
-        Callable[[int], bool],
-        Iterable[Tuple[int, int]],
-    ]
-]
-
-SexSpec = Optional[Union[str, int, Sex, Iterable[Union[str, int, Sex]]]]
-GroupSpecDict = Dict[str, Any]  # Any: user-specified group values (str, int, list[str], ...)
+# One legacy group entry: an IndividualSelector, a legacy ``{genotype, sex,
+# age}`` dictionary, or a duck-typed object with those attributes.  ``Any``
+# is intentional: user-specified group values are heterogeneous
+# (str, int, list[str], callables are rejected at the boundary).
+GroupSpecDict = Dict[str, Any]
 GroupsInput = Optional[
     Union[
         List[GroupSpecDict],
         Tuple[GroupSpecDict, ...],
-        Dict[str, GroupSpecDict],
+        Mapping[str, GroupSpecDict],
+        Mapping[str, "IndividualSelector"],
     ]
 ]
 
@@ -147,15 +144,13 @@ class Observation:
             non-spatial Observation.
         deme_mode: Whether a spatial projection preserves or aggregates the
             selected deme axis.
-        specs: Internal group specifications (removed in Phase 8).
-        _selectors: ``IndividualSelector``-based group selectors
-            (populated by the new :meth:`ObservationFilter.build_from_selectors`).
+        _selectors: ``IndividualSelector`` group selectors, one per group.
         _is_identity: ``True`` when this is an identity observation
             (one group per ZType, no dense mask).
         _identity_map: ``(n_groups,)`` int32 array mapping group index
             to ZType index.  Only set for identity observations.
         _registry: Optional :class:`IndexRegistry` reference for lazy
-            mask rebuild (legacy path).
+            mask rebuild.
     """
 
     labels: Tuple[str, ...]
@@ -164,7 +159,6 @@ class Observation:
     population_fingerprint: str = ""
     deme_indices: Optional[Tuple[int, ...]] = None
     deme_mode: Literal["preserve", "aggregate"] = "preserve"
-    specs: Tuple[Tuple[str, Dict[str, Any]], ...] = field(default=())  # Any: group spec values (str, int, list[str])
     _selectors: Optional[Tuple[IndividualSelector, ...]] = field(
         default=None, repr=False
     )
@@ -277,25 +271,20 @@ class Observation:
             Rebuilt floating-point selection mask.
 
         Raises:
-            ValueError: If this observation has no registry reference.
+            ValueError: If this observation has no registry reference or
+                no stored selectors.
         """
         registry = self._registry
         if registry is None:
             raise ValueError("Cannot rebuild mask: no registry reference stored")
+        if self._selectors is None:
+            raise ValueError("Cannot rebuild mask: no selectors stored")
         compiler = ObservationFilter(registry)
-        if self._selectors is not None:
-            return compiler.build_mask_from_selectors(
-                n_sexes=n_sexes,
-                n_ages=n_ages,
-                n_ztypes=n_ztypes,
-                selectors=self._selectors,
-                collapse_age=collapse_age,
-            )
-        return compiler.build_mask_from_specs(
+        return compiler.build_mask_from_selectors(
             n_sexes=n_sexes,
             n_ages=n_ages,
             n_ztypes=n_ztypes,
-            specs=self.specs,
+            selectors=self._selectors,
             collapse_age=collapse_age,
         )
 
@@ -352,13 +341,14 @@ class Observation:
 
 
 class ObservationFilter:
-    """Compile group specs into a frozen :class:`Observation`.
+    """Compile group selections into a frozen :class:`Observation`.
 
-    Supports both the legacy dict-based group format (e.g.
-    ``{"age": [2,3,4], "genotype": ["WT|WT"], "sex": ["male"]}``)
-    and the new :class:`IndividualSelector`-based format via
-    :meth:`build_from_selectors` (e.g.
-    ``IndividualSelector(ztype="*|Drive", sex="female")``).
+    The single selection representation is :class:`IndividualSelector`
+    (:meth:`build_from_selectors`).  :meth:`build_filter` is the boundary
+    that normalizes legacy spellings — the dict-based group format (e.g.
+    ``{"age": [2,3,4], "genotype": ["WT|WT"], "sex": ["male"]}``), ordered
+    group sequences, and ``None`` identity groups — into selectors before
+    compilation.
     """
 
     def __init__(self, registry: IndexRegistry) -> None:
@@ -404,7 +394,7 @@ class ObservationFilter:
                 return None
         return diploid_genotypes
 
-    # ── New: IndividualSelector-based mask build ──────────────────────────
+    # ── Selector mask compilation ─────────────────────────────────────────
 
     def build_mask_from_selectors(
         self,
@@ -528,291 +518,288 @@ class ObservationFilter:
             _registry=self.registry,
         )
 
-    # ── Legacy dict-based methods ────────────────────────────────────────
+    # ── Legacy-spelling boundary normalization ────────────────────────────
 
-    @staticmethod
-    def _normalize_group_specs(
-        groups: GroupsInput,
-        diploid_genotypes: Optional[Sequence[Any]],  # Any: duck-typed genotype objects
-    ) -> Tuple[List[Tuple[str, Dict[str, Any]]], Tuple[str, ...]]:  # Any: group spec values
-        """Normalize legacy observation groups to labeled dictionaries.
+    def _genotype_patterns(
+        self,
+        value: object,  # object: legacy genotype spec (str, int, list, or None)
+        registry: IndexRegistry,
+    ) -> List[str]:
+        """Convert a legacy genotype selector into canonical pattern strings.
+
+        An empty result means a wildcard (every ZType).
 
         Args:
-            groups: Legacy group mapping or ordered group sequence.
-            diploid_genotypes: Genotypes used to construct identity groups.
+            value: ``None``, ``"*"``, an integer registry genotype index, a
+                pattern string, a duck-typed pattern object, or a sequence
+                of those.
+            registry: Registry providing the compressed genotype directory.
 
         Returns:
-            Normalized labeled specs and their labels.
+            Pattern strings (empty list for a wildcard).
+
+        Raises:
+            TypeError: If an entry is not a supported genotype selector.
+        """
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple, set)):
+            container = cast("Sequence[object]", value)
+            if len(container) == 0:
+                raise ValueError(
+                    "genotype selector selects no genotypes (use None or "
+                    "'*' for a wildcard)"
+                )
+        entries: List[Any] = (  # Any: heterogeneous legacy genotype entries
+            list(cast("Iterable[Any]", value))
+            if isinstance(value, (list, tuple, set))
+            else [value]
+        )
+        patterns: List[str] = []
+        for entry in entries:
+            if entry == "*":
+                return []
+            if isinstance(entry, bool):
+                raise TypeError(f"Unsupported genotype selector: {entry!r}")
+            if isinstance(entry, numbers.Integral):
+                # Compressed genotype index (int or numpy integer): matches
+                # every slab of the genotype at that registry position (a
+                # bare pattern string resolves the same way — slab-less
+                # patterns match all slabs).
+                patterns.append(str(registry.index_to_genotype[int(entry)]))
+            elif isinstance(entry, str):
+                patterns.append(entry)
+            elif getattr(entry, "genotype", None) is not None:
+                # Duck-typed ZygoteTypePattern.
+                patterns.append(str(entry))
+            else:
+                # Legacy acceptance: Genotype objects (and other stringable
+                # entries) parse through their label; invalid labels still
+                # fail loudly at pattern resolution.
+                patterns.append(str(entry))
+        return patterns
+
+    @staticmethod
+    def _flatten_sex_values(value: object) -> List[Union[str, int]]:
+        """Flatten a legacy sex selector into explicit values.
+
+        Numeric strings keep their legacy integer semantics; unknown sex
+        labels are rejected by the :class:`IndividualSelector` constructor.
+
+        Args:
+            value: ``None``, a sex label/int/enum, or a nested iterable.
+
+        Returns:
+            Flat list of sex values; empty list for a wildcard.
+
+        Raises:
+            TypeError: If an entry is not a supported sex selector.
+        """
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple, set)):
+            container = cast("Sequence[object]", value)
+            if len(container) == 0:
+                raise ValueError(
+                    "sex selector selects no sexes (use None for a wildcard)"
+                )
+        if isinstance(value, str):
+            try:
+                return [int(value)]
+            except ValueError:
+                return [value]
+        if isinstance(value, (int, Sex)):
+            return [int(value)]
+        if isinstance(value, Iterable):
+            values = cast("Iterable[object]", value)
+            flat: List[Union[str, int]] = []
+            for item in values:
+                flat.extend(ObservationFilter._flatten_sex_values(item))
+            if not flat:
+                raise ValueError(
+                    "sex selector selects no sexes (use None for a wildcard)"
+                )
+            return flat
+        raise TypeError(f"Unsupported sex selector: {value!r}")
+
+    @staticmethod
+    def _age_selector_values(value: object) -> List[int]:
+        """Flatten a legacy age selector into explicit age indices.
+
+        A two-integer ``(start, end)`` list/tuple is an **inclusive** range
+        (the legacy spelling); nested pairs expand the same way.  Invalid
+        pairs (``end < start``) raise instead of silently selecting nothing.
+
+        Args:
+            value: ``None``, an integer, a pair, or an iterable of
+                integers and pairs.
+
+        Returns:
+            Flat list of age indices; empty list for a wildcard.
+
+        Raises:
+            TypeError: If the selector is a callable or an unsupported type.
+            ValueError: If an inclusive range is empty.
+        """
+        if value is None:
+            return []
+        if callable(value):
+            raise TypeError(
+                "Callable age selectors are not part of the unified "
+                f"IndividualSelector representation: {value!r}"
+            )
+        if isinstance(value, (str, bytes)):
+            # Strings are iterable but are never age selectors; rejecting
+            # them here keeps the Iterable branch below from recursing.
+            raise TypeError(f"Unsupported age selector: {value!r}")
+        if isinstance(value, bool):
+            raise TypeError(f"Unsupported age selector: {value!r}")
+        if isinstance(value, numbers.Integral):
+            return [int(value)]
+        if isinstance(value, (list, tuple)):
+            items = cast("Sequence[object]", value)
+            if len(items) == 0:
+                raise ValueError(
+                    "age selector selects no ages (use None for a wildcard)"
+                )
+            if len(items) == 2:
+                first: object = items[0]
+                second: object = items[1]
+                # Bools register as Integral at runtime (True would parse
+                # as age 1); reject them before the Integral narrowing.
+                if type(first) is bool or type(second) is bool:
+                    raise TypeError(
+                        f"Unsupported age selector: {[first, second]!r}"
+                    )
+                if isinstance(first, numbers.Integral) and isinstance(
+                    second, numbers.Integral
+                ):
+                    start, end = int(first), int(second)
+                    if end < start:
+                        raise ValueError(
+                            f"age range [{start}, {end}] selects no ages"
+                        )
+                    return list(range(start, end + 1))
+            ages: List[int] = []
+            for item in items:
+                ages.extend(ObservationFilter._age_selector_values(item))
+            return ages
+        if isinstance(value, Iterable):
+            flattened: List[int] = []
+            elements = cast("Iterable[object]", value)
+            for element in elements:
+                flattened.extend(
+                    ObservationFilter._age_selector_values(element)
+                )
+            if not flattened:
+                raise ValueError(
+                    "age selector selects no ages (use None for a wildcard)"
+                )
+            return flattened
+        raise TypeError(f"Unsupported age selector: {value!r}")
+
+    def _spec_to_selector(
+        self,
+        spec: object,  # object: selector, legacy dict, or duck-typed group
+        registry: IndexRegistry,
+    ) -> IndividualSelector:
+        """Convert one legacy group entry into an :class:`IndividualSelector`.
+
+        ``IndividualSelector`` values pass through unchanged.  Dictionary
+        and duck-typed entries combine their ``genotype``/``sex``/``age``
+        fields exactly like the legacy compiler: genotype alternatives
+        OR-combine, sex and age AND-combine with them.
+
+        Args:
+            spec: Group entry to convert.
+            registry: Registry for genotype-index resolution.
+
+        Returns:
+            The unified selector.
+
+        Raises:
+            TypeError: If the entry spelling is unsupported.
+        """
+        from natal.frontend.patterns.individual_selector import IndividualSelector
+
+        if isinstance(spec, IndividualSelector):
+            return spec
+        if isinstance(spec, Mapping):
+            # Legacy dict spelling: keyed by the documented selector names.
+            # ``is None`` (not ``or``) so falsy values — the empty container
+            # and the bare genotype index 0 — reach their selector branches.
+            source = cast("Mapping[str, object]", spec)
+            genotype = source.get("genotype")
+            if genotype is None:
+                genotype = source.get("genotypes")
+            sex = source.get("sex")
+            age = source.get("age")
+        elif hasattr(spec, "genotype") or hasattr(spec, "age") or hasattr(spec, "sex"):
+            genotype = getattr(spec, "genotype", None)
+            sex = getattr(spec, "sex", None)
+            age = getattr(spec, "age", None)
+        else:
+            raise TypeError(f"Unsupported observation group entry: {spec!r}")
+
+        sex_values = self._flatten_sex_values(sex)
+        age_values = self._age_selector_values(age)
+        patterns = self._genotype_patterns(genotype, registry)
+        if not patterns:
+            return IndividualSelector(
+                sex=sex_values or None, age=age_values or None
+            )
+        merged = IndividualSelector(
+            ztype=patterns[0], sex=sex_values or None, age=age_values or None
+        )
+        for pattern in patterns[1:]:
+            merged = merged | IndividualSelector(
+                ztype=pattern, sex=sex_values or None, age=age_values or None
+            )
+        return merged
+
+    def _normalize_groups_to_selectors(
+        self,
+        groups: GroupsInput,
+        diploid_genotypes: Optional[Sequence[Any]],  # Any: duck-typed genotype list
+    ) -> Dict[str, IndividualSelector]:
+        """Normalize every accepted group spelling to labeled selectors.
+
+        Args:
+            groups: ``None`` (identity groups over *diploid_genotypes*),
+                an ordered sequence, or a label mapping.
+            diploid_genotypes: Genotypes used to build identity groups.
+
+        Returns:
+            Insertion-ordered mapping of labels to selectors.
 
         Raises:
             ValueError: If identity groups are requested without genotypes.
+            TypeError: If the input shape is unsupported.
         """
-        specs: List[Tuple[str, Dict[str, Any]]] = []  # Any: group spec values
-
         if groups is None:
             if diploid_genotypes is None:
                 raise ValueError("diploid_genotypes required when groups is None")
-            labels = tuple(f"g{g}" for g in range(len(diploid_genotypes)))
-            return (
-                [
-                    (label, {"genotype": [index]})
-                    for index, label in enumerate(labels)
-                ],
-                labels,
+            from natal.frontend.patterns.individual_selector import (
+                IndividualSelector,
             )
 
+            return {
+                f"g{index}": IndividualSelector(
+                    ztype=str(self.registry.index_to_genotype[index])
+                )
+                for index in range(len(diploid_genotypes))
+            }
         if isinstance(groups, (list, tuple)):
-            for i, item in enumerate(groups):
-                name = f"group_{i}"
-                if isinstance(
-                    item, dict
-                ):  # type: ignore[reportUnnecessaryIsInstance]  # GroupSpec may also be passed
-                    specs.append((name, item))
-                elif (
-                    hasattr(item, "genotype")
-                    or hasattr(item, "age")
-                    or hasattr(item, "sex")
-                ):
-                    spec_dict: Dict[str, Any] = {}  # Any: group spec values (str, int, list[str])
-                    if (
-                        hasattr(item, "genotype") and item.genotype is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    ):
-                        spec_dict["genotype"] = item.genotype  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    if (
-                        hasattr(item, "age") and item.age is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    ):
-                        spec_dict["age"] = item.age  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    if (
-                        hasattr(item, "sex") and item.sex is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    ):
-                        spec_dict["sex"] = item.sex  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    specs.append((name, spec_dict))
-                else:
-                    specs.append((name, item))
-            return specs, tuple(name for name, _ in specs)
-
-        else:
-            for name, item in groups.items():
-                if (
-                    hasattr(item, "genotype")
-                    or hasattr(item, "age")
-                    or hasattr(item, "sex")
-                ):
-                    spec_dict = {}
-                    if (
-                        hasattr(item, "genotype") and item.genotype is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    ):
-                        spec_dict["genotype"] = item.genotype  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    if (
-                        hasattr(item, "age") and item.age is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    ):
-                        spec_dict["age"] = item.age  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    if (
-                        hasattr(item, "sex") and item.sex is not None  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    ):
-                        spec_dict["sex"] = item.sex  # type: ignore[union-attr]  # duck-typed GroupSpec
-                    specs.append((str(name), spec_dict))
-                else:
-                    specs.append((str(name), item))
-            return specs, tuple(name for name, _ in specs)
-
-    def build_mask_from_specs(
-        self,
-        *,
-        n_sexes: int,
-        n_ages: int,
-        n_ztypes: int,
-        specs: Tuple[Tuple[str, Dict[str, Any]], ...],  # Any: group spec values
-        collapse_age: bool,
-    ) -> NDArray[np.float64]:
-        """Compile legacy group dictionaries into a numerical mask.
-
-        Args:
-            n_sexes: Number of sex entries.
-            n_ages: Number of age entries.
-            n_ztypes: Number of ZType entries.
-            specs: Labeled legacy group specifications.
-            collapse_age: Whether to omit the age axis from the mask.
-
-        Returns:
-            Binary floating-point mask indexed by group and selected axes.
-        """
-        per_ztypes: List[List[int]] = []
-        per_sexes: List[List[int]] = []
-        per_age_preds: List[Callable[[int], bool]] = []
-
-        for _, spec in specs:
-            gen_spec = self._get_gen_spec(spec)
-            z_list = self._resolve_ztype_indices_from_spec(gen_spec, n_ztypes)
-            per_ztypes.append(z_list)
-
-            sex_spec = self._get_sex_spec(spec)
-            per_sexes.append(self._resolve_sexes(sex_spec, n_sexes))
-
-            age_spec = self._get_age_spec(spec)
-            per_age_preds.append(self._make_age_predicate(age_spec))
-
-        n_groups = len(specs)
-        if not collapse_age:
-            mask = np.zeros(
-                (n_groups, n_sexes, n_ages, n_ztypes), dtype=np.float64
-            )
-            for gi in range(n_groups):
-                for zidx in per_ztypes[gi]:
-                    for s in per_sexes[gi]:
-                        for a in range(n_ages):
-                            if per_age_preds[gi](a):
-                                mask[gi, s, a, zidx] = 1.0
-            return mask
-
-        mask = np.zeros((n_groups, n_sexes, n_ztypes), dtype=np.float64)
-        for gi in range(n_groups):
-            for zidx in per_ztypes[gi]:
-                for s in per_sexes[gi]:
-                    any_selected = False
-                    for a in range(n_ages):
-                        if per_age_preds[gi](a):
-                            any_selected = True
-                            break
-                    mask[gi, s, zidx] = 1.0 if any_selected else 0.0
-        return mask
-
-    @staticmethod
-    def _make_age_predicate(age_spec: AgeSpec) -> Callable[[int], bool]:
-        """Compile an age specification into a membership predicate.
-
-        Args:
-            age_spec: Wildcard, explicit ages, ranges, or existing predicate.
-
-        Returns:
-            Predicate returning whether an age is selected.
-        """
-        if age_spec is None:
-            return lambda a: True
-        if callable(age_spec):
-            return age_spec
-
-        if isinstance(age_spec, (list, tuple)) and len(age_spec) == 2:
-            start_val, end_val = age_spec
-            if isinstance(start_val, int) and isinstance(end_val, int):
-                start, end = start_val, end_val
-                return lambda a: start <= a <= end
-
-        allowed: set[int] = set()
-        for item in age_spec:
-            if isinstance(item, (list, tuple)) and len(item) == 2:
-                start_val, end_val = item
-                s, e = start_val, end_val
-                if e < s:
-                    continue
-                allowed.update(range(s, e + 1))
-            else:
-                allowed.add(item)
-
-        return lambda a: a in allowed
-
-    @staticmethod
-    def _resolve_sexes(spec_sex: SexSpec, n_sexes: int) -> List[int]:
-        """Resolve a legacy sex specification to valid axis indices.
-
-        Args:
-            spec_sex: Sex wildcard, label, integer, enum, or iterable.
-            n_sexes: Number of available sex entries.
-
-        Returns:
-            Sorted unique selected sex indices.
-        """
-        if spec_sex is None:
-            return list(range(n_sexes))
-        if isinstance(spec_sex, (str, int, Sex)):
-            if isinstance(spec_sex, str):
-                s = spec_sex.lower()
-                if s in ("male", "m"):
-                    return [int(Sex.MALE)]
-                if s in ("female", "f"):
-                    return [int(Sex.FEMALE)]
-                try:
-                    return [int(spec_sex)]
-                except (TypeError, ValueError):
-                    return []
-            return [int(spec_sex)]
-        res: List[int] = []
-        for x in spec_sex:
-            res.extend(ObservationFilter._resolve_sexes(x, n_sexes))
-        return sorted(set(res))
-
-    def _resolve_ztype_indices_from_spec(
-        self,
-        gen_spec: Optional[Iterable[Any]],  # Any: duck-typed genotype or pattern
-        n_ztypes: int,
-    ) -> List[int]:
-        """Resolve legacy genotype selectors to ZType indices.
-
-        Args:
-            gen_spec: Genotype indices, patterns, or ``None`` wildcard.
-            n_ztypes: Number of available ZTypes.
-
-        Returns:
-            Sorted unique selected ZType indices.
-        """
-        if gen_spec is None:
-            return list(range(n_ztypes))
-
-        from natal.frontend.patterns import ZygoteTypePattern
-
-        species: Species | None = None
-        if self.registry.n_ztypes > 0:
-            species = self.registry.index_to_genotype[0].species
-
-        out: List[int] = []
-        for sel in gen_spec:
-            if isinstance(sel, str) and sel == "*":
-                return list(range(n_ztypes))
-            if isinstance(sel, int):
-                genotype = self.registry.index_to_genotype[sel]
-                for i, (gt, _slab) in enumerate(self.registry.index_to_ztype):
-                    if gt == genotype:
-                        out.append(i)
-            elif species is not None:
-                pattern = ZygoteTypePattern.parse(str(sel), species)
-                out.extend(self.registry.resolve_ztype_indices(pattern))
-
-        return sorted(set(out))
-
-    def _get_gen_spec(
-        self, spec: Dict[str, Any]  # Any: group spec dict with str keys and mixed values
-    ) -> Optional[Iterable[Any]]:  # Any: duck-typed genotype or pattern
-        """Extract the genotype selector from a legacy group dictionary.
-
-        Args:
-            spec: Legacy group specification.
-
-        Returns:
-            Genotype selectors or ``None``.
-        """
-        return spec.get("genotype") or spec.get("genotypes")
-
-    def _get_sex_spec(self, spec: Dict[str, Any]) -> SexSpec:  # Any: group spec dict
-        """Extract the sex selector from a legacy group dictionary.
-
-        Args:
-            spec: Legacy group specification.
-
-        Returns:
-            Sex selector or ``None``.
-        """
-        return spec.get("sex")
-
-    def _get_age_spec(self, spec: Dict[str, Any]) -> AgeSpec:  # Any: group spec dict
-        """Extract the age selector from a legacy group dictionary.
-
-        Args:
-            spec: Legacy group specification.
-
-        Returns:
-            Age selector or ``None``.
-        """
-        return spec.get("age")
+            return {
+                f"group_{index}": self._spec_to_selector(item, self.registry)
+                for index, item in enumerate(groups)
+            }
+        if not hasattr(groups, "items"):
+            raise TypeError(f"Unsupported observation groups input: {type(groups).__name__}")
+        return {
+            str(label): self._spec_to_selector(item, self.registry)
+            for label, item in groups.items()
+        }
 
     def build_filter(
         self,
@@ -824,7 +811,16 @@ class ObservationFilter:
         n_ages: int = 1,
         n_ztypes: Optional[int] = None,
     ) -> Observation:
-        """Compile group specs into a frozen :class:`Observation`.
+        """Compile group selections into a frozen :class:`Observation`.
+
+        This is the boundary that normalizes legacy spellings — ``None``
+        (identity groups), ordered sequences, ``{label: {genotype, sex,
+        age}}`` dictionaries, duck-typed group objects, and
+        :class:`IndividualSelector` values — into the unified selector
+        representation, then compiles through
+        :meth:`build_from_selectors`.  A selection that matches no
+        coordinate raises ``ValueError`` instead of silently producing an
+        all-zero group.
 
         When ``n_ztypes`` is provided the mask is baked immediately.
         Otherwise the mask is ``None`` and will be rebuilt on first use
@@ -832,7 +828,8 @@ class ObservationFilter:
 
         Args:
             diploid_genotypes: Optional sequence of genotypes, Species, or
-                population object used to resolve genotype selectors.
+                population object used to resolve identity groups (``None``
+                groups) and genotype-index selectors.
             groups: Group specification (None, list/tuple, or dict).
             collapse_age: Whether to collapse the age axis.
             n_sexes: Number of sex axes (must match the target population).
@@ -844,40 +841,20 @@ class ObservationFilter:
             Frozen ``Observation``.
 
         Raises:
-            ValueError: If groups are invalid or dimensions are missing.
+            ValueError: If groups are invalid, a selection matches nothing,
+                or dimensions are missing.
+            TypeError: If a group spelling is unsupported.
         """
         resolved_diploid = self.resolve_diploid_genotypes(diploid_genotypes)
-        specs, labels = self._normalize_group_specs(groups, resolved_diploid)
-
-        effective_n_ztypes = (
-            n_ztypes if n_ztypes is not None else self.registry.n_ztypes
+        selector_groups = self._normalize_groups_to_selectors(
+            groups, resolved_diploid
         )
-        if effective_n_ztypes <= 0:
-            raise ValueError("Cannot build observation with n_ztypes <= 0")
-
-        mask: Optional[NDArray[np.float64]] = None
-        if n_ztypes is not None:
-            mask = self.build_mask_from_specs(
-                n_sexes=n_sexes,
-                n_ages=n_ages,
-                n_ztypes=effective_n_ztypes,
-                specs=tuple(specs),
-                collapse_age=False,
-            )
-
-        fingerprint = _build_fingerprint(
-            tuple(labels),
-            effective_n_ztypes,
-            collapse_age,
-        )
-
-        return Observation(
-            labels=tuple(labels),
-            collapse_age=bool(collapse_age),
-            mask=mask,
-            population_fingerprint=fingerprint,
-            specs=tuple(specs),
-            _registry=self.registry,
+        return self.build_from_selectors(
+            groups=selector_groups,
+            collapse_age=collapse_age,
+            n_sexes=n_sexes,
+            n_ages=n_ages,
+            n_ztypes=n_ztypes,
         )
 
 
@@ -922,16 +899,20 @@ def build_identity_observation(
         n_ztypes if n_ztypes is not None else index_registry.n_ztypes
     )
 
-    groups: Dict[str, IndividualSelector] = {}
     from natal.frontend.patterns.individual_selector import IndividualSelector
 
+    labels: List[str] = []
+    selectors: List[IndividualSelector] = []
     for i in range(effective_n_ztypes):
         gt, slab = index_registry.index_to_ztype[i]
-        label = f"{gt}@{slab}"
-        groups[label] = IndividualSelector()
+        labels.append(f"{gt}@{slab}")
+        # A bare ``"genotype"`` pattern matches every slab of the genotype;
+        # non-default slabs pin the pattern to their slab.
+        ztype_spec: str = str(gt) if slab == "default" else f"{gt}@{slab}"
+        selectors.append(IndividualSelector(ztype=ztype_spec))
 
     fingerprint = _build_fingerprint(
-        ("identity", tuple(groups.keys())), effective_n_ztypes, collapse_age
+        ("identity", tuple(labels)), effective_n_ztypes, collapse_age
     )
 
     mask: Optional[NDArray[np.float64]] = None
@@ -939,23 +920,14 @@ def build_identity_observation(
     if n_ztypes is not None:
         identity_map = np.arange(effective_n_ztypes, dtype=np.int32)
 
-    non_wildcard_selectors: Dict[str, IndividualSelector] = {}
-    for i, (label, _) in enumerate(groups.items()):
-        gt, slab = index_registry.index_to_ztype[i]
-        if slab == "default":
-            ztype_spec: str = str(gt)
-        else:
-            ztype_spec = f"{gt}@{slab}"
-        non_wildcard_selectors[label] = IndividualSelector(ztype=ztype_spec)
-
     return Observation(
-        labels=tuple(non_wildcard_selectors.keys()),
+        labels=tuple(labels),
         collapse_age=bool(collapse_age),
         mask=mask,
         population_fingerprint=fingerprint,
         deme_indices=deme_indices,
         deme_mode=deme_mode,
-        _selectors=tuple(non_wildcard_selectors.values()),
+        _selectors=tuple(selectors),
         _is_identity=True,
         _identity_map=identity_map,
         _registry=index_registry,

@@ -82,7 +82,7 @@ def _obs_meta(
     collapse_age: bool = False,
 ) -> ObservationMetadata:
     """Build observation metadata for named test groups."""
-    return ObservationMetadata(labels=labels, collapse_age=collapse_age, n_groups=len(labels))
+    return ObservationMetadata(labels=labels, collapse_age=collapse_age)
 
 
 def _obs_schema(
@@ -1185,14 +1185,58 @@ class TestRawVsObservationEquivalence:
 
 
 class TestSpatialHistoryLayout:
-    """Invariant: SpatialHistoryLayout stores correct per-deme sizes."""
+    """Invariant: SpatialHistoryLayout derives per-deme sizes from the layout."""
 
-    def test_construction(self) -> None:
-        """Retain all per-deme layout dimensions."""
-        layout = SpatialHistoryLayout(n_demes=5, ind_per_deme=24, sperm_per_deme=0)
+    def test_derives_from_population_layout(self) -> None:
+        """Per-deme sizes are pure functions of the population layout."""
+        population = _minimal_layout(
+            kind="spatial_age_structured",
+            n_demes=5,
+            n_sexes=2,
+            n_ages=4,
+            n_ztypes=3,
+        )
+        population_discrete = _minimal_layout(
+            kind="spatial_discrete_generation",
+            n_demes=5,
+            n_sexes=2,
+            n_ages=1,
+            n_ztypes=3,
+        )
+        # has_sperm_storage=False on _minimal_layout → sperm_per_deme = 0.
+        layout = SpatialHistoryLayout.from_population(population)
         assert layout.n_demes == 5
-        assert layout.ind_per_deme == 24
+        assert layout.ind_per_deme == 2 * 4 * 3
         assert layout.sperm_per_deme == 0
+        discrete = SpatialHistoryLayout.from_population(population_discrete)
+        assert discrete.ind_per_deme == 2 * 1 * 3
+        assert discrete.sperm_per_deme == 0
+
+    def test_schema_spatial_layout_is_derived_and_compatible(self) -> None:
+        """A schema built without a stored layout still derives one.
+
+        Regression guard for stored-schema import: schemas persisted before
+        the derivation carried redundant per-deme fields; importing rows
+        against the derived schema must keep working (accept-and-recompute).
+        """
+        population = _minimal_layout(
+            kind="spatial_discrete_generation",
+            n_demes=3,
+            n_sexes=2,
+            n_ages=1,
+            n_ztypes=4,
+        )
+        schema = HistorySchema(
+            mode="raw", population=population, row_size=1 + 3 * 2 * 1 * 4
+        )
+        layout = schema.spatial_layout
+        assert layout is not None
+        assert layout == SpatialHistoryLayout(n_demes=3, ind_per_deme=8, sperm_per_deme=0)
+
+        panmictic = HistorySchema(mode="raw", population=_minimal_layout(), row_size=25)
+        assert panmictic.spatial_layout is None
+        observation = _obs_schema(layout=population)
+        assert observation.spatial_layout is None
 
 
 # ============================================================================

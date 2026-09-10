@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
 def _derive_metrics(conf: object) -> tuple[float, float]:
     """Derive the equilibrium metrics from a config's own ecology."""
-    from natal.frontend.data._engine import (
+    from natal.frontend.model.ecology import (
         derive_equilibrium_metrics_from_draft,
     )
 

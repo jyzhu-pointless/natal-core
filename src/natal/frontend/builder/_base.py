@@ -58,11 +58,6 @@ from natal.contracts.materialize import (
     gtype_names_from_registry,
     ztype_names_from_registry,
 )
-from natal.frontend.builder._params import (
-    resolve_age_structured_initial_individual_count,
-    resolve_age_structured_initial_sperm_storage,
-    resolve_discrete_initial_individual_count,
-)
 from natal.frontend.builder._registry_builder import (
     build_registry,
     rebuild_config_maps,
@@ -81,18 +76,23 @@ from natal.frontend.builder._runtime import (
 from natal.frontend.builder._writers import (
     DraftWriter,
 )
-from natal.frontend.data import (
-    ModelDraft,
-)
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.types import DemeSelector
+from natal.frontend.model import (
+    ModelDraft,
+)
+from natal.frontend.model.initial_state import (
+    resolve_age_structured_initial_individual_count,
+    resolve_age_structured_initial_sperm_storage,
+    resolve_discrete_initial_individual_count,
+)
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
     from typing import Self
 
-    from natal.frontend.data.definition import ModelDefinition
     from natal.frontend.hooks import CompiledHookDescriptor
+    from natal.frontend.model.definition import ModelDefinition
     from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
     from natal.frontend.patterns import IndividualSelector
     from natal.frontend.population.age_structured import AgeStructuredPopulation
@@ -212,7 +212,7 @@ def set_param(
         # Fallback: check custom slots (not in the route table).  The
         # slot dict is shared mutable content on the draft, so the write
         # is visible to the population without a _replace.
-        from natal.frontend.data import build_custom_slots
+        from natal.frontend.model import build_custom_slots
 
         if name in getattr(config, "custom", ()):
             config.custom[name] = build_custom_slots({name: value})[name]
@@ -600,7 +600,7 @@ class PopulationBuilder:
         has_sc = getattr(species, "has_sex_chromosomes", False)
 
         if discrete:
-            from natal.frontend.data import build_discrete_engine_config
+            from natal.frontend.model import build_discrete_engine_config
 
             config = build_discrete_engine_config(
                 n_genotypes=n_g,
@@ -616,7 +616,7 @@ class PopulationBuilder:
             result = PopulationBuilder(config, species=species)
             object.__setattr__(result, "_name", "DiscreteGenerationPop")
         else:
-            from natal.frontend.data import build_population_config
+            from natal.frontend.model import build_population_config
 
             config = build_population_config(
                 n_genotypes=n_g,
@@ -840,7 +840,7 @@ class PopulationBuilder:
             raise ValueError(
                 f"new_adult_age must be in [0, {n_ages}), got {new_adult_age}"
             )
-        from natal.frontend.data import build_population_config
+        from natal.frontend.model import build_population_config
 
         old = self._config
         # Use species blueprint maps (unexpanded) so that
@@ -1188,7 +1188,7 @@ class PopulationBuilder:
         Returns:
             Self for chaining.
         """
-        from natal.frontend.data import build_custom_slots
+        from natal.frontend.model import build_custom_slots
 
         merged = dict(self._config.custom)
         merged.update(kwargs)
@@ -1478,7 +1478,7 @@ class PopulationBuilder:
 
     def _definition_for_compile(self, *, build_name: str | None = None) -> ModelDefinition:
         """Capture the full declaration rather than reconstructing it from outputs."""
-        from natal.frontend.data.definition import ModelDefinition
+        from natal.frontend.model.definition import ModelDefinition
 
         return ModelDefinition(
             self.species, bool(self._config.discrete_generation),
@@ -1755,7 +1755,7 @@ class PopulationBuilder:
 
         # Custom kwargs (accumulated by .custom()) applied to final config.
         if self._custom_kwargs:
-            from natal.frontend.data import build_custom_slots
+            from natal.frontend.model import build_custom_slots
 
             final_config = final_config._replace(
                 custom=build_custom_slots(self._custom_kwargs)

@@ -14,7 +14,7 @@ from typing import TextIO
 
 import pytest
 
-from natal.frontend.data import ModelDraft
+from natal.frontend.model import ModelDraft
 from natal.frontend.hooks.types import ECO_PARAM_NAMES
 from natal.frontend.utils.parameters import (
     ALL_PARAMETERS,

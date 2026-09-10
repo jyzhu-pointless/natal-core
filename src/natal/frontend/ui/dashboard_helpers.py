@@ -6,7 +6,8 @@ between the panmictic and spatial dashboards.
 """
 
 import inspect
-from typing import TYPE_CHECKING, Any, Dict, List
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, Dict, List, cast
 
 if TYPE_CHECKING:
     from natal.frontend.genetics import Haplotype, Locus
@@ -40,7 +41,7 @@ except ImportError:
 
     ui = _DummyUI()  # type: ignore[assignment]
 
-from natal.frontend.data import BEVERTON_HOLT, FIXED, LINEAR, NO_COMPETITION
+from natal.frontend.model import BEVERTON_HOLT, FIXED, LINEAR, NO_COMPETITION
 
 
 def get_unordered_genotype_labels(genotypes: list[Any]) -> list[str]:
@@ -288,9 +289,11 @@ def build_observation_from_specs(
     specs: list[dict[str, Any]],
     collapse_age: bool = False,
 ) -> "Observation":
-    """Build an Observation from a list of group spec dicts.
+    """Build an Observation from a list of legacy group spec dicts.
 
     Each spec dict may contain keys: ``genotype``, ``age``, ``sex``.
+    The legacy spellings are normalized to :class:`IndividualSelector`
+    values at the observation-filter boundary.
     """
     from natal.frontend.output.observation import ObservationFilter
 
@@ -475,6 +478,57 @@ class ObservationPanel:
 
     # -- apply ------------------------------------------------------------
 
+    def _selector_from_panel_state(self, spec: dict[str, Any]) -> Any:
+        """Build one :class:`IndividualSelector` from the panel group state.
+
+        Genotype pattern alternatives OR-combine; the sex and age fields
+        AND-combine with every alternative.
+
+        Args:
+            spec: Panel state with ``genotype`` (pattern list or ``None``),
+                ``sex`` (``"both"``/``"female"``/``"male"``), and optional
+                ``age_start``/``age_end`` numbers.
+
+        Returns:
+            The unified selector for one observation group.
+        """
+        from natal.frontend.patterns import IndividualSelector
+
+        genotype = spec.get("genotype")
+        entries = cast(  # legacy genotype spec: iterable spelling or falsy
+            "Iterable[object]", genotype or []
+        )
+        if any(pattern == "*" for pattern in entries):
+            # Legacy short-circuit: a "*" alternative widens the genotype
+            # selection to every ztype instead of being dropped.
+            patterns: List[str] = []
+        else:
+            patterns = [
+                str(pattern)
+                for pattern in entries
+                if pattern and pattern != "*"
+            ]
+        sex = spec.get("sex", "both")
+        sex_value: Any = sex if sex and sex != "both" else None  # Any: selector sex spec (str or None)
+        age_start = spec.get("age_start")
+        age_end = spec.get("age_end")
+        if age_start is not None and age_end is not None:
+            if int(age_start) > int(age_end):
+                raise ValueError(
+                    f"age range [{age_start}, {age_end}] selects no ages"
+                )
+            age_value: Any = range(int(age_start), int(age_end) + 1)  # Any: selector age spec (range or None)
+        else:
+            age_value = None  # Any: selector age spec (range or None)
+        if not patterns:
+            return IndividualSelector(sex=sex_value, age=age_value)
+        merged = IndividualSelector(ztype=patterns[0], sex=sex_value, age=age_value)
+        for pattern in patterns[1:]:
+            merged = merged | IndividualSelector(
+                ztype=pattern, sex=sex_value, age=age_value
+            )
+        return merged
+
     def _apply(self) -> None:
         from natal.frontend.output.observation import ObservationFilter
 
@@ -487,26 +541,14 @@ class ObservationPanel:
                 ui.label("No observation groups defined.").classes("text-gray-500 italic")
             return
 
-        groups: dict[str, dict[str, Any]] = {}
-        for i, spec in enumerate(self._group_specs):
-            gs: dict[str, Any] = {}
-            gv = spec.get("genotype")
-            if gv and gv != "*":
-                gs["genotype"] = gv
-            sv = spec.get("sex", "both")
-            if sv and sv != "both":
-                gs["sex"] = sv
-            a_s = spec.get("age_start")
-            a_e = spec.get("age_end")
-            if a_s is not None and a_e is not None:
-                gs["age"] = (int(a_s), int(a_e))
-            groups[f"group_{i}"] = gs
-
         try:
+            groups: dict[str, Any] = {
+                f"group_{i}": self._selector_from_panel_state(spec)
+                for i, spec in enumerate(self._group_specs)
+            }
             registry = self._get_registry()
             obs_filter = ObservationFilter(registry)
-            obs = obs_filter.build_filter(
-                diploid_genotypes=registry.index_to_genotype,
+            obs = obs_filter.build_from_selectors(
                 groups=groups,
                 collapse_age=bool(self._collapse_age.value) if self._collapse_age else False,
             )

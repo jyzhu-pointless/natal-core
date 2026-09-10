@@ -7,7 +7,7 @@ import numpy as np
 import pytest  # type: ignore
 
 import natal as nt
-from natal.frontend.data import initialize_gamete_map
+from natal.frontend.genetics import initialize_gamete_map
 from natal.frontend.genetics import (
     Gene,
     Genotype,

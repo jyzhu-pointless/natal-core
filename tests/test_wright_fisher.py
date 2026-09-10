@@ -112,7 +112,7 @@ class TestCompressConfig:
 
     def test_compress_config_does_not_mutate_input(self):
         import natal as nt
-        from natal.frontend.data import compress_config
+        from natal.frontend.model import compress_config
 
         sp = nt.Species.from_dict("cc1", {"c1": {"l1": ["A", "a"]}})
         pop = (
@@ -139,7 +139,7 @@ class TestCompressConfig:
     def test_compress_config_includes_initial_sperm_storage(self):
         import natal as nt
         from natal.frontend.builder import PopulationBuilder
-        from natal.frontend.data import compress_config
+        from natal.frontend.model import compress_config
 
         sp = nt.Species.from_dict("cc2", {"c1": {"l1": ["A", "a"]}})
         pop = (

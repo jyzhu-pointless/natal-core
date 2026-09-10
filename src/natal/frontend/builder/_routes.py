@@ -37,7 +37,7 @@ from natal.frontend.builder._params import resolve_age_param
 from natal.frontend.utils.parameters import ALL_PARAMETERS, ParamDescriptor
 
 if TYPE_CHECKING:
-    from natal.frontend.data import ModelDraft
+    from natal.frontend.model import ModelDraft
 
 __all__ = [
     "ROUTES",
@@ -114,7 +114,7 @@ def _build_routes(
     Returns:
         The ``(ROUTES, ROUTES_BY_METHOD)`` pair.
     """
-    from natal.frontend.data import ModelDraft
+    from natal.frontend.model import ModelDraft
 
     if registry is None:
         registry = ALL_PARAMETERS

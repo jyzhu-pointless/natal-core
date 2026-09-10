@@ -10,7 +10,8 @@ from natal.backends.rust.rust_backend import (
     RustDiscreteLifecycleBackend,
 )
 from natal.frontend.builder import PopulationBuilder
-from natal.frontend.data import DiscretePopulationState, ModelDraft
+from natal.frontend.model import ModelDraft
+from natal.frontend.data import DiscretePopulationState
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.types import HookProgram
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation

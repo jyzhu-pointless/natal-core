@@ -27,11 +27,8 @@ from natal.contracts.blueprint import Blueprint
 from natal.contracts.materialize import SpatialMigration, materialize
 from natal.frontend.data import (
     DiscretePopulationState,
-    ModelDefinition,
-    ModelDraft,
     PopulationState,
 )
-from natal.frontend.data.definition import copy_declaration_value
 from natal.frontend.genetics import Species
 from natal.frontend.hooks import (
     CompiledHookDescriptor,
@@ -39,6 +36,11 @@ from natal.frontend.hooks import (
     HookProgram,
 )
 from natal.frontend.hooks._compile import build_hook_program
+from natal.frontend.model import (
+    ModelDefinition,
+    ModelDraft,
+)
+from natal.frontend.model.definition import copy_declaration_value
 from natal.frontend.population.base import BasePopulation, ParamChange
 from natal.frontend.spatial.migration import (
     MigrationCSR,
@@ -1030,7 +1032,6 @@ class SpatialPopulation:
             History,
             HistorySchema,
             PopulationLayout,
-            SpatialHistoryLayout,
         )
         from natal.frontend.output.observation import Observation
 
@@ -1075,11 +1076,6 @@ class SpatialPopulation:
             mode="raw",
             population=layout,
             row_size=(1 + self.n_demes * (ind_per_deme + sperm_per_deme)),
-            spatial_layout=SpatialHistoryLayout(
-                n_demes=self.n_demes,
-                ind_per_deme=ind_per_deme,
-                sperm_per_deme=sperm_per_deme,
-            ),
         )
         self._history_obj = History(schema, max_rows=self.max_history)
 

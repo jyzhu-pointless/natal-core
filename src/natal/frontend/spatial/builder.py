@@ -42,17 +42,17 @@ from numpy.typing import NDArray
 
 from natal.frontend.builder import PopulationBuilder
 from natal.frontend.builder._base import normalize_observation_groups
-from natal.frontend.builder._params import (
+from natal.frontend.genetics import Species
+from natal.frontend.genetics.structures._helpers import build_compression_mask
+from natal.frontend.hooks.types import DemeSelector
+from natal.frontend.model import ModelDraft
+from natal.frontend.model.initial_state import (
     InitialIndividualCountInput,
     InitialSpermStorageInput,
     resolve_age_structured_initial_individual_count,
     resolve_age_structured_initial_sperm_storage,
     resolve_discrete_initial_individual_count,
 )
-from natal.frontend.data import ModelDraft
-from natal.frontend.genetics import Species
-from natal.frontend.genetics.structures._helpers import build_compression_mask
-from natal.frontend.hooks.types import DemeSelector
 from natal.frontend.patterns import IndividualSelector
 from natal.frontend.population.age_structured import AgeStructuredPopulation
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
@@ -62,8 +62,8 @@ from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import GridTopology
 
 if TYPE_CHECKING:
-    from natal.frontend.data.definition import ModelDefinition
     from natal.frontend.genetics.compile import GameteList, ZygoteList
+    from natal.frontend.model.definition import ModelDefinition
     from natal.frontend.presets import GeneticPreset
 
 __all__ = [
@@ -1716,7 +1716,7 @@ class SpatialPopulationBuilder:
 
     def _definition_for_compile(self) -> ModelDefinition:
         """Freeze concrete spatial controls before creating any execution session."""
-        from natal.frontend.data.definition import (
+        from natal.frontend.model.definition import (
             ModelDefinition,
             SpatialInputs,
             copy_declaration_value,

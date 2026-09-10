@@ -43,8 +43,9 @@ from natal.backends.rust.rust_backend import (
     RustDiscreteLifecycleBackend,
     rust_backend_available,
 )
-from natal.frontend.data import DiscretePopulationState, ModelDraft
-from natal.frontend.data._engine import recompute_offspring_tensor
+from natal.frontend.model import ModelDraft
+from natal.frontend.data import DiscretePopulationState
+from natal.frontend.genetics.matrices import recompute_offspring_tensor
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.types import HookProgram
 from natal.frontend.population.discrete_generation import (

@@ -39,15 +39,15 @@ from natal.frontend.builder._routes import (
     lookup,
     plan_write,
 )
-from natal.frontend.data import ModelDraft
 
 # Single derivation/validation points live with the map constructors in
-# the data layer; re-exported here because the writer channel and the
+# the genetics layer; re-exported here because the writer channel and the
 # spatial variant channel consume them alongside this module's writes.
-from natal.frontend.data._engine import (
+from natal.frontend.genetics.matrices import (
     recompute_offspring_tensor,
     validate_meiosis_table,
 )
+from natal.frontend.model import ModelDraft
 from natal.frontend.utils.parameters import ParamDescriptor
 
 if TYPE_CHECKING:

@@ -8,7 +8,8 @@ from typing import Any
 import numpy as np
 
 from natal.contracts.materialize import SpatialMigration  # noqa: F401  # construction contract exercises materialize through the container
-from natal.frontend.data import DiscretePopulationState, ModelDraft
+from natal.frontend.model import ModelDraft
+from natal.frontend.data import DiscretePopulationState
 from natal.frontend.genetics import Species
 from natal.frontend.population.base import BasePopulation
 from natal.frontend.population.discrete_generation import (

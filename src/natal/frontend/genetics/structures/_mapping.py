@@ -65,7 +65,7 @@ class SpeciesMappingMixin:
                 tiled so that each base genotype appears once per slab.
         """
         self = cast(Species, self)
-        from natal.frontend.data import initialize_gamete_map as _impl
+        from natal.frontend.genetics import initialize_gamete_map as _impl
 
         return _impl(
             diploid_genotypes=self.get_all_genotypes(unordered=self.unordered),
@@ -90,7 +90,7 @@ class SpeciesMappingMixin:
                 tiled so that each base genotype appears once per slab.
         """
         self = cast(Species, self)
-        from natal.frontend.data import initialize_zygote_map as _impl
+        from natal.frontend.genetics import initialize_zygote_map as _impl
 
         return _impl(
             haploid_genotypes=self.get_all_haploid_genotypes(),
@@ -122,7 +122,7 @@ class SpeciesMappingMixin:
         if self.config_blueprint is not None:
             return self.config_blueprint
 
-        from natal.frontend.data._engine import recompute_offspring_tensor
+        from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
         genotypes = self.get_all_genotypes(unordered=self.unordered)
         haplotypes = self.get_all_haploid_genotypes()

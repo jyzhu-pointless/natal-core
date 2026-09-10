@@ -182,7 +182,7 @@ def test_normalized_definition_recompiles_same_genetic_products(compressed: bool
 
 def test_bare_definition_cannot_compile() -> None:
     """A declaration without normalized inputs is rejected, not silently built."""
-    from natal.frontend.data.definition import ModelDefinition
+    from natal.frontend.model.definition import ModelDefinition
     from natal.frontend.genetics.definition_compiler import compile_definition
     from tests.test_compile_unification import _species
 

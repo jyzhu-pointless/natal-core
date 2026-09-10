@@ -15,7 +15,7 @@ import pytest
 
 import natal as nt
 from natal.frontend.builder import PopulationBuilder
-from natal.frontend.data import ModelDefinition
+from natal.frontend.model import ModelDefinition
 from natal.frontend.genetics.compile import RecipeHost
 
 

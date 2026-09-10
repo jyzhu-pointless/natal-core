@@ -64,7 +64,7 @@ class DiscretePopulationState(NamedTuple):
 
 ## `ModelDraft`：模型规则与映射配置
 
-`ModelDraft` 定义在 `src/natal/frontend/data/config.py`，包含运行模型所需的固定参数与矩阵。
+`ModelDraft` 定义在 `src/natal/frontend/model/draft.py`，包含运行模型所需的固定参数与矩阵。
 
 ### 配置内容分组
 
