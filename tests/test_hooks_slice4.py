@@ -151,7 +151,7 @@ def test_stop() -> None:
 
     assert calls == [0]  # fired exactly once, at tick 0
     assert pop.tick == 0
-    assert pop._finished
+    assert pop.is_finished
 
 
 def test_stop_returns_nonzero_equivalently() -> None:
@@ -166,7 +166,7 @@ def test_stop_returns_nonzero_equivalently() -> None:
     pop.run(n_steps=3)
 
     assert pop.tick == 0
-    assert pop._finished
+    assert pop.is_finished
 
 
 def test_tick_and_deme_id_read_only() -> None:

@@ -200,6 +200,11 @@ impl SpatialSession {
         self.execution = crate::sessions::status::ExecutionStatus::Stopped;
     }
 
+    /// Read the authoritative shared tick without exporting state arrays.
+    fn current_tick(&self) -> i64 {
+        self.state_tick
+    }
+
     /// Create a heterogeneous spatial session from columnized contracts.
     ///
     /// ## Parameters

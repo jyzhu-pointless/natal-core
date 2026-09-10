@@ -591,6 +591,34 @@ impl AgeStructuredSession {
         )
     }
 
+    /// Read the authoritative session tick without exporting state arrays.
+    fn current_tick(&self) -> i64 {
+        self.state_tick
+    }
+
+    /// Sum the live adult per-sex counts without exporting the state arrays.
+    ///
+    /// Adults are the ages ``>= new_adult_age`` of each sex plane.  Each
+    /// sex sums its own contiguous adult slice in NumPy's pairwise order
+    /// and ``total`` is the float addition of both sums, so the result is
+    /// bitwise identical to the retired Python reduction
+    /// ``individual_count[sex, new_adult_age:, :].sum()`` (``total`` kept
+    /// the ``f.sum() + m.sum()`` evaluation order).
+    fn adult_counts(&self) -> (f64, f64, f64) {
+        let z = self.blueprint.n_ztypes;
+        let plane = self.blueprint.n_ages * z;
+        // A declared adult start at or above the last age leaves an empty
+        // slice; NumPy sums an empty view to 0.0, and so does the pairwise
+        // reduction over an empty sub-slice.
+        let adult_start = (self.blueprint.new_adult_age * z).min(plane);
+        let female =
+            crate::kernels::state_reduce::numpy_pairwise_sum(&self.state_ind[adult_start..plane]);
+        let male = crate::kernels::state_reduce::numpy_pairwise_sum(
+            &self.state_ind[plane + adult_start..2 * plane],
+        );
+        (female + male, female, male)
+    }
+
     /// Capture a memory checkpoint of everything the session owns.
     ///
     /// The state arrays are Python-owned, so they are passed in and returned

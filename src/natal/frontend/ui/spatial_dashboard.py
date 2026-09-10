@@ -132,7 +132,7 @@ class SpatialDashboard:
         self.status_label.text = "Running..."
 
         try:
-            if not any(getattr(deme, "_finished", False) for deme in self.pop.demes):
+            if not any((getattr(deme, "is_finished", False) or getattr(deme, "_finished", False)) for deme in self.pop.demes):
                 speed = self.slider_speed.value
                 if speed is None or speed <= 0:
 
@@ -141,7 +141,7 @@ class SpatialDashboard:
                         ticks = 0
                         while (
                             time.time() - start < 0.1
-                            and not any(getattr(deme, "_finished", False) for deme in self.pop.demes)
+                            and not any((getattr(deme, "is_finished", False) or getattr(deme, "_finished", False)) for deme in self.pop.demes)
                             and ticks < 50
                         ):
                             self.pop.run_tick()
@@ -153,7 +153,7 @@ class SpatialDashboard:
 
                 self.refresh_ui()
 
-            if any(getattr(deme, "_finished", False) for deme in self.pop.demes):
+            if any((getattr(deme, "is_finished", False) or getattr(deme, "_finished", False)) for deme in self.pop.demes):
                 self.is_running = False
                 self.btn_play.props("icon=play_arrow")
                 self.btn_play.text = "Play"

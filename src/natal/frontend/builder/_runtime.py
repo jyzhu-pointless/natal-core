@@ -337,7 +337,10 @@ class _UpdateTarget(ABC):
     @property
     def tick(self) -> int:
         """The tick audit entries are stamped with."""
-        return int(self.pop._tick)  # pyright: ignore[reportPrivateUsage]  # same-package owner state
+        # The population resolves the session-owned tick (or the active
+        # event's tick); the retired private mirror no longer exists on
+        # session-backed populations.
+        return int(self.pop.tick)
 
     @property
     @abstractmethod

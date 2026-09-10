@@ -272,6 +272,26 @@ class RustLifecycleBackend:
         total, female, male = self._session.counts()
         return (float(total), float(female), float(male))
 
+    def adult_counts(self) -> tuple[float, float, float]:
+        """Sum the live adult per-sex counts natively, without a state export.
+
+        Returns:
+            ``(total, female, male)`` restricted to ages
+            ``>= new_adult_age`` — bitwise identical to the retired Python
+            sums over ``individual_count[sex, new_adult_age:, :]`` (the
+            total keeps the female-sum + male-sum evaluation order).
+        """
+        total, female, male = self._session.adult_counts()
+        return (float(total), float(female), float(male))
+
+    def current_tick(self) -> int:
+        """Read the session-owned tick without exporting state arrays."""
+        return int(self._session.current_tick())
+
+    def stop(self) -> None:
+        """Mark the session Stopped without discarding state or history."""
+        self._session.stop()
+
     def apply(self, writes: dict[str, float]) -> None:
         """Batch scalar write straight into the session-owned params.
 
@@ -620,6 +640,14 @@ class RustDiscreteLifecycleBackend:
         """
         total, female, male = self._session.counts()
         return (float(total), float(female), float(male))
+
+    def current_tick(self) -> int:
+        """Read the session-owned tick without exporting state arrays."""
+        return int(self._session.current_tick())
+
+    def stop(self) -> None:
+        """Mark the session Stopped without discarding state or history."""
+        self._session.stop()
 
     def apply(self, writes: dict[str, float]) -> None:
         """Batch scalar write straight into the session-owned params."""
@@ -1502,6 +1530,14 @@ class RustDemeParameters:
             return self._session.trigger_deme_event(self._deme, event)
         finally:
             self._invalidate_state()
+
+    def execution_state(self) -> tuple[str, int]:
+        """Read the owning spatial session's lifecycle status for this deme."""
+        return self._session.execution_state()
+
+    def current_tick(self) -> int:
+        """Read the owning spatial session's authoritative shared tick."""
+        return int(self._session.current_tick())
 
     def config_snapshot(self, draft: ModelDraft) -> ModelDraft:
         """Project current native values onto detached model metadata."""
