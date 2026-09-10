@@ -722,6 +722,7 @@ class PopulationBuilder:
         declared_genotypes: Sequence[str]
         | Sequence[int]
         | None = None,  # deprecated alias
+        extreme_speed_mode: int | None = None,
     ) -> Self:
         """Configure simulation flags and optional population name.
 
@@ -748,6 +749,9 @@ class PopulationBuilder:
             continuous_sampling: If ``True``, sample from continuous
                 distributions instead of discrete counts.
             fixed_egg_count: If ``True``, disable Poisson noise on egg counts.
+            extreme_speed_mode: Optional speed/precision kernel selection
+                (0 off, 1 multinomial, 2 poisson, 3 both). The low-level
+                factory spelling is retired; this is the chain entry.
             compress: If ``True``, enable full index compression at build time.
             declared_zygote_types: Optional sequence of genotype selectors to protect
                 from compression pruning.
@@ -777,13 +781,21 @@ class PopulationBuilder:
             self._declared_zygote_types = cast(
                 "set[str] | set[int]", set(declared_zygote_types)
             )
-        overrides: dict[str, bool] = {}
+        overrides: dict[str, object] = {}
         if stochastic is not None:
             overrides["stochastic"] = stochastic
         if continuous_sampling is not None:
             overrides["continuous_sampling"] = continuous_sampling
         if fixed_egg_count is not None:
             overrides["fixed_egg_count"] = fixed_egg_count
+        if extreme_speed_mode is not None:
+            if extreme_speed_mode not in (0, 1, 2, 3):
+                raise ValueError(
+                    "extreme_speed_mode must be one of 0 (off), 1 "
+                    "(multinomial), 2 (poisson), 3 (multinomial + poisson); "
+                    f"got {extreme_speed_mode!r}"
+                )
+            overrides["extreme_speed_mode"] = int(extreme_speed_mode)
         if overrides:
             self._config = self._config._replace(**overrides)
         return self

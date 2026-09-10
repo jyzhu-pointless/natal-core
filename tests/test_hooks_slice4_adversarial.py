@@ -879,6 +879,9 @@ def test_deme_selector_serialization_and_panmictic_filter() -> None:
         name="s4x_deme_sel_inject", structure={"chr1": {"loc": ["WT", "Dr"]}}
     )
     template = _build("s4x_deme_sel")
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
     pop = type(template)(
         species=template.species,
         population_config=template.config,

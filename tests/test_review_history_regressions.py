@@ -397,6 +397,9 @@ def test_reducing_history_capacity_immediately_discards_native_checkpoints(model
 def test_direct_population_snapshot_initializes_native_checkpoint_owner(model: Literal["discrete", "age"]) -> None:
     """Directly constructed populations use the same full snapshot contract."""
     built = _population(f"ReviewDirectSnapshotSource_{model}", model)
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
     direct = type(built)(species=built.species, population_config=built.config, index_registry=built.index_registry)
     direct.record_snapshot()
     expected = direct.export_state().copy()

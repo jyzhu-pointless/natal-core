@@ -230,6 +230,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         declared_genotypes: Sequence[str]
         | Sequence[int]
         | None = None,  # deprecated alias
+        extreme_speed_mode: int | None = None,
     ) -> PopulationBuilder:
         """Fluent population construction entry point.
 
@@ -253,6 +254,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             fixed_egg_count=fixed_egg_count,
             compress=compress,
             declared_zygote_types=declared_zygote_types,
+            extreme_speed_mode=extreme_speed_mode,
         )
 
     def _resolve_age_distribution(

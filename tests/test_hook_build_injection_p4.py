@@ -99,6 +99,9 @@ class TestDeletedRegistrationSurfaces:
         template = _build("neg_hook_items_template")
 
         with pytest.raises(TypeError, match="hook_items"):
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
             type(pop)(
                 species=template.species,
                 population_config=template.config,
@@ -108,6 +111,9 @@ class TestDeletedRegistrationSurfaces:
     def test_ctor_without_plan_starts_with_an_empty_plan(self) -> None:
         """A raw-constructed population starts with a well-shaped empty plan."""
         template = _build("neg_ctor_empty")
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
         pop = type(template)(species=template.species, population_config=template.config)
 
         assert tuple(pop.compiled_hook_descriptors) == ()

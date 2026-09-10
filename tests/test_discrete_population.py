@@ -268,6 +268,9 @@ class TestStateAndConfigInterop:
         age_config = _build_age_structured_config(sp)
 
         with pytest.raises(ValueError, match="zero adult survival"):
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
             nt.DiscreteGenerationPopulation(
                 species=sp,
                 population_config=age_config,

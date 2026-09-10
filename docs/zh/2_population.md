@@ -273,46 +273,17 @@ if pop.is_failed:
 | MULTINOMIAL (1) | 标准 Wright-Fisher 单次多项分布 |
 | POISSON (2) | 独立泊松抽样（大 N 近似） |
 
-### 公开的底层入口
-
-公开的底层工厂接受 `extreme_speed_mode`，并将其写入不可变的
-`ModelDraft`。将该 draft 传给公开的
-`DiscreteGenerationPopulation` 构造函数；Rust 后端在种群创建时读取这个标志。
+`extreme_speed_mode` 在构建链上选择（底层工厂构造路径已退役）：
 
 ```python
-import natal as nt
-
-species = nt.Species.from_dict(
-    "WFExample",
-    {"chr1": {"L": ["WT", "Drive"]}},
-)
-base = (
-    nt.DiscreteGenerationPopulation.setup(species, stochastic=False)
+pop = (
+    nt.DiscreteGenerationPopulation.setup(
+        species, stochastic=False, extreme_speed_mode=3
+    )
     .initial_state({"female": {"WT|WT": 50}, "male": {"Drive|Drive": 50}})
     .build()
 )
-config = base.config
-
-engine_config = nt.build_discrete_engine_config(
-    n_genotypes=config.n_ztypes,
-    n_gtypes=config.n_gtypes,
-    n_glabs=config.n_glabs,
-    n_slabs=config.n_slabs,
-    zygotes_to_gametes_map=config.zygotes_to_gametes_map,
-    gametes_to_zygotes_map=config.gametes_to_zygotes_map,
-    stochastic=False,
-    extreme_speed_mode=3,
-)
-pop = nt.DiscreteGenerationPopulation(
-    species=species,
-    population_config=engine_config,
-    initial_individual_count={"female": {"WT|WT": 50}, "male": {"Drive|Drive": 50}},
-)
-pop.run(1)
 ```
-
-这是底层构造路径。常规 `PopulationBuilder` 构建流程没有
-`extreme_speed_mode` 链式方法。
 
 ### 竞争与 Hook 支持
 

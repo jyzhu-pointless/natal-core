@@ -352,6 +352,9 @@ def test_idle_updater_rejects_writes_during_run_guard() -> None:
 def test_genetic_update_without_native_session_is_rejected() -> None:
     """A candidate compile without a session fails before publishing."""
     template = _build("RUNoSessionTemplate")
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
     raw = type(template)(
         species=template.species, population_config=template.config
     )
@@ -361,6 +364,9 @@ def test_genetic_update_without_native_session_is_rejected() -> None:
     )
     raw.update().presets(drive)
     assert [p.name for p in raw.presets] == ["RUDrive"]
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
     no_session = type(template)(
         species=template.species, population_config=template.config
     )

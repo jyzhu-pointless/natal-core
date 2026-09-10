@@ -174,6 +174,9 @@ def test_direct_population_event_initializes_native_session(model: Literal["age"
     )
     # The raw constructor is the internal mechanism build/clone/restore
     # share; the compiled plan travels with it exactly as with clones.
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
     pop = type(source)(
         species=source.species,
         population_config=source.config,
@@ -188,6 +191,9 @@ def test_direct_population_event_initializes_native_session(model: Literal["age"
 def test_explicit_event_without_available_session_reports_native_requirement(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed lazy initialization cannot silently skip registered hooks."""
     source = _population("UnavailableNativeEvent", "discrete", stochastic=False)
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
     pop = type(source)(species=source.species, population_config=source.config)
     monkeypatch.setattr(pop, "_initialize_session", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="Native hook execution is unavailable"):

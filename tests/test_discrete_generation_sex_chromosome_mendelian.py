@@ -112,6 +112,9 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
     )
 
     parent_count = 1000.0
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
     pop = DiscreteGenerationPopulation(
         species=species,
         population_config=config,
@@ -280,6 +283,9 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
         gametes_to_zygotes_map=zygote_map,
     )
 
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
     pop = DiscreteGenerationPopulation(
         species=species,
         population_config=config,
@@ -377,6 +383,9 @@ def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:
         gametes_to_zygotes_map=zygote_map,
     )
 
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
     pop = DiscreteGenerationPopulation(
         species=species,
         population_config=config,

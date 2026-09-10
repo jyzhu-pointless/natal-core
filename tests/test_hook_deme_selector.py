@@ -26,6 +26,9 @@ def _build_with_descriptors(
     species = nt.Species.from_dict(
         name=name, structure={"chr1": {"loc": ["WT", "Dr"]}}
     )
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
     return nt.DiscreteGenerationPopulation(
         species=species,
         population_config=(

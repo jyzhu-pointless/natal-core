@@ -175,6 +175,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         declared_genotypes: Sequence[str]
         | Sequence[int]
         | None = None,  # deprecated alias
+        extreme_speed_mode: int | None = None,
     ) -> PopulationBuilder:
         """Start building an age-structured population with overlapping generations.
 
@@ -207,6 +208,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 appear later via hooks or runtime presets.
             declared_genotypes: Deprecated alias for
                 *declared_zygote_types*.
+            extreme_speed_mode: Optional speed/precision kernel selection
+                (0 off, 1 multinomial, 2 poisson, 3 both). Defaults to the
+                draft default when omitted.
 
         Returns:
             A ``PopulationBuilder`` ready for domain-method chaining.
@@ -233,6 +237,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             fixed_egg_count=fixed_egg_count,
             compress=compress,
             declared_zygote_types=declared_zygote_types,
+            extreme_speed_mode=extreme_speed_mode,
         )
 
     def _distribute_initial_population(

@@ -167,6 +167,9 @@ class TestConstructorInitialArrays:
             species=species, stochastic=False
         ).age_structure(n_ages=3, new_adult_age=1)
         draft = cfg.config
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
         pop = nt.AgeStructuredPopulation(
             species=species,
             population_config=draft,
@@ -200,6 +203,9 @@ class TestConstructorDictAndSpermForms:
     def test_dict_counts_constructor(self) -> None:
         """dict-per-age counts land in exact cells via the dict branch."""
         species = _species("CtorDictCounts")
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
         pop = nt.AgeStructuredPopulation(
             species=species,
             population_config=self._draft(species),
@@ -218,6 +224,9 @@ class TestConstructorDictAndSpermForms:
     def test_sperm_all_spellings_constructor(self) -> None:
         """dict / list / tuple / scalar sperm forms fill exact cells."""
         species = _species("CtorSpermForms")
+        # Internal materialization path (shared by build/clone/restore),
+        # deliberately exercised; the public construction entry is the
+        # builder chain.
         pop = nt.AgeStructuredPopulation(
             species=species,
             population_config=self._draft(species),

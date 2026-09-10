@@ -271,47 +271,18 @@ The discrete-generation engine ships a Wright-Fisher extreme speed mode: a singl
 | MULTINOMIAL (1) | Classic Wright-Fisher single multinomial draw |
 | POISSON (2) | Independent Poisson draws (large-N approximation) |
 
-### Public low-level entry
-
-The public low-level factory accepts `extreme_speed_mode` and stores it in the
-immutable `ModelDraft`. Pass that draft to the public
-`DiscreteGenerationPopulation` constructor; the Rust backend reads the flag
-when the population is created.
+`extreme_speed_mode` is selected on the build chain (the low-level factory
+construction path has been retired):
 
 ```python
-import natal as nt
-
-species = nt.Species.from_dict(
-    "WFExample",
-    {"chr1": {"L": ["WT", "Drive"]}},
-)
-base = (
-    nt.DiscreteGenerationPopulation.setup(species, stochastic=False)
+pop = (
+    nt.DiscreteGenerationPopulation.setup(
+        species, stochastic=False, extreme_speed_mode=3
+    )
     .initial_state({"female": {"WT|WT": 50}, "male": {"Drive|Drive": 50}})
     .build()
 )
-config = base.config
-
-engine_config = nt.build_discrete_engine_config(
-    n_genotypes=config.n_ztypes,
-    n_gtypes=config.n_gtypes,
-    n_glabs=config.n_glabs,
-    n_slabs=config.n_slabs,
-    zygotes_to_gametes_map=config.zygotes_to_gametes_map,
-    gametes_to_zygotes_map=config.gametes_to_zygotes_map,
-    stochastic=False,
-    extreme_speed_mode=3,
-)
-pop = nt.DiscreteGenerationPopulation(
-    species=species,
-    population_config=engine_config,
-    initial_individual_count={"female": {"WT|WT": 50}, "male": {"Drive|Drive": 50}},
-)
-pop.run(1)
 ```
-
-This is a low-level construction path. The regular `PopulationBuilder` build path
-does not expose an `extreme_speed_mode` chain method.
 
 ### Competition and Hooks
 
