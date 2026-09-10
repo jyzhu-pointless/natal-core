@@ -316,6 +316,156 @@ def test_reset_returns_session_to_ready() -> None:
     assert pop.tick == 1
 
 
+def test_manual_stopping_event_locks_rerun() -> None:
+    """A stopping hook fired through the public trigger_event locks runs.
+
+    Pins the disclosed P7 delta: the session has marked itself Stopped on
+    every stopping event since before P7, and the derived ``is_finished``
+    now reflects it.  Catches a regression back to the retired split state
+    where a manual stopping event left the population runnable while the
+    session already recorded Stopped.
+    """
+
+    def stop_now(ctx: TickContext) -> int:
+        _ = ctx
+        return ctx.stop()
+
+    pop = _builder("RS7ManualStoppingEvent").hooks(stop_now, event="early").build()
+    result = pop.trigger_event("early", deme_id=0)
+
+    assert result == 1
+    assert pop.is_finished
+    with pytest.raises(RuntimeError, match="has finished"):
+        pop.run(1)
+
+    pop.reset()
+    assert not pop.is_finished
+    # The unconditional stop hook fires again on the post-reset run: the
+    # population must stop at tick 0 and re-lock through the session.
+    pop.run(1)
+    assert pop.tick == 0
+    assert pop.is_finished
+
+
+def test_python_side_failure_before_native_call_does_not_poison(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Python-side failure before the native call leaves runs retryable.
+
+    Pins the disclosed P7 delta: only the session itself marks Failed (a
+    native run or in-run callback abort).  Catches the retired blanket
+    ``except BaseException: _failed = True`` poison, which permanently
+    locked the population on pre-native errors that never touched the
+    session (retry would raise "has failed").
+    """
+    from natal.frontend.population.base import BasePopulation
+
+    pop = _builder("RS7PreNativeFailure").record_history(mode="raw").build()
+    original = BasePopulation._bind_history_recording
+    calls = {"n": 0}
+
+    def flaky_bind(self: BasePopulation[Any], backend: Any) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("python-side pre-native failure")
+        original(self, backend)
+
+    monkeypatch.setattr(BasePopulation, "_bind_history_recording", flaky_bind)
+
+    with pytest.raises(RuntimeError, match="pre-native failure"):
+        pop.run(1, record_every=1)
+
+    monkeypatch.undo()
+    assert pop.is_failed is False
+    assert pop.is_finished is False
+
+    pop.run(1, record_every=1)
+    assert pop.tick == 1
+    assert pop.history.ticks == (0, 1)
+
+
+def test_import_state_after_failure_unlocks_runs() -> None:
+    """import_state returns a failed population to a runnable boundary.
+
+    Pins the disclosed P7 delta: set_state resets the session to Ready, so
+    the derived ``is_failed`` clears.  Catches the retired behavior where
+    the Python-side failure marker survived the import and rejected every
+    later run.
+    """
+
+    def boom(ctx: TickContext) -> int:
+        if not boom.armed:
+            return 0
+        boom.armed = False
+        raise ValueError("hook boom")
+
+    boom.armed = True  # type: ignore[attr-defined]
+
+    pop = (
+        _builder("RS7ImportAfterFail")
+        .record_history(mode="raw")
+        .hooks(boom, event="early")
+        .build()
+    )
+    with pytest.raises(ValueError, match="hook boom"):
+        pop.run(2, record_every=1)
+    assert pop.is_failed
+
+    pop.import_state(pop.export_state())
+    assert not pop.is_failed
+    assert not pop.is_finished
+
+    pop.run(1, record_every=0)
+    assert pop.tick == 1
+
+
+def test_finish_simulation_inside_hook_raises_and_ctx_stop_is_the_path() -> None:
+    """finish_simulation re-enters the borrowed session; ctx.stop() is the path.
+
+    Pins the disclosed P7 delta and the docstring contract: calling
+    finish_simulation from inside a hook raises the native borrow error
+    instead of silently locking, and the documented alternative (the
+    context's stop()) locks the population through the session.  Catches a
+    re-introduced Python-side flag set that would mask the re-entrancy.
+    """
+    holder: dict[str, Any] = {}
+    in_hook_errors: list[str] = []
+
+    def forbidden_finish(ctx: TickContext) -> int:
+        pop: AnyPopulation = holder["pop"]
+        try:
+            pop.finish_simulation()
+        except RuntimeError as error:
+            in_hook_errors.append(str(error))
+        return 0
+
+    pop = (
+        _builder("RS7FinishInHook")
+        .hooks(forbidden_finish, event="early")
+        .build()
+    )
+    holder["pop"] = pop
+    pop.run(2)
+
+    assert len(in_hook_errors) == 2
+    assert all("Already" in message for message in in_hook_errors)
+    assert not pop.is_finished
+    assert pop.tick == 2  # the swallowed error did not abort or lock the run
+
+    # The documented in-hook path: ctx.stop() marks the session Stopped,
+    # the finish event fires after the run, and the population locks.
+    def stop_late(ctx: TickContext) -> int:
+        if int(ctx.tick) >= 1:
+            return ctx.stop()
+        return 0
+
+    pop2 = _builder("RS7FinishViaCtxStop").hooks(stop_late, event="late").build()
+    pop2.run(3)
+    assert pop2.is_finished
+    with pytest.raises(RuntimeError, match="has finished"):
+        pop2.run(1)
+
+
 def test_manual_stop_marks_session_stopped() -> None:
     """A manual STOP event (outside a run) locks the population.
 
