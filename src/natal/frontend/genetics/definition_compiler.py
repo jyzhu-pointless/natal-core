@@ -116,7 +116,7 @@ def _apply_fitness_step(host: _CompileHost, step: Mapping[str, object]) -> None:
     method, so a cold rebuild resolves patterns exactly as the original
     declaration did.
     """
-    from natal.frontend.configurator._writers import DraftWriter
+    from natal.frontend.builder._writers import DraftWriter
 
     writes = {name: value for name, value in step.items() if name != "mode"}
     if not writes:
@@ -187,7 +187,7 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
                 apply_preset_fitness_patch(host, patch)
         gametes.extend(cast("GameteList", list(definition.manual_gamete)))
         zygotes.extend(cast("ZygoteList", list(definition.manual_zygote)))
-        from natal.frontend.configurator._registry_builder import rebuild_config_maps
+        from natal.frontend.builder._registry_builder import rebuild_config_maps
 
         host.draft, _applied = rebuild_config_maps(
             species, host.draft, registry,

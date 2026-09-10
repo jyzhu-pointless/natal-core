@@ -158,7 +158,7 @@ class TestPerAgeInitialStateBranches:
 
 
 class TestConstructorInitialArrays:
-    """Direct constructor initial arrays bypass the configurator chain."""
+    """Direct constructor initial arrays bypass the builder chain."""
 
     def test_constructor_counts_and_sperm_land_exact(self) -> None:
         """__init__(initial_individual_count=..., initial_sperm_storage=...)."""

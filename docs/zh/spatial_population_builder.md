@@ -1,6 +1,6 @@
-# SpatialConfigurator：空间种群批量构造
+# SpatialPopulationBuilder：空间种群批量构造
 
-`SpatialConfigurator` 通过「构建一次模板，克隆 N-1 次」的策略解决多 deme 初始化时的重复计算问题。
+`SpatialPopulationBuilder` 通过「构建一次模板，克隆 N-1 次」的策略解决多 deme 初始化时的重复计算问题。
 
 ## 快速开始
 
@@ -8,7 +8,7 @@
 import numpy as np
 from natal import Species, HexGrid, SpatialPopulation
 
-species = Species.from_dict(name="spatial_configurator_demo", structure={"chr1": {"loc": ["A", "B"]}})
+species = Species.from_dict(name="spatial_population_builder_demo", structure={"chr1": {"loc": ["A", "B"]}})
 
 # 所有 deme 使用相同的离散世代模型。
 pop = (
@@ -36,9 +36,9 @@ assert pop.tick == 10
 ```
 SpatialPopulation.builder(...)
     │
-    └─► SpatialConfigurator         ← 面向用户的链式 API
+    └─► SpatialPopulationBuilder         ← 面向用户的链式 API
            │
-           ├─ _template        ← 单 deme 模板 Configurator（不是已删除的 Builder 类）
+           ├─ _template        ← 单 deme 模板 PopulationBuilder（不是已删除的 Builder 类）
            │                     始终只看到一个 deme 的标量参数
            ├─ _batch_settings  ← {参数名: BatchSetting}
            │                     拦截到的跨 deme 变化参数
@@ -46,9 +46,9 @@ SpatialPopulation.builder(...)
                                  每次链式调用的完整记录
 ```
 
-`SpatialConfigurator` 不新增种群类，而是在外层包装一个单 deme 模板 `Configurator`。链式调用阶段同时做三件事：
+`SpatialPopulationBuilder` 不新增种群类，而是在外层包装一个单 deme 模板 `PopulationBuilder`。链式调用阶段同时做三件事：
 
-1. **代理给 `_template`** — 模板 `Configurator` 始终收到标量值，保持正确的内部状态
+1. **代理给 `_template`** — 模板 `PopulationBuilder` 始终收到标量值，保持正确的内部状态
 2. **检测 `BatchSetting`** — 拦截并存储到 `_batch_settings`，template 只拿到 `first_value()`
 3. **记录到 `_declaration_log`** — 保留原始参数（含 BatchSetting 对象），供异构场景回放
 
@@ -98,7 +98,7 @@ def _detect_and_delegate(self, method_name, kwargs):
 
 优先级：`age_1_carrying_capacity` > `old_juvenile_carrying_capacity` > `carrying_capacity`。
 
-这在 `_declaration_log` 中统一键名，确保异构回放时参数名与模板 `Configurator` 的方法签名一致。
+这在 `_declaration_log` 中统一键名，确保异构回放时参数名与模板 `PopulationBuilder` 的方法签名一致。
 
 ## 两条构建路径
 
@@ -130,7 +130,7 @@ _build_heterogeneous():
 
     4. 对每组:
        a. _build_template_for_group(sig_map)
-          # 创建新模板 Configurator，重放 _declaration_log，替换 batch 参数为组值
+          # 创建新模板 PopulationBuilder，重放 _declaration_log，替换 batch 参数为组值
        b. 组内其余 deme = _clone_deme(group_template)
 
     5. 按索引组装所有 deme，构造 SpatialPopulation
@@ -140,8 +140,8 @@ _build_heterogeneous():
 
 ```python
 def _build_template_for_group(self, sig_map):
-    # 为该组新建单 deme 模板（与 SpatialConfigurator.__init__ 同一入口）
-    template = Configurator.from_species(self._species, discrete=(self._pop_type != "age_structured"))
+    # 为该组新建单 deme 模板（与 SpatialPopulationBuilder.__init__ 同一入口）
+    template = PopulationBuilder.from_species(self._species, discrete=(self._pop_type != "age_structured"))
 
     for method_name, kwargs in self._declaration_log:
         resolved = {}
@@ -210,9 +210,9 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 ## 与现有 API 的关系
 
-`SpatialConfigurator` 不修改任何现有类：
+`SpatialPopulationBuilder` 不修改任何现有类：
 
-- 旧的 Builder 类（`AgeStructuredPopulationBuilder` / `DiscreteGenerationPopulationBuilder`）已移除，`SpatialConfigurator` 是唯一的批量配置路径
+- 旧的 Builder 类（`AgeStructuredPopulationBuilder` / `DiscreteGenerationPopulationBuilder`）已移除，`SpatialPopulationBuilder` 是唯一的批量配置路径
 - `SpatialPopulation.__init__` — 不变，`build()` 最终调用它，传入已构建好的 deme 列表
 - 旧的逐 deme 构造写法仍然有效
 

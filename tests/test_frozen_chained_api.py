@@ -312,7 +312,7 @@ def test_custom_slots_keep_scalar_types_and_array_shapes() -> None:
 
 def _fixed_point_builder(
     name: str,
-) -> nt.Configurator:
+) -> nt.PopulationBuilder:
     """Return a 10+10 WT|WT discrete builder at its exact replacement point."""
     return (
         nt.DiscreteGenerationPopulation.setup(

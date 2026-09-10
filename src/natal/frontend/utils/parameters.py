@@ -2,7 +2,7 @@
 
 Each ``ParamDescriptor`` maps a user-facing parameter to its
 ``ModelDraft`` field and array path.  This is the single source of
-truth shared by the route table (``natal.frontend.configurator._routes``),
+truth shared by the route table (``natal.frontend.builder._routes``),
 the spatial builder dispatch, and the inference layer
 (``natal-inferencer``).
 
@@ -60,7 +60,7 @@ class ParamDescriptor:
     Attributes:
         domain: Category this parameter belongs to (e.g. ``"competition"``).
         name: User-facing name (e.g. ``"carrying_capacity"``).
-        method: Configurator method that exposes the parameter.
+        method: PopulationBuilder method that exposes the parameter.
         kind: One of the seven shapes (see :data:`RouteKindStr`).
         section: ``"ecology"`` or ``"genetics"`` — selects the params
             section and therefore the write channel.

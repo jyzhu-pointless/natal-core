@@ -215,7 +215,7 @@ def materialize(
 
     Args:
         draft: A fully built :class:`ModelDraft` (the build-time
-            scratch produced by the configurator factories).
+            scratch produced by the builder factories).
         migration: Optional spatial migration payload (CSR + rate
             column).  ``None`` materializes a panmictic contract: one
             deme, empty CSR, an all-zero (1, n_sexes, n_ages) rate.

@@ -39,7 +39,7 @@ def _build_age_structured_config(sp: nt.Species) -> ModelDraft:
 
     Used by the negative-contract tests to obtain a real ``PopulationConfig``
     (independent model) that must be rejected by the discrete-generation
-    entry points.  Building via the public Configurator path is less brittle
+    entry points.  Building via the public PopulationBuilder path is less brittle
     than hand-constructing the 40-field NamedTuple.
     """
     age_pop = (

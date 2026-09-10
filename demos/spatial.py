@@ -12,7 +12,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 import natal as nt
-from natal.frontend.spatial.configurator import batch_setting
+from natal.frontend.spatial.builder import batch_setting
 from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import (
     SquareGrid,

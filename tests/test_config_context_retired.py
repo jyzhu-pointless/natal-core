@@ -8,7 +8,7 @@ could be violated or the frozen build-path behavior could regress:
     ``fitness._types``) must stay unreachable through every import and
     getattr path, and its definitions must not exist anywhere under
     ``src/natal``.
-  - RecipeHost structure: the Configurator itself is now the build-side
+  - RecipeHost structure: the PopulationBuilder itself is now the build-side
     recipe host; its ``species``/``registry``/``index_registry`` surface
     must mirror the population side structurally.
   - State transitions: build-time preset/modifier failures must roll the
@@ -33,10 +33,10 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.configurator import Configurator
-from natal.frontend.configurator import _base as configurator_base
-from natal.frontend.configurator import _registry_builder as registry_builder
-from natal.frontend.configurator._registry_builder import rebuild_config_maps
+from natal.frontend.builder import PopulationBuilder
+from natal.frontend.builder import _base as builder_base
+from natal.frontend.builder import _registry_builder as registry_builder
+from natal.frontend.builder._registry_builder import rebuild_config_maps
 from natal.frontend.data import ModelDraft
 from natal.frontend.genetics.compile import RecipeHost
 from natal.frontend.modifiers.module import GameteModifier
@@ -178,7 +178,7 @@ class TestNegativeContracts:
         (e.g. left behind in a submodule or re-exported).
         """
         with pytest.raises(ImportError):
-            from natal.frontend.configurator._registry_builder import (  # noqa: F401
+            from natal.frontend.builder._registry_builder import (  # noqa: F401
                 ConfigContext,
             )
         assert getattr(registry_builder, "ConfigContext", None) is None, (
@@ -235,12 +235,12 @@ class TestNegativeContracts:
                     hits.append(f"{path.relative_to(_SRC_NATAL.parent)}: {needle}")
         assert not hits, f"retired definitions found in source: {hits}"
 
-    def test_configurator_adapter_round_trip_methods_are_gone(
+    def test_builder_adapter_round_trip_methods_are_gone(
         self, simple_species: nt.Species
     ) -> None:
         """Category: negative contract.
 
-        Invariant: the Configurator class no longer defines the
+        Invariant: the PopulationBuilder class no longer defines the
         ``_make_ctx`` / ``_sync_from_ctx`` adapter pair (neither on the
         class nor on an instance), and the dead
         ``_RUST_GENETICS_TENSORS`` constant is absent from the module
@@ -249,13 +249,13 @@ class TestNegativeContracts:
         methods, silently re-introducing the population-mimicry path.
         """
         for attr in ("_make_ctx", "_sync_from_ctx"):
-            assert getattr(Configurator, attr, None) is None, (
-                f"Configurator.{attr} is back — the adapter round-trip returned"
+            assert getattr(PopulationBuilder, attr, None) is None, (
+                f"PopulationBuilder.{attr} is back — the adapter round-trip returned"
             )
-        instance = Configurator.from_species(simple_species)
+        instance = PopulationBuilder.from_species(simple_species)
         assert getattr(instance, "_make_ctx", None) is None
         assert getattr(instance, "_sync_from_ctx", None) is None
-        assert not hasattr(configurator_base, "_RUST_GENETICS_TENSORS"), (
+        assert not hasattr(builder_base, "_RUST_GENETICS_TENSORS"), (
             "the dead _RUST_GENETICS_TENSORS constant is reachable again"
         )
 
@@ -308,9 +308,9 @@ class _RecipeHostMirror(Protocol):
 
 
 class TestRecipeHostStructure:
-    """The Configurator is the build-side RecipeHost; structure must match."""
+    """The PopulationBuilder is the build-side RecipeHost; structure must match."""
 
-    def test_configurator_exposes_stable_lazy_recipe_host_surface(
+    def test_builder_exposes_stable_lazy_recipe_host_surface(
         self, simple_species: nt.Species
     ) -> None:
         """Category: ownership / structure.
@@ -323,7 +323,7 @@ class TestRecipeHostStructure:
         Attack vector: the property rebuilding the registry per call (each
         recipe would see fresh indices) or handing out a copy.
         """
-        cfg = Configurator.from_species(simple_species)
+        cfg = PopulationBuilder.from_species(simple_species)
         assert cfg._registry is None, "registry was built eagerly at construction"  # pyright: ignore[reportPrivateUsage]  # laziness is the invariant under test
         first = cfg.registry
         second = cfg.registry
@@ -343,14 +343,14 @@ class TestRecipeHostStructure:
         """Category: structure (axis: build-side host vs runtime host).
 
         Invariant: both hosts that recipes run against — a mid-compile
-        Configurator and a built population — satisfy the same structural
+        PopulationBuilder and a built population — satisfy the same structural
         surface with the correct member types, and both spell
         ``registry is index_registry``.
-        Attack vector: the Configurator dropping a protocol member
+        Attack vector: the PopulationBuilder dropping a protocol member
         (recipes would crash only when driven through one host) or
         exposing a differently-typed stand-in.
         """
-        cfg = Configurator.from_species(simple_species)
+        cfg = PopulationBuilder.from_species(simple_species)
         with pytest.raises(TypeError):
             # Documents why the mirror below is needed: RecipeHost is not
             # runtime_checkable, so a direct isinstance probe is rejected.
@@ -373,19 +373,19 @@ class TestRecipeHostStructure:
         assert cfg.species is simple_species
         assert pop.species is simple_species
 
-    def test_species_less_configurator_properties_raise(
+    def test_species_less_builder_properties_raise(
         self, simple_species: nt.Species
     ) -> None:
         """Category: error path.
 
-        Invariant: a raw-constructed Configurator (no species) raises
+        Invariant: a raw-constructed PopulationBuilder (no species) raises
         ``RuntimeError`` from ``species`` and — because the registry is
         derived from the species — from ``registry``/``index_registry``.
         Attack vector: the lazy registry builder silently registering an
         empty registry instead of failing fast.
         """
-        draft = Configurator.from_species(simple_species).config
-        bare = Configurator(draft)
+        draft = PopulationBuilder.from_species(simple_species).config
+        bare = PopulationBuilder(draft)
         for probe in (
             lambda: bare.species,
             lambda: bare.registry,
@@ -428,7 +428,7 @@ class TestBuildPathFreeze:
         of row replacement, or the manual fitness write composing
         (multiplying) where it must replace.
         """
-        cfg = Configurator.from_species(simple_species)
+        cfg = PopulationBuilder.from_species(simple_species)
         reg = cfg.registry
         zt_het = _ztype_index(reg, simple_species, "WT|Dr", "default")
         zt_ctrl = _ztype_index(reg, simple_species, "WT|R2", "default")
@@ -484,14 +484,14 @@ class TestBuildPathFreeze:
 
         Invariant 1 (order: success then failure): when the first preset
         applies fully and a later one is pre-bound to a different species,
-        the ``ValueError`` leaves the Configurator bit-identical to its
+        the ``ValueError`` leaves the PopulationBuilder bit-identical to its
         pre-call state — same draft object, same maps, same fitness
         tensors, empty modifier/preset lists — and unbinds the first
         preset again (its binding was a transaction side effect).
         Invariant 2 (order: failure first): the failure surfaces before
         any mutation.
         Invariant 3 (recovery): a subsequent ``presets(ok)`` on the same
-        Configurator compiles maps bit-identical to a fresh Configurator
+        PopulationBuilder compiles maps bit-identical to a fresh PopulationBuilder
         that only ever saw ``ok`` — no residue of the failed batch.
         Attack vector: a rollback that restores the draft identity but not
         the in-place-mutated fitness arrays, or that leaves the first
@@ -506,7 +506,7 @@ class TestBuildPathFreeze:
         )
 
         # -- order A: ok applies fully, then bound fails --------------------
-        cfg = Configurator.from_species(simple_species)
+        cfg = PopulationBuilder.from_species(simple_species)
         ok = _fresh_homing()
         original_draft = cfg.config
         baseline_z2g = cfg.config.zygotes_to_gametes_map.copy()
@@ -535,9 +535,9 @@ class TestBuildPathFreeze:
         assert cfg.gamete_modifiers == []
         assert ok2._bound_species is None  # pyright: ignore[reportPrivateUsage]  # same probe as above
 
-        # -- recovery: the same Configurator now accepts ok alone ------------
+        # -- recovery: the same PopulationBuilder now accepts ok alone ------------
         cfg.presets(ok)
-        fresh = Configurator.from_species(simple_species).presets(_fresh_homing())
+        fresh = PopulationBuilder.from_species(simple_species).presets(_fresh_homing())
         np.testing.assert_array_equal(
             cfg.config.zygotes_to_gametes_map,
             fresh.config.zygotes_to_gametes_map,
@@ -561,12 +561,12 @@ class TestBuildPathFreeze:
 
         Invariant: a modifier whose callable returns a non-mapping makes
         ``modifiers()`` raise ``TypeError`` at rebuild time, and the
-        Configurator's modifier list and draft identity are unchanged
+        PopulationBuilder's modifier list and draft identity are unchanged
         afterwards — the candidate list is committed only on success.
         Attack vector: the failing modifier appended to
         ``cfg.gamete_modifiers`` anyway, corrupting every later rebuild.
         """
-        cfg = Configurator.from_species(simple_species)
+        cfg = PopulationBuilder.from_species(simple_species)
         cfg.modifiers(gamete_modifiers=[_noop_gamete_modifier])
         committed = list(cfg.gamete_modifiers)
         draft_before = cfg.config
@@ -718,7 +718,7 @@ class TestBuildPathFreeze:
         blueprint arrays, permanently contaminating every later build on
         that singleton species.
         """
-        drive_cfg = Configurator.from_species(simple_species)
+        drive_cfg = PopulationBuilder.from_species(simple_species)
         reg = drive_cfg.registry
         zt_het = _ztype_index(reg, simple_species, "WT|Dr", "default")
         wt = _gtype_index(reg, simple_species, "WT", "default")
@@ -731,7 +731,7 @@ class TestBuildPathFreeze:
             atol=1e-15,
         )
 
-        clean = Configurator.from_species(simple_species)
+        clean = PopulationBuilder.from_species(simple_species)
         np.testing.assert_allclose(
             clean.config.zygotes_to_gametes_map[0, zt_het, [wt, dr, r2]],
             [0.5, 0.5, 0.0],
@@ -882,15 +882,15 @@ class TestErrorPaths:
     ) -> None:
         """Category: error path.
 
-        Invariant: ``presets()`` on a species-less Configurator raises
+        Invariant: ``presets()`` on a species-less PopulationBuilder raises
         ``RuntimeError`` and the transaction rolls back completely — same
         draft object, empty modifier/preset lists, and the caller-owned
         preset stays unbound (so it can be applied elsewhere afterwards).
         Attack vector: the species guard firing AFTER the candidate lists
         were mutated, leaving half-registered state behind.
         """
-        draft = Configurator.from_species(simple_species).config
-        bare = Configurator(draft)
+        draft = PopulationBuilder.from_species(simple_species).config
+        bare = PopulationBuilder(draft)
         preset = _fresh_homing()
         with pytest.raises(RuntimeError, match="require a Species"):
             bare.presets(preset)
@@ -900,8 +900,8 @@ class TestErrorPaths:
         assert bare._presets == []  # pyright: ignore[reportPrivateUsage]  # rollback verification inspects the registration list
         assert preset._bound_species is None  # pyright: ignore[reportPrivateUsage]  # caller-owned preset must survive the failed transaction unbound
 
-        # The preset is still usable on a properly-hosted Configurator.
-        hosted = Configurator.from_species(simple_species).presets(preset)
+        # The preset is still usable on a properly-hosted PopulationBuilder.
+        hosted = PopulationBuilder.from_species(simple_species).presets(preset)
         assert preset._bound_species is simple_species  # pyright: ignore[reportPrivateUsage]  # confirms the earlier failure bound nothing
         reg = hosted.registry
         zt_het = _ztype_index(reg, simple_species, "WT|Dr", "default")
@@ -918,13 +918,13 @@ class TestErrorPaths:
     ) -> None:
         """Category: error path.
 
-        Invariant: ``modifiers()`` on a species-less Configurator raises
+        Invariant: ``modifiers()`` on a species-less PopulationBuilder raises
         ``RuntimeError`` before the candidate lists are committed.
         Attack vector: the id assignment/list append happening before the
         compile touches ``self.species``.
         """
-        draft = Configurator.from_species(simple_species).config
-        bare = Configurator(draft)
+        draft = PopulationBuilder.from_species(simple_species).config
+        bare = PopulationBuilder(draft)
         with pytest.raises(RuntimeError, match="require a Species"):
             bare.modifiers(gamete_modifiers=[_noop_gamete_modifier])
         assert bare.gamete_modifiers == []
@@ -953,7 +953,7 @@ class TestErrorPaths:
         assert registry.index_to_haplo == []
         assert len(registry.index_to_genotype) == 6
 
-        draft = Configurator.from_species(simple_species).config
+        draft = PopulationBuilder.from_species(simple_species).config
         new_draft, applied = rebuild_config_maps(
             simple_species,
             draft,
@@ -987,7 +987,7 @@ class TestOwnershipIsolation:
         tensors, so a compile that later fails would still have corrupted
         the caller's draft.
         """
-        cfg = Configurator.from_species(simple_species)
+        cfg = PopulationBuilder.from_species(simple_species)
         original_viab = cfg.config.viability_fitness
         original_z2g = cfg.config.zygotes_to_gametes_map
         cfg.presets(_fresh_homing())
@@ -1022,7 +1022,7 @@ class TestOwnershipIsolation:
         recipe could corrupt the name directory every later index lookup
         depends on.
         """
-        cfg = Configurator.from_species(simple_species)
+        cfg = PopulationBuilder.from_species(simple_species)
         reg = cfg.registry
         ztypes = reg.index_to_ztype
         gtypes = reg.index_to_gtype

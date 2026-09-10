@@ -42,14 +42,14 @@ def test_deferred_zygote_modifier_registration_compiles_once() -> None:
 def test_compression_preserves_closed_wild_type_population(declared: list[str] | list[int] | None) -> None:
     """A wild-type-only Mendelian model needs exactly one active type per axis."""
     import natal as nt
-    from natal.frontend.configurator import Configurator
+    from natal.frontend.builder import PopulationBuilder
 
     species = nt.Species.from_dict(
         name=f"CompressedBoundary_{declared}",
         structure={"chr": {"locus": ["WT", "Dr"]}},
         gamete_labels=["default", "deposited"],
     )
-    pop = (Configurator.for_discrete(species)
+    pop = (PopulationBuilder.for_discrete(species)
            .setup(stochastic=False, compress=True, declared_zygote_types=declared)
            .initial_state({"female": {"WT|WT": 10}, "male": {"WT|WT": 10}})
            .build())

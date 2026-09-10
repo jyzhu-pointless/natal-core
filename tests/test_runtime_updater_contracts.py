@@ -28,7 +28,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.configurator import Configurator, RuntimeUpdater
+from natal.frontend.builder import PopulationBuilder, RuntimeUpdater
 from natal.frontend.hooks.tick_context import TickContext
 
 # Build-only vocabulary: none of these may exist on the update handle.
@@ -127,7 +127,7 @@ def test_build_methods_are_absent_not_rejected() -> None:
 def test_retired_handle_machinery_is_gone() -> None:
     """The for_population-era handle machinery is unreachable.
 
-    Catches the runtime Configurator returning through any of its old
+    Catches the runtime PopulationBuilder returning through any of its old
     doors: the factory, the population backref, the hook-context marker,
     or the candidate compiler pair.
     """
@@ -136,9 +136,9 @@ def test_retired_handle_machinery_is_gone() -> None:
         "_genetic_candidate",
         "_commit_genetic_candidate",
     ):
-        assert not hasattr(Configurator, attr), attr
+        assert not hasattr(PopulationBuilder, attr), attr
     pop = _build("RURetired")
-    instance = Configurator.from_species(_species("RURetiredSp"))
+    instance = PopulationBuilder.from_species(_species("RURetiredSp"))
     assert not hasattr(instance, "_pop_ref")
     assert not hasattr(instance, "_hook_context")
     assert pop.update().__class__ is RuntimeUpdater

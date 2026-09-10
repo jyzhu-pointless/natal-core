@@ -1,6 +1,6 @@
 """Spatial runtime modification after the stage-3 write-plane change.
 
-The ``_SpatialUpdate`` configurator chain (``pop.update()`` /
+The ``_SpatialUpdate`` builder chain (``pop.update()`` /
 ``pop.update_deme()``) is deleted.  Runtime modification of a spatial
 population goes through the params data plane instead:
 
@@ -143,12 +143,12 @@ def homogeneous_age_pop(species):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Negative contracts: the update() configurator chain is gone
+# Negative contracts: the update() builder chain is gone
 # ══════════════════════════════════════════════════════════════════════════
 
 
 class TestSpatialUpdateRemoved:
-    """The deleted runtime configurator chain must stay inaccessible."""
+    """The deleted runtime builder chain must stay inaccessible."""
 
     def test_spatial_population_update_removed(self, homogeneous_pop) -> None:
         """SpatialPopulation.update must not exist."""
@@ -169,7 +169,7 @@ class TestSpatialUpdateRemoved:
 
         assert not hasattr(spatial_population, "_SpatialUpdate")
 
-    def test_spatial_configurator_batchable_constant_removed(
+    def test_spatial_builder_batchable_constant_removed(
         self,
         homogeneous_pop,
     ) -> None:

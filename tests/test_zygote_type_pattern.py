@@ -114,7 +114,7 @@ class TestFitnessAtSlab:
             "fit_slab", {"c1": {"l1": ["A", "a"]}},
             somatic_labels=["normal", "infected"],
         )
-        cfg = nt.Configurator.from_species(sp).setup(stochastic=False)
+        cfg = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
         cfg.fitness(viability={"A|a@infected": {"female": 0.5}})
         arr = cfg._config.viability_fitness
         # Unordered genotypes: AA=0, Aa=1, aa=2
@@ -130,7 +130,7 @@ class TestFitnessAtSlab:
             "fit_noslab", {"c1": {"l1": ["A", "a"]}},
             somatic_labels=["normal", "infected"],
         )
-        cfg = nt.Configurator.from_species(sp).setup(stochastic=False)
+        cfg = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
         cfg.fitness(viability={"A|a": {"female": 0.3}})
         arr = cfg._config.viability_fitness
         # Without @slab → writes to all slab columns (default behavior)
@@ -146,7 +146,7 @@ class TestLabPatternAdvanced:
             "lab_neg", {"c1": {"l1": ["A", "a"]}},
             somatic_labels=["normal", "infected"],
         )
-        cfg = nt.Configurator.from_species(sp).setup(stochastic=False)
+        cfg = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
         # "!normal" means all slabs EXCEPT normal
         cfg.fitness(viability={"A|a@!normal": {"female": 0.5}})
         arr = cfg._config.viability_fitness
@@ -158,7 +158,7 @@ class TestLabPatternAdvanced:
             "lab_set", {"c1": {"l1": ["A", "a"]}},
             somatic_labels=["normal", "infected", "treated"],
         )
-        cfg = nt.Configurator.from_species(sp).setup(stochastic=False)
+        cfg = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
         # Only normal and infected
         cfg.fitness(viability={"A|a@{normal,infected}": {"female": 0.5}})
         arr = cfg._config.viability_fitness
@@ -171,7 +171,7 @@ class TestLabPatternAdvanced:
             "lab_inv", {"c1": {"l1": ["A", "a"]}},
             somatic_labels=["normal", "infected"],
         )
-        cfg = nt.Configurator.from_species(sp).setup(stochastic=False)
+        cfg = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
         with pytest.raises(ValueError, match="No slab matches"):
             cfg.fitness(viability={"A|a@nonexistent": 0.5})
 
@@ -180,7 +180,7 @@ class TestLabPatternAdvanced:
             "lab_multi", {"c1": {"l1": ["A", "a"]}},
             somatic_labels=["normal", "infected"],
         )
-        cfg = nt.Configurator.from_species(sp).setup(stochastic=False)
+        cfg = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
         cfg.fitness(viability={
             "A|a@normal": {"female": 0.3},
             "A|a@infected": {"female": 0.7},

@@ -62,7 +62,7 @@ for row in pop.params_log:
 `set_param()` 只写你传入的 **draft（草稿）**，不会写入任何运行种群。`pop.config` 是查询快照，对它调用 `set_param()` 不会改变种群；要修改运行种群请用 `pop.update()` 或 `pop.params`。它适合纯草稿场景（脚本、notebook、离线构造配置）：
 
 ```python
-from natal.frontend.configurator import set_param
+from natal.frontend.builder import set_param
 
 # 生态标量是 NamedTuple 槽位：必须接住返回值并重新绑定
 draft = pop.config
@@ -230,14 +230,14 @@ juvenile_growth_mode、generation_time）在运行合同中均为普通标量；
 （例如修改了 custom 字段结构）。新配置必须与原有配置类型相同（`ModelDraft`，
 且离散模型须满足离散归一化不变量）。
 
-Configurator 的 `custom()` 方法在添加新字段时会触发此路径：它会重建 custom
+PopulationBuilder 的 `custom()` 方法在添加新字段时会触发此路径：它会重建 custom
 结构化数组并调用 `set_config()` 将新配置写回种群。
 
 ---
 
 ## 8. 参数参考
 
-参数按领域分组，与 Configurator 链式 API 方法对应。
+参数按领域分组，与 PopulationBuilder 链式 API 方法对应。
 
 | 领域 | 参数名 | 别名 | 适用模型 | set_param |
 |---|---|---|---|---|
@@ -264,7 +264,7 @@ Configurator 的 `custom()` 方法在添加新字段时会触发此路径：它�
 
 ## 9. 新旧对比
 
-| | 旧（Builder / njit 时代） | 新（Configurator） |
+| | 旧（Builder / njit 时代） | 新（PopulationBuilder） |
 |---|---|---|
 | 构建后修改 | 不支持 | `pop.update()` |
 | Hook 内修改 | `(state, config, deme_id)` 直接写 | `pop.params`（TickContext）或 `Op.set_param` |

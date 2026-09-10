@@ -28,7 +28,7 @@ from natal.frontend.registry.index import IndexRegistry
 if TYPE_CHECKING:
     from natal.frontend.genetics.compile import GameteList, RecipeHost, ZygoteList
 
-# ── Registry builder (shared by Configurator and adapter) ──────────────────────
+# ── Registry builder (shared by PopulationBuilder and adapter) ──────────────────────
 
 
 def build_registry(species: Species) -> IndexRegistry:

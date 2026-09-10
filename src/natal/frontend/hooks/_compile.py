@@ -1,6 +1,6 @@
 """Build-time hook compilation and program packing.
 
-The builder (Configurator) resolves every declared hook item once against
+The builder (PopulationBuilder) resolves every declared hook item once against
 the final registry and injects the resulting plan into the population at
 construction.  Populations expose no registration entry, so this module is
 the single compile path shared by the panmictic and the spatial build

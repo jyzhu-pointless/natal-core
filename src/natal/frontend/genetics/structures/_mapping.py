@@ -108,7 +108,7 @@ class SpeciesMappingMixin:
         offspring probability tensor, and genotype compatibility arrays.
         These never change at runtime.
 
-        Configurator and PopulationBuilder call this during build to avoid
+        PopulationBuilder and PopulationBuilder call this during build to avoid
         recomputing species-level arrays on every construction.
 
         Returns:

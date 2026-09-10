@@ -1,6 +1,6 @@
 # Spatial 模拟指南
 
-SpatialPopulation 的实际用法：用 SpatialConfigurator 快速构建多 deme 种群，配置拓扑与迁移核，控制 deme 间流动。
+SpatialPopulation 的实际用法：用 SpatialPopulationBuilder 快速构建多 deme 种群，配置拓扑与迁移核，控制 deme 间流动。
 
 阅读完成后，可以写出下面这类代码：
 
@@ -16,11 +16,11 @@ spatial = (
 )
 ```
 
-> **提示**：`SpatialConfigurator` 是同构/异构空间种群的首选构造方式（构建一次模板、克隆其余 deme）。详见 [SpatialConfigurator 文档](spatial_configurator.md)。
+> **提示**：`SpatialPopulationBuilder` 是同构/异构空间种群的首选构造方式（构建一次模板、克隆其余 deme）。详见 [SpatialPopulationBuilder 文档](spatial_population_builder.md)。
 
 ## 两种构造路径
 
-### 推荐：SpatialConfigurator（链式 API）
+### 推荐：SpatialPopulationBuilder（链式 API）
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
@@ -94,7 +94,7 @@ spatial = SpatialPopulation(
 
 ## 链式 API
 
-`SpatialConfigurator` 的链式调用流程与 panmictic builder 一致，以下按推荐顺序列出各方法。带 `→` 标记的是空间特有方法，`[B]` 标记的参数接受 `batch_setting`（跨 deme 异构配置）。
+`SpatialPopulationBuilder` 的链式调用流程与 panmictic builder 一致，以下按推荐顺序列出各方法。带 `→` 标记的是空间特有方法，`[B]` 标记的参数接受 `batch_setting`（跨 deme 异构配置）。
 
 ```python
 pop = (
@@ -168,7 +168,7 @@ pop = (
 
 ## batch_setting 异构配置
 
-`batch_setting` 是 `SpatialConfigurator` 的核心机制，允许不同 deme 在同一链式调用中指定不同的参数值。内部通过 config 等价性分组自动优化——相同参数的 deme 共享编译产物，仅 state 数组独立。
+`batch_setting` 是 `SpatialPopulationBuilder` 的核心机制，允许不同 deme 在同一链式调用中指定不同的参数值。内部通过 config 等价性分组自动优化——相同参数的 deme 共享编译产物，仅 state 数组独立。
 
 ### 四种输入形式
 
@@ -801,7 +801,7 @@ SpatialPopulation 的实际使用顺序可以记成四步：
 
 ## 相关章节
 
-- [SpatialConfigurator：空间种群批量构造](spatial_configurator.md)
+- [SpatialPopulationBuilder：空间种群批量构造](spatial_population_builder.md)
 - [空间生命周期包装器](spatial_lifecycle_wrapper.md)
 - [Migration Kernel 底层实现](migration_kernel_impl.md)
 - [模拟内核深度解析](4_simulation_engine.md)

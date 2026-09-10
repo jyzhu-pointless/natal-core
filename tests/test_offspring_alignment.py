@@ -22,7 +22,7 @@ is checked with an independent einsum oracle (which never touches
    single owner of the derivation) on hand-built maps, including
    asymmetric (drive-biased) meiosis and zygote-lethal fusion tables
    whose rows sum to less than one;
-2. the same identity on a Configurator-built draft's maps;
+2. the same identity on a PopulationBuilder-built draft's maps;
 3. the Wright-Fisher fused kernel (Rust, deterministic mode 3) must
    reproduce the map-direct contraction weighted by the replicated pair
    weights — i.e. consuming the folded tensor is semantically identical

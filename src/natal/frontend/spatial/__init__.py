@@ -1,6 +1,6 @@
 """Spatial population models, topology, and configuration."""
 
-from .configurator import BatchSetting, SpatialConfigurator, batch_setting
+from .builder import BatchSetting, SpatialPopulationBuilder, batch_setting
 from .migration import MigrationCSR
 from .population import SpatialPopulation
 from .topology import (
@@ -16,7 +16,7 @@ __all__ = [
     "GridTopology",
     "HexGrid",
     "MigrationCSR",
-    "SpatialConfigurator",
+    "SpatialPopulationBuilder",
     "SpatialPopulation",
     "SquareGrid",
     "batch_setting",

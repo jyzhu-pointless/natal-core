@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.configurator import Configurator
+from natal.frontend.builder import PopulationBuilder
 from natal.frontend.data import ModelDefinition
 from natal.frontend.genetics.compile import RecipeHost
 
@@ -28,7 +28,7 @@ def _species() -> nt.Species:
     )
 
 
-def _chain(cfg: Configurator) -> Configurator:
+def _chain(cfg: PopulationBuilder) -> PopulationBuilder:
     """Run a representative declaration chain."""
     return (
         cfg.setup(stochastic=False)
@@ -56,7 +56,7 @@ class TestModelDefinitionSnapshot:
 
     def test_definition_reflects_build_history(self) -> None:
         """The journal mirrors the chaining order and declared identity."""
-        pop = _chain(Configurator.for_age_structured(_species())).build(
+        pop = _chain(PopulationBuilder.for_age_structured(_species())).build(
             name="def_hist"
         )
         definition = pop.definition
@@ -80,7 +80,7 @@ class TestModelDefinitionSnapshot:
         """A discrete build records the granularity flag."""
         species = _species()
         pop = (
-            Configurator.for_discrete(species)
+            PopulationBuilder.for_discrete(species)
             .reproduction(eggs_per_female=6.0)
             .competition(carrying_capacity=800.0)
             .build()
@@ -89,14 +89,14 @@ class TestModelDefinitionSnapshot:
 
     def test_snapshot_is_frozen(self) -> None:
         """Frozen dataclass: attribute writes raise."""
-        pop = _chain(Configurator.for_age_structured(_species())).build()
+        pop = _chain(PopulationBuilder.for_age_structured(_species())).build()
         with pytest.raises(dataclasses.FrozenInstanceError):
             pop.definition.build_name = "hijack"  # type: ignore[misc]  # frozen snapshot contract check
 
     def test_draft_mutation_cannot_reach_definition(self) -> None:
         """In-place draft array writes leave the snapshot untouched."""
         species = _species()
-        pop = _chain(Configurator.for_age_structured(species)).build()
+        pop = _chain(PopulationBuilder.for_age_structured(species)).build()
         before_entries = pop.definition.entry_names()
         before_journal = pop.definition.journal
 
@@ -112,7 +112,7 @@ class TestModelDefinitionSnapshot:
     def test_runtime_updates_do_not_rewrite_snapshot(self) -> None:
         """Sanctioned runtime updates also leave the build snapshot frozen."""
         species = _species()
-        pop = _chain(Configurator.for_age_structured(species)).build()
+        pop = _chain(PopulationBuilder.for_age_structured(species)).build()
         snapshot = pop.definition.journal
 
         pop.update().competition(carrying_capacity=250.0)
@@ -127,10 +127,10 @@ class TestModelDefinitionSnapshot:
     def test_rebuild_from_definition_is_bit_identical(self) -> None:
         """Replaying the definition rebuilds a bit-identical population."""
         species = _species()
-        original = _chain(Configurator.for_age_structured(species)).build()
+        original = _chain(PopulationBuilder.for_age_structured(species)).build()
 
         replayed_cfg = original.definition.replay(
-            partial(Configurator.for_age_structured, species)
+            partial(PopulationBuilder.for_age_structured, species)
         )
         rebuilt = replayed_cfg.build(name=original.name)
 
@@ -157,7 +157,7 @@ class TestModelDefinitionSnapshot:
     def test_population_without_snapshot_raises(self) -> None:
         """A clone built via __new__ has no snapshot and says so."""
         species = _species()
-        pop = _chain(Configurator.for_age_structured(species)).build()
+        pop = _chain(PopulationBuilder.for_age_structured(species)).build()
         clone = pop._clone("no_snapshot_clone")
         with pytest.raises(AttributeError, match="no declaration snapshot"):
             _ = clone.definition
@@ -220,7 +220,7 @@ class TestReconfigurationProvenance:
             drive_conversion_rate=0.9,
         )
         pop = (
-            Configurator.for_age_structured(species)
+            PopulationBuilder.for_age_structured(species)
             .setup(stochastic=False)
             .age_structure(n_ages=4, new_adult_age=1)
             .initial_state(
@@ -310,7 +310,7 @@ def test_inline_build_hooks_are_normalized_with_dispatch_defaults() -> None:
         return 0
 
     descriptor = nt.hook(event="early")(callback)
-    pop = Configurator.for_discrete(_species()).build(hook_items=[descriptor])
+    pop = PopulationBuilder.for_discrete(_species()).build(hook_items=[descriptor])
     definition = pop.definition
     assert definition.hook_calls[0][0] == (descriptor,)
     pop.run(2)
@@ -321,7 +321,7 @@ def test_inline_build_hooks_are_normalized_with_dispatch_defaults() -> None:
 
 def test_failed_modifier_registration_leaves_declarations_and_products_unchanged() -> None:
     """A user recipe failure cannot leave a latent modifier for the next refresh."""
-    pop = Configurator.for_discrete(_species()).build()
+    pop = PopulationBuilder.for_discrete(_species()).build()
     before = pop.config.offspring_tensor
 
     def invalid_modifier() -> dict[str, float]:
@@ -344,7 +344,7 @@ def test_modifier_receives_isolated_host_on_build_and_refresh() -> None:
         assert host.config.n_ztypes == 3
         return {}
 
-    pop = Configurator.for_discrete(_species()).modifiers(gamete_modifiers=[modifier]).build()
+    pop = PopulationBuilder.for_discrete(_species()).modifiers(gamete_modifiers=[modifier]).build()
     pop.refresh_modifiers()
     assert len(hosts) == 2
     assert all(host is not pop for host in hosts)

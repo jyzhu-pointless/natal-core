@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 import pytest
 
 import natal as nt
-from natal.frontend.configurator._params import (
+from natal.frontend.builder._params import (
     compute_expected_eggs_from_distribution,
     build_equilibrium_distribution,
     compute_expected_eggs_from_females,

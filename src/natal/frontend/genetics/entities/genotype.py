@@ -245,7 +245,7 @@ class Genotype:
 
         For gene drives, gamete selection, or other modifications, register
         Population-level gamete modifiers through the ``.modifiers()``
-        configurator method (they rewrite this map at build time).
+        builder method (they rewrite this map at build time).
 
         Recombination behavior is controlled by the Species's RecombinationMap:
         - If recombination rates are defined and non-zero, recombinant haplotypes

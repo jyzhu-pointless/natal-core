@@ -290,7 +290,7 @@ class TestNSlabsFullRepair:
             .competition(juvenile_growth_mode=0)
             .build()
         )
-        # Set fitness for single slab via ztype_index — bypass Configurator.fitness()
+        # Set fitness for single slab via ztype_index — bypass PopulationBuilder.fitness()
         reg = pop.index_registry
         gm = pop.config.viability_fitness
         z_i = reg.ztype_index(sp.get_genotype_from_str("A|A"), "exposed")

@@ -83,8 +83,8 @@ T_State = TypeVar("T_State", bound=Union[PopulationState, DiscretePopulationStat
 if TYPE_CHECKING:
     from typing import Self
 
-    from natal.frontend.configurator import RuntimeUpdater
-    from natal.frontend.configurator._writers import AuditValue, SessionChannel
+    from natal.frontend.builder import RuntimeUpdater
+    from natal.frontend.builder._writers import AuditValue, SessionChannel
     from natal.frontend.hooks import (
         CompiledHookDescriptor,
     )
@@ -139,7 +139,7 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     _shares_genetics_draft: bool = False
 
     # Frozen declaration snapshot, attached by
-    # Configurator.build(); None until then (e.g. clones built via __new__).
+    # PopulationBuilder.build(); None until then (e.g. clones built via __new__).
     _definition: ModelDefinition | None = None
 
     # Cached projection mask for :meth:`observe`.  The Observation rule and
@@ -288,7 +288,7 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     ) -> Self:
         """Create a lightweight functional copy sharing compiled state and config.
 
-        Used by ``SpatialConfigurator`` to efficiently clone template demes without
+        Used by ``SpatialPopulationBuilder`` to efficiently clone template demes without
         re-running hook compilation or preset application. The clone shares
         compiled hooks, index registry, modifier pipelines, and config arrays
         with the template. Only state arrays and history are independent.
@@ -439,11 +439,11 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     def _initialize_registry(self) -> None:
         """Template method: Initialize registry and register all genotypes.
 
-        If a registry was already provided (e.g. from Configurator, possibly
+        If a registry was already provided (e.g. from PopulationBuilder, possibly
         compressed), it is reused.  Otherwise a fresh registry is created
         and populated from the Species.
         """
-        # If a registry was already injected (e.g. compressed by Configurator),
+        # If a registry was already injected (e.g. compressed by PopulationBuilder),
         # keep it — don't overwrite with a fresh one.
         if self._index_registry is not None:
             return
@@ -639,7 +639,7 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
         Subclass ``update()`` methods call this helper so concrete return
         types do not need ``cast()``.
         """
-        from natal.frontend.configurator import RuntimeUpdater
+        from natal.frontend.builder import RuntimeUpdater
 
         return RuntimeUpdater(self)
 
@@ -789,12 +789,12 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
 
         Raises:
             AttributeError: If the population was not built through
-                ``Configurator.build()`` (no snapshot exists).
+                ``PopulationBuilder.build()`` (no snapshot exists).
         """
         if self._definition is None:
             raise AttributeError(
                 "This population has no declaration snapshot; it was not "
-                "built through Configurator.build()."
+                "built through PopulationBuilder.build()."
             )
         return self._definition
 
@@ -904,7 +904,7 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
                 ``backend.restore_from_checkpoint`` (scalars as floats,
                 vectors as arrays).
         """
-        from natal.frontend.configurator._writers import contract_to_draft_field
+        from natal.frontend.builder._writers import contract_to_draft_field
 
         # Draft ecology values are heterogeneous: scalars stay floats,
         # vectors become float64 ndarrays, and the eggs sentinel becomes
@@ -967,7 +967,7 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     ) -> None:
         """Install the temporary raw History schema used during construction.
 
-        Configurator replaces this schema with the final compiled recording
+        PopulationBuilder replaces this schema with the final compiled recording
         plan before returning the built population.
 
         Args:
@@ -1055,7 +1055,7 @@ class BasePopulation(OutputMixin, ABC, Generic[T_State]):
     def observation(self) -> Observation:
         """The immutable :class:`Observation` for this population.
 
-        Configurator installs either an explicit rule or the canonical identity
+        PopulationBuilder installs either an explicit rule or the canonical identity
         rule before returning the built Population.
 
         Raises:

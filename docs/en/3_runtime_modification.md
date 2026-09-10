@@ -62,7 +62,7 @@ for row in pop.params_log:
 `set_param()` writes only the **draft** you pass in; it never writes to a running population. `pop.config` is a query snapshot, so calling `set_param()` on it does not change the population — use `pop.update()` or `pop.params` to modify a running population. This function suits draft-only work (scripts, notebooks, offline configuration):
 
 ```python
-from natal.frontend.configurator import set_param
+from natal.frontend.builder import set_param
 
 # Ecology scalars are NamedTuple slots: bind the returned draft
 draft = pop.config
@@ -226,13 +226,13 @@ read-only derived values read through `pop.params.<name>`; assigning to them rai
 
 `pop.set_config(new_config)` replaces the population's entire config object at once. Suitable after rebuilding the config from scratch (e.g. after changing the custom-field structure). The new config must have the same type (`ModelDraft`, and discrete models must satisfy the discrete normalization invariants).
 
-The Configurator's `custom()` method triggers this path when adding new fields: it rebuilds the custom structured array and calls `set_config()` to write the new config back into the population.
+The PopulationBuilder's `custom()` method triggers this path when adding new fields: it rebuilds the custom structured array and calls `set_config()` to write the new config back into the population.
 
 ---
 
 ## 8. Parameter Reference
 
-Parameters are grouped by domain, matching the Configurator chain-API methods.
+Parameters are grouped by domain, matching the PopulationBuilder chain-API methods.
 
 | Domain | Parameter | Alias | Model | set_param |
 |---|---|---|---|---|
@@ -259,7 +259,7 @@ Parameters are grouped by domain, matching the Configurator chain-API methods.
 
 ## 9. Old vs. New
 
-| | Old (Builder / njit era) | New (Configurator) |
+| | Old (Builder / njit era) | New (PopulationBuilder) |
 |---|---|---|
 | Post-build modification | unsupported | `pop.update()` |
 | Hook-side modification | `(state, config, deme_id)` direct writes | `pop.params` (`TickContext`) or `Op.set_param` |

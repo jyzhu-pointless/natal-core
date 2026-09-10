@@ -262,7 +262,7 @@ Raw History 始终保存所有 deme，不受 Observation 的选择或聚合模�
 
 ### 记录模式与容量
 
-Configurator 提供 `record_history()` 方法，在构建阶段设置记录模式和容量。该方法**独立于** `with_observation()`——链式调用的顺序无关紧要。
+PopulationBuilder 提供 `record_history()` 方法，在构建阶段设置记录模式和容量。该方法**独立于** `with_observation()`——链式调用的顺序无关紧要。
 
 ```python
 # 构建时：配置记录模式和容量
@@ -292,7 +292,7 @@ pop.record_every = 10  # 每10步记录一次
 pop.max_history = 1000  # 最多保存1000个快照（旧版）
 ```
 
-录制 schema（模式、行大小、布局）在**构建时冻结**，记录首行后无法更改。一旦通过 Configurator 配置完成，`pop.record_every` 和 `pop.max_history` 只控制记录**频率**和**旧版上限**，不影响 schema。
+录制 schema（模式、行大小、布局）在**构建时冻结**，记录首行后无法更改。一旦通过 PopulationBuilder 配置完成，`pop.record_every` 和 `pop.max_history` 只控制记录**频率**和**旧版上限**，不影响 schema。
 
 ```python
 # 运行模拟并记录历史

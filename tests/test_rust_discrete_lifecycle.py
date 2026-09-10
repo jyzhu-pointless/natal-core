@@ -9,7 +9,7 @@ import natal as nt
 from natal.backends.rust.rust_backend import (
     RustDiscreteLifecycleBackend,
 )
-from natal.frontend.configurator import Configurator
+from natal.frontend.builder import PopulationBuilder
 from natal.frontend.data import DiscretePopulationState, ModelDraft
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.types import HookProgram
@@ -57,7 +57,7 @@ def species() -> Species:
 @pytest.fixture(scope="module")
 def config(species: Species) -> ModelDraft:
     return (
-        Configurator.from_species(species, discrete=True)
+        PopulationBuilder.from_species(species, discrete=True)
         .setup(stochastic=False)
         .build()
         .config
@@ -124,7 +124,7 @@ def test_stochastic_discrete_multi_seed_statistics(species: Species) -> None:
     """Multi-seed statistical pins: seed reproducibility, active randomness,
     and finite positive totals across independent replicates."""
     stochastic_config = (
-        Configurator.from_species(species, discrete=True)
+        PopulationBuilder.from_species(species, discrete=True)
         .setup(stochastic=True, name="rust_discrete_stochastic")
         .competition(juvenile_growth_mode=0)
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)

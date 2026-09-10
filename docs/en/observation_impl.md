@@ -7,10 +7,10 @@ This document is for NATAL Core maintainers and contributors. It explains the bo
 An Observation only defines how to derive observed values from population state. History only defines which kind of snapshot to store. A RecordingPlan connects them at build time, but they remain independent concepts:
 
 ```text
-Configurator.with_observation(...)
+PopulationBuilder.with_observation(...)
   → compile an immutable canonical Observation
 
-Configurator.record_history(mode=...)
+PopulationBuilder.record_history(mode=...)
   → select a raw or observation History schema
 
 Population state
@@ -35,13 +35,13 @@ Core modules and responsibilities:
 
 ## Build-Time Public Interface
 
-Non-spatial Configurators use:
+Non-spatial PopulationBuilders use:
 
 ```text
 .with_observation(groups, *, collapse_age=False)
 ```
 
-The spatial Configurator additionally accepts a deme selection and processing mode:
+The spatial PopulationBuilder additionally accepts a deme selection and processing mode:
 
 ```text
 .with_observation(
@@ -66,7 +66,7 @@ The spatial arguments have the following semantics:
 
 `demes` must be a non-empty, duplicate-free sequence of integer indices within the Population range. Every group shares the same ordered deme selection; separate groups cannot define different deme sets. `deme_mode` accepts only `"preserve"` and `"aggregate"`.
 
-The Observation and History schema are frozen by `build()`. A runtime Configurator cannot replace the `with_observation()` or `record_history()` rules.
+The Observation and History schema are frozen by `build()`. A runtime PopulationBuilder cannot replace the `with_observation()` or `record_history()` rules.
 
 ## Canonical Observation
 

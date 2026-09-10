@@ -24,7 +24,7 @@ def _species() -> nt.Species:
     )
 
 
-def _builder(name: str) -> nt.Configurator:
+def _builder(name: str) -> nt.PopulationBuilder:
     """Return a minimal deterministic discrete-generation builder."""
     return (
         nt.DiscreteGenerationPopulation.setup(

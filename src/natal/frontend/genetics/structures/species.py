@@ -46,7 +46,7 @@ class SpeciesConfigBlueprint(TypedDict):
     """Cached species-level arrays shared across population constructions.
 
     Built once per species by :meth:`Species.get_config_blueprint` and
-    consumed by ``Configurator`` / ``PopulationBuilder``.
+    consumed by ``PopulationBuilder`` / ``PopulationBuilder``.
     """
 
     n_genotypes: int

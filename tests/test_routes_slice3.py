@@ -33,8 +33,8 @@ import pytest
 import natal as nt
 from natal.backends.rust.rust_backend import rust_backend_available
 from natal.contracts.params import Params
-from natal.frontend.configurator import Configurator, _routes, set_param
-from natal.frontend.configurator._routes import (
+from natal.frontend.builder import PopulationBuilder, _routes, set_param
+from natal.frontend.builder._routes import (
     ROUTES_BY_METHOD,
     commit_write,
     dispatch,
@@ -42,7 +42,7 @@ from natal.frontend.configurator._routes import (
     lookup,
     plan_write,
 )
-from natal.frontend.configurator._writers import (
+from natal.frontend.builder._writers import (
     CoreConfigWriter,
     DraftWriter,
 )
@@ -160,7 +160,7 @@ class TestModeEnumShape:
     def test_concave_alias_fully_removed(self):
         """Negative contract: no import path reaches the CONCAVE alias."""
         import natal as nt
-        from natal.frontend.configurator._params import resolve_growth_mode
+        from natal.frontend.builder._params import resolve_growth_mode
 
         with pytest.raises(ImportError):
             from natal.frontend.data import (
@@ -303,7 +303,7 @@ class TestGenoTensorShape:
             writer.apply({"fecundity": np.ones((3, 3))})
 
     def test_fitness_pattern_patch_routes_through_writer(self, age_species):
-        chain = Configurator.from_species(age_species).age_structure(3, 1)
+        chain = PopulationBuilder.from_species(age_species).age_structure(3, 1)
         chain = chain.fitness(viability={"A|A": 0.5})
         arr = np.asarray(chain.config.viability_fitness)
         # Both sexes at the juvenile age column carry the patch.
@@ -1066,7 +1066,7 @@ class TestVocabularyPreserved:
         assert float(pop.config.age_based_survival_rates[0, 0]) == 0.25
 
     def test_growth_mode_aliases_on_build_chain(self, discrete_species):
-        cfg = Configurator.for_discrete(discrete_species)
+        cfg = PopulationBuilder.for_discrete(discrete_species)
         cfg.competition(growth_mode="beverton_holt")
         assert int(cfg.config.juvenile_growth_mode) == 3
         cfg.competition(growth_mode="ricker")
@@ -1084,7 +1084,7 @@ class TestVocabularyPreserved:
         }
         assert set(ROUTES_BY_METHOD) == methods
         for name in ROUTES_BY_METHOD:
-            assert callable(getattr(Configurator, name, None)) or name in (
+            assert callable(getattr(PopulationBuilder, name, None)) or name in (
                 "hook", "migration", "initial_state"
             )
 
@@ -1104,20 +1104,20 @@ class TestVocabularyPreserved:
 class TestDeletedInterfaces:
     def test_subclass_modules_are_gone(self):
         with pytest.raises(ImportError):
-            importlib.import_module("natal.frontend.configurator.age_structured")
+            importlib.import_module("natal.frontend.builder.age_structured")
         with pytest.raises(ImportError):
-            importlib.import_module("natal.frontend.configurator.discrete")
+            importlib.import_module("natal.frontend.builder.discrete")
 
     def test_subclass_names_are_unreachable(self):
-        import natal.frontend.configurator as legacy_shim
-        from natal.frontend import configurator as package
+        import natal.frontend.builder as legacy_shim
+        from natal.frontend import builder as package
 
         for name in ("AgeStructuredConfigurator", "DiscreteConfigurator"):
             assert not hasattr(package, name)
             assert not hasattr(legacy_shim, name)
             assert name not in package.__all__
             with pytest.raises(AttributeError):
-                _import_name("natal.frontend.configurator", name)
+                _import_name("natal.frontend.builder", name)
 
     def test_descriptor_columns_deleted(self):
         from natal.frontend.utils.parameters import ParamDescriptor
@@ -1126,16 +1126,16 @@ class TestDeletedInterfaces:
             assert column not in ParamDescriptor.__dataclass_fields__
 
     def test_hand_maintained_sensitive_sets_deleted(self):
-        from natal.frontend.configurator import _base
-        from natal.frontend.spatial import configurator as spatial_cfg
+        from natal.frontend.builder import _base
+        from natal.frontend.spatial import builder as spatial_cfg
 
         assert not hasattr(_base, "_EQUILIBRIUM_SENSITIVE_KEYS")
         assert not hasattr(spatial_cfg, "_EQUILIBRIUM_SENSITIVE_KWARGS")
 
     def test_per_method_sync_deleted(self):
-        from natal.frontend.configurator import _base
+        from natal.frontend.builder import _base
 
-        assert not hasattr(Configurator, "_sync_equilibrium")
+        assert not hasattr(PopulationBuilder, "_sync_equilibrium")
         assert not hasattr(_base, "_EQUILIBRIUM_SENSITIVE_KEYS")
 
     def test_spatial_only_param_still_rejected(self):
@@ -1249,7 +1249,7 @@ class TestDerivedMetricQueries:
         engine's own derivation.  Both the params view and the dispatch
         entry now reject the write and leave the draft untouched.
         """
-        from natal.frontend.configurator._routes import dispatch
+        from natal.frontend.builder._routes import dispatch
 
         pop = self._built_population("__slice3_derived_ro2__")
         fresh = pop.params.expected_competition_strength

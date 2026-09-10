@@ -7,7 +7,7 @@ import natal as nt
 import pytest
 from natal.frontend.hooks import Op
 from natal.frontend.hooks.tick_context import TickContext
-from natal.frontend.spatial.configurator import SpatialConfigurator
+from natal.frontend.spatial.builder import SpatialPopulationBuilder
 
 
 def test_base_population_non_wildcard_deme_selector_warns_and_is_ignored() -> None:
@@ -60,7 +60,7 @@ def test_spatial_population_handles_deme_selector_locally() -> None:
     deme_op.event = "first"
 
     spatial = (
-        SpatialConfigurator(species, 2, pop_type="discrete_generation")
+        SpatialPopulationBuilder(species, 2, pop_type="discrete_generation")
         .setup(name="sp_selector_demes", stochastic=False)
         .initial_state(
             individual_count={

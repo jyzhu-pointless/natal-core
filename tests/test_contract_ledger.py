@@ -268,16 +268,16 @@ def _removed_probe_configcontext_population_clone() -> None:
 
     The retirement removed the ConfigContext adapter, the
     ``apply_preset_to_population`` dual-target helper, and the
-    Configurator's ``_make_ctx`` / ``_sync_from_ctx`` write-back pair:
-    build-time preset application now compiles against the Configurator
+    PopulationBuilder's ``_make_ctx`` / ``_sync_from_ctx`` write-back pair:
+    build-time preset application now compiles against the PopulationBuilder
     itself (RecipeHost protocol) through explicit-data rebuilds.
     """
     import natal as nt
     from natal.frontend import presets as presets_pkg
-    from natal.frontend.configurator import _registry_builder as rb
+    from natal.frontend.builder import _registry_builder as rb
 
     assert not _module_importable(
-        "natal.frontend.configurator._registry_builder.ConfigContext"
+        "natal.frontend.builder._registry_builder.ConfigContext"
     ), "ConfigContext is importable again — the Population mimicry is back"
     assert not hasattr(rb, "ConfigContext"), (
         "ConfigContext is getattr-reachable on _registry_builder again"
@@ -288,11 +288,11 @@ def _removed_probe_configcontext_population_clone() -> None:
     assert not hasattr(nt, "apply_preset_to_population"), (
         "apply_preset_to_population is reachable on the top-level package again"
     )
-    from natal.frontend.configurator._base import Configurator
+    from natal.frontend.builder._base import PopulationBuilder
 
     for attr in ("_make_ctx", "_sync_from_ctx"):
-        assert not hasattr(Configurator, attr), (
-            f"Configurator.{attr} is back — the adapter round-trip returned"
+        assert not hasattr(PopulationBuilder, attr), (
+            f"PopulationBuilder.{attr} is back — the adapter round-trip returned"
         )
 
 
@@ -344,7 +344,7 @@ def _removed_probe_backend_selector() -> None:
     ``using_rust_backend`` property are absent from every population class,
     and ``_initialize_session`` remains as the engine initialization entry.
     """
-    from natal.frontend.configurator._base import Configurator
+    from natal.frontend.builder._base import PopulationBuilder
     from natal.frontend.population.age_structured import AgeStructuredPopulation
     from natal.frontend.population.discrete_generation import (
         DiscreteGenerationPopulation,
@@ -355,8 +355,8 @@ def _removed_probe_backend_selector() -> None:
         assert "backend" not in inspect.signature(cls.setup).parameters, (
             f"{cls.__name__}.setup carries the retired backend= selector kwarg"
         )
-    assert "backend" not in inspect.signature(Configurator.setup).parameters, (
-        "Configurator.setup carries the retired backend= selector kwarg"
+    assert "backend" not in inspect.signature(PopulationBuilder.setup).parameters, (
+        "PopulationBuilder.setup carries the retired backend= selector kwarg"
     )
     for cls in (
         AgeStructuredPopulation,

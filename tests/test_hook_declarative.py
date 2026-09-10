@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.configurator import Configurator
+from natal.frontend.builder import PopulationBuilder
 from natal.frontend.hooks.entry.declarative import (
     Op,
     _resolve_ages,
@@ -231,7 +231,7 @@ class TestCompileDeclarativeHook:
     def _build_pop(self, species: nt.Species):
         """Build a minimal age-structured population for hook compilation tests."""
         return (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})

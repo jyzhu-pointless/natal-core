@@ -1,12 +1,12 @@
-"""Configurator subpackage — build-side chains and the runtime updater.
+"""PopulationBuilder subpackage — build-side chains and the runtime updater.
 
-Provides the unified Configurator API for constructing ``ModelDraft``
+Provides the unified PopulationBuilder API for constructing ``ModelDraft``
 (the former age-structured/discrete subclass split into one class driven
 by the route table), plus the runtime update handle:
 
-- :class:`Configurator` — the build-side chain: domain methods
+- :class:`PopulationBuilder` — the build-side chain: domain methods
   (``.competition()``, ``.reproduction()``) that write through the
-  declarative route table, created via ``Configurator.from_species()``
+  declarative route table, created via ``PopulationBuilder.from_species()``
   and finalized with ``build()``.  Batch writers live in
   :mod:`._writers`, routing logic in :mod:`._routes`.
 - :class:`RuntimeUpdater` — the single runtime-update handle returned by
@@ -18,29 +18,21 @@ Utility symbols:
     Python or the route-table writers.
 """
 
-from natal.frontend.configurator._base import (
-    Configurator,
+from natal.frontend.builder._base import (
+    PopulationBuilder,
     set_param,
 )
-from natal.frontend.configurator._routes import (
+from natal.frontend.builder._routes import (
     ROUTES,
     ROUTES_BY_METHOD,
     dispatch,
 )
-from natal.frontend.configurator._runtime import (
+from natal.frontend.builder._runtime import (
     RuntimeUpdater,
-)
-from natal.frontend.configurator._writers import (
-    ConfigWriter,
-    CoreConfigWriter,
-    DraftWriter,
 )
 
 __all__ = [
-    "Configurator",
-    "CoreConfigWriter",
-    "ConfigWriter",
-    "DraftWriter",
+    "PopulationBuilder",
     "ROUTES",
     "ROUTES_BY_METHOD",
     "RuntimeUpdater",

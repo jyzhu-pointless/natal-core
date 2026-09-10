@@ -1,6 +1,6 @@
 """User-facing frontend of NATAL.
 
-Target home (Phase 0 migration) for the user world: the Configurator build
+Target home (Phase 0 migration) for the user world: the PopulationBuilder build
 pipeline, Population objects (holders of blueprint / params / state / history
 / program / rng token), presets, fitness patches, the declarative hook
 compiler, observation & history, and UI. Frontend lifecycle code uses the

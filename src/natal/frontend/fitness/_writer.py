@@ -1,4 +1,4 @@
-"""Fitness DSL writer for the Configurator API.
+"""Fitness DSL writer for the PopulationBuilder API.
 
 Resolves genotype-pattern selectors to ztype indices and writes into
 config fitness arrays.

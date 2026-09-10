@@ -18,7 +18,7 @@ NATAL Core 提供两种主要的种群类型：
 
 ## 创建种群
 
-通过链式 API 创建种群；默认 `Configurator` 路径会立即写入参数，详见[种群初始化](2_population_initialization.md)。
+通过链式 API 创建种群；默认 `PopulationBuilder` 路径会立即写入参数，详见[种群初始化](2_population_initialization.md)。
 
 ```python
 import natal as nt
@@ -78,7 +78,7 @@ pop.update().custom(temperature=35.0)
 `set_param()` 只写传入的 draft，不会提交到运行种群；生态标量走 `NamedTuple._replace`，必须接住返回值。修改运行种群请用 `pop.update()` 或 `pop.params`：
 
 ```python
-from natal.frontend.configurator import set_param
+from natal.frontend.builder import set_param
 
 draft = pop.config                       # 查询快照
 draft = set_param(draft, "competition.carrying_capacity", 5000.0)
@@ -306,7 +306,7 @@ pop = nt.DiscreteGenerationPopulation(
 pop.run(1)
 ```
 
-这是底层构造路径。常规 `Configurator` 构建流程没有
+这是底层构造路径。常规 `PopulationBuilder` 构建流程没有
 `extreme_speed_mode` 链式方法。
 
 ### 竞争与 Hook 支持

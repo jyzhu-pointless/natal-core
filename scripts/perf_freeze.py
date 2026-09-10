@@ -77,7 +77,7 @@ def _ring_adjacency(n: int) -> np.ndarray:
     return m
 
 
-def _discrete(name: str, species: nt.Species) -> nt.Configurator:
+def _discrete(name: str, species: nt.Species) -> nt.PopulationBuilder:
     # Beverton-Holt is explicit: the discrete default growth mode is
     # no-competition (audit finding C2), which explodes the census and
     # overflows the Rust Poisson sampler's lambda table.
@@ -101,7 +101,7 @@ def _discrete(name: str, species: nt.Species) -> nt.Configurator:
     )
 
 
-def _spatial(name: str, species: nt.Species, n_demes: int) -> nt.SpatialConfigurator:
+def _spatial(name: str, species: nt.Species, n_demes: int) -> nt.SpatialPopulationBuilder:
     return (
         nt.SpatialPopulation.builder(
             species, n_demes=n_demes, pop_type="discrete_generation"

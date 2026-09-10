@@ -1,10 +1,10 @@
-# SpatialConfigurator Heterogeneous Config Sharing Mechanism
+# SpatialPopulationBuilder Heterogeneous Config Sharing Mechanism
 
-> **Implementation note**: this page describes the internal `ModelDraft._replace` sharing of large arrays during a heterogeneous build. The mechanism is still in use, but it is **not** the whole heterogeneous build — declaration freezing, signature grouping, and template cloning live in [SpatialConfigurator: Batch Construction of Spatial Populations](spatial_configurator.md).
+> **Implementation note**: this page describes the internal `ModelDraft._replace` sharing of large arrays during a heterogeneous build. The mechanism is still in use, but it is **not** the whole heterogeneous build — declaration freezing, signature grouping, and template cloning live in [SpatialPopulationBuilder: Batch Construction of Spatial Populations](spatial_population_builder.md).
 
 ## Problem
 
-`SpatialConfigurator._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `ModelDraft`.
+`SpatialPopulationBuilder._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `ModelDraft`.
 
 If only a few parameters differ between groups, all large arrays (`zygotes_to_gametes_map`, `gametes_to_zygotes_map`, `viability_fitness`, `fecundity_fitness`, etc.) are still duplicated, causing memory waste.
 
@@ -70,7 +70,7 @@ Changes to `carrying_capacity`, `eggs_per_female`, and `sex_ratio` affect `expec
 
 ## Array Field Conversion
 
-The values for `individual_count` and `sperm_storage` are user-provided dicts (e.g., `{"female": {"WT|WT": 100}}`), which must be converted to numpy arrays before `_replace`. Conversion is done by the plain resolver functions in `natal.frontend.configurator._params`:
+The values for `individual_count` and `sperm_storage` are user-provided dicts (e.g., `{"female": {"WT|WT": 100}}`), which must be converted to numpy arrays before `_replace`. Conversion is done by the plain resolver functions in `natal.frontend.builder._params`:
 
 - Age-structured: `resolve_age_structured_initial_individual_count(species, distribution, n_ages, new_adult_age)`
 - Discrete generation: `resolve_discrete_initial_individual_count(species, distribution)`
@@ -149,12 +149,12 @@ With 2601 demes and only `initial_individual_count` differing:
 
 ## File Location
 
-The relevant implementation lives in `src/natal/frontend/spatial/configurator.py`:
+The relevant implementation lives in `src/natal/frontend/spatial/builder.py`:
 
 | Symbol | Role |
 |---|---|
 | `_ARRAY_KWARGS` | Set of parameters requiring dict→array conversion |
 | `_KWARG_RENAMES` | Builder kwarg → config field renames |
-| `SpatialConfigurator._build_heterogeneous_demes()` | Main heterogeneous build flow |
-| `SpatialConfigurator._can_use_replace(sig_map, base_config)` | Determines whether `_replace` can be used |
-| `SpatialConfigurator._build_variant_config()` | Creates variant config |
+| `SpatialPopulationBuilder._build_heterogeneous_demes()` | Main heterogeneous build flow |
+| `SpatialPopulationBuilder._can_use_replace(sig_map, base_config)` | Determines whether `_replace` can be used |
+| `SpatialPopulationBuilder._build_variant_config()` | Creates variant config |

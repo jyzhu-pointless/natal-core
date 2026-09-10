@@ -102,7 +102,7 @@ def _build_population(
     """
     species = _species(f"{name}_species")
     if model == "age":
-        configurator = (
+        builder = (
             nt.AgeStructuredPopulation.setup(
                 species=species,
                 name=name,
@@ -142,7 +142,7 @@ def _build_population(
             )
         )
     else:
-        configurator = (
+        builder = (
             nt.DiscreteGenerationPopulation.setup(
                 species=species,
                 name=name,
@@ -164,15 +164,15 @@ def _build_population(
         )
 
     if mode == "observation":
-        configurator.with_observation(
+        builder.with_observation(
             groups=_observation_groups(),
             collapse_age=True,
         )
     if install_noop_hook:
-        configurator.hooks(_noop_history_hook)
+        builder.hooks(_noop_history_hook)
     for items, kwargs in hook_calls or []:
-        configurator = configurator.hooks(*items, **kwargs)
-    population = configurator.record_history(mode=mode).build()
+        builder = builder.hooks(*items, **kwargs)
+    population = builder.record_history(mode=mode).build()
     if model == "wright_fisher":
         object.__setattr__(
             population,

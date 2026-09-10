@@ -145,7 +145,7 @@ class MyCustomPreset(GeneticPreset):
 2. **`fitness_patch` 是可选的** - 不重写时默认返回 `None`
 3. **可以返回 None** - 表示该阶段不需要修饰
 4. **支持延迟物种绑定** - 可以在创建时不指定 `Species`
-5. **`gamete_modifier` / `zygote_modifier` 的入参是 `host`** - 它是一个统一入口（接口约定 `natal.frontend.genetics.compile.RecipeHost`）：运行时指向当前的 Population，编译阶段指向构建中的 Configurator，两种场景都可以通过它读取 `species`、`config`、`registry`、`index_registry` 四项只读信息
+5. **`gamete_modifier` / `zygote_modifier` 的入参是 `host`** - 它是一个统一入口（接口约定 `natal.frontend.genetics.compile.RecipeHost`）：运行时指向当前的 Population，编译阶段指向构建中的 PopulationBuilder，两种场景都可以通过它读取 `species`、`config`、`registry`、`index_registry` 四项只读信息
 
 ### 简单示例
 
@@ -425,7 +425,7 @@ class DrivePreset(GeneticPreset):
         return None
 ```
 
-### 在 Configurator 构建链中应用 Preset
+### 在 PopulationBuilder 构建链中应用 Preset
 
 ```python
 import natal as nt

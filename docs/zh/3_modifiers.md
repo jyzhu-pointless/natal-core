@@ -44,9 +44,9 @@ Modifier 的作用就是对这两类映射进行有控制的改写。
 - 细胞质不兼容
 - 非孟德尔比例的后代重分配
 
-## 3. 推荐接入方式（Configurator 构建链）
+## 3. 推荐接入方式（PopulationBuilder 构建链）
 
-在用户实践中，推荐在构建阶段（Configurator 链）统一注册 Modifier：
+在用户实践中，推荐在构建阶段（PopulationBuilder 链）统一注册 Modifier：
 
 ```python
 import natal as nt

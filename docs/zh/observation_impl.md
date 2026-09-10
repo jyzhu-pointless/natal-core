@@ -7,10 +7,10 @@
 Observation 只定义“怎样从种群状态得到观测结果”，History 只定义“保存哪一种快照”。两者在构建阶段由 RecordingPlan 连接，但仍是独立概念：
 
 ```text
-Configurator.with_observation(...)
+PopulationBuilder.with_observation(...)
   → 编译不可变的 canonical Observation
 
-Configurator.record_history(mode=...)
+PopulationBuilder.record_history(mode=...)
   → 选择 raw 或 observation History schema
 
 Population state
@@ -35,13 +35,13 @@ Population state
 
 ## 构建阶段的公开接口
 
-非空间 Configurator 使用：
+非空间 PopulationBuilder 使用：
 
 ```text
 .with_observation(groups, *, collapse_age=False)
 ```
 
-空间 Configurator 额外接受 deme 选择与处理方式：
+空间 PopulationBuilder 额外接受 deme 选择与处理方式：
 
 ```text
 .with_observation(
@@ -66,7 +66,7 @@ Population state
 
 `demes` 必须是非空、无重复且位于 Population 范围内的整数序列。所有 group 共享同一个有序 deme 选择；不能为不同 group 指定不同的 deme 集合。`deme_mode` 只接受 `"preserve"` 和 `"aggregate"`。
 
-Observation 和 History schema 在 `build()` 时冻结。运行时 Configurator 不允许更换 `with_observation()` 或 `record_history()` 规则。
+Observation 和 History schema 在 `build()` 时冻结。运行时 PopulationBuilder 不允许更换 `with_observation()` 或 `record_history()` 规则。
 
 ## Canonical Observation
 

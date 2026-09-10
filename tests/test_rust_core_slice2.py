@@ -40,8 +40,8 @@ from natal.backends.rust.rust_backend import (
     rust_backend_available,
 )
 from natal.contracts.materialize import materialize
-from natal.frontend.configurator import Configurator  # unified build-side chain
-from natal.frontend.configurator import RuntimeUpdater  # runtime update handle
+from natal.frontend.builder import PopulationBuilder  # unified build-side chain
+from natal.frontend.builder import RuntimeUpdater  # runtime update handle
 from natal.frontend.data import DiscretePopulationState, PopulationState
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.entry.declarative import Op
@@ -99,7 +99,7 @@ def _build_age_population(
 ) -> AgeStructuredPopulation:
     """Build a fully calibrated age-structured population (5 ages, 2 ztypes)."""
     builder = (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(5, 2)
         .setup(stochastic=stochastic, name=name)
         .initial_state(
@@ -158,7 +158,7 @@ def _build_disc_population(
 ) -> DiscreteGenerationPopulation:
     """Build a discrete-generation population with fully explicit params."""
     return (
-        Configurator.for_discrete(species)
+        PopulationBuilder.for_discrete(species)
         .setup(stochastic=stochastic, name=name)
         .initial_state(
             individual_count={
@@ -617,7 +617,7 @@ def test_preset_registration_updates_existing_session_fitness(
     from natal.frontend.presets import HomingDrive
 
     pop = (
-        Configurator.from_species(drive_species)
+        PopulationBuilder.from_species(drive_species)
         .age_structure(4, 2)
         .setup(stochastic=False, name="slice2_preset_dirty")
         .initial_state(
@@ -873,7 +873,7 @@ def test_discrete_wf_checkpoint_restore_bitwise(discrete_species: Species) -> No
     the split run is bit-for-bit equal to the fused one.
     """
     draft = (
-        Configurator.for_discrete(discrete_species)
+        PopulationBuilder.for_discrete(discrete_species)
         .setup(stochastic=True, name="slice2_disc_wf")
         .initial_state(
             individual_count={

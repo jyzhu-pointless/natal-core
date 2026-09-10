@@ -249,7 +249,7 @@ def test_blueprint_view_reflects_dimensions() -> None:
     assert any(name.split(":")[0].split("@")[0] == "WT|WT" for name in bp.ztype_names)
 
 
-def test_update_inside_hook_uses_configurator_syntax() -> None:
+def test_update_inside_hook_uses_builder_syntax() -> None:
     """ctx.update() accepts the same chained syntax as the build path."""
     captured: list[TickContext] = []
 

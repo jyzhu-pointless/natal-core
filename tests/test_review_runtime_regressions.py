@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.configurator import RuntimeUpdater
+from natal.frontend.builder import RuntimeUpdater
 from natal.frontend.hooks.tick_context import TickContext
 from natal.frontend.population._params_view import ParamsView
 
@@ -225,14 +225,14 @@ def test_retained_callback_context_cannot_mutate_later(operation: str) -> None:
     contexts: list[TickContext] = []
     samplers: list[RandomSampler] = []
     parameter_handles: list[ParamsView] = []
-    configurators: list[RuntimeUpdater] = []
+    updaters: list[RuntimeUpdater] = []
 
     def retain(ctx: TickContext) -> int:
         """Retain both the context and its sampler for the lifetime attack."""
         contexts.append(ctx)
         samplers.append(ctx.rng)
         parameter_handles.append(ctx.params)
-        configurators.append(ctx.update())
+        updaters.append(ctx.update())
         return 0
 
     pop = _population(f"ReviewExpired_{operation}", callback=retain)
@@ -248,7 +248,7 @@ def test_retained_callback_context_cannot_mutate_later(operation: str) -> None:
         elif operation == "retained_params":
             parameter_handles[0].carrying_capacity = 9.0
         elif operation == "retained_update":
-            configurators[0].competition(carrying_capacity=9.0)
+            updaters[0].competition(carrying_capacity=9.0)
         else:
             samplers[0].random()
     np.testing.assert_array_equal(pop.export_state(), snapshot)

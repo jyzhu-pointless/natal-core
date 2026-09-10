@@ -62,7 +62,7 @@ def _build_discrete(
     Returns:
         A configured discrete-generation population.
     """
-    configurator = (
+    builder = (
         nt.DiscreteGenerationPopulation.setup(
             species=_species(f"{name}_species"),
             name=name,
@@ -83,11 +83,11 @@ def _build_discrete(
         )
     )
     if history_mode == "observation":
-        configurator.with_observation(
+        builder.with_observation(
             groups=_groups(),
             collapse_age=collapse_age,
         )
-    return configurator.record_history(mode=history_mode).build()
+    return builder.record_history(mode=history_mode).build()
 
 
 def _build_age(name: str) -> nt.AgeStructuredPopulation:
@@ -148,7 +148,7 @@ def _build_spatial(
     Returns:
         A two-deme spatial population.
     """
-    configurator = (
+    builder = (
         nt.SpatialPopulation.builder(
             _species(f"{name}_species"),
             n_demes=2,
@@ -158,8 +158,8 @@ def _build_spatial(
         .setup(name=name, stochastic=False)
     )
     if pop_type == "age_structured":
-        configurator = (
-            configurator.age_structure(n_ages=2, new_adult_age=1)
+        builder = (
+            builder.age_structure(n_ages=2, new_adult_age=1)
             .initial_state(
                 individual_count={
                     "female": {"WT|WT": [1.0, 2.0]},
@@ -179,8 +179,8 @@ def _build_spatial(
             .competition(juvenile_growth_mode=nt.NO_COMPETITION)
         )
     else:
-        configurator = (
-            configurator.initial_state(
+        builder = (
+            builder.initial_state(
                 individual_count={
                     "female": {"WT|WT": 30.0, "WT|Dr": 20.0},
                     "male": {"WT|WT": 10.0, "Dr|Dr": 40.0},
@@ -195,13 +195,13 @@ def _build_spatial(
             )
         )
     if history_mode == "observation":
-        configurator.with_observation(
+        builder.with_observation(
             groups=_groups(),
             collapse_age=collapse_age,
             demes=[0, 1],
             deme_mode=deme_mode,
         )
-    return configurator.record_history(mode=history_mode).build()
+    return builder.record_history(mode=history_mode).build()
 
 
 def _numeric_leaves(value: object) -> list[float]:

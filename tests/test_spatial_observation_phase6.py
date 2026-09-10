@@ -71,7 +71,7 @@ def _build_discrete(
     Returns:
         A built spatial population with the requested history mode.
     """
-    configurator = (
+    builder = (
         nt.SpatialPopulation.builder(
             _species(f"{name}_species"),
             n_demes=n_demes,
@@ -94,13 +94,13 @@ def _build_discrete(
         )
     )
     if not identity:
-        configurator.with_observation(
+        builder.with_observation(
             _groups(),
             collapse_age=collapse_age,
             demes=demes,
             deme_mode=deme_mode,
         )
-    return configurator.record_history(mode=history_mode).build()
+    return builder.record_history(mode=history_mode).build()
 
 
 def _build_age(
@@ -805,7 +805,7 @@ def test_removed_spatial_deme_modes_are_rejected(removed_mode: str) -> None:
 
 
 @pytest.mark.parametrize("invalid_demes", [[True], [1.5]])
-def test_configurator_rejects_non_integer_deme_indices(
+def test_builder_rejects_non_integer_deme_indices(
     invalid_demes: list[object],
 ) -> None:
     """Boolean and floating-point indices cannot enter a spatial rule.
@@ -831,7 +831,7 @@ def test_configurator_rejects_non_integer_deme_indices(
         ([1, 1], "demes must not contain duplicate indices"),
     ],
 )
-def test_configurator_rejects_invalid_integer_deme_selections(
+def test_builder_rejects_invalid_integer_deme_selections(
     invalid_demes: list[int],
     expected_message: str,
 ) -> None:

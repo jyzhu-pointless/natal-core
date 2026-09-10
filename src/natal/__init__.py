@@ -69,9 +69,9 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "format_type_name", "gtype_names_from_registry", "materialize",
         "ztype_names_from_registry",
     ],
-    "frontend.configurator": [
-        "Configurator", "CoreConfigWriter", "ConfigWriter", "DraftWriter",
-        "ROUTES", "ROUTES_BY_METHOD", "RuntimeUpdater", "dispatch", "set_param",
+    "frontend.builder": [
+        "PopulationBuilder", "ROUTES", "ROUTES_BY_METHOD", "RuntimeUpdater",
+        "dispatch", "set_param",
     ],
     "frontend.data": [
         "ModelDefinition", "ModelDraft", "NO_COMPETITION", "FIXED", "LOGISTIC",
@@ -151,7 +151,7 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     "frontend.registry": ["IndexRegistry"],
     "frontend.spatial": [
         "BatchSetting", "GridTopology", "HexGrid", "MigrationCSR",
-        "SpatialConfigurator", "SpatialPopulation", "SquareGrid", "batch_setting",
+        "SpatialPopulationBuilder", "SpatialPopulation", "SquareGrid", "batch_setting",
         "build_adjacency_matrix", "build_gaussian_kernel",
     ],
     "frontend.ui": [

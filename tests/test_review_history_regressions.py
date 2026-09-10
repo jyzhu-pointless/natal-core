@@ -407,7 +407,7 @@ def test_direct_population_snapshot_initializes_native_checkpoint_owner(model: L
 
 def test_routed_writer_rejects_missing_atomic_channel_and_logs_only_commits() -> None:
     """Legacy scalar log adapters still honor the native transaction boundary."""
-    from natal.frontend.configurator._writers import CoreConfigWriter
+    from natal.frontend.builder._writers import CoreConfigWriter
 
     pop = _population("ReviewLegacyScalarAudit")
     rows: list[tuple[str, float, float]] = []

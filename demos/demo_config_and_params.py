@@ -6,7 +6,7 @@
   - tick 10-15: 环境恢复，K 回升、T 恢复正常（通过 pop.update() 修改）
 
 覆盖的修改方式：
-  1. 构建时 — Configurator 链式 API → build()
+  1. 构建时 — PopulationBuilder 链式 API → build()
   2. 运行时 — pop.update().method(...)
   3. Python 侧 — set_param(config, "name", v)
   4. Hook 内写参数 — pop.params.xxx = v（单参数 hook 的一等写法，
@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import natal as nt
-from natal.frontend.configurator import set_param
+from natal.frontend.builder import set_param
 from natal.frontend.data import BEVERTON_HOLT
 from natal.frontend.hooks.tick_context import TickContext
 
@@ -30,14 +30,14 @@ sp = nt.Species.from_dict(
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 1. 构建时配置 — Configurator 链式 API
+# 1. 构建时配置 — PopulationBuilder 链式 API
 # ═══════════════════════════════════════════════════════════════════════════════
-# 新路径：Configurator.from_species() → 链式方法 → build()
+# 新路径：PopulationBuilder.from_species() → 链式方法 → build()
 # 每个链式方法内部调用 set_param() 立即写入 config，不需 freeze/build。
 #
-# Configurator 包装了一个 ModelDraft（统一构建草稿），提供以下领域方法：
+# PopulationBuilder 包装了一个 ModelDraft（统一构建草稿），提供以下领域方法：
 #   .setup(...)             — 模拟标志（stochastic、continuous_sampling 等）
-#   .age_structure(...)     — 年龄维度（仅 AgeStructuredConfigurator）
+#   .age_structure(...)     — 年龄维度（仅年龄结构模型）
 #   .initial_state(...)     — 初始种群分布（字典 → 3-D 数组）
 #   .reproduction(...)      — 繁殖参数（eggs_per_female, sex_ratio 等）
 #   .competition(...)       — 竞争参数（carrying_capacity, low_density_growth_rate 等）
@@ -51,7 +51,7 @@ sp = nt.Species.from_dict(
 
 pop = (
     nt.DiscreteGenerationPopulation
-    .setup(sp)                                        # ① Configurator 入口
+    .setup(sp)                                        # ① PopulationBuilder 入口
     .setup(stochastic=False)                          # ② 确定性模拟
     .initial_state({                                   # ③ 初始种群
         "female": {"WT|WT": 5000, "WT|Var": 1000},
@@ -84,10 +84,10 @@ print(f"  population = {pop.state.individual_count.sum():.0f} individuals")
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. 运行时修改 — pop.update() 链式 API
 # ═══════════════════════════════════════════════════════════════════════════════
-# pop.update() 拿当前 config 包一个 Configurator 返回，
-# 后续链式方法同样通过 set_param() 原地写入，立即生效。
+# pop.update() 返回 RuntimeUpdater 运行时更新句柄，
+# 后续链式方法同样通过底层写入原地提交，立即生效。
 #
-# 与构建时的 Configurator 是同一个类——构建和运行时都用同一套 API。
+# 链式语法与构建时的 PopulationBuilder 一致——构建和运行时用同一套领域方法。
 
 # ── 2a. 单个参数修改 ──
 pop.update().competition(carrying_capacity=5000)
@@ -157,7 +157,7 @@ def hook_recover(pop: TickContext) -> int:
 # 注意：上面 @hook 装饰器的函数需要在 build() 前注册。
 # 这里重新构建一个带完整 hooks 的种群来演示。
 
-# 注意：带 hook 的种群使用 Configurator 构建。
+# 注意：带 hook 的种群使用 PopulationBuilder 构建。
 pop2 = (
     nt.DiscreteGenerationPopulation
     .setup(sp, name="demo_hooks", stochastic=False)

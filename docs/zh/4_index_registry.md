@@ -300,7 +300,7 @@ indices = list(pop.index_registry.resolve_ztype_indices(pattern))  # 匹配的�
 
 ### 4. 索引压缩
 
-- `rebuild_config_maps()`（在 `natal.frontend.configurator._registry_builder` 中）运行 BFS。
+- `rebuild_config_maps()`（在 `natal.frontend.builder._registry_builder` 中）运行 BFS。
 - 生成的掩码通过 `registry.compress(ztype_mask, gtype_mask)` 应用。
 - 压缩后，所有注册表属性只反映幸存的条目。
 

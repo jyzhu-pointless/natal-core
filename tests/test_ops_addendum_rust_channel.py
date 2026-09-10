@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import natal as nt  # noqa: E402
-from natal.frontend.configurator import Configurator  # noqa: E402
+from natal.frontend.builder import PopulationBuilder  # noqa: E402
 from natal.frontend.hooks.entry.declarative import Op  # noqa: E402
 from natal.frontend.hooks.types import HookOp, OpType  # noqa: E402
 from natal.frontend.population.age_structured import AgeStructuredPopulation  # noqa: E402
@@ -83,7 +83,7 @@ def _build_viable(
             ``.hooks()`` in the build chain.
     """
     chain = (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(4, 1)
         .setup(stochastic=False, name=name)
         .initial_state(

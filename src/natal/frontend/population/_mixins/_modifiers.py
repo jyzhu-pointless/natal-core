@@ -52,13 +52,13 @@ class ModifierPresetMixin(HookManagerMixin):
 
         Returns:
             The resolved ``_UpdateTarget`` (typed ``Any`` here: the
-            runtime target classes are internal to the configurator
+            runtime target classes are internal to the builder
             package and the host mixin only forwards them).
 
         Raises:
             RuntimeError: If a run holds the session borrow.
         """
-        from natal.frontend.configurator._runtime import idle_session_target
+        from natal.frontend.builder._runtime import idle_session_target
 
         return idle_session_target(cast("BasePopulation[Any]", self))
 
@@ -73,7 +73,7 @@ class ModifierPresetMixin(HookManagerMixin):
         fitness values set directly via ``pop.update().fitness()`` will be
         overwritten. This explicit reset clears stored manual-fitness patches.
         """
-        from natal.frontend.configurator._runtime import reset_preset_fitness
+        from natal.frontend.builder._runtime import reset_preset_fitness
 
         if self._config is None:
             return
@@ -93,7 +93,7 @@ class ModifierPresetMixin(HookManagerMixin):
                 multiple modifier registrations and will commit once
                 afterward.
         """
-        from natal.frontend.configurator._runtime import (
+        from natal.frontend.builder._runtime import (
             commit_genetic_update,
             compile_runtime_candidate,
             read_declaration,
@@ -132,7 +132,7 @@ class ModifierPresetMixin(HookManagerMixin):
             and by individual ``add_gamete_modifier`` /
             ``add_zygote_modifier`` when ``refresh=True``.
         """
-        from natal.frontend.configurator._runtime import recompile_modifier_maps
+        from natal.frontend.builder._runtime import recompile_modifier_maps
 
         if self._config is None or self._index_registry is None:
             return
@@ -158,7 +158,7 @@ class ModifierPresetMixin(HookManagerMixin):
                 call :meth:`refresh_modifiers` or
                 :meth:`refresh_modifier_maps` afterward to apply all at once.
         """
-        from natal.frontend.configurator._runtime import add_manual_modifier
+        from natal.frontend.builder._runtime import add_manual_modifier
 
         add_manual_modifier(
             self._session_target(), "gamete", modifier, name, modifier_id,
@@ -183,7 +183,7 @@ class ModifierPresetMixin(HookManagerMixin):
                 call :meth:`refresh_modifiers` or
                 :meth:`refresh_modifier_maps` afterward to apply all at once.
         """
-        from natal.frontend.configurator._runtime import add_manual_modifier
+        from natal.frontend.builder._runtime import add_manual_modifier
 
         add_manual_modifier(
             self._session_target(), "zygote", modifier, name, modifier_id,
@@ -231,7 +231,7 @@ class ModifierPresetMixin(HookManagerMixin):
 :class:`natal.frontend.presets.GeneticPreset` - Base class for creating custom presets
 :class:`natal.frontend.presets.HomingDrive` - Built-in gene drive preset
         """
-        from natal.frontend.configurator._runtime import (
+        from natal.frontend.builder._runtime import (
             apply_runtime_presets,
         )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 import uuid
 
-from natal.frontend.configurator._params import iter_sexual_selection_entries
+from natal.frontend.builder._params import iter_sexual_selection_entries
 from natal.frontend.genetics import Species
 from natal.frontend.utils.helpers import resolve_sex_label
 

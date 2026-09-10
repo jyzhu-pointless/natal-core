@@ -25,7 +25,7 @@ from natal.backends.rust.rust_backend import (
     rust_backend_available,
 )
 from natal.contracts.materialize import Materialized, materialize
-from natal.frontend.configurator import Configurator
+from natal.frontend.builder import PopulationBuilder
 from natal.frontend.data import DiscretePopulationState, PopulationState
 from natal.frontend.genetics import Species
 
@@ -61,7 +61,7 @@ def discrete_species() -> Species:
 def _build_age_draft(species: Species, *, stochastic: bool, k: float = 400.0):
     """Build a fully calibrated age-structured draft."""
     return (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(5, 2)
         .setup(stochastic=stochastic, name="bridge_age")
         .initial_state(
@@ -325,7 +325,7 @@ def test_discrete_checkpoint_restore_matches_continuous_run(
 ) -> None:
     """Discrete checkpoint round trip must equal the continuous run."""
     draft = (
-        Configurator.for_discrete(discrete_species)
+        PopulationBuilder.for_discrete(discrete_species)
         .setup(stochastic=True, name="bridge_disc")
         .initial_state(
             individual_count={
@@ -510,7 +510,7 @@ def test_population_bridge_end_to_end(age_species: Species) -> None:
 def _build_population(species: Species, name: str):
     """Build a deterministic age-structured population at K=400."""
     return (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(5, 2)
         .setup(stochastic=False, name=name)
         .initial_state(

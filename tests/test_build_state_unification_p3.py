@@ -16,7 +16,7 @@ import numpy as np
 import natal as nt
 from natal.frontend.genetics.definition_compiler import compile_definition
 from natal.frontend.presets import GeneticPreset
-from natal.frontend.spatial.configurator import SpatialConfigurator
+from natal.frontend.spatial.builder import SpatialPopulationBuilder
 
 PRODUCT_FIELDS = (
     "viability_fitness",
@@ -56,10 +56,10 @@ class _CountingPreset(GeneticPreset):
         return None
 
 
-def _age_configurator(name: str, preset: GeneticPreset) -> nt.Configurator:
+def _age_builder(name: str, preset: GeneticPreset) -> nt.PopulationBuilder:
     """Return a deterministic age-structured chain carrying *preset*."""
     return (
-        nt.Configurator.for_age_structured(_species(name))
+        nt.PopulationBuilder.for_age_structured(_species(name))
         .age_structure(n_ages=3, new_adult_age=1)
         .initial_state(
             individual_count={
@@ -86,7 +86,7 @@ def test_double_build_reruns_zero_recipes() -> None:
     (count 2) or, worse, reuses products across DIFFERENT declarations.
     """
     calls: dict[str, int] = {}
-    cfg = _age_configurator("P3DoubleBuild", _CountingPreset(calls))
+    cfg = _age_builder("P3DoubleBuild", _CountingPreset(calls))
     pop1 = cfg.build(name="P3DoubleBuild")
     assert calls == {"fitness": 1}
     pop2 = cfg.build(name="P3DoubleBuildSecond")
@@ -107,7 +107,7 @@ def test_runtime_fitness_edit_resyncs_without_recipes() -> None:
     ``_compiled_draft`` sync in ``fitness()`` maintains.
     """
     calls: dict[str, int] = {}
-    pop = _age_configurator("P3FitnessResync", _CountingPreset(calls)).build(name="P3FitnessResync")
+    pop = _age_builder("P3FitnessResync", _CountingPreset(calls)).build(name="P3FitnessResync")
     pop.update().fitness(viability={"WT|WT": 0.5})
     pop.run(1, record_every=0)
     assert calls == {"fitness": 1}, "runtime fitness edit re-executed recipes"
@@ -133,7 +133,7 @@ def test_frozen_definition_stays_at_build_time_values() -> None:
     definition and later declarations keep distinct meanings.
     """
     calls: dict[str, int] = {}
-    pop = _age_configurator("P3FrozenDef", _CountingPreset(calls)).build(name="P3FrozenDef")
+    pop = _age_builder("P3FrozenDef", _CountingPreset(calls)).build(name="P3FrozenDef")
     pop.update().fitness(viability={"WT|WT": 0.5})
     frozen_draft = pop.definition.draft
     assert frozen_draft is not None
@@ -156,7 +156,7 @@ def test_spatial_multi_deme_build_runs_each_recipe_once_per_group() -> None:
     """
     calls: dict[str, int] = {}
     builder = (
-        SpatialConfigurator(_species("P3SpatialReuse"), 4, pop_type="age_structured")
+        SpatialPopulationBuilder(_species("P3SpatialReuse"), 4, pop_type="age_structured")
         .age_structure(n_ages=3, new_adult_age=1)
         .initial_state(
             individual_count={
@@ -191,11 +191,11 @@ def test_compressed_declaration_rebuilds_its_own_products_exactly() -> None:
     (shapes and values) — the declaration/products consistency the
     group-reuse bookkeeping maintains after CompiledModel's removal.
     """
-    from natal.frontend.spatial.configurator import batch_setting
+    from natal.frontend.spatial.builder import batch_setting
 
     calls: dict[str, int] = {}
     builder = (
-        SpatialConfigurator(_species("P3CompressProducts"), 2, pop_type="age_structured")
+        SpatialPopulationBuilder(_species("P3CompressProducts"), 2, pop_type="age_structured")
         .setup(compress=True)
         .age_structure(n_ages=2, new_adult_age=1)
         .initial_state(

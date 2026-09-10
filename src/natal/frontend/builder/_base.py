@@ -6,26 +6,26 @@ and shallow-copy via ``_replace`` (cheap — all
 ndarray fields are shared by reference).  This is the build-side chain:
 writes land on the owned draft through the declarative route table and
 are materialized via ``build()``.  Runtime updates use
-:class:`~natal.frontend.configurator.RuntimeUpdater` — the handle
+:class:`~natal.frontend.builder.RuntimeUpdater` — the handle
 returned by ``pop.update()`` / ``ctx.update()`` — which shares this
 module's parse functions and commits to a native session or event
 transaction instead.
 
 ``ModelDraft`` is an immutable NamedTuple whose fields cannot be
 replaced once created.  During simulation setup, however, parameters
-need real-time adjustment.  The ``Configurator`` provides a mutable
+need real-time adjustment.  The ``PopulationBuilder`` provides a mutable
 layer on top: all modifications route through the declarative route
-table (:mod:`natal.frontend.configurator._routes`) via batch writers
-(:mod:`natal.frontend.configurator._writers`).
+table (:mod:`natal.frontend.builder._routes`) via batch writers
+(:mod:`natal.frontend.builder._writers`).
 
-The Configurator also doubles as the build-side recipe host: during a
+The PopulationBuilder also doubles as the build-side recipe host: during a
 candidate compile, preset / modifier / fitness recipes read
 ``species`` / ``config`` / ``registry`` / ``index_registry`` directly off
-the Configurator (:class:`natal.frontend.genetics.compile.RecipeHost`)
+the PopulationBuilder (:class:`natal.frontend.genetics.compile.RecipeHost`)
 — there is no adapter object impersonating a Population.
 
-There is exactly one ``Configurator`` class: the former
-``AgeStructuredConfigurator`` / ``DiscreteConfigurator`` split was a
+There is exactly one ``PopulationBuilder`` class: the former
+age-structured / discrete subclass split was a
 code duplication of parameter shapes, now expressed as data in the
 route table.  Discrete-specific vocabulary (``female_age0_survival``,
 ``female_adult_mating_rate``, ...) keeps working — those names route to
@@ -58,27 +58,27 @@ from natal.contracts.materialize import (
     gtype_names_from_registry,
     ztype_names_from_registry,
 )
-from natal.frontend.configurator._params import (
+from natal.frontend.builder._params import (
     resolve_age_structured_initial_individual_count,
     resolve_age_structured_initial_sperm_storage,
     resolve_discrete_initial_individual_count,
 )
-from natal.frontend.configurator._registry_builder import (
+from natal.frontend.builder._registry_builder import (
     build_registry,
     rebuild_config_maps,
 )
-from natal.frontend.configurator._routes import (
+from natal.frontend.builder._routes import (
     dispatch,
     lookup_or_none,
 )
-from natal.frontend.configurator._runtime import (
+from natal.frontend.builder._runtime import (
     competition_writes,
     expected_females_eggs,
     fitness_writes,
     reproduction_writes,
     survival_writes,
 )
-from natal.frontend.configurator._writers import (
+from natal.frontend.builder._writers import (
     DraftWriter,
 )
 from natal.frontend.data import (
@@ -102,7 +102,7 @@ if TYPE_CHECKING:
     from natal.frontend.presets import GeneticPreset
 
 __all__ = [
-    "Configurator",
+    "PopulationBuilder",
     "set_param",
 ]
 
@@ -167,7 +167,7 @@ def set_param(
     """Set a simulation parameter by its user-facing name.
 
     The write is routed through the declarative route table
-    (:mod:`natal.frontend.configurator._routes`): the name (full key,
+    (:mod:`natal.frontend.builder._routes`): the name (full key,
     short name, or alias) resolves to a route entry, the value is
     parsed and validated according to the entry's ``kind``, and the
     write is committed into the draft.  Entries flagged ``sensitive``
@@ -184,10 +184,10 @@ def set_param(
     Array-backed fields (custom slots and vector/tensor contents) are
     mutated in place and the same draft is returned.
 
-    Usable from pure Python and Configurator chain methods.
+    Usable from pure Python and PopulationBuilder chain methods.
 
     If *name* matches a custom field on ``config.custom`` (registered via
-    :meth:`Configurator.custom`), it is written directly — no route
+    :meth:`PopulationBuilder.custom`), it is written directly — no route
     lookup needed.
 
     Args:
@@ -195,7 +195,7 @@ def set_param(
         name: Parameter name — full key ``"competition.carrying_capacity"``,
               short name ``"carrying_capacity"``, or alias.
         value: New value (scalar). For tensor, vector, and row
-               parameters, use the Configurator methods or
+               parameters, use the PopulationBuilder methods or
                ``pop.params.tensor_write`` instead.
 
     Returns:
@@ -221,7 +221,7 @@ def set_param(
     if entry.kind in ("geno_tensor", "age_vec", "sex_row"):
         raise ValueError(
             f"set_param does not support tensor or array parameters "
-            f"like {name!r}. Use the corresponding Configurator method "
+            f"like {name!r}. Use the corresponding PopulationBuilder method "
             f"or pop.params.tensor_write instead."
         )
     return dispatch(config, name, value)
@@ -304,15 +304,15 @@ def _extract_refs_from_callable(func: Callable[..., Any]) -> set[str]:
     return set()
 
 
-# ── Configurator ───────────────────────────────────────────────────────────────
+# ── PopulationBuilder ───────────────────────────────────────────────────────────────
 
 
 _P = ParamSpec("_P")
 
 
 def _declared(
-    method: Callable[Concatenate[Configurator, _P], Configurator],
-) -> Callable[Concatenate[Configurator, _P], Configurator]:
+    method: Callable[Concatenate[PopulationBuilder, _P], PopulationBuilder],
+) -> Callable[Concatenate[PopulationBuilder, _P], PopulationBuilder]:
     """Journal one public chaining call for replayable declaration order.
 
     the future ModelDefinition needs the semantic declaration
@@ -335,8 +335,8 @@ def _declared(
 
     @wraps(method)
     def wrapper(
-        self: Configurator, *args: _P.args, **kwargs: _P.kwargs
-    ) -> Configurator:
+        self: PopulationBuilder, *args: _P.args, **kwargs: _P.kwargs
+    ) -> PopulationBuilder:
         # bind WITHOUT apply_defaults: only what the caller explicitly
         # passed is journaled; replay re-applies the method defaults for
         # the rest.  Variadic parameters are normalized so the journal
@@ -378,25 +378,25 @@ def _declared(
 
 
 def replay_declarations(
-    factory: Callable[[], Configurator],
+    factory: Callable[[], PopulationBuilder],
     journal: list[tuple[str, dict[str, object]]],
-) -> Configurator:
-    """Rebuild a configurator by replaying a declaration journal.
+) -> PopulationBuilder:
+    """Rebuild a builder by replaying a declaration journal.
 
     The replay companion of the ``@_declared`` journal (the ordered log
     is the replayable source of what the user declared).
-    Each journaled call is re-executed on a fresh configurator from
+    Each journaled call is re-executed on a fresh builder from
     *factory* with the explicitly-passed kwargs only, so method defaults
     re-apply exactly as they did originally.
 
     Args:
         factory: Zero-argument constructor producing a fresh, empty
-            configurator of the right granularity (e.g.
-            ``functools.partial(Configurator.for_discrete, species)``).
-        journal: The ``_declaration_log`` of the original configurator.
+            builder of the right granularity (e.g.
+            ``functools.partial(PopulationBuilder.for_discrete, species)``).
+        journal: The ``_declaration_log`` of the original builder.
 
     Returns:
-        The freshly built configurator after replaying every entry.
+        The freshly built builder after replaying every entry.
     """
     replayed = factory()
     for method_name, declared in journal:
@@ -417,20 +417,20 @@ def replay_declarations(
     return replayed
 
 
-class Configurator:
-    """Parameter configurator — the build-side chainable API.
+class PopulationBuilder:
+    """Population builder — the build-side chainable API.
 
     Wraps a ModelDraft and provides chainable domain methods
     (``.competition()``, ``.reproduction()``, etc.) that immediately write
     parameters via :func:`set_param`.  Presets, modifiers, and fitness
     are applied immediately — no deferred execution.  Runtime updates
-    (``pop.update()``) do not create a Configurator; they return a
-    :class:`~natal.frontend.configurator.RuntimeUpdater`.
+    (``pop.update()``) do not create a PopulationBuilder; they return a
+    :class:`~natal.frontend.builder.RuntimeUpdater`.
 
     Usage::
 
         # Build-time (from a blank config)
-        cfg = Configurator(blank_config)
+        cfg = PopulationBuilder(blank_config)
         cfg.competition(carrying_capacity=10000).reproduction(eggs_per_female=50)
         cfg.presets(drive).apply()
     """
@@ -446,7 +446,7 @@ class Configurator:
             config: An existing ModelDraft.
             species: Required for methods that need genotype resolution
                 (initial_state, presets, modifiers, fitness).  Can be
-                omitted when the Configurator is only used for scalar
+                omitted when the PopulationBuilder is only used for scalar
                 parameter updates via set_param.
         """
         self._config: ModelDraft = config
@@ -530,7 +530,7 @@ class Configurator:
     # -- recipe-host surface (build-side candidate compile) ------------------
     # These three read-only properties complete the RecipeHost protocol
     # alongside the existing ``config`` property: preset / modifier /
-    # fitness recipes read them while the Configurator compiles a
+    # fitness recipes read them while the PopulationBuilder compiles a
     # candidate.  A live BasePopulation satisfies the same protocol, so
     # recipes cannot tell (and must not care) which side drives them.
 
@@ -544,7 +544,7 @@ class Configurator:
         if self._species is None:
             raise RuntimeError(
                 "presets() / modifiers() / fitness() require a Species. "
-                "Use Configurator.from_species() to create this instance."
+                "Use PopulationBuilder.from_species() to create this instance."
             )
         return self._species
 
@@ -572,13 +572,13 @@ class Configurator:
         species: Species,
         *,
         discrete: bool = False,
-    ) -> Configurator:
-        """Create a Configurator from a Species with a minimal config.
+    ) -> PopulationBuilder:
+        """Create a PopulationBuilder from a Species with a minimal config.
 
         This is the primary factory.  Pass ``discrete=True`` for
         non-overlapping generations; otherwise an age-structured config
         with overlapping generations is returned.  Both
-        granularities share this single Configurator class — the choice
+        granularities share this single PopulationBuilder class — the choice
         only selects the normalized draft shape.
 
         Args:
@@ -588,7 +588,7 @@ class Configurator:
                 age-structured draft.
 
         Returns:
-            A ``Configurator`` ready for further chaining.
+            A ``PopulationBuilder`` ready for further chaining.
         """
         bp = species.get_config_blueprint()
         n_g = bp["n_genotypes"]
@@ -613,7 +613,7 @@ class Configurator:
                 gametes_to_zygotes_map=g2z,
                 has_sex_chromosomes=has_sc,
             )
-            result = Configurator(config, species=species)
+            result = PopulationBuilder(config, species=species)
             object.__setattr__(result, "_name", "DiscreteGenerationPop")
         else:
             from natal.frontend.data import build_population_config
@@ -632,38 +632,38 @@ class Configurator:
                 carrying_capacity=1000.0,
                 has_sex_chromosomes=has_sc,
             )
-            result = Configurator(config, species=species)
+            result = PopulationBuilder(config, species=species)
             object.__setattr__(result, "_name", "AgeStructuredPop")
         return result
 
     @classmethod
-    def for_discrete(cls, species: Species) -> Configurator:
+    def for_discrete(cls, species: Species) -> PopulationBuilder:
         """Shorthand for ``from_species(species, discrete=True)``.
 
         Args:
             species: The genetic architecture for the population.
 
         Returns:
-            A ``Configurator`` wrapping a discrete-normalized draft.
+            A ``PopulationBuilder`` wrapping a discrete-normalized draft.
         """
         return cls.from_species(species, discrete=True)
 
     @classmethod
-    def for_age_structured(cls, species: Species) -> Configurator:
+    def for_age_structured(cls, species: Species) -> PopulationBuilder:
         """Shorthand for ``from_species(species)``.
 
         Args:
             species: The genetic architecture for the population.
 
         Returns:
-            A ``Configurator`` wrapping an age-structured draft.
+            A ``PopulationBuilder`` wrapping an age-structured draft.
         """
         return cls.from_species(species)
 
     @staticmethod
     def for_config(
         config: ModelDraft,
-    ) -> Configurator:
+    ) -> PopulationBuilder:
         """Wrap *config* with the right granularity of the unified class.
 
         The returned instance is identical either way — the draft's
@@ -674,9 +674,9 @@ class Configurator:
             config: The draft to wrap.
 
         Returns:
-            A ``Configurator`` around *config*.
+            A ``PopulationBuilder`` around *config*.
         """
-        return Configurator(config)
+        return PopulationBuilder(config)
 
     # -- batch writer ----------------------------------------------------------
 
@@ -685,7 +685,7 @@ class Configurator:
 
         The build side always writes the owned draft through the route
         table (:class:`DraftWriter`); the runtime path's writer selection
-        lives in :func:`natal.frontend.configurator._runtime.runtime_writer`.
+        lives in :func:`natal.frontend.builder._runtime.runtime_writer`.
 
         Args:
             writes: Known method writes; accepted for call-shape parity
@@ -697,7 +697,7 @@ class Configurator:
 
         def _publish(draft: ModelDraft) -> None:
             # ``_replace`` writes swap the draft identity: keep the
-            # Configurator's view in sync.
+            # PopulationBuilder's view in sync.
             self._config = draft
 
         return DraftWriter(
@@ -832,7 +832,7 @@ class Configurator:
             raise RuntimeError(
                 "age_structure() must be called before any domain method "
                 "(competition(), reproduction(), survival(), etc.). "
-                "Domain methods have already been called on this configurator."
+                "Domain methods have already been called on this builder."
             )
         if n_ages <= 1:
             raise ValueError(f"n_ages must be at least 2, got {n_ages}")
@@ -876,7 +876,7 @@ class Configurator:
         )
         # Rebuild registry for the new n_ages (affects genotype lookup dims).
         if self._species is not None:
-            from natal.frontend.configurator._base import build_registry
+            from natal.frontend.builder._base import build_registry
 
             self._registry = build_registry(self._species)
         return self
@@ -1132,7 +1132,7 @@ class Configurator:
         if self._species is None:
             raise RuntimeError(
                 "initial_state() requires a Species reference. "
-                "Use Configurator.from_species() to create the instance."
+                "Use PopulationBuilder.from_species() to create the instance."
             )
 
         if self._config.discrete_generation:
@@ -1208,11 +1208,11 @@ class Configurator:
         Modifier lists are accumulated — calling ``presets()`` again
         appends additional modifiers rather than replacing existing ones.
 
-        Recipes run against this Configurator as the build-side candidate
+        Recipes run against this PopulationBuilder as the build-side candidate
         (RecipeHost protocol), isolated on a deepcopy of the draft that is
         published only when every new preset has succeeded.  Runtime
         preset application goes through
-        :meth:`~natal.frontend.configurator.RuntimeUpdater.presets`.
+        :meth:`~natal.frontend.builder.RuntimeUpdater.presets`.
 
         Args:
             *presets: One or more ``GeneticPreset`` instances
@@ -1308,7 +1308,7 @@ class Configurator:
         if self._species is None:
             raise RuntimeError(
                 "fitness() requires a Species. "
-                "Use Configurator.from_species() to create this instance."
+                "Use PopulationBuilder.from_species() to create this instance."
             )
         if self._registry is None:
             self._registry = build_registry(self._species)
@@ -1535,7 +1535,7 @@ class Configurator:
         config = result.config._replace(**fitness) if preserve_fitness else result.config
         self._accept_products(config, result.registry, result.gamete_modifiers, result.zygote_modifiers)
 
-    def _adopt_compilation(self, candidate: Configurator) -> None:
+    def _adopt_compilation(self, candidate: PopulationBuilder) -> None:
         """Publish an already validated build candidate without rerunning recipes."""
         self._accept_products(
             candidate._config, candidate._registry,  # pyright: ignore[reportPrivateUsage]  # the candidate is a controlled copy owned by this builder.
@@ -1555,7 +1555,7 @@ class Configurator:
         All routed writes already refresh the equilibrium caches on
         their own (driven by the jsonc ``sensitive`` column), so this is
         only needed when you modify config arrays directly (outside
-        Configurator) or want to force a re-derivation before build.
+        PopulationBuilder) or want to force a re-derivation before build.
 
         Returns:
             Self for chaining.
@@ -1640,7 +1640,7 @@ class Configurator:
 
         This is the terminal method of the build chain::
 
-            Configurator.from_species()
+            PopulationBuilder.from_species()
                 .age_structure(5, 2)
                 .competition(K=5000)
                 .reproduction(eggs=100)
@@ -1708,7 +1708,7 @@ class Configurator:
         if self._species is None:
             raise RuntimeError(
                 "Cannot build Population: no Species set. "
-                "Use Configurator.from_species() to create this instance."
+                "Use PopulationBuilder.from_species() to create this instance."
             )
         if self._registry is None:
             self._registry = build_registry(self._species)
@@ -1805,7 +1805,7 @@ class Configurator:
         pop._definition = self._definition_for_compile(build_name=name)  # pyright: ignore[reportPrivateUsage]  # one owned frozen declaration; avoid snapshotting it three times.
         pop._current_definition = pop._definition  # pyright: ignore[reportPrivateUsage]  # initial normalized declaration is the runtime compiler source.
 
-        # Configurator applies modifiers before Population construction.  Carry
+        # PopulationBuilder applies modifiers before Population construction.  Carry
         # both the recipe objects and their current derived callables across the
         # boundary so refresh_modifiers() and reconfigure_preset() behave the
         # same for build-time and runtime preset registration.
@@ -1898,10 +1898,10 @@ class Configurator:
         # lifecycle wrapper from silently switching the row layout merely
         # because every Population now owns an Observation.
         pop._observation_mask = plan.observation_mask  # type: ignore[reportPrivateUsage]  # frozen engine input derived from RecordingPlan
-        pop._recording_plan = plan  # type: ignore[reportPrivateUsage]  # configurator sets private attr on population
+        pop._recording_plan = plan  # type: ignore[reportPrivateUsage]  # builder sets private attr on population
         # max_rows=None means "the population default bound" so recording
         # stays bounded unless the caller raises the limit explicitly.
-        pop._history_obj = History(  # type: ignore[reportPrivateUsage]  # configurator sets private attr
+        pop._history_obj = History(  # type: ignore[reportPrivateUsage]  # builder sets private attr
             plan.schema,
             max_rows=max_rows if max_rows is not None else pop.max_history,
         )

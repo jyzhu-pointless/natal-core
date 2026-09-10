@@ -1,6 +1,6 @@
 """Spatial population builder with fluent API and batch-setting support.
 
-Provides ``SpatialConfigurator`` for constructing ``SpatialPopulation`` instances
+Provides ``SpatialPopulationBuilder`` for constructing ``SpatialPopulation`` instances
 via a chainable API. Supports both homogeneous (all demes identical) and
 heterogeneous (per-deme varying parameters via ``batch_setting``) construction.
 
@@ -40,9 +40,9 @@ from typing import (
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.configurator import Configurator
-from natal.frontend.configurator._base import normalize_observation_groups
-from natal.frontend.configurator._params import (
+from natal.frontend.builder import PopulationBuilder
+from natal.frontend.builder._base import normalize_observation_groups
+from natal.frontend.builder._params import (
     InitialIndividualCountInput,
     InitialSpermStorageInput,
     resolve_age_structured_initial_individual_count,
@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 __all__ = [
     "BatchSetting",
     "batch_setting",
-    "SpatialConfigurator",
+    "SpatialPopulationBuilder",
 ]
 
 # Type aliases for population and builder types used throughout.
@@ -90,7 +90,7 @@ _T = TypeVar("_T")
 class BatchSetting(Generic[_T]):
     """Deferred per-deme parameter specification.
 
-    Wraps one of three value kinds used by ``SpatialConfigurator`` to express
+    Wraps one of three value kinds used by ``SpatialPopulationBuilder`` to express
     parameters that vary across demes:
 
     - **scalar**: A Python sequence (list/tuple), one element per deme.
@@ -103,7 +103,7 @@ class BatchSetting(Generic[_T]):
       ``(row, col) -> float`` (auto-detected by parameter count),
       expanded at build time.
 
-    ``SpatialConfigurator`` detects ``BatchSetting`` values in builder method
+    ``SpatialPopulationBuilder`` detects ``BatchSetting`` values in builder method
     calls, stores them, and expands them during ``build()``.
 
     Type Parameter:
@@ -239,7 +239,7 @@ class BatchSetting(Generic[_T]):
     def first_value(self) -> Optional[_T]:
         """Return a single concrete element for template-builder delegation.
 
-        ``SpatialConfigurator`` holds a single-deme template builder internally.
+        ``SpatialPopulationBuilder`` holds a single-deme template builder internally.
         When a parameter is wrapped in ``batch_setting`` (a per-deme list),
         the template builder still needs one scalar value to proceed through
         ``setup() → … → build()``. This method provides that value —
@@ -279,7 +279,7 @@ def batch_setting(
             - An existing ``BatchSetting`` (returned as-is).
 
     Returns:
-        A ``BatchSetting`` instance that ``SpatialConfigurator`` detects and
+        A ``BatchSetting`` instance that ``SpatialPopulationBuilder`` detects and
         expands at build time.
     """
     if isinstance(values, BatchSetting):
@@ -339,7 +339,7 @@ _MODIFIER_KWARGS = frozenset({"gamete_modifiers", "zygote_modifiers"})
 
 def _genetics_route_names() -> frozenset[str]:
     """Genetics-section user-facing names from the route table."""
-    from natal.frontend.configurator._routes import ROUTES_BY_METHOD
+    from natal.frontend.builder._routes import ROUTES_BY_METHOD
 
     names: set[str] = set()
     for entries in ROUTES_BY_METHOD.values():
@@ -378,7 +378,7 @@ def _float_value(
     value: object, *, name: str
 ) -> (
     float
-):  # object: accepts any scalar from configurator replay log (int, float, np.generic)
+):  # object: accepts any scalar from builder replay log (int, float, np.generic)
     """Narrow a replay-log scalar before converting it to float.
 
     Args:
@@ -498,7 +498,7 @@ def _object_sequence(
     value: object, *, name: str
 ) -> Sequence[
     object
-]:  # object: accepts any sequence from configurator replay log (list, tuple, ndarray)
+]:  # object: accepts any sequence from builder replay log (list, tuple, ndarray)
     """Validate a replay-log value used as positional arguments.
 
     Args:
@@ -517,14 +517,14 @@ def _object_sequence(
 
 
 # ---------------------------------------------------------------------------
-# SpatialConfigurator
+# SpatialPopulationBuilder
 # ---------------------------------------------------------------------------
 
 
-class SpatialConfigurator:
+class SpatialPopulationBuilder:
     """Fluent builder for ``SpatialPopulation``.
 
-    Wraps a single-deme ``Configurator`` as a template. All chainable
+    Wraps a single-deme ``PopulationBuilder`` as a template. All chainable
     configuration methods delegate to the template and return ``self``.
 
     Spatial-specific parameters (topology, migration, adjacency) are stored
@@ -539,9 +539,9 @@ class SpatialConfigurator:
         *,
         pop_type: Literal["age_structured", "discrete_generation"] = "age_structured",
     ):
-        """Initialize the spatial configurator.
+        """Initialize the spatial builder.
 
-        Creates a single-deme template ``Configurator`` internally and
+        Creates a single-deme template ``PopulationBuilder`` internally and
         stores spatial parameters (topology, migration) for later use
         during ``build()``.
 
@@ -571,13 +571,13 @@ class SpatialConfigurator:
         self._record_history_mode: Literal["raw", "observation"] = "raw"
         self._record_history_max_rows: int | None = None
 
-        # Create the template configurator (new path).  The unified
-        # Configurator serves both granularities — the flag only picks the
+        # Create the template builder (new path).  The unified
+        # PopulationBuilder serves both granularities — the flag only picks the
         # normalized draft shape.
         if pop_type == "age_structured":
-            self._template: Configurator = Configurator.from_species(species)
+            self._template: PopulationBuilder = PopulationBuilder.from_species(species)
         else:
-            self._template: Configurator = Configurator.from_species(
+            self._template: PopulationBuilder = PopulationBuilder.from_species(
                 species, discrete=True
             )
         # Demes build through this template: declared deme selectors must
@@ -590,7 +590,7 @@ class SpatialConfigurator:
         ] = {}  # Any: BatchSetting value type varies per config field
 
         # Declaration journal: the spatial twin of the plain
-        # Configurator's _declaration_log — same entry type, plus raw
+        # PopulationBuilder's _declaration_log — same entry type, plus raw
         # BatchSetting values preserved for the per-group replay.  This is
         # the SINGLE store for the spatial chain: template calls bypass the
         # @_declared wrapper (see _call_template) so no second journal
@@ -692,7 +692,7 @@ class SpatialConfigurator:
                     seeds.update(int(z) for z in nz[0])
 
         # ── Step 3: Seeds from hook genotype refs ──────────────────────
-        from natal.frontend.configurator._base import collect_hook_genotype_refs
+        from natal.frontend.builder._base import collect_hook_genotype_refs
 
         hook_strs: set[str] = set()
         for method_name, kwargs in self._declaration_log:
@@ -804,7 +804,7 @@ class SpatialConfigurator:
         combined_z2g: NDArray[np.float64] = np.zeros_like(baseline_z2g)
         combined_g2z: NDArray[np.float64] = np.zeros_like(baseline_g2z)
 
-        from natal.frontend.configurator._registry_builder import build_registry
+        from natal.frontend.builder._registry_builder import build_registry
 
         registry = build_registry(self._species)
 
@@ -814,7 +814,7 @@ class SpatialConfigurator:
             zygote_mods: list[tuple[int, str | None, Any]] = []
 
             # Do a lightweight replay — only need modifiers.
-            cfg = Configurator.for_age_structured(self._species)
+            cfg = PopulationBuilder.for_age_structured(self._species)
             for method_name, kwargs in self._declaration_log:
                 if method_name in (
                     "hooks",
@@ -845,7 +845,7 @@ class SpatialConfigurator:
                     else:
                         resolved[key] = value
 
-                # Apply to temporary configurator.
+                # Apply to temporary builder.
                 method = getattr(cfg, method_name, None)
                 if method is None:
                     continue
@@ -931,7 +931,7 @@ class SpatialConfigurator:
         self,
         method_name: str,
         kwargs: Dict[str, Any],
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Detect BatchSetting values in kwargs, store them, and delegate
         concrete (non-batch) values to the template builder's method.
 
@@ -989,7 +989,7 @@ class SpatialConfigurator:
         method_name: str,
         args: tuple[object, ...],
         kwargs: Dict[str, Any],
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Like ``_detect_and_delegate`` but accepts positional args.
 
         Positional args are assumed to never be BatchSetting; only kwargs
@@ -1028,7 +1028,7 @@ class SpatialConfigurator:
         fixed_egg_count: bool = False,
         compress: bool = False,
         declared_zygote_types: Sequence[str] | Sequence[int] | None = None,
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Configure basic population settings.
 
         Args:
@@ -1085,7 +1085,7 @@ class SpatialConfigurator:
         equilibrium_distribution: Optional[
             Union[List[float], NDArray[np.float64]]
         ] = None,
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Configure age structure (age-structured models only).
 
         Args:
@@ -1124,7 +1124,7 @@ class SpatialConfigurator:
         sperm_storage: Optional[
             Any
         ] = None,  # Any: accepts nested dict, list, or ndarray — validated internally  # Any: accepts nested dict, list, or ndarray — validated internally
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Configure the initial population state.
 
         Args:
@@ -1149,7 +1149,7 @@ class SpatialConfigurator:
         # Discrete-generation params
         female_age0_survival: Optional[float] = None,
         male_age0_survival: Optional[float] = None,
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Configure survival rates.
 
         Args:
@@ -1209,7 +1209,7 @@ class SpatialConfigurator:
         # Discrete-generation params
         female_adult_mating_rate: float = 1.0,
         male_adult_mating_rate: float = 1.0,
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Configure reproduction and mating parameters.
 
         Args:
@@ -1266,7 +1266,7 @@ class SpatialConfigurator:
         ] = None,
         # Discrete-generation params
         carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Configure competition and density-dependence.
 
         Args:
@@ -1313,7 +1313,7 @@ class SpatialConfigurator:
                 },
             )
 
-    def presets(self, *preset_list: GeneticPreset) -> SpatialConfigurator:
+    def presets(self, *preset_list: GeneticPreset) -> SpatialPopulationBuilder:
         """Add gene-drive presets (applied during build).
 
         Each positional argument may be a ``BatchSetting`` of preset objects,
@@ -1350,7 +1350,7 @@ class SpatialConfigurator:
         sexual_selection: Optional[Any] = None,
         zygote_viability: Optional[Any] = None,
         mode: str = "replace",
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Configure fitness values (applied after presets).
 
         Args:
@@ -1376,13 +1376,13 @@ class SpatialConfigurator:
 
     def custom(
         self, **kwargs: bool | int | float | NDArray[np.float64]
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Register custom named slots on every deme's draft.
 
         Custom slots are container-uniform: the kwargs are replayed onto
         each group template at build time, so all demes carry the same
         values (per-deme custom slots are not a batch_setting axis).
-        Values follow the panmictic ``Configurator.custom`` contract and
+        Values follow the panmictic ``PopulationBuilder.custom`` contract and
         reach the Rust session via ``Params.custom_slots``.
 
         Args:
@@ -1401,10 +1401,10 @@ class SpatialConfigurator:
         priority: int = 0,
         deme: DemeSelector = "*",
         name: Optional[str] = None,
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Declare lifecycle hooks for every deme's build chain.
 
-        Declaration keywords mirror the panmictic ``Configurator.hooks``:
+        Declaration keywords mirror the panmictic ``PopulationBuilder.hooks``:
         ``deme`` metadata rides on the compiled descriptors (demes outside
         the selector never fire the hook), not on the container.
 
@@ -1448,7 +1448,7 @@ class SpatialConfigurator:
         zygote_modifiers: Optional[
             List[Tuple[int, Optional[str], Callable[..., object]]]
         ] = None,
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Configure custom modifier functions.
 
         Args:
@@ -1473,7 +1473,7 @@ class SpatialConfigurator:
         collapse_age: bool = False,
         demes: Optional[Sequence[int]] = None,
         deme_mode: Literal["preserve", "aggregate"] = "preserve",
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Define the canonical spatial Observation at build time.
 
         This method only defines how ``pop.observe()`` projects population
@@ -1489,7 +1489,7 @@ class SpatialConfigurator:
                 ``"aggregate"`` sums and removes it.
 
         Returns:
-            SpatialConfigurator: Self for chaining.
+            SpatialPopulationBuilder: Self for chaining.
 
         Raises:
             TypeError: If groups is not a mapping of selectors.
@@ -1522,7 +1522,7 @@ class SpatialConfigurator:
         *,
         mode: Literal["raw", "observation"] = "raw",
         max_rows: Optional[int] = None,
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Set the recording mode and capacity for spatial population history.
 
         Must be called during the build phase.
@@ -1566,7 +1566,7 @@ class SpatialConfigurator:
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
         adjust_migration_on_edge: bool = False,
-    ) -> SpatialConfigurator:
+    ) -> SpatialPopulationBuilder:
         """Configure spatial migration parameters.
 
         Args:
@@ -1768,7 +1768,7 @@ class SpatialConfigurator:
 
     @classmethod
     def _build_from_definition(
-        cls, definition: ModelDefinition, *, compiled_template: Configurator | None = None,
+        cls, definition: ModelDefinition, *, compiled_template: PopulationBuilder | None = None,
     ) -> SpatialPopulation:
         """Compile a detached declaration using the existing group compiler.
 
@@ -1783,7 +1783,7 @@ class SpatialConfigurator:
         if definition.draft is None or controls is None:
             raise ValueError("Spatial compilation requires normalized spatial inputs")
         compiler = cls(definition.species, controls.n_demes, controls.topology, pop_type=controls.pop_type)
-        template = Configurator(definition.draft, species=definition.species)
+        template = PopulationBuilder(definition.draft, species=definition.species)
         template._spatial_template = True  # pyright: ignore[reportPrivateUsage]  # detached spatial group template keeps per-deme selectors.
         template._registry = definition.registry  # pyright: ignore[reportPrivateUsage]  # initialize one isolated compiler candidate.
         template._presets = list(definition.presets)  # pyright: ignore[reportPrivateUsage]
@@ -2234,7 +2234,7 @@ class SpatialConfigurator:
         """
         # Ecology-only variants reuse the template's compiled genetics,
         # including the uncompressed pass used to collect global BFS seeds.
-        # Cloning the configurator preserves opaque recipe identities without
+        # Cloning the builder preserves opaque recipe identities without
         # repeating their effects; build snapshots every owned array itself.
         if not _genetics_batch_names(list(sig_map)) and self._can_use_replace(sig_map, self._template.config):
             from copy import copy
@@ -2255,9 +2255,9 @@ class SpatialConfigurator:
             self._template._compiled_key = template_cfg._compiled_key  # pyright: ignore[reportPrivateUsage]
             return result
         if self._pop_type == "age_structured":
-            template_cfg = Configurator.for_age_structured(self._species)
+            template_cfg = PopulationBuilder.for_age_structured(self._species)
         else:
-            template_cfg = Configurator.for_discrete(self._species)
+            template_cfg = PopulationBuilder.for_discrete(self._species)
         template_cfg._spatial_template = True  # pyright: ignore[reportPrivateUsage]  # group template replays spatial hook declarations.
 
         for method_name, kwargs in self._declaration_log:
@@ -2389,5 +2389,5 @@ class SpatialConfigurator:
         # The native store compiles its selector from this frozen policy when
         # bound; no per-tick raw batch is transported to the Python wrapper.
         spatial._observation_mask = None  # type: ignore[reportPrivateUsage]  # raw engine transport; container commits the configured History mode
-        spatial._recording_plan = plan  # type: ignore[reportPrivateUsage]  # configurator sets private attr on spatial
-        spatial._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]  # configurator sets private attr
+        spatial._recording_plan = plan  # type: ignore[reportPrivateUsage]  # builder sets private attr on spatial
+        spatial._history_obj = History(plan.schema, max_rows=max_rows)  # type: ignore[reportPrivateUsage]  # builder sets private attr

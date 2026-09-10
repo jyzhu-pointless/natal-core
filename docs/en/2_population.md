@@ -18,7 +18,7 @@ NATAL Core provides two main population types:
 
 ## Creating a Population
 
-Use the fluent chain API. The default `Configurator` path writes parameters immediately.
+Use the fluent chain API. The default `PopulationBuilder` path writes parameters immediately.
 See [Population Initialization](2_population_initialization.md) for details.
 
 ```python
@@ -75,7 +75,7 @@ Each `pop.update()` call is validated against the route table and committed to t
 `set_param()` writes only the draft you pass in and never commits to a running population; ecology scalars go through `NamedTuple._replace`, so the return value must be rebound. Use `pop.update()` or `pop.params` to modify a running population:
 
 ```python
-from natal.frontend.configurator import set_param
+from natal.frontend.builder import set_param
 
 draft = pop.config                       # query snapshot
 draft = set_param(draft, "competition.carrying_capacity", 5000.0)
@@ -305,7 +305,7 @@ pop = nt.DiscreteGenerationPopulation(
 pop.run(1)
 ```
 
-This is a low-level construction path. The regular `Configurator` build path
+This is a low-level construction path. The regular `PopulationBuilder` build path
 does not expose an `extreme_speed_mode` chain method.
 
 ### Competition and Hooks

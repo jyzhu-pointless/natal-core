@@ -9,11 +9,11 @@ import pytest
 
 import natal as nt
 from natal.frontend.data.definition import ModelDefinition
-from natal.frontend.spatial.configurator import SpatialConfigurator, batch_setting
+from natal.frontend.spatial.builder import SpatialPopulationBuilder, batch_setting
 from tests.test_evaluator_compiler_regressions import _OpaqueResourcePreset
 
 
-def _builder(name: str) -> SpatialConfigurator:
+def _builder(name: str) -> SpatialPopulationBuilder:
     """Create a two-deme declaration with 100 females and 100 males per deme."""
     species = nt.Species.from_dict(name, {"chr": {"locus": ["WT", "Dr"]}})
     return (
@@ -56,7 +56,7 @@ def test_cold_spatial_definition_preserves_controls_and_isolates_arrays(
     detached_adjacency = spatial.migration["adjacency"]
     assert isinstance(detached_adjacency, np.ndarray)
     detached_adjacency[:] = -1
-    cold = SpatialConfigurator._build_from_definition(definition)
+    cold = SpatialPopulationBuilder._build_from_definition(definition)
     assert cold.demes[0].params.carrying_capacity == 1000
     assert cold.demes[1].params.carrying_capacity == 2000
     assert cold.observe().values.sum() == 400
@@ -101,7 +101,7 @@ def test_spatial_batch_callable_expands_once_and_cold_build_uses_frozen_values()
     assert calls == [0, 1]
     definition = pop.definition
     assert definition is not None
-    cold = SpatialConfigurator._build_from_definition(definition)
+    cold = SpatialPopulationBuilder._build_from_definition(definition)
     assert calls == [0, 1]
     assert cold.demes[1].params.carrying_capacity == 1100
 
@@ -130,7 +130,7 @@ def test_spatial_normalization_preserves_opaque_resources_and_cached_recipes(bat
     definition = pop.definition
     assert definition is not None
     assert definition.presets == (preset,)
-    cold = SpatialConfigurator._build_from_definition(definition)
+    cold = SpatialPopulationBuilder._build_from_definition(definition)
     assert calls == ["fitness", "fitness"]
     assert cold.demes[0].presets == [preset]
 
@@ -144,4 +144,4 @@ def test_spatial_compiler_rejects_incomplete_definition(template_only: bool) -> 
         definition.species, True,
     )
     with pytest.raises(ValueError, match="normalized spatial inputs"):
-        SpatialConfigurator._build_from_definition(incomplete)
+        SpatialPopulationBuilder._build_from_definition(incomplete)

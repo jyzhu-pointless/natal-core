@@ -43,7 +43,7 @@ def test_regression_issue34_zygote_modifier_index_error():
 
     # This must not raise.
     pop = (
-        nt.Configurator.for_age_structured(sp)
+        nt.PopulationBuilder.for_age_structured(sp)
         .setup(stochastic=False)
         .age_structure(n_ages=8, new_adult_age=2)
         .initial_state(
@@ -117,7 +117,7 @@ def test_regression_issue36_gamete_modifier_wrong_ztype():
         ]
 
     pop = (
-        nt.Configurator.for_age_structured(sp)
+        nt.PopulationBuilder.for_age_structured(sp)
         .setup(stochastic=False)
         .age_structure(n_ages=8, new_adult_age=2)
         .initial_state(

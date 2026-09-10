@@ -1,6 +1,6 @@
 # SpatialPopulation Initialization Optimization Plan
 
-> **Historical design**: this page records the bottleneck analysis and implementation plan from the time SpatialConfigurator was proposed. It is **not a guarantee of current behavior** — some phases, performance expectations, and API ideas were never implemented. The current implementation entry point is [SpatialConfigurator: Batch Construction of Spatial Populations](spatial_configurator.md).
+> **Historical design**: this page records the bottleneck analysis and implementation plan from the time SpatialConfigurator was proposed. It is **not a guarantee of current behavior** — some phases, performance expectations, and API ideas were never implemented. The current implementation entry point is [SpatialPopulationBuilder: Batch Construction of Spatial Populations](spatial_population_builder.md).
 
 ## Current State and Bottlenecks
 
@@ -58,7 +58,7 @@ All demes must be ready before constructing `SpatialPopulation`.
 
 ---
 
-## Core Design: SpatialConfigurator + batch_setting
+## Core Design: SpatialPopulationBuilder + batch_setting
 
 ### `batch_setting` Wrapper
 
@@ -77,7 +77,7 @@ batch_setting({
 
 When a builder parameter is a `batch_setting` object, the builder internally switches to spatial batch mode.
 
-### SpatialConfigurator Chained API
+### SpatialPopulationBuilder Chained API
 
 ```python
 pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, cols=N)) \
@@ -98,7 +98,7 @@ pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, col
     .build()
 ```
 
-### SpatialConfigurator Internal Flow
+### SpatialPopulationBuilder Internal Flow
 
 ```
 At build() time:
@@ -117,9 +117,9 @@ At build() time:
 
 ## Implementation Roadmap
 
-### Phase 1a: Homogeneous SpatialConfigurator (no batch_setting)
+### Phase 1a: Homogeneous SpatialPopulationBuilder (no batch_setting)
 
-Without `batch_setting`, all demes are completely identical. SpatialConfigurator only needs to build one template, then N shallow copies.
+Without `batch_setting`, all demes are completely identical. SpatialPopulationBuilder only needs to build one template, then N shallow copies.
 
 ```python
 pop = SpatialPopulation.builder(species, n_demes=2601, ...) \
@@ -134,7 +134,7 @@ pop = SpatialPopulation.builder(species, n_demes=2601, ...) \
 
 Expected: 2601 demes ~50ms (excluding the template's first build of 2-3ms).
 
-### Phase 1b: Heterogeneous SpatialConfigurator (with batch_setting)
+### Phase 1b: Heterogeneous SpatialPopulationBuilder (with batch_setting)
 
 When at least one `batch_setting` parameter is detected, group by config equivalence.
 
@@ -158,7 +158,7 @@ batch_setting.spatial(lambda x, y: 10000 if abs(x) < 5 else 5000, topology=hex_g
 
 Receives topology coordinates, implicitly fills all deme positions.
 
-### Phase 1d: `set_hook` Integration in SpatialConfigurator
+### Phase 1d: `set_hook` Integration in SpatialPopulationBuilder
 
 ```python
 SpatialPopulation.builder(...) \
@@ -278,7 +278,7 @@ for i in range(n_demes):
 | Config group key after batch expansion is unhashable (contains NumPy arrays) | Use `id(arr)` or serialized digest |
 | Sharing `compiled_hook_descriptors` / `hook_entries` reference when cloning demes leads to state leakage | Copy-on-write: duplicate on demand via subset `set_hook` |
 | Does `ModelDraft` support `_replace`? | It is a NamedTuple, confirmed usable |
-| Relationship between SpatialConfigurator and existing `DiscreteGenerationPopulationBuilder` | SpatialConfigurator holds per-deme builders internally, reuses their validation logic |
+| Relationship between SpatialPopulationBuilder and existing `DiscreteGenerationPopulationBuilder` | SpatialPopulationBuilder holds per-deme builders internally, reuses their validation logic |
 
 ---
 

@@ -351,13 +351,13 @@ def _build_spatial_population(
     )
 
 
-def _build_configurator(
+def _build_population_builder(
     species: nt.Species,
     *,
     kind: PopulationKind,
     name: str,
-) -> nt.Configurator:
-    """Create an unbuilt configurator for build-time transaction tests."""
+) -> nt.PopulationBuilder:
+    """Create an unbuilt builder for build-time transaction tests."""
     if kind == "age":
         return (
             nt.AgeStructuredPopulation.setup(
@@ -812,7 +812,7 @@ def test_build_time_preset_failure_can_retry_same_object_exactly() -> None:
         "build_retry_same_preset_recipe",
         fail_during_rebuild=True,
     )
-    configurator = (
+    builder = (
         nt.AgeStructuredPopulation.setup(species=species, stochastic=False)
         .age_structure(n_ages=2, new_adult_age=1)
         .initial_state({
@@ -824,16 +824,16 @@ def test_build_time_preset_failure_can_retry_same_object_exactly() -> None:
             juvenile_growth_mode=nt.NO_COMPETITION,
         )
     )
-    original_config = configurator.config
+    original_config = builder.config
 
     with pytest.raises(ValueError, match="group modifier failure"):
-        configurator.presets(preset)
+        builder.presets(preset)
 
-    assert configurator.config is original_config
+    assert builder.config is original_config
     assert preset._bound_species is None  # pyright: ignore[reportPrivateUsage]  # failed registration must restore caller-owned binding.
 
     preset.fail_during_rebuild = False
-    retried = configurator.presets(preset).build()
+    retried = builder.presets(preset).build()
     fresh = _build_population(
         species,
         _ConfigSensitivePreset("build_retry_fresh_recipe"),
@@ -865,21 +865,21 @@ def test_build_time_multi_preset_failure_rolls_back_and_retries_exactly(
         fail_during_rebuild=True,
         failure_stage=failure_stage,
     )
-    configurator = _build_configurator(
+    builder = _build_population_builder(
         species,
         kind=kind,
         name=f"build_transaction_pop_{axis}",
     )
     if scenario == "append":
-        configurator.presets(successful)
+        builder.presets(successful)
 
-    original_config = configurator.config
-    original_registry = configurator._registry  # pyright: ignore[reportPrivateUsage]  # transaction must restore the registry object exactly.
-    original_presets = list(configurator._presets)  # pyright: ignore[reportPrivateUsage]  # build-time registration has no public metadata view.
-    original_gamete = list(configurator.gamete_modifiers)
-    original_zygote = list(configurator.zygote_modifiers)
-    original_compression = configurator._compression_applied  # pyright: ignore[reportPrivateUsage]  # rollback covers all Configurator transaction state.
-    original_arrays = _copy_config_arrays(configurator.config)
+    original_config = builder.config
+    original_registry = builder._registry  # pyright: ignore[reportPrivateUsage]  # transaction must restore the registry object exactly.
+    original_presets = list(builder._presets)  # pyright: ignore[reportPrivateUsage]  # build-time registration has no public metadata view.
+    original_gamete = list(builder.gamete_modifiers)
+    original_zygote = list(builder.zygote_modifiers)
+    original_compression = builder._compression_applied  # pyright: ignore[reportPrivateUsage]  # rollback covers all PopulationBuilder transaction state.
+    original_arrays = _copy_config_arrays(builder.config)
     attempted = (successful, failing) if scenario == "same-call" else (failing,)
     expected_message = (
         "deferred fitness failure"
@@ -888,27 +888,27 @@ def test_build_time_multi_preset_failure_rolls_back_and_retries_exactly(
     )
 
     with pytest.raises(ValueError, match=expected_message):
-        configurator.presets(*attempted)
+        builder.presets(*attempted)
 
-    assert configurator.config is original_config
-    assert configurator._registry is original_registry  # pyright: ignore[reportPrivateUsage]  # exact registry identity is part of atomic rollback.
-    assert configurator._presets == original_presets  # pyright: ignore[reportPrivateUsage]  # no failed recipe may remain registered.
-    assert configurator.gamete_modifiers == original_gamete
-    assert configurator.zygote_modifiers == original_zygote
-    assert configurator._compression_applied is original_compression  # pyright: ignore[reportPrivateUsage]  # compression state cannot leak from a failed attempt.
-    _assert_config_arrays_equal(configurator.config, original_arrays)
+    assert builder.config is original_config
+    assert builder._registry is original_registry  # pyright: ignore[reportPrivateUsage]  # exact registry identity is part of atomic rollback.
+    assert builder._presets == original_presets  # pyright: ignore[reportPrivateUsage]  # no failed recipe may remain registered.
+    assert builder.gamete_modifiers == original_gamete
+    assert builder.zygote_modifiers == original_zygote
+    assert builder._compression_applied is original_compression  # pyright: ignore[reportPrivateUsage]  # compression state cannot leak from a failed attempt.
+    _assert_config_arrays_equal(builder.config, original_arrays)
     expected_successful_binding = species if scenario == "append" else None
     assert successful._bound_species is expected_successful_binding  # pyright: ignore[reportPrivateUsage]  # same-call rollback releases earlier inputs; append preserves prior success.
     assert failing._bound_species is None  # pyright: ignore[reportPrivateUsage]  # the failed input remains reusable by its caller.
 
     failing.fail_during_rebuild = False
-    retried = configurator.presets(*attempted).build()
+    retried = builder.presets(*attempted).build()
     fresh_successful = _make_fitness_drive(f"build_transaction_fresh_successful_{axis}")
     fresh_failing = _DeferredFailurePreset(
         f"build_transaction_fresh_failing_{axis}",
         failure_stage=failure_stage,
     )
-    fresh = _build_configurator(
+    fresh = _build_population_builder(
         species,
         kind=kind,
         name=f"build_transaction_fresh_pop_{axis}",
@@ -1235,10 +1235,10 @@ def test_spatial_runtime_update_chain_removed() -> None:
     assert not hasattr(nt.SpatialPopulation, "update")
     assert not hasattr(nt.SpatialPopulation, "update_deme")
     # The panmictic runtime channel is the RuntimeUpdater handle: the
-    # for_population factory and the runtime-handle configurator are gone.
-    from natal.frontend.configurator import Configurator, RuntimeUpdater
+    # for_population factory and the runtime-handle builder are gone.
+    from natal.frontend.builder import PopulationBuilder, RuntimeUpdater
 
-    assert not hasattr(Configurator, "for_population")
-    assert not hasattr(Configurator, "_genetic_candidate")
-    assert not hasattr(Configurator, "_commit_genetic_candidate")
+    assert not hasattr(PopulationBuilder, "for_population")
+    assert not hasattr(PopulationBuilder, "_genetic_candidate")
+    assert not hasattr(PopulationBuilder, "_commit_genetic_candidate")
     assert nt.RuntimeUpdater is RuntimeUpdater

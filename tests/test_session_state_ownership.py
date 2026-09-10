@@ -592,7 +592,7 @@ class TestDirtyBridgeNegativeContracts:
 
     def test_dirty_sink_parameter_is_gone_from_writers(self) -> None:
         """No writer accepts the dirty_sink argument anymore."""
-        from natal.frontend.configurator._writers import (
+        from natal.frontend.builder._writers import (
             CoreConfigWriter,
             DraftWriter,
         )
@@ -888,7 +888,7 @@ class TestInRunCustomSlotWrite:
         """A runtime slot write must not wipe slots declared at build time.
 
         ``custom()`` documents that multiple calls accumulate; the runtime
-        configurator re-validates the whole slot set, so a write through
+        builder re-validates the whole slot set, so a write through
         ``pop.update().custom(...)`` must preserve the slots the
         population was built with.
         """

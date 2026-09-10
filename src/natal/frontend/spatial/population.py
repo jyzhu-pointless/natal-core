@@ -59,7 +59,7 @@ if TYPE_CHECKING:
     )
     from natal.frontend.output.history import History
     from natal.frontend.output.observation import Observation, ObservationResult
-    from natal.frontend.spatial.configurator import SpatialConfigurator
+    from natal.frontend.spatial.builder import SpatialPopulationBuilder
 
 __all__ = ["SpatialPopulation"]
 
@@ -648,8 +648,8 @@ class SpatialPopulation:
         topology: Optional[GridTopology] = None,
         *,
         pop_type: Literal["age_structured", "discrete_generation"] = "age_structured",
-    ) -> SpatialConfigurator:
-        """Create a ``SpatialConfigurator`` for fluent spatial population construction.
+    ) -> SpatialPopulationBuilder:
+        """Create a ``SpatialPopulationBuilder`` for fluent spatial population construction.
 
         Args:
             species: Genetic architecture shared by all demes.
@@ -658,7 +658,7 @@ class SpatialPopulation:
             pop_type: ``"age_structured"`` (default) or ``"discrete_generation"``.
 
         Returns:
-            A ``SpatialConfigurator`` instance ready for chaining.
+            A ``SpatialPopulationBuilder`` instance ready for chaining.
 
         Examples:
             >>> pop = SpatialPopulation.builder(species, n_demes=100) \\
@@ -667,9 +667,9 @@ class SpatialPopulation:
             ...     .competition(carrying_capacity=batch_setting([...])) \\
             ...     .build()
         """
-        from natal.frontend.spatial.configurator import SpatialConfigurator
+        from natal.frontend.spatial.builder import SpatialPopulationBuilder
 
-        return SpatialConfigurator(
+        return SpatialPopulationBuilder(
             species=species,
             n_demes=n_demes,
             topology=topology,
@@ -742,7 +742,7 @@ class SpatialPopulation:
         # tuple view to prevent accidental external mutation.
         self._demes: List[DemePopulation] = list(demes)
         # Frozen declaration snapshot, attached by
-        # SpatialConfigurator.build.
+        # SpatialPopulationBuilder.build.
         self._definition: ModelDefinition | None = None
         # Genetics draft tables start out shared by every deme; in-place
         # genetics writes would leak across demes, so the per-deme params
@@ -1022,7 +1022,7 @@ class SpatialPopulation:
     def _initialize_default_output_policy(self) -> None:
         """Install identity Observation and raw History for direct construction.
 
-        ``SpatialConfigurator`` replaces these defaults with its explicitly
+        ``SpatialPopulationBuilder`` replaces these defaults with its explicitly
         compiled policy after construction. The defaults keep the public
         ``SpatialPopulation(demes, ...)`` constructor fully usable on its own.
         """
@@ -1345,7 +1345,7 @@ class SpatialPopulation:
             KeyError: If *field* is not a genetics tensor.
             ValueError: If a meiosis table's rows are not distributions.
         """
-        from natal.frontend.configurator._writers import (
+        from natal.frontend.builder._writers import (
             recompute_offspring_tensor,
             validate_meiosis_table,
         )
@@ -1406,12 +1406,12 @@ class SpatialPopulation:
 
         Raises:
             AttributeError: If the population was not built through
-                ``SpatialConfigurator.build()``.
+                ``SpatialPopulationBuilder.build()``.
         """
         if self._definition is None:
             raise AttributeError(
                 "This spatial population has no declaration snapshot; it "
-                "was not built through SpatialConfigurator.build()."
+                "was not built through SpatialPopulationBuilder.build()."
             )
         return self._definition
 
@@ -2473,7 +2473,7 @@ class SpatialPopulation:
         Raises:
             RuntimeError: If any deme has already finished or the native
                 engine extension is unavailable (the session is created by
-                ``SpatialConfigurator.build()`` or lazily at the first
+                ``SpatialPopulationBuilder.build()`` or lazily at the first
                 tick).
         """
         return self.run(1, record_every=0)
@@ -2503,7 +2503,7 @@ class SpatialPopulation:
             ValueError: If ``n_steps`` is negative.
             RuntimeError: If any deme has already finished or the native
                 engine extension is unavailable (the session is created by
-                ``SpatialConfigurator.build()`` or lazily at the first
+                ``SpatialPopulationBuilder.build()`` or lazily at the first
                 tick).
         """
         if getattr(self, "_running", False):

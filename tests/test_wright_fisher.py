@@ -138,12 +138,12 @@ class TestCompressConfig:
 
     def test_compress_config_includes_initial_sperm_storage(self):
         import natal as nt
-        from natal.frontend.configurator import Configurator
+        from natal.frontend.builder import PopulationBuilder
         from natal.frontend.data import compress_config
 
         sp = nt.Species.from_dict("cc2", {"c1": {"l1": ["A", "a"]}})
         pop = (
-            Configurator.for_age_structured(sp)
+            PopulationBuilder.for_age_structured(sp)
             .setup(
                 stochastic=False,
             )

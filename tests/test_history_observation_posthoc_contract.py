@@ -14,7 +14,7 @@ import natal as nt
 
 from natal.frontend.output import History
 from natal.frontend.patterns import IndividualSelector
-from natal.frontend.spatial.configurator import batch_setting
+from natal.frontend.spatial.builder import batch_setting
 
 
 def _species(name: str) -> nt.Species:
@@ -55,7 +55,7 @@ def _discrete_deme(
     Returns:
         A built discrete-generation deme with raw history recording.
     """
-    configurator = (
+    builder = (
         nt.DiscreteGenerationPopulation.setup(
             species=species,
             name=name,
@@ -82,11 +82,11 @@ def _discrete_deme(
         )
     )
     if custom_observation:
-        configurator.with_observation(
+        builder.with_observation(
             groups=_observation_groups(),
             collapse_age=collapse_age,
         )
-    return configurator.record_history(mode="raw").build()
+    return builder.record_history(mode="raw").build()
 
 
 def _observation_groups() -> OrderedDict[str, IndividualSelector]:
@@ -108,7 +108,7 @@ def _observation_groups() -> OrderedDict[str, IndividualSelector]:
 
 
 def _direct_spatial_discrete(name: str) -> nt.SpatialPopulation:
-    """Construct a spatial population directly, without SpatialConfigurator.
+    """Construct a spatial population directly, without SpatialPopulationBuilder.
 
     Args:
         name: Base identifier for species and demes.
@@ -186,7 +186,7 @@ def _configured_spatial_discrete(name: str) -> nt.SpatialPopulation:
 
 
 def test_direct_spatial_constructor_installs_identity_observation_and_raw_history() -> None:
-    """Direct construction records exact typed snapshots without a configurator."""
+    """Direct construction records exact typed snapshots without a builder."""
     population = _direct_spatial_discrete("direct_output_defaults")
     initial_counts = _stack_counts(population)
     initial_projection = population.observe()

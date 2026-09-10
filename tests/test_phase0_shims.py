@@ -14,7 +14,7 @@ classes:
    cycle is broken by PEP 562 deferral, so a clean interpreter must be able
    to import the involved modules in ANY order.
 3. Lazy-map completeness (axis combination): every name in the top-level
-   ``natal._lazy_map`` (230 names across 15 real owning modules) resolves
+   ``natal._lazy_map`` (208 names across 15 real owning modules) resolves
    through ``getattr(natal, name)`` to the very object its owning module
    exports, and legacy package keys (``natal.hooks`` etc.) resolve to the
    relocated module object.
@@ -39,7 +39,9 @@ import natal
 
 # The 14 relocated legacy packages: natal.<mod> used to be a forwarding shim
 # of natal.frontend.<mod>.  ``engine`` is covered by ENGINE_LEGACY_PATHS
-# below (its shim exported no ``__all__`` names).
+# below (its shim exported no ``__all__`` names).  ``configurator`` lost its
+# legacy key to the P5 ``builder`` rename and is covered by the P5 negative
+# contract at the end of this module.
 _RELOCATED_PACKAGES: Tuple[str, ...] = (
     "patterns",
     "registry",
@@ -49,7 +51,7 @@ _RELOCATED_PACKAGES: Tuple[str, ...] = (
     "modifiers",
     "output",
     "data",
-    "configurator",
+    "builder",
     "population",
     "spatial",
     "ui",
@@ -211,7 +213,7 @@ def test_no_legacy_packages_left_on_disk() -> None:
     """The physical shim directories are gone from the package tree.
 
     Invariant: the only first-level packages under ``natal/`` are the real
-    tree (``frontend``, ``backends``, ``contracts``); no ``configurator``,
+    tree (``frontend``, ``backends``, ``contracts``); no ``builder``,
     ``data``, ... ``utils`` directory remains.
     """
     pkg_dir = Path(importlib.import_module("natal").__file__ or ".").resolve().parent
@@ -568,7 +570,7 @@ def test_p2_retired_exports_stay_removed() -> None:
 
     ``RouteEntry`` (merged into ``ParamDescriptor``), ``HookConfigWriter``
     (test-only writer), and ``PopulationConfigBuilder`` (dissolved into
-    plain resolver functions in ``configurator._params``) must be
+    plain resolver functions in ``builder._params``) must be
     unreachable through the lazy top level and every owning package or
     module import path.  The surviving descriptor type stays exported and
     carries the contract-field mapping that used to live on RouteEntry.
@@ -579,22 +581,22 @@ def test_p2_retired_exports_stay_removed() -> None:
         assert not hasattr(natal, name), f"retired export {name!r} is back"
 
     with pytest.raises(ImportError):
-        from natal.frontend.configurator import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+        from natal.frontend.builder import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
             RouteEntry,
         )
     with pytest.raises(ImportError):
-        from natal.frontend.configurator import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+        from natal.frontend.builder import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
             HookConfigWriter,
         )
     with pytest.raises(ImportError):
-        from natal.frontend.configurator import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+        from natal.frontend.builder import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
             PopulationConfigBuilder,
         )
     with pytest.raises(ImportError):
-        from natal.frontend.configurator._writers import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
+        from natal.frontend.builder._writers import (  # type: ignore[attr-defined]  # noqa: F401  # negative contract: must not import
             HookConfigWriter,
         )
-    assert importlib.util.find_spec("natal.frontend.configurator._factory") is None, (
+    assert importlib.util.find_spec("natal.frontend.builder._factory") is None, (
         "dissolved PopulationConfigBuilder module is back on disk"
     )
 
@@ -635,3 +637,84 @@ def test_p3_retired_exports_stay_removed() -> None:
     config_mod = importlib.import_module("natal.frontend.data.config")
     assert config_mod.ModelDraft is not None
     assert hasattr(natal, "ModelDraft")
+
+
+def _spec_is_none(module: str) -> bool:
+    """Whether *module* has no importable spec (missing parents count as gone)."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(module) is None
+    except ModuleNotFoundError:
+        return True
+
+
+def test_p5_retired_configurator_surface_stays_removed() -> None:
+    """Negative contract: surface retired by the P5 rename.
+
+    ``Configurator`` / ``SpatialConfigurator`` were renamed to
+    ``PopulationBuilder`` / ``SpatialPopulationBuilder`` with no alias, and
+    ``ConfigWriter`` / ``CoreConfigWriter`` / ``DraftWriter`` left the
+    top-level exports (importable only from their owning module
+    ``natal.frontend.builder._writers``).  The retired
+    ``natal.frontend.configurator`` package path (including every former
+    submodule and the spatial configurator module) must be gone, the
+    ``builder`` paths must resolve, and the ``.setup()`` chain entry must
+    return the renamed build class.
+    """
+    import importlib
+
+    for name in (
+        "Configurator",
+        "SpatialConfigurator",
+        "ConfigWriter",
+        "CoreConfigWriter",
+        "DraftWriter",
+    ):
+        assert not hasattr(natal, name), f"retired export {name!r} is back"
+
+    # The retired package path and its former submodules are gone from disk.
+    assert _spec_is_none("natal.frontend.configurator"), (
+        "retired natal.frontend.configurator package is importable again"
+    )
+    for sub in (
+        "_base",
+        "_factory",
+        "_fitness",
+        "_params",
+        "_registry_builder",
+        "_routes",
+        "_runtime",
+        "_writers",
+    ):
+        assert _spec_is_none(f"natal.frontend.configurator.{sub}")
+    assert _spec_is_none("natal.frontend.spatial.configurator"), (
+        "retired spatial configurator module is importable again"
+    )
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("natal.frontend.configurator")
+
+    # The renamed packages resolve and publish the renamed classes.
+    builder_pkg = importlib.import_module("natal.frontend.builder")
+    spatial_builder_mod = importlib.import_module("natal.frontend.spatial.builder")
+    assert builder_pkg.PopulationBuilder is natal.PopulationBuilder
+    assert spatial_builder_mod.SpatialPopulationBuilder is natal.SpatialPopulationBuilder
+
+    # Writers remain importable from their owning module only — not from the
+    # builder package and not from the top level.
+    writers_mod = importlib.import_module("natal.frontend.builder._writers")
+    for name in ("ConfigWriter", "CoreConfigWriter", "DraftWriter"):
+        assert hasattr(writers_mod, name), f"writer {name!r} vanished from _writers"
+        assert not hasattr(builder_pkg, name), (
+            f"writer {name!r} is re-exported from the builder package again"
+        )
+
+    # The .setup() chain entry returns the renamed build class.
+    species = natal.Species.from_dict(
+        name="__p5_rename_contract__",
+        structure={"auto": {"A": ["WT", "Var"]}},
+    )
+    from natal.frontend.population import DiscreteGenerationPopulation
+
+    chain = DiscreteGenerationPopulation.setup(species)
+    assert type(chain) is natal.PopulationBuilder

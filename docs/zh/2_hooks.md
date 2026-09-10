@@ -281,7 +281,7 @@ pop.run(n_steps=200, record_every=10)
 | `pop.blueprint` | 只读维度、名称目录与引擎开关（`n_sexes`、`n_ages`、`n_ztypes`、`ztype_names` 等）。 |
 | `pop.metrics` | 按需计算的指标视图（每次访问重新计算）。 |
 | `pop.rng` | 确定性随机流（每调用独立；由种群槽位、tick、deme、hook 索引派生，从不触碰全局 `numpy.random`）。 |
-| `pop.update()` | 返回绑定到所属种群的运行时 `Configurator`（与构建链同语法）。 |
+| `pop.update()` | 返回绑定到所属种群的 `RuntimeUpdater`（与构建链同语法）。 |
 | `pop.stop()` / `pop.stop_requested` | 在事件边界请求/查询终止当前 run。 |
 
 ```python
@@ -308,5 +308,5 @@ def my_hook(pop: TickContext) -> int:
 - [运行时参数修改](3_runtime_modification.md)
 - [种群初始化](2_population_initialization.md)
 - [Modifier 机制](3_modifiers.md)
-- [Configurator API 参考](api/configurator.md)
+- [PopulationBuilder API 参考](api/population_builder.md)
 - [快速开始](1_quickstart.md)

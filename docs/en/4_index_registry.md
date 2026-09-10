@@ -301,7 +301,7 @@ Within the NATAL framework, `IndexRegistry` is used for:
 
 ### 4. Index Compression
 
-- `rebuild_config_maps()` (in `natal.frontend.configurator._registry_builder`) runs the BFS.
+- `rebuild_config_maps()` (in `natal.frontend.builder._registry_builder`) runs the BFS.
 - The resulting masks are applied via `registry.compress(ztype_mask, gtype_mask)`.
 - After compression, all registry properties reflect only the surviving entries.
 

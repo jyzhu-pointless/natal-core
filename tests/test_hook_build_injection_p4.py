@@ -155,13 +155,13 @@ class TestDeletedRegistrationSurfaces:
         assert "hooks" in rejections[0]
 
     def test_spatial_container_and_deme_registration_removed(self) -> None:
-        from natal.frontend.spatial.configurator import SpatialConfigurator
+        from natal.frontend.spatial.builder import SpatialPopulationBuilder
 
         species = _species("p4_neg_spatial")
         op = Op.add(genotypes="WT|WT", ages=0, sex="male", delta=1.0)
         op.event = "first"
         spatial = (
-            SpatialConfigurator(species, 2, pop_type="discrete_generation")
+            SpatialPopulationBuilder(species, 2, pop_type="discrete_generation")
             .setup(name="p4_neg_spatial_build", stochastic=False)
             .initial_state(
                 individual_count={

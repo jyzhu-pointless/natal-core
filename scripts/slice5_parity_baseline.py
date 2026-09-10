@@ -217,7 +217,7 @@ def _scenario_heterogeneous():
 
 def _scenario_age_structured() -> dict[str, str]:
     """Deterministic age-structured panmictic model (reference path)."""
-    from natal.frontend.configurator import Configurator
+    from natal.frontend.builder import PopulationBuilder
     from natal.frontend.genetics import Species
 
     species = Species.from_dict(
@@ -229,7 +229,7 @@ def _scenario_age_structured() -> dict[str, str]:
         },
     )
     pop = (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(3, 1)
         .setup(name="s5age", stochastic=False)
         .initial_state(
@@ -262,7 +262,7 @@ def _scenario_age_structured() -> dict[str, str]:
 
 def _scene_age_rust() -> dict[str, str]:
     """Same deterministic age-structured model driven through Rust."""
-    from natal.frontend.configurator import Configurator
+    from natal.frontend.builder import PopulationBuilder
     from natal.frontend.genetics import Species
 
     species = Species.from_dict(
@@ -274,7 +274,7 @@ def _scene_age_rust() -> dict[str, str]:
         },
     )
     pop = (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(3, 1)
         .setup(name="s5age_rust", stochastic=False)
         .initial_state(
@@ -308,7 +308,7 @@ def _scene_age_rust() -> dict[str, str]:
 
 def _scenario_discrete_generation() -> dict[str, str]:
     """Deterministic discrete-generation panmictic model (reference path)."""
-    from natal.frontend.configurator import Configurator
+    from natal.frontend.builder import PopulationBuilder
     from natal.frontend.genetics import Species
 
     species = Species.from_dict(
@@ -320,7 +320,7 @@ def _scenario_discrete_generation() -> dict[str, str]:
         },
     )
     pop = (
-        Configurator.for_discrete(species)
+        PopulationBuilder.for_discrete(species)
         .setup(name="s5disc", stochastic=False)
         .initial_state(
             individual_count={
@@ -345,7 +345,7 @@ def _scenario_discrete_generation() -> dict[str, str]:
 
 def _scene_discrete_rust() -> dict[str, str]:
     """Same deterministic discrete-generation model driven through Rust."""
-    from natal.frontend.configurator import Configurator
+    from natal.frontend.builder import PopulationBuilder
     from natal.frontend.genetics import Species
 
     species = Species.from_dict(
@@ -357,7 +357,7 @@ def _scene_discrete_rust() -> dict[str, str]:
         },
     )
     pop = (
-        Configurator.for_discrete(species)
+        PopulationBuilder.for_discrete(species)
         .setup(name="s5disc_rust", stochastic=False)
         .initial_state(
             individual_count={

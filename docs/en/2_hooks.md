@@ -282,7 +282,7 @@ Use the single-parameter callback shape when you need to read and write state ar
 | `pop.blueprint` | Read-only dimensions, name catalogs, and engine switches (`n_sexes`, `n_ages`, `n_ztypes`, `ztype_names`, ...). |
 | `pop.metrics` | On-demand metrics view (recomputed on every access). |
 | `pop.rng` | Deterministic per-invocation random stream (derived from population slot, tick, deme, hook index; never touches global `numpy.random`). |
-| `pop.update()` | Returns a runtime `Configurator` bound to the owning population (same syntax as the build chain). |
+| `pop.update()` | Returns a `RuntimeUpdater` bound to the owning population (same syntax as the build chain). |
 | `pop.stop()` / `pop.stop_requested` | Request/query run termination at the event boundary. |
 
 ```python
@@ -309,5 +309,5 @@ See the [Advanced Hook Tutorial](3_advanced_hooks.md).
 - [Runtime Parameter Modification](3_runtime_modification.md)
 - [Population Initialization](2_population_initialization.md)
 - [Modifier Mechanism](3_modifiers.md)
-- [Configurator API Reference](api/configurator.md)
+- [PopulationBuilder API Reference](api/population_builder.md)
 - [Quickstart](1_quickstart.md)

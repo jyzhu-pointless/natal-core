@@ -1,11 +1,11 @@
 """Fitness system — fitness patch construction, application, and DSL writing.
 
 This subpackage hosts fitness logic extracted from presets and
-configurator modules:
+builder modules:
 
 - ``fitness/_patch.py``: core fitness patch application (allele scaling, slab
   scaling, selector-based writes).  Uses the ``RecipeHost`` protocol.
-- ``fitness/_writer.py``: Configurator DSL writer — resolves genotype-pattern
+- ``fitness/_writer.py``: PopulationBuilder DSL writer — resolves genotype-pattern
   selectors to ztype indices and writes to config arrays.
 """
 

@@ -1,6 +1,6 @@
 # Spatial Simulation Guide
 
-This chapter introduces the practical usage of `SpatialPopulation`: using the `SpatialConfigurator` to quickly build multi-deme populations, configure topology and migration kernels, and control inter-deme flow.
+This chapter introduces the practical usage of `SpatialPopulation`: using the `SpatialPopulationBuilder` to quickly build multi-deme populations, configure topology and migration kernels, and control inter-deme flow.
 
 After reading this, you will be able to write code like this:
 
@@ -16,11 +16,11 @@ spatial = (
 )
 ```
 
-> **Tip**: `SpatialConfigurator` is the preferred construction method for homogeneous/heterogeneous spatial populations (build one template, clone the rest). See [SpatialConfigurator Documentation](spatial_configurator.md).
+> **Tip**: `SpatialPopulationBuilder` is the preferred construction method for homogeneous/heterogeneous spatial populations (build one template, clone the rest). See [SpatialPopulationBuilder Documentation](spatial_population_builder.md).
 
 ## Two Construction Paths
 
-### Recommended: SpatialConfigurator (Chainable API)
+### Recommended: SpatialPopulationBuilder (Chainable API)
 
 ```python
 from natal import Species, HexGrid, SpatialPopulation
@@ -94,7 +94,7 @@ The most important rules:
 
 ## Chainable API
 
-The `SpatialConfigurator` chainable call flow is consistent with the panmictic builder. Below are the methods listed in recommended order. Methods marked with `->` are spatial-specific, and parameters marked with `[B]` accept `batch_setting` (cross-deme heterogeneous configuration).
+The `SpatialPopulationBuilder` chainable call flow is consistent with the panmictic builder. Below are the methods listed in recommended order. Methods marked with `->` are spatial-specific, and parameters marked with `[B]` accept `batch_setting` (cross-deme heterogeneous configuration).
 
 ```python
 pop = (
@@ -168,7 +168,7 @@ The following parameters do **not** accept `batch_setting`:
 
 ## batch_setting Heterogeneous Configuration
 
-`batch_setting` is the core mechanism of `SpatialConfigurator`, allowing different demes to specify different parameter values within the same chainable call. Internally, it automatically optimizes through config equivalence grouping -- demes with the same parameters share compiled artifacts, only the state arrays are independent.
+`batch_setting` is the core mechanism of `SpatialPopulationBuilder`, allowing different demes to specify different parameter values within the same chainable call. Internally, it automatically optimizes through config equivalence grouping -- demes with the same parameters share compiled artifacts, only the state arrays are independent.
 
 ### Four Input Forms
 
@@ -804,7 +804,7 @@ The practical usage order of SpatialPopulation can be remembered in four steps:
 
 ## Related Chapters
 
-- [SpatialConfigurator: Batch Construction of Spatial Populations](spatial_configurator.md)
+- [SpatialPopulationBuilder: Batch Construction of Spatial Populations](spatial_population_builder.md)
 - [Spatial Lifecycle Wrapper](spatial_lifecycle_wrapper.md)
 - [Migration Kernel Implementation](migration_kernel_impl.md)
 - [the Simulation Engine Deep Dive](4_simulation_engine.md)

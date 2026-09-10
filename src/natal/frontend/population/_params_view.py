@@ -6,7 +6,7 @@ A live, validated view over a population's parameters.  Design points
 - **Ecology section**: attribute writes go through the route table with
   full bounds validation (``pop.params.carrying_capacity = 8000``) and
   name the jsonc parameter names — no invented shorthand.  Every write
-  is a single-field :class:`~natal.frontend.configurator._writers.
+  is a single-field :class:`~natal.frontend.builder._writers.
   CoreConfigWriter.apply` batch, so the draft, the live Rust session,
   and the dirty bridge stay exactly in sync.
 - **Genetics section**: reads return *copies* (never live views) — a
@@ -28,8 +28,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from natal.contracts.params import Params
-from natal.frontend.configurator._routes import lookup, lookup_or_none
-from natal.frontend.configurator._writers import NATIVE_SCALAR_FIELDS, CoreConfigWriter
+from natal.frontend.builder._routes import lookup, lookup_or_none
+from natal.frontend.builder._writers import NATIVE_SCALAR_FIELDS, CoreConfigWriter
 from natal.frontend.utils.parameters import ParamDescriptor
 
 if TYPE_CHECKING:
@@ -425,7 +425,7 @@ class ParamsView:
 
     def __dir__(self) -> list[str]:
         """Expose the readable parameter names."""
-        from natal.frontend.configurator._routes import ROUTES
+        from natal.frontend.builder._routes import ROUTES
 
         names = set(ROUTES) | _GENETICS_TENSORS | _ECOLOGY_VECTORS
         return sorted(names)
@@ -557,7 +557,7 @@ class ParamsView:
         channel (reshaped to the declared draft shape); the draft path
         stays as the fallback when no channel is available.
         """
-        from natal.frontend.configurator._writers import contract_to_draft_field
+        from natal.frontend.builder._writers import contract_to_draft_field
 
         draft_field = contract_to_draft_field(name)
         channel = self._native_read_channel()

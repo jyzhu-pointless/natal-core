@@ -51,7 +51,7 @@ from natal.backends.rust.rust_backend import (
 from natal.contracts.materialize import SpatialMigration, materialize
 from natal.contracts.params import Params
 from natal.frontend.data.config import ModelDraft
-from natal.frontend.spatial.configurator import batch_setting
+from natal.frontend.spatial.builder import batch_setting
 
 pytestmark = pytest.mark.skipif(
     not rust_backend_available(),
@@ -608,13 +608,13 @@ class TestSingleDemeFlatteningInvariant:
         bitwise-identical trajectories — the flattening invariant
         observed end-to-end.
         """
-        from natal.frontend.configurator import Configurator
+        from natal.frontend.builder import PopulationBuilder
 
         species = _species("__adv_flat_parity__")
 
         def _panmictic() -> nt.AgeStructuredPopulation:
             return (
-                Configurator.from_species(species)
+                PopulationBuilder.from_species(species)
                 .setup(name="__adv_flat_parity_pan__", stochastic=False)
                 .age_structure(n_ages=2, new_adult_age=1)
                 .initial_state(individual_count={
@@ -1014,7 +1014,7 @@ class TestRemovedSurfaceSpotCheck:
         place so no removal regresses silently.
         """
         import natal.frontend.spatial.population as spatial_population
-        from natal.frontend.spatial.configurator import SpatialConfigurator
+        from natal.frontend.spatial.builder import SpatialPopulationBuilder
 
         species = _species("__adv_removed__")
         pop = _build_pop(
@@ -1024,8 +1024,8 @@ class TestRemovedSurfaceSpotCheck:
         assert not hasattr(pop, "update_deme")
         assert not hasattr(spatial_population, "_SpatialUpdate")
         assert not hasattr(spatial_population, "_DETACH_FIELDS")
-        assert not hasattr(SpatialConfigurator, "_build_homogeneous")
-        assert not hasattr(SpatialConfigurator, "_build_heterogeneous")
+        assert not hasattr(SpatialPopulationBuilder, "_build_homogeneous")
+        assert not hasattr(SpatialPopulationBuilder, "_build_heterogeneous")
         assert not hasattr(
             RustHeterogeneousSpatialLifecycleBackend, "refresh_bank_params"
         )

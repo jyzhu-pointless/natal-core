@@ -33,7 +33,7 @@ from natal.backends.rust.rust_backend import (
     rust_backend_available,
 )
 from natal.contracts.materialize import materialize
-from natal.frontend.spatial.configurator import SpatialConfigurator, batch_setting
+from natal.frontend.spatial.builder import SpatialPopulationBuilder, batch_setting
 
 pytestmark = pytest.mark.skipif(
     not rust_backend_available(),
@@ -182,11 +182,11 @@ class TestMergedBuildEntry:
 
     def test_split_builders_removed(self) -> None:
         """_build_homogeneous/_build_heterogeneous must not be accessible."""
-        assert not hasattr(SpatialConfigurator, "_build_homogeneous"), (
-            "SpatialConfigurator._build_homogeneous must be merged away"
+        assert not hasattr(SpatialPopulationBuilder, "_build_homogeneous"), (
+            "SpatialPopulationBuilder._build_homogeneous must be merged away"
         )
-        assert not hasattr(SpatialConfigurator, "_build_heterogeneous"), (
-            "SpatialConfigurator._build_heterogeneous must be merged away"
+        assert not hasattr(SpatialPopulationBuilder, "_build_heterogeneous"), (
+            "SpatialPopulationBuilder._build_heterogeneous must be merged away"
         )
 
     def test_merged_build_preserves_batch_semantics(self) -> None:

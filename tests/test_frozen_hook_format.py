@@ -31,7 +31,7 @@ def _builder(
     pop_name: str,
     *hook_items: nt.HookOp | Callable[..., Any],  # Any: arbitrary hook callable per the frozen .hooks() contract
     **hook_kwargs: str,
-) -> nt.Configurator:
+) -> nt.PopulationBuilder:
     """Return a minimal discrete builder chain with optional hooks.
 
     Args:

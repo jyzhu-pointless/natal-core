@@ -37,7 +37,7 @@ class RecipeHost(Protocol):
     """Read surface a recipe (preset / rule-set / fitness patch) may inspect.
 
     ``BasePopulation`` satisfies this protocol structurally, and so does
-    the build-side candidate: a ``Configurator`` mid-compile.  Recipes run
+    the build-side candidate: a ``PopulationBuilder`` mid-compile.  Recipes run
     exactly once against whichever host drives the compilation — there is
     no adapter that impersonates a population.
     """
@@ -67,7 +67,7 @@ def project_mendelian_maps(
     Returns:
         Isolated meiosis and fertilization arrays aligned to the registry.
     """
-    from natal.frontend.configurator._registry_builder import build_registry
+    from natal.frontend.builder._registry_builder import build_registry
 
     full = build_registry(species)
     zindices = {key: index for index, key in enumerate(full.index_to_ztype)}

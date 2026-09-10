@@ -5,7 +5,7 @@ import uuid
 
 import numpy as np
 
-from natal.frontend.configurator._params import (
+from natal.frontend.builder._params import (
     resolve_age_param,
     resolve_age_structured_initial_individual_count,
     resolve_age_structured_initial_sperm_storage,

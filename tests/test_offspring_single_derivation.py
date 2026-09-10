@@ -473,8 +473,8 @@ class TestSingleSpellingContract:
     """The kernel is spelled only in its definition file and the wrapper."""
 
     _FRONTEND_MODULES_THAT_MUST_NOT_SPELL_KERNEL = (
-        "natal/frontend/configurator/_writers.py",
-        "natal/frontend/configurator/_registry_builder.py",
+        "natal/frontend/builder/_writers.py",
+        "natal/frontend/builder/_registry_builder.py",
         "natal/frontend/data/_config.py",
         "natal/frontend/genetics/structures/_mapping.py",
         "natal/frontend/population/_mixins/_modifiers.py",
@@ -519,10 +519,10 @@ class TestSingleSpellingContract:
         shadowed) the functions locally would fork the spelling again
         at the import level while looking identical to readers.
         """
-        from natal.frontend.configurator import _writers
+        from natal.frontend.builder import _writers
 
         # The exact import spelling spatial/population.py depends on.
-        from natal.frontend.configurator._writers import (
+        from natal.frontend.builder._writers import (
             recompute_offspring_tensor,
             validate_meiosis_table,
         )

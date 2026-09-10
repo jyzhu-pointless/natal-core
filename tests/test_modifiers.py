@@ -577,7 +577,7 @@ def _build_glab_pop():
         gamete_labels=["default", "tagged"],
     )
     return (
-        nt.Configurator.for_age_structured(sp)
+        nt.PopulationBuilder.for_age_structured(sp)
         .setup(stochastic=False)
         .age_structure(n_ages=3, new_adult_age=1)
         .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
@@ -674,7 +674,7 @@ class TestZygoteModifierE2E:
             gamete_labels=["default"],
         )
         pop = (
-            nt.Configurator.for_age_structured(sp)
+            nt.PopulationBuilder.for_age_structured(sp)
             .setup(stochastic=False)
             .age_structure(n_ages=3, new_adult_age=1)
             .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
@@ -703,7 +703,7 @@ class TestZygoteModifierE2E:
             gamete_labels=["default"],
         )
         pop = (
-            nt.Configurator.for_age_structured(sp)
+            nt.PopulationBuilder.for_age_structured(sp)
             .setup(stochastic=False)
             .age_structure(n_ages=3, new_adult_age=1)
             .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
@@ -748,7 +748,7 @@ class TestZygoteModifierE2E:
             unordered=False,
         )
         pop = (
-            nt.Configurator.for_age_structured(sp)
+            nt.PopulationBuilder.for_age_structured(sp)
             .setup(stochastic=False)
             .age_structure(n_ages=3, new_adult_age=1)
             .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
@@ -1076,7 +1076,7 @@ class TestGameteModifierEmptyFreqs:
             gamete_labels=["default", "tagged"],
         )
         pop = (
-            nt.Configurator.for_age_structured(sp)
+            nt.PopulationBuilder.for_age_structured(sp)
             .setup(stochastic=False)
             .age_structure(n_ages=3, new_adult_age=1)
             .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
@@ -1110,7 +1110,7 @@ class TestZygoteResolveGlabs:
             gamete_labels=["default", "tagged"],
         )
         pop = (
-            nt.Configurator.for_age_structured(sp)
+            nt.PopulationBuilder.for_age_structured(sp)
             .setup(stochastic=False)
             .age_structure(n_ages=3, new_adult_age=1)
             .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
@@ -1148,7 +1148,7 @@ class TestZygoteCascadePaths:
             unordered=False,
         )
         pop = (
-            nt.Configurator.for_age_structured(sp)
+            nt.PopulationBuilder.for_age_structured(sp)
             .setup(stochastic=False)
             .age_structure(n_ages=3, new_adult_age=1)
             .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
@@ -1180,7 +1180,7 @@ class TestZygoteCascadePaths:
             unordered=False,
         )
         pop = (
-            nt.Configurator.for_age_structured(sp)
+            nt.PopulationBuilder.for_age_structured(sp)
             .setup(stochastic=False)
             .age_structure(n_ages=3, new_adult_age=1)
             .initial_state(
@@ -1221,7 +1221,7 @@ class TestZygoteGlabRedirectE2E:
             unordered=False,
         )
         pop = (
-            nt.Configurator.for_age_structured(sp)
+            nt.PopulationBuilder.for_age_structured(sp)
             .setup(stochastic=False)
             .age_structure(n_ages=3, new_adult_age=1)
             .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})
@@ -1302,7 +1302,7 @@ class TestGameteCheckWhen:
             gamete_labels=["default"],
         )
         pop = (
-            nt.Configurator.for_age_structured(sp)
+            nt.PopulationBuilder.for_age_structured(sp)
             .setup(stochastic=False)
             .age_structure(n_ages=3, new_adult_age=1)
             .initial_state({"female": {"WT|WT": [0, 10, 0]}, "male": {"WT|WT": [0, 10, 0]}})

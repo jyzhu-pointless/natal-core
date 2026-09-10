@@ -1,4 +1,4 @@
-"""Test Configurator — unified build/runtime parameter API."""
+"""Test PopulationBuilder — unified build/runtime parameter API."""
 
 import numpy as np
 import pytest
@@ -6,7 +6,7 @@ import pytest
 from tests._config_assertions import assert_config_equal
 
 import natal as nt
-from natal.frontend.configurator import Configurator, set_param
+from natal.frontend.builder import PopulationBuilder, set_param
 from natal.frontend.data import build_custom_slots, build_population_config
 from natal.frontend.data._engine import (
     derive_equilibrium_metrics_from_draft,
@@ -17,7 +17,7 @@ from natal.frontend.patterns import IndividualSelector
 @pytest.fixture(scope="module")
 def species() -> nt.Species:
     return nt.Species.from_dict(
-        name="__test_configurator__",
+        name="__test_population_builder__",
         structure={"auto": {"A": ["WT", "Var"]}},
     )
 
@@ -106,13 +106,13 @@ class TestSetParam:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Configurator — build path
+# PopulationBuilder — build path
 # ══════════════════════════════════════════════════════════════════════════
 
 
-class TestConfiguratorBuild:
+class TestPopulationBuilderBuild:
     def test_from_species_minimal(self, species):
-        cfg = Configurator.from_species(species)
+        cfg = PopulationBuilder.from_species(species)
         assert cfg._config.n_ages == 2
         assert cfg._config.n_ztypes > 0
 
@@ -160,30 +160,30 @@ class TestConfiguratorBuild:
         np.testing.assert_array_equal(pop.config.zygotes_to_gametes_map, expected)
 
     def test_age_structure_changes_dimensions(self, species):
-        cfg = Configurator.from_species(species).age_structure(n_ages=6, new_adult_age=3)
+        cfg = PopulationBuilder.from_species(species).age_structure(n_ages=6, new_adult_age=3)
         assert cfg._config.n_ages == 6
         assert cfg._config.new_adult_age == 3
 
     def test_setup_flags(self, species):
-        cfg = Configurator.from_species(species).setup(stochastic=False)
+        cfg = PopulationBuilder.from_species(species).setup(stochastic=False)
         assert cfg._config.stochastic is False
 
     def test_competition_writes_immediately(self, species):
-        cfg = Configurator.from_species(species).competition(
+        cfg = PopulationBuilder.from_species(species).competition(
             carrying_capacity=5000.0, low_density_growth_rate=3.0
         )
         assert cfg._config.carrying_capacity == 5000.0
         assert cfg._config.low_density_growth_rate == 3.0
 
     def test_reproduction_writes_immediately(self, species):
-        cfg = Configurator.from_species(species).reproduction(
+        cfg = PopulationBuilder.from_species(species).reproduction(
             eggs_per_female=100.0, sex_ratio=0.6
         )
         assert cfg._config.eggs_per_female == 100.0
         assert cfg._config.sex_ratio == 0.6
 
     def test_survival_flexible_input(self, species):
-        cfg = Configurator.from_species(species).age_structure(n_ages=3, new_adult_age=1)
+        cfg = PopulationBuilder.from_species(species).age_structure(n_ages=3, new_adult_age=1)
         # Scalar fill
         cfg.survival(female_age_based_survival=0.9)
         assert cfg._config.age_based_survival_rates[0, 0] == 0.9
@@ -195,7 +195,7 @@ class TestConfiguratorBuild:
         assert cfg._config.age_based_survival_rates[1, 2] == 0.6
 
     def test_survival_discrete_shortcuts(self, species):
-        cfg = Configurator.for_discrete(species).survival(
+        cfg = PopulationBuilder.for_discrete(species).survival(
             female_age0_survival=0.95, male_age0_survival=0.85
         )
         assert cfg._config.age_based_survival_rates[0, 0] == 0.95
@@ -203,7 +203,7 @@ class TestConfiguratorBuild:
 
     def test_initial_state(self, species):
         cfg = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
         )
@@ -212,7 +212,7 @@ class TestConfiguratorBuild:
 
     def test_build(self, species):
         pop = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
@@ -224,20 +224,20 @@ class TestConfiguratorBuild:
         assert pop.config.carrying_capacity == 10000.0
 
     def test_custom_fields_build(self, species):
-        cfg = Configurator.from_species(species).custom(temperature=25.0, debug=True)
+        cfg = PopulationBuilder.from_species(species).custom(temperature=25.0, debug=True)
         assert cfg._config.custom["temperature"] == 25.0
         assert cfg._config.custom["debug"] is True
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Configurator — runtime update path
+# PopulationBuilder — runtime update path
 # ══════════════════════════════════════════════════════════════════════════
 
 
-class TestConfiguratorUpdate:
+class TestPopulationBuilderUpdate:
     def test_update_changes_config(self, species):
         pop = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
@@ -254,7 +254,7 @@ class TestConfiguratorUpdate:
 
     def test_update_chains(self, species):
         pop = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
@@ -274,7 +274,7 @@ class TestConfiguratorUpdate:
 
     def test_update_auto_sync(self, species):
         pop = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
@@ -295,7 +295,7 @@ class TestConfiguratorUpdate:
     def test_update_does_not_require_build(self, species):
         """update() writes immediately, no apply() needed."""
         pop = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
@@ -325,7 +325,7 @@ class TestUpdateWriteBack:
         from natal.frontend.presets import HomingDrive
 
         pop = (
-            Configurator.from_species(simple_species)
+            PopulationBuilder.from_species(simple_species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
@@ -353,7 +353,7 @@ class TestUpdateWriteBack:
         """pop.update().modifiers(gamete_modifiers=[fn]) does not crash and
         the population can still run afterwards."""
         pop = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
@@ -382,7 +382,7 @@ class TestCustomFields:
     def test_update_custom_scalar(self, species):
         """pop.update().custom() writes to config.custom."""
         pop = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
@@ -400,7 +400,7 @@ class TestCustomFields:
     def test_update_custom_multiple_fields(self, species):
         """pop.update().custom() with multiple fields."""
         pop = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
@@ -420,7 +420,7 @@ class TestCustomFields:
     def test_custom_mutable(self, species):
         """Custom field can be mutated multiple times."""
         pop = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
@@ -443,8 +443,8 @@ class TestCustomFields:
 # ══════════════════════════════════════════════════════════════════════════
 
 
-class TestConfiguratorBuildAndUpdate:
-    def test_discrete_configurator_build(self, species):
+class TestPopulationBuilderBuildAndUpdate:
+    def test_discrete_builder_build(self, species):
         pop = (
             nt.DiscreteGenerationPopulation
             .setup(species, stochastic=False)
@@ -458,7 +458,7 @@ class TestConfiguratorBuildAndUpdate:
         assert pop.name == "cfg"
         assert pop.config.carrying_capacity == 10000.0
 
-    def test_configurator_update_works(self, species):
+    def test_builder_update_works(self, species):
         pop = (
             nt.DiscreteGenerationPopulation
             .setup(species, stochastic=False)
@@ -501,33 +501,33 @@ class TestSetParamErrors:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Configurator: factory methods
+# PopulationBuilder: factory methods
 # ══════════════════════════════════════════════════════════════════════════
 
 
 class TestFactoryMethods:
-    def test_for_config_returns_unified_configurator(self, minimal_config):
-        """for_config wraps the draft with the single Configurator."""
-        cfg = Configurator.for_config(minimal_config)
-        assert type(cfg) is Configurator
+    def test_for_config_returns_unified_builder(self, minimal_config):
+        """for_config wraps the draft with the single PopulationBuilder."""
+        cfg = PopulationBuilder.for_config(minimal_config)
+        assert type(cfg) is PopulationBuilder
 
     def test_for_discrete(self, species):
-        """for_discrete returns the unified Configurator with a
+        """for_discrete returns the unified PopulationBuilder with a
         discrete-normalized draft (the flag carries the granularity)."""
-        cfg = Configurator.for_discrete(species)
-        assert type(cfg) is Configurator
+        cfg = PopulationBuilder.for_discrete(species)
+        assert type(cfg) is PopulationBuilder
         assert cfg._species is species
         assert cfg.config.discrete_generation is True
 
     def test_for_age_structured(self, species):
-        cfg = Configurator.for_age_structured(species)
-        assert type(cfg) is Configurator
+        cfg = PopulationBuilder.for_age_structured(species)
+        assert type(cfg) is PopulationBuilder
         assert cfg._species is species
         assert cfg.config.discrete_generation is False
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Configurator: hooks / apply / presets
+# PopulationBuilder: hooks / apply / presets
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -536,14 +536,14 @@ class TestHooks:
         @nt.hook(event="early")
         def my_hook(pop):
             return 0
-        cfg = Configurator.from_species(species).hooks(my_hook)
+        cfg = PopulationBuilder.from_species(species).hooks(my_hook)
         assert len(cfg._hook_calls) == 1
         items, kwargs = cfg._hook_calls[0]
         assert items == (my_hook,)
         assert kwargs["event"] is None  # event rides on the decorator meta
 
     def test_apply_syncs_equilibrium(self, species):
-        cfg = Configurator.from_species(species).competition(carrying_capacity=5000)
+        cfg = PopulationBuilder.from_species(species).competition(carrying_capacity=5000)
         old_comp = derive_equilibrium_metrics_from_draft(cfg._config)[0]
         # Scalar slots are immutable: rebind before the explicit apply.
         cfg._config = cfg._config._replace(carrying_capacity=10000.0)
@@ -552,21 +552,21 @@ class TestHooks:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Configurator returns correct type
+# PopulationBuilder returns correct type
 # ══════════════════════════════════════════════════════════════════════════
 
 
-class TestConfiguratorReturnType:
-    def test_setup_returns_unified_configurator(self, species):
-        """setup returns the single Configurator for both
+class TestPopulationBuilderReturnType:
+    def test_setup_returns_unified_builder(self, species):
+        """setup returns the single PopulationBuilder for both
         granularities; the draft flag carries the granularity."""
         cfg = nt.DiscreteGenerationPopulation.setup(species)
-        assert type(cfg) is Configurator
+        assert type(cfg) is PopulationBuilder
         assert cfg.config.discrete_generation is True
 
-    def test_setup_returns_age_structured_configurator(self, species):
+    def test_setup_returns_age_structured_builder(self, species):
         cfg = nt.AgeStructuredPopulation.setup(species)
-        assert type(cfg) is Configurator
+        assert type(cfg) is PopulationBuilder
         assert cfg.config.discrete_generation is False
 
 
@@ -583,8 +583,8 @@ def fitness_species() -> nt.Species:
     )
 
 
-def _make_cfg(species: nt.Species) -> Configurator:
-    return Configurator.from_species(species)
+def _make_cfg(species: nt.Species) -> PopulationBuilder:
+    return PopulationBuilder.from_species(species)
 
 
 class TestFitnessFormats:
@@ -747,16 +747,16 @@ class TestFitnessFormats:
 
 
 class TestFromSpeciesDiscrete:
-    def test_returns_discrete_configurator(self, species):
+    def test_returns_discrete_builder(self, species):
         from natal.frontend.data import ModelDraft
 
-        cfg = Configurator.from_species(species, discrete=True)
-        assert type(cfg) is Configurator
+        cfg = PopulationBuilder.from_species(species, discrete=True)
+        assert type(cfg) is PopulationBuilder
         assert isinstance(cfg._config, ModelDraft)
         assert cfg._config.discrete_generation is True
 
     def test_discrete_defaults(self, species):
-        cfg = Configurator.from_species(species, discrete=True)
+        cfg = PopulationBuilder.from_species(species, discrete=True)
         # age-0 juvenile survival defaults to 1.0 for both sexes
         assert cfg._config.age_based_survival_rates[0, 0] == 1.0
         assert cfg._config.age_based_survival_rates[1, 0] == 1.0
@@ -807,13 +807,13 @@ class TestFitnessAdvanced:
 
 class TestCustomAccumulate:
     def test_custom_accumulates_fields(self, species):
-        cfg = Configurator.from_species(species)
+        cfg = PopulationBuilder.from_species(species)
         cfg.custom(temperature=25.0).custom(humidity=0.6)
         assert cfg._config.custom["temperature"] == 25.0
         assert cfg._config.custom["humidity"] == 0.6
 
     def test_custom_overwrites_on_same_key(self, species):
-        cfg = Configurator.from_species(species)
+        cfg = PopulationBuilder.from_species(species)
         cfg.custom(temperature=25.0).custom(temperature=30.0)
         assert cfg._config.custom["temperature"] == 30.0
 
@@ -825,7 +825,7 @@ class TestCustomAccumulate:
 
 class TestWithObservation:
     def test_sets_observation_groups(self, species):
-        cfg = Configurator.from_species(species)
+        cfg = PopulationBuilder.from_species(species)
         groups = {"total": IndividualSelector()}
         cfg.with_observation(groups, collapse_age=True)
         assert hasattr(cfg, "_observation_groups")
@@ -840,7 +840,7 @@ class TestWithObservation:
 
 class TestModifiersCombined:
     def test_gamete_and_zygote_modifier_together(self, species):
-        cfg = Configurator.from_species(species).age_structure(n_ages=2, new_adult_age=1)
+        cfg = PopulationBuilder.from_species(species).age_structure(n_ages=2, new_adult_age=1)
 
         # Two no-op modifiers that return empty mappings (no effect on tensor).
         def gamete_mod() -> dict:
@@ -904,7 +904,7 @@ class TestReconfigurePreset:
         from natal.frontend.presets import HomingDrive
 
         pop = (
-            Configurator.from_species(fitness_species)
+            PopulationBuilder.from_species(fitness_species)
             .setup(stochastic=False)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
@@ -1360,7 +1360,7 @@ class TestDiscreteScalarSync:
     def test_mating_rate_stored_for_later_extraction(self, species):
         """reproduction() writes mating scalars into the unified vector cells."""
         pop = (
-            Configurator.for_discrete(species)
+            PopulationBuilder.for_discrete(species)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
             .reproduction(
                 female_adult_mating_rate=0.3,
@@ -1378,7 +1378,7 @@ class TestDiscreteScalarSync:
     def test_survival_scalar_synced_after_build(self, species):
         """survival() writes age-0 survival into the unified vector cells."""
         pop = (
-            Configurator.for_discrete(species)
+            PopulationBuilder.for_discrete(species)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
             .reproduction(eggs_per_female=50)
             .competition(carrying_capacity=10000)
@@ -1394,7 +1394,7 @@ class TestDiscreteScalarSync:
     def test_reproduction_rate_default_is_one(self, species):
         """Adult reproduction participation defaults to 1.0 — all mated females reproduce."""
         pop = (
-            Configurator.for_discrete(species)
+            PopulationBuilder.for_discrete(species)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
             .reproduction(eggs_per_female=50)
             .competition(carrying_capacity=10000)
@@ -1414,14 +1414,14 @@ class TestRuntimeErrorGuards:
 
     def test_build_without_species_raises(self, minimal_config):
         """build() must raise RuntimeError when _species is None."""
-        cfg = Configurator.for_config(minimal_config)
+        cfg = PopulationBuilder.for_config(minimal_config)
         # for_config() does NOT set _species
         with pytest.raises(RuntimeError, match="species|Species"):
             cfg.build()
 
     def test_fitness_without_species_raises(self, minimal_config):
         """fitness() must raise RuntimeError without Species."""
-        cfg = Configurator.for_config(minimal_config)
+        cfg = PopulationBuilder.for_config(minimal_config)
         with pytest.raises(RuntimeError, match="species|Species"):
             cfg.fitness(viability={"WT|WT": 0.5})
 
@@ -1429,7 +1429,7 @@ class TestRuntimeErrorGuards:
         """presets() must raise RuntimeError without Species."""
         from natal.frontend.presets import HomingDrive
 
-        cfg = Configurator.for_config(minimal_config)
+        cfg = PopulationBuilder.for_config(minimal_config)
         drive = HomingDrive(
             name="__test_guard__", drive_allele="A", target_allele="B",
             drive_conversion_rate=0.5,
@@ -1439,7 +1439,7 @@ class TestRuntimeErrorGuards:
 
     def test_modifiers_without_species_raises(self, minimal_config):
         """modifiers() must raise RuntimeError without Species."""
-        cfg = Configurator.for_config(minimal_config)
+        cfg = PopulationBuilder.for_config(minimal_config)
         with pytest.raises(RuntimeError, match="species|Species"):
             cfg.modifiers(gamete_modifiers=[lambda: {}])
 
@@ -1455,31 +1455,31 @@ class TestAgeStructureValidation:
     def test_n_ages_zero_raises(self, species):
         """n_ages <= 1 must raise ValueError."""
         with pytest.raises(ValueError, match="at least 2"):
-            Configurator.from_species(species).age_structure(n_ages=0, new_adult_age=0)
+            PopulationBuilder.from_species(species).age_structure(n_ages=0, new_adult_age=0)
 
     def test_n_ages_one_raises(self, species):
         """n_ages == 1 must raise ValueError."""
         with pytest.raises(ValueError, match="at least 2"):
-            Configurator.from_species(species).age_structure(n_ages=1, new_adult_age=0)
+            PopulationBuilder.from_species(species).age_structure(n_ages=1, new_adult_age=0)
 
     def test_negative_new_adult_age_raises(self, species):
         """new_adult_age < 0 must raise ValueError."""
         with pytest.raises(ValueError, match="new_adult_age"):
-            Configurator.from_species(species).age_structure(n_ages=5, new_adult_age=-1)
+            PopulationBuilder.from_species(species).age_structure(n_ages=5, new_adult_age=-1)
 
     def test_new_adult_age_equals_n_ages_raises(self, species):
         """new_adult_age >= n_ages must raise ValueError."""
         with pytest.raises(ValueError, match="new_adult_age"):
-            Configurator.from_species(species).age_structure(n_ages=5, new_adult_age=5)
+            PopulationBuilder.from_species(species).age_structure(n_ages=5, new_adult_age=5)
 
     def test_new_adult_age_exceeds_n_ages_raises(self, species):
         """new_adult_age > n_ages must raise ValueError."""
         with pytest.raises(ValueError, match="new_adult_age"):
-            Configurator.from_species(species).age_structure(n_ages=3, new_adult_age=10)
+            PopulationBuilder.from_species(species).age_structure(n_ages=3, new_adult_age=10)
 
     def test_age_structure_after_domain_method_raises(self, species):
         """Calling age_structure() after a domain method must raise RuntimeError."""
-        cfg = Configurator.from_species(species).competition(carrying_capacity=5000)
+        cfg = PopulationBuilder.from_species(species).competition(carrying_capacity=5000)
         with pytest.raises(RuntimeError, match="domain method"):
             cfg.age_structure(n_ages=5, new_adult_age=2)
 
@@ -1498,7 +1498,7 @@ class TestAdultSurvivalDiscrete:
 
     def test_adult_survival_rejected_by_discrete_survival(self, species):
         """survival() rejects adult_survival (unexpected keyword)."""
-        cfg = Configurator.for_discrete(species)
+        cfg = PopulationBuilder.for_discrete(species)
         with pytest.raises(TypeError, match="adult_survival"):
             cfg.survival(adult_survival=0.5)
 
@@ -1598,7 +1598,7 @@ class TestCompetitionOrdering:
         """When competition() is called before initial_state(), K auto-detection
         reads from all-zero array and falls back to default."""
         cfg = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .age_structure(n_ages=3, new_adult_age=2)
             .competition()  # no explicit K → auto-detect from initial_state (all zeros)
         )
@@ -1611,7 +1611,7 @@ class TestCompetitionOrdering:
         """When initial_state() is called before competition(), K can be
         auto-detected from the actual initial counts."""
         cfg = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .age_structure(n_ages=3, new_adult_age=2)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
             .competition()  # no explicit K → auto-detect from initial_state
@@ -1633,7 +1633,7 @@ class TestSpermStorageShape:
 
     def test_sperm_storage_shape_matches_state(self, species):
         """Default initial_sperm_storage must have correct shape."""
-        cfg = Configurator.from_species(species).age_structure(n_ages=5, new_adult_age=3)
+        cfg = PopulationBuilder.from_species(species).age_structure(n_ages=5, new_adult_age=3)
         arr = cfg._config.initial_sperm_storage
         n_ztypes = cfg._config.n_ztypes
         n_ages = cfg._config.n_ages
@@ -1643,7 +1643,7 @@ class TestSpermStorageShape:
 
     def test_sperm_storage_shape_discrete(self, species):
         """Discrete config sperm_storage should also match."""
-        cfg = Configurator.for_discrete(species)
+        cfg = PopulationBuilder.for_discrete(species)
         arr = cfg._config.initial_sperm_storage
         n_ztypes = cfg._config.n_ztypes
         n_ages = cfg._config.n_ages
@@ -1655,7 +1655,7 @@ class TestSpermStorageShape:
         """Building a population with explicit sperm storage must not
         silently discard the values due to shape mismatch."""
         pop = (
-            Configurator.from_species(species)
+            PopulationBuilder.from_species(species)
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
             .reproduction(eggs_per_female=50)

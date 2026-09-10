@@ -24,14 +24,14 @@ InvalidGroups: TypeAlias = (
 )
 
 
-def _configurator(name: str) -> nt.Configurator:
-    """Create a deterministic four-age configurator for contract tests.
+def _builder(name: str) -> nt.PopulationBuilder:
+    """Create a deterministic four-age builder for contract tests.
 
     Args:
         name: Identifier used to name the species and population.
 
     Returns:
-        A chainable configurator ready for further customization.
+        A chainable builder ready for further customization.
     """
     species = nt.Species.from_dict(
         name=f"{name}_species",
@@ -86,12 +86,12 @@ def _build_population(
     Returns:
         A built population whose configuration is frozen.
     """
-    configurator = _configurator(name)
+    builder = _builder(name)
     if groups is not None:
-        configurator.with_observation(groups=groups, collapse_age=collapse_age)
+        builder.with_observation(groups=groups, collapse_age=collapse_age)
     if history_mode is not None:
-        configurator.record_history(mode=history_mode)
-    return configurator.build()
+        builder.record_history(mode=history_mode)
+    return builder.build()
 
 
 def _coordinate_unique_counts(n_ztypes: int) -> NDArray[np.float64]:
@@ -243,13 +243,13 @@ def test_observation_and_history_configuration_order_is_irrelevant() -> None:
     """Swapping the two chain calls produces the same frozen policies."""
     groups = OrderedDict((("wild", IndividualSelector(ztype="WT|WT")),))
     first_observation = (
-        _configurator("contract_order_observation_first")
+        _builder("contract_order_observation_first")
         .with_observation(groups=groups, collapse_age=True)
         .record_history(mode="observation", max_rows=7)
         .build()
     )
     first_history = (
-        _configurator("contract_order_history_first")
+        _builder("contract_order_history_first")
         .record_history(mode="observation", max_rows=7)
         .with_observation(groups=groups, collapse_age=True)
         .build()
@@ -265,7 +265,7 @@ def test_observation_and_history_configuration_order_is_irrelevant() -> None:
     assert first_observation.history.max_rows == first_history.history.max_rows == 7
 
 
-def test_runtime_configurator_rejects_output_schema_mutation() -> None:
+def test_runtime_updater_rejects_output_schema_mutation() -> None:
     """A built Population cannot replace Observation or History policy.
 
     The runtime updater carries no output-schema vocabulary at all: the
@@ -326,7 +326,7 @@ def test_with_observation_rejects_noncanonical_groups(groups: InvalidGroups) -> 
         groups: An invalid groups value supplied via parametrize.
     """
     with pytest.raises((TypeError, ValueError)):
-        _configurator(f"contract_invalid_groups_{id(groups)}").with_observation(
+        _builder(f"contract_invalid_groups_{id(groups)}").with_observation(
             groups=groups
         ).build()
 

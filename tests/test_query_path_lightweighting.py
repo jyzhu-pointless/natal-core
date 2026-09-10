@@ -627,7 +627,7 @@ def test_every_route_read_equals_the_snapshot_path(builder: AnyBuilder) -> None:
     a silently stale draft read. Checked after build and again after a
     run (committed-state reads).
     """
-    from natal.frontend.configurator._routes import ROUTES
+    from natal.frontend.builder._routes import ROUTES
 
     pop = builder("QLWAllRoutes")
     for phase in ("fresh", "after-run"):

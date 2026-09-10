@@ -1,9 +1,9 @@
-"""Parameter and initial-state resolution helpers shared by the Configurator.
+"""Parameter and initial-state resolution helpers shared by the PopulationBuilder.
 
-Standalone functions used by the Configurator build/update paths, the
+Standalone functions used by the PopulationBuilder build/update paths, the
 spatial builder dispatch, and the population modules.  Extracting them
 into a shared module avoids circular imports between ``_base.py``,
-the spatial configurator, ``discrete_generation.py``, and
+the spatial builder, ``discrete_generation.py``, and
 ``age_structured.py``.
 
 Function overview:

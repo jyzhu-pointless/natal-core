@@ -145,7 +145,7 @@ Implementation notes:
 2. **`fitness_patch` is optional** - the default implementation returns `None`
 3. **Can return None** - indicates no modification needed at that stage
 4. **Supports deferred species binding** - can create without specifying `Species`
-5. **The parameter of `gamete_modifier` / `zygote_modifier` is `host`** - one uniform entry point (interface contract `natal.frontend.genetics.compile.RecipeHost`): at runtime it points to the live Population, during compilation it points to the in-progress Configurator; both expose the same four read-only attributes — `species`, `config`, `registry`, `index_registry`
+5. **The parameter of `gamete_modifier` / `zygote_modifier` is `host`** - one uniform entry point (interface contract `natal.frontend.genetics.compile.RecipeHost`): at runtime it points to the live Population, during compilation it points to the in-progress PopulationBuilder; both expose the same four read-only attributes — `species`, `config`, `registry`, `index_registry`
 
 ### Simple Examples
 
@@ -425,7 +425,7 @@ class DrivePreset(GeneticPreset):
         return None
 ```
 
-### Applying Presets in the Configurator Build Chain
+### Applying Presets in the PopulationBuilder Build Chain
 
 ```python
 import natal as nt

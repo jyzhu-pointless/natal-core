@@ -58,7 +58,7 @@ class DrivePreset(GeneticPreset):
         return None
 ```
 
-## 在 Configurator 构建链中应用 Preset
+## 在 PopulationBuilder 构建链中应用 Preset
 
 ```python
 import natal as nt

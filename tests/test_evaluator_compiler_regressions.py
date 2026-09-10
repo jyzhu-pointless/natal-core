@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.configurator import Configurator
+from natal.frontend.builder import PopulationBuilder
 from natal.frontend.hooks.tick_context import TickContext
 from natal.frontend.modifiers.module import GameteModifier
 from natal.frontend.patterns import PatternParseError
@@ -44,7 +44,7 @@ def test_definition_preserves_opaque_recipe_resources() -> None:
         name="EvaluatorOpaqueResource", structure={"chr": {"locus": ["WT", "Dr"]}}
     )
     recipe = _OpaqueResourcePreset()
-    pop = Configurator.for_discrete(species).presets(recipe).build()
+    pop = PopulationBuilder.for_discrete(species).presets(recipe).build()
     assert pop.presets == [recipe]
     assert pop.definition is not None
     assert "presets" in pop.definition.entry_names()
@@ -74,7 +74,7 @@ def test_failed_custom_call_does_not_poison_retained_writer() -> None:
 
 def test_expired_context_custom_writer_rejects_write() -> None:
     """Context lifetime applies to custom() as well as ecology writers."""
-    retained: list[Configurator] = []
+    retained: list[PopulationBuilder] = []
 
     def capture(ctx: TickContext) -> int:
         """Retain the event-scoped update handle for the lifetime attack."""
@@ -123,7 +123,7 @@ def test_noop_refresh_preserves_noncommuting_preset_priority() -> None:
         name="earlier", drive_allele="A", target_allele="B",
         drive_conversion_rate=0.5, priority=-10,
     )
-    pop = Configurator.for_discrete(species).setup(stochastic=False).presets(high, low).build()
+    pop = PopulationBuilder.for_discrete(species).setup(stochastic=False).presets(high, low).build()
     before = pop.config.zygotes_to_gametes_map.copy()
     pop.refresh_modifiers()
     np.testing.assert_array_equal(pop.config.zygotes_to_gametes_map, before)
@@ -146,7 +146,7 @@ def test_one_genetic_compile_invokes_user_modifier_once() -> None:
     species = nt.Species.from_dict(
         name="EvaluatorRecipeOnce", structure={"chr": {"locus": ["A", "B"]}}
     )
-    pop = Configurator.for_discrete(species).presets(CountingPreset()).build()
+    pop = PopulationBuilder.for_discrete(species).presets(CountingPreset()).build()
     assert invocations == ["rules"]
     invocations.clear()
     pop.refresh_modifiers()
@@ -157,10 +157,10 @@ def test_one_genetic_compile_invokes_user_modifier_once() -> None:
 def test_normalized_definition_recompiles_same_genetic_products(compressed: bool) -> None:
     """The stored inputs reproduce products without relying on cached tensors."""
     from natal.frontend.genetics.definition_compiler import compile_definition
-    from tests.test_compile_unification import _build_configurator, _drive, _species
+    from tests.test_compile_unification import _build_population_builder, _drive, _species
 
     pop = (
-        _build_configurator(
+        _build_population_builder(
             _species(f"EvaluatorDefinitionCold_{compressed}"), _drive(), compress=compressed,
         )
         .fitness(viability={"A|A": 0.3})
@@ -203,7 +203,7 @@ def test_inline_build_hook_is_normalized_and_executed() -> None:
         """Make execution of the inline declaration externally observable."""
         return [Op.set_param("carrying_capacity", 123.0)]
 
-    pop = Configurator.for_discrete(species).build(hook_items=[retune])
+    pop = PopulationBuilder.for_discrete(species).build(hook_items=[retune])
     pop.run(1)
     assert pop.params.carrying_capacity == 123.0
 
@@ -293,7 +293,7 @@ def test_failed_hook_reconfiguration_preserves_preset_object_and_future_compiles
         raise ValueError("reject the entire callback")
 
     pop = (
-        Configurator.for_discrete(species)
+        PopulationBuilder.for_discrete(species)
         .presets(preset)
         .hooks(fail_after_reconfigure, event="first")
         .build()
@@ -328,7 +328,7 @@ def test_repeated_hook_reconfiguration_rolls_back_only_current_callback(prior_su
         ctx.update().reconfigure_preset(preset, drive_conversion_rate=0.9)
         raise ValueError("rollback repeated edits")
 
-    builder = Configurator.for_discrete(species).presets(preset)
+    builder = PopulationBuilder.for_discrete(species).presets(preset)
     if prior_success:
         builder = builder.hooks(succeed, event="first")
     pop = builder.hooks(fail, event="first").build()

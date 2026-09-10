@@ -563,7 +563,7 @@ def build_custom_slots(
 ) -> dict[str, bool | int | float | NDArray[np.float64]]:
     """Validate and normalize user custom slot values.
 
-    Called by :meth:`Configurator.custom` and the legacy
+    Called by :meth:`PopulationBuilder.custom` and the legacy
     ``PopulationBuilderBase.custom``.  The draft's ``custom`` field is a
     plain ``{name: value}`` dict (the runtime ``Params.custom_slots``
     contract); this helper is the single validation point for what may

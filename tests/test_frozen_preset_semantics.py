@@ -29,7 +29,7 @@ def _species() -> nt.Species:
     )
 
 
-def _base_builder(name: str) -> nt.Configurator:
+def _base_builder(name: str) -> nt.PopulationBuilder:
     """Return a minimal discrete-generation builder chain."""
     return (
         nt.DiscreteGenerationPopulation.setup(

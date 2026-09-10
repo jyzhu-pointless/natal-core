@@ -1,6 +1,6 @@
-# SpatialConfigurator: Batch Construction of Spatial Populations
+# SpatialPopulationBuilder: Batch Construction of Spatial Populations
 
-`SpatialConfigurator` solves the redundant computation problem during multi-deme initialization using a "build template once, clone N-1 times" strategy.
+`SpatialPopulationBuilder` solves the redundant computation problem during multi-deme initialization using a "build template once, clone N-1 times" strategy.
 
 ## Quick Start
 
@@ -8,7 +8,7 @@
 import numpy as np
 from natal import Species, HexGrid, SpatialPopulation
 
-species = Species.from_dict(name="spatial_configurator_demo", structure={"chr1": {"loc": ["A", "B"]}})
+species = Species.from_dict(name="spatial_population_builder_demo", structure={"chr1": {"loc": ["A", "B"]}})
 
 # All demes use the same discrete-generation model.
 pop = (
@@ -36,9 +36,9 @@ assert pop.tick == 10
 ```
 SpatialPopulation.builder(...)
     │
-    └─► SpatialConfigurator         ← User-facing chained API
+    └─► SpatialPopulationBuilder         ← User-facing chained API
            │
-           ├─ _template        ← single-deme template Configurator (not a removed Builder class)
+           ├─ _template        ← single-deme template PopulationBuilder (not a removed Builder class)
            │                     Always sees scalar parameters for a single deme
            ├─ _batch_settings  ← {param_name: BatchSetting}
            │                     Intercepted cross-deme varying parameters
@@ -46,9 +46,9 @@ SpatialPopulation.builder(...)
                                   Complete record of each chained call
 ```
 
-`SpatialConfigurator` adds no population class; it wraps a single-deme template `Configurator` externally. During the chained call phase it performs three tasks simultaneously:
+`SpatialPopulationBuilder` adds no population class; it wraps a single-deme template `PopulationBuilder` externally. During the chained call phase it performs three tasks simultaneously:
 
-1. **Delegates to `_template`** — the template `Configurator` always receives scalar values, maintaining correct internal state
+1. **Delegates to `_template`** — the template `PopulationBuilder` always receives scalar values, maintaining correct internal state
 2. **Detects `BatchSetting`** — intercepts and stores them in `_batch_settings`; template only sees `first_value()`
 3. **Records in `_declaration_log`** — preserves original arguments (including BatchSetting objects) for heterogeneous scenario replay
 
@@ -98,7 +98,7 @@ User passes age_1_carrying_capacity ─┘
 
 Priority: `age_1_carrying_capacity` > `old_juvenile_carrying_capacity` > `carrying_capacity`.
 
-This unifies key names in `_declaration_log`, ensuring parameter names match the template `Configurator` method signatures during heterogeneous replay.
+This unifies key names in `_declaration_log`, ensuring parameter names match the template `PopulationBuilder` method signatures during heterogeneous replay.
 
 ## Two Build Paths
 
@@ -130,7 +130,7 @@ _build_heterogeneous():
 
     4. For each group:
        a. _build_template_for_group(sig_map)
-          # Create a new template Configurator, replay _declaration_log, replace batch params with group values
+          # Create a new template PopulationBuilder, replay _declaration_log, replace batch params with group values
        b. Remaining demes in group = _clone_deme(group_template)
 
     5. Assemble all demes by index, construct SpatialPopulation
@@ -140,8 +140,8 @@ _build_heterogeneous():
 
 ```python
 def _build_template_for_group(self, sig_map):
-    # New single-deme template for this group (same entry as SpatialConfigurator.__init__)
-    template = Configurator.from_species(self._species, discrete=(self._pop_type != "age_structured"))
+    # New single-deme template for this group (same entry as SpatialPopulationBuilder.__init__)
+    template = PopulationBuilder.from_species(self._species, discrete=(self._pop_type != "age_structured"))
 
     for method_name, kwargs in self._declaration_log:
         resolved = {}
@@ -211,9 +211,9 @@ This page reports no historical measurements: the former table carried no versio
 
 ## Relationship with Existing API
 
-`SpatialConfigurator` does not modify any existing classes:
+`SpatialPopulationBuilder` does not modify any existing classes:
 
-- The old Builder classes (`AgeStructuredPopulationBuilder` / `DiscreteGenerationPopulationBuilder`) are removed; `SpatialConfigurator` is the only batch configuration path
+- The old Builder classes (`AgeStructuredPopulationBuilder` / `DiscreteGenerationPopulationBuilder`) are removed; `SpatialPopulationBuilder` is the only batch configuration path
 - `SpatialPopulation.__init__` — unchanged, `build()` ultimately calls it with the pre-built deme list
 - The old per-deme construction approach still works
 

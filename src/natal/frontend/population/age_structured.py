@@ -32,7 +32,7 @@ from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
     from natal.backends.rust.rust_backend import RustLifecycleBackend
-    from natal.frontend.configurator import Configurator, RuntimeUpdater
+    from natal.frontend.builder import PopulationBuilder, RuntimeUpdater
     from natal.frontend.hooks import CompiledHookDescriptor
 
 __all__ = ["AgeStructuredPopulation"]
@@ -174,12 +174,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         declared_genotypes: Sequence[str]
         | Sequence[int]
         | None = None,  # deprecated alias
-    ) -> Configurator:
+    ) -> PopulationBuilder:
         """Start building an age-structured population with overlapping generations.
 
         This is the fluent entry point for constructing an
         ``AgeStructuredPopulation``.  It returns the unified
-        ``Configurator`` that you configure by chaining domain methods
+        ``PopulationBuilder`` that you configure by chaining domain methods
         (``initial_state()``, ``reproduction()``, ``competition()``, etc.)
         and finalize with ``build()``.
 
@@ -208,7 +208,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 *declared_zygote_types*.
 
         Returns:
-            A ``Configurator`` ready for domain-method chaining.
+            A ``PopulationBuilder`` ready for domain-method chaining.
             Call ``.build()`` to produce an ``AgeStructuredPopulation``.
 
         Raises:
@@ -216,7 +216,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 ``declared_genotypes`` (deprecated alias) are specified
                 simultaneously.
         """
-        from natal.frontend.configurator import Configurator
+        from natal.frontend.builder import PopulationBuilder
 
         if declared_genotypes is not None:
             if declared_zygote_types is not None:
@@ -225,7 +225,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                     "declared_genotypes (deprecated alias)."
                 )
             declared_zygote_types = declared_genotypes
-        return Configurator.from_species(species).setup(
+        return PopulationBuilder.from_species(species).setup(
             name=name,
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,

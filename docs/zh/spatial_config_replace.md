@@ -1,10 +1,10 @@
-# SpatialConfigurator 异构 Config 共享机制
+# SpatialPopulationBuilder 异构 Config 共享机制
 
-> **实现说明**：本页描述异构构建中 `ModelDraft._replace` 共享大数组的内部机制。该机制仍在使用，但**不是**异构构建的全部内容——声明冻结、按签名分组与模板克隆见 [SpatialConfigurator：空间种群批量构造](spatial_configurator.md)。
+> **实现说明**：本页描述异构构建中 `ModelDraft._replace` 共享大数组的内部机制。该机制仍在使用，但**不是**异构构建的全部内容——声明冻结、按签名分组与模板克隆见 [SpatialPopulationBuilder：空间种群批量构造](spatial_population_builder.md)。
 
 ## 问题
 
-`SpatialConfigurator._build_heterogeneous()` 为每个 config 等价组调用 `_build_template_for_group()`，该函数完整重放 builder 管线（`setup → … → build()`），每次都调用 `build_population_config()` 创建全新的 `ModelDraft`。
+`SpatialPopulationBuilder._build_heterogeneous()` 为每个 config 等价组调用 `_build_template_for_group()`，该函数完整重放 builder 管线（`setup → … → build()`），每次都调用 `build_population_config()` 创建全新的 `ModelDraft`。
 
 如果只有少数参数在组间不同，所有大数组（`zygotes_to_gametes_map`、`gametes_to_zygotes_map`、`viability_fitness`、`fecundity_fitness` 等）仍会被重复创建，造成内存浪费。
 
@@ -70,7 +70,7 @@ builder kwarg 名与 config 字段名不同，定义在 `_KWARG_RENAMES`：
 
 ## 数组字段的转换
 
-`individual_count` 和 `sperm_storage` 的值是用户传入的 dict（如 `{"female": {"WT|WT": 100}}`），需要先转换为 numpy 数组才能 `_replace`。转换由 `natal.frontend.configurator._params` 中的普通解析函数完成：
+`individual_count` 和 `sperm_storage` 的值是用户传入的 dict（如 `{"female": {"WT|WT": 100}}`），需要先转换为 numpy 数组才能 `_replace`。转换由 `natal.frontend.builder._params` 中的普通解析函数完成：
 
 - 年龄结构：`resolve_age_structured_initial_individual_count(species, distribution, n_ages, new_adult_age)`
 - 离散世代：`resolve_discrete_initial_individual_count(species, distribution)`
@@ -149,12 +149,12 @@ _build_heterogeneous()
 
 ## 文件位置
 
-相关实现集中在 `src/natal/frontend/spatial/configurator.py`：
+相关实现集中在 `src/natal/frontend/spatial/builder.py`：
 
 | 符号 | 作用 |
 |---|---|
 | `_ARRAY_KWARGS` | 需 dict→array 转换的参数集合 |
 | `_KWARG_RENAMES` | builder kwarg → config 字段重命名 |
-| `SpatialConfigurator._build_heterogeneous_demes()` | 异构构建主流程 |
-| `SpatialConfigurator._can_use_replace(sig_map, base_config)` | 判断是否可用 `_replace` |
-| `SpatialConfigurator._build_variant_config()` | 创建 variant config |
+| `SpatialPopulationBuilder._build_heterogeneous_demes()` | 异构构建主流程 |
+| `SpatialPopulationBuilder._can_use_replace(sig_map, base_config)` | 判断是否可用 `_replace` |
+| `SpatialPopulationBuilder._build_variant_config()` | 创建 variant config |

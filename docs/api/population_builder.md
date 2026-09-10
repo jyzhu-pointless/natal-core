@@ -1,15 +1,15 @@
-# configurator Module
+# population_builder Module
 
 Parameter configuration — build and runtime modification of population models.
 
 ## Overview
 
-`Configurator` is the unified API for setting and modifying simulation parameters
+`PopulationBuilder` is the unified API for setting and modifying simulation parameters
 identically at build time and runtime.
 
 ## API Reference
 
-::: natal.frontend.configurator._base.Configurator
+::: natal.frontend.builder._base.PopulationBuilder
     options:
       heading_level: 3
       filters:
@@ -20,7 +20,7 @@ Key features:
 - **Fluent chain API** — `.competition(carrying_capacity=10000).reproduction(eggs_per_female=50).build()`
 - **Validated writes** — build-time methods update the model definition; runtime methods submit validated updates to the Rust session
 - **Runtime modification** — `pop.update().competition(carrying_capacity=5000)` without rebuilding
-- **One configurator** — the same `Configurator` dispatches parameters for discrete and age-structured models
+- **One builder** — the same `PopulationBuilder` dispatches parameters for discrete and age-structured models
 - **Preset/modifier/fitness** — declarations compile into genetic tables; runtime reconfiguration updates the existing session
 - **Equilibrium metrics** — derived on read (`pop.params.expected_*`); writes to the
   sensitive parameters (K / eggs / sex_ratio / the Champer overrides) refresh the
@@ -50,12 +50,12 @@ pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 
 ## Discrete-Generation Configuration
 
-Use `Configurator.for_discrete(species)` or the population's `.setup(species)`
+Use `PopulationBuilder.for_discrete(species)` or the population's `.setup(species)`
 entry point. The following fragment assumes `species` is already defined.
 
 ```python
 # Create
-cfg = nt.Configurator.for_discrete(species)
+cfg = nt.PopulationBuilder.for_discrete(species)
 
 # Or via setup()
 cfg = nt.DiscreteGenerationPopulation.setup(species)
@@ -82,12 +82,12 @@ cfg.competition(
 
 ## Age-Structured Configuration
 
-Use `Configurator.for_age_structured(species)`. It supports per-age parameters
+Use `PopulationBuilder.for_age_structured(species)`. It supports per-age parameters
 and the Champer equilibrium model. The following fragment assumes `species`
 and the optional `custom_dist` equilibrium distribution are already defined.
 
 ```python
-cfg = nt.Configurator.for_age_structured(species)
+cfg = nt.PopulationBuilder.for_age_structured(species)
 
 cfg.age_structure(n_ages=8, new_adult_age=2)
 
@@ -117,7 +117,7 @@ cfg.competition(
 
 ## Shared Methods
 
-The unified Configurator exposes these methods. Fragments below assume a
+The unified PopulationBuilder exposes these methods. Fragments below assume a
 build-time `cfg` and any referenced presets or modifiers already exist.
 
 ### `setup(**flags)`
@@ -315,7 +315,7 @@ spatial.params.tensor_write("carrying_capacity", [100.0, 200.0, 300.0, 400.0])
 
 ### `set_param(config, name, value)`
 ```python
-from natal.frontend.configurator import set_param
+from natal.frontend.builder import set_param
 
 draft = pop.config                                     # detached query snapshot
 draft = set_param(draft, "competition.carrying_capacity", 5000.0)
@@ -349,19 +349,19 @@ pop = builder.hooks(
 For Python callback logic, use `ctx.params` or `ctx.update()` as shown above.
 Direct mutation of a returned configuration snapshot does not update a session.
 
-### `Configurator.for_config(config)`
+### `PopulationBuilder.for_config(config)`
 ```python
-cfg = nt.Configurator.for_config(pop.config)
+cfg = nt.PopulationBuilder.for_config(pop.config)
 ```
-Returns the unified `Configurator` for the supplied draft. A configuration
+Returns the unified `PopulationBuilder` for the supplied draft. A configuration
 snapshot obtained from `pop.config` is isolated; use `pop.update()` when the
 intention is to modify a running population.
 
-## Configurator Ownership
+## PopulationBuilder Ownership
 
-`Configurator` is the build-side chain for both model kinds: construction keeps
+`PopulationBuilder` is the build-side chain for both model kinds: construction keeps
 model declarations and compiles them in `build()`. Runtime updates do not
-create a Configurator — `pop.update()` returns a `RuntimeUpdater` whose method
+create a PopulationBuilder — `pop.update()` returns a `RuntimeUpdater` whose method
 face is exactly the eight domain methods, committed to the live session or the
 callback's event transaction. `pop.config` is a query snapshot, so mutation
 through that snapshot cannot replace the explicit runtime write path.

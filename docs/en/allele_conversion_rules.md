@@ -141,7 +141,7 @@ Implementation highlights:
 2. **`fitness_patch` is optional** - omit it for no fitness effect; it may also return `None`
 3. **Can return None** - indicating no modification is needed at that stage
 4. **Supports deferred species binding** - `Species` can be unspecified at creation time
-5. **The parameter of `gamete_modifier` / `zygote_modifier` is `host`** - one uniform entry point (interface contract `natal.frontend.genetics.compile.RecipeHost`): at runtime it points to the live Population, during compilation it points to the in-progress Configurator; both expose the same four read-only attributes — `species`, `config`, `registry`, `index_registry`
+5. **The parameter of `gamete_modifier` / `zygote_modifier` is `host`** - one uniform entry point (interface contract `natal.frontend.genetics.compile.RecipeHost`): at runtime it points to the live Population, during compilation it points to the in-progress PopulationBuilder; both expose the same four read-only attributes — `species`, `config`, `registry`, `index_registry`
 
 ## Simple Examples
 

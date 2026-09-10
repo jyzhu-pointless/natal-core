@@ -12,7 +12,7 @@ import natal as nt
 from natal.frontend.output import History
 from natal.frontend.output.history import HistoryBatch
 from natal.frontend.patterns import IndividualSelector
-from natal.frontend.spatial.configurator import (
+from natal.frontend.spatial.builder import (
     _float_value,  # type: ignore[reportPrivateUsage]  # directly verify replay-log type boundary
     _object_sequence,  # type: ignore[reportPrivateUsage]  # directly verify positional replay boundary
     batch_setting,
@@ -52,7 +52,7 @@ def _discrete_population(
     Returns:
         A built discrete-generation population.
     """
-    configurator = (
+    builder = (
         nt.DiscreteGenerationPopulation.setup(
             species=_species(f"{name}_species"),
             name=name,
@@ -73,7 +73,7 @@ def _discrete_population(
         )
     )
     if observation_history:
-        configurator.with_observation(
+        builder.with_observation(
             groups=OrderedDict(
                 (
                     ("wild", IndividualSelector(ztype="WT|WT")),
@@ -87,8 +87,8 @@ def _discrete_population(
             collapse_age=True,
         ).record_history(mode="observation")
     else:
-        configurator.record_history(mode="raw")
-    return configurator.build()
+        builder.record_history(mode="raw")
+    return builder.build()
 
 
 def _spatial_discrete(
@@ -106,7 +106,7 @@ def _spatial_discrete(
     Returns:
         A built two-deme spatial population.
     """
-    configurator = (
+    builder = (
         nt.SpatialPopulation.builder(
             _species(f"{name}_species"),
             n_demes=2,
@@ -132,7 +132,7 @@ def _spatial_discrete(
         .competition(carrying_capacity=1000.0)
     )
     if observation_history:
-        configurator.with_observation(
+        builder.with_observation(
             groups=OrderedDict(
                 (
                     ("wild", IndividualSelector(ztype="WT|WT")),
@@ -142,7 +142,7 @@ def _spatial_discrete(
             collapse_age=True,
         ).record_history(mode="observation")
     else:
-        configurator.with_observation(
+        builder.with_observation(
             groups=OrderedDict(
                 (
                     ("wild", IndividualSelector(ztype="WT|WT")),
@@ -150,7 +150,7 @@ def _spatial_discrete(
                 )
             )
         ).record_history(mode="raw")
-    return configurator.build()
+    return builder.build()
 
 
 def _stack_individual_count(population: nt.SpatialPopulation) -> NDArray[np.float64]:

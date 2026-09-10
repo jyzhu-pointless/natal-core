@@ -776,7 +776,7 @@ def _resolve_eco_param_id(name: str) -> int:
             runtime-mutable ecology scalars (vectors and genetics tensors
             are called out explicitly in the message).
     """
-    from natal.frontend.configurator._routes import lookup_or_none
+    from natal.frontend.builder._routes import lookup_or_none
 
     entry = lookup_or_none(name)
     if entry is None:

@@ -20,7 +20,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
-    from natal.frontend.configurator import Configurator
+    from natal.frontend.builder import PopulationBuilder
     from natal.frontend.data.config import ModelDraft
     from natal.frontend.genetics import Species
     from natal.frontend.patterns import IndividualSelector
@@ -68,7 +68,7 @@ class SpatialInputs:
     pop_type: Literal["age_structured", "discrete_generation"]
     name: str
     batch_values: tuple[tuple[str, tuple[Any, ...]], ...]  # Any: each batch route has its own scalar/tensor/recipe value type.
-    group_calls: tuple[tuple[str, dict[str, Any]], ...]  # Any: normalized Configurator keyword values are heterogeneous.
+    group_calls: tuple[tuple[str, dict[str, Any]], ...]  # Any: normalized PopulationBuilder keyword values are heterogeneous.
     migration: Mapping[str, object]
     observation_groups: Mapping[str, IndividualSelector] | None
     observation_collapse_age: bool
@@ -275,18 +275,18 @@ class ModelDefinition:
         )
 
     def replay(
-        self, factory: Callable[[], Configurator]
-    ) -> Configurator:
-        """Rebuild a configurator from this definition's journal.
+        self, factory: Callable[[], PopulationBuilder]
+    ) -> PopulationBuilder:
+        """Rebuild a builder from this definition's journal.
 
         Args:
             factory: Zero-argument constructor producing a fresh,
-                empty configurator of the right granularity.
+                empty builder of the right granularity.
 
         Returns:
-            The configurator after replaying every journal entry.
+            The builder after replaying every journal entry.
         """
-        from natal.frontend.configurator._base import replay_declarations
+        from natal.frontend.builder._base import replay_declarations
 
         return replay_declarations(factory, list(self.journal))
 

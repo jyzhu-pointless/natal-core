@@ -8,9 +8,9 @@ This section provides module-level API references, organized by subpackage.
 - [AgeStructuredPopulation](age_structured_population.md)
 - [DiscreteGenerationPopulation](discrete_generation_population.md)
 
-## Configurator
+## PopulationBuilder
 
-- [Configurator](configurator.md)
+- [PopulationBuilder](population_builder.md)
 
 ## Genetics
 

@@ -46,7 +46,7 @@ Typical uses:
 
 ## 3. Recommended Integration Method
 
-In practice, it is recommended to register Modifiers uniformly during the build stage (the Configurator chain):
+In practice, it is recommended to register Modifiers uniformly during the build stage (the PopulationBuilder chain):
 
 ```python
 import natal as nt
@@ -158,7 +158,7 @@ Both have the same allele but different labels, potentially triggering different
 ```python
 # Gamete labels are defined by setting gamete_labels on the Species
 species.gamete_labels = ["default", "Cas9_deposited"]
-# Then build normally using Configurator (labels take effect automatically)
+# Then build normally using PopulationBuilder (labels take effect automatically)
 pop = nt.AgeStructuredPopulation.setup(species).build()
 ```
 

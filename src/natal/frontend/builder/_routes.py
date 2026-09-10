@@ -6,7 +6,7 @@ This module is the single source of routing logic for parameter writes
 - ``ROUTES`` — a flat ``{lookup_name: ParamDescriptor}`` index (full key
   ``"competition.carrying_capacity"``, short name, and every alias);
 - ``ROUTES_BY_METHOD`` — a ``{method: [entries]}`` index mirroring the
-  Configurator's domain methods.
+  PopulationBuilder's domain methods.
 
 Import fails immediately on a malformed table: missing columns, an
 unknown kind, duplicate names, alias collisions, or a ``config_field``
@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Mapping, cast
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.configurator._params import resolve_age_param
+from natal.frontend.builder._params import resolve_age_param
 from natal.frontend.utils.parameters import ALL_PARAMETERS, ParamDescriptor
 
 if TYPE_CHECKING:
@@ -453,7 +453,7 @@ def commit_write(target: ModelDraft, plan: ResolvedWrite) -> ModelDraft:
         raise TypeError(
             f"Cannot set {entry.name!r}: field is a Python "
             f"{type(field).__name__} on an immutable config. "
-            f"Use the corresponding Configurator method instead."
+            f"Use the corresponding PopulationBuilder method instead."
         )
     if entry.kind in ("scalar", "mode_enum"):
         if entry.config_path:
@@ -464,7 +464,7 @@ def commit_write(target: ModelDraft, plan: ResolvedWrite) -> ModelDraft:
             raise ValueError(
                 f"Cannot set {entry.name!r}: field is a {field.ndim}d array "
                 f"but config_path is empty. Use the corresponding "
-                f"Configurator method or write to the array directly."
+                f"PopulationBuilder method or write to the array directly."
             )
     elif entry.kind == "slot":
         field[entry.config_path] = plan.scalar

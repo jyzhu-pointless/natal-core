@@ -21,7 +21,7 @@ from natal.frontend.hooks._transaction import EventTransaction, HookRng
 from natal.frontend.hooks.types import RESULT_STOP
 
 if TYPE_CHECKING:
-    from natal.frontend.configurator import RuntimeUpdater
+    from natal.frontend.builder import RuntimeUpdater
     from natal.frontend.data import ModelDraft
     from natal.frontend.genetics import Species
     from natal.frontend.population._params_view import ParamsView
@@ -410,11 +410,11 @@ class TickContext:
         """Return an event-bound runtime updater (build-chain syntax).
 
         Returns:
-            A :class:`~natal.frontend.configurator.RuntimeUpdater` whose
+            A :class:`~natal.frontend.builder.RuntimeUpdater` whose
             writes stage into this event's transaction and adopt when the
             callback succeeds.
         """
-        from natal.frontend.configurator import RuntimeUpdater
+        from natal.frontend.builder import RuntimeUpdater
 
         self._prepare_parameters()
         return RuntimeUpdater(self._pop, context=self)

@@ -35,7 +35,7 @@ from natal.frontend.utils.types import Sex
 
 if TYPE_CHECKING:
     from natal.backends.rust.rust_backend import RustDiscreteLifecycleBackend
-    from natal.frontend.configurator import Configurator, RuntimeUpdater
+    from natal.frontend.builder import PopulationBuilder, RuntimeUpdater
     from natal.frontend.hooks import CompiledHookDescriptor
 
 __all__ = ["DiscreteGenerationPopulation"]
@@ -75,7 +75,7 @@ def _require_discrete_config(config: object) -> ModelDraft:
         raise TypeError(
             f"DiscreteGenerationPopulation requires a discrete-generation "
             f"ModelDraft, got {type(config).__name__}. Build one via "
-            f"Configurator.for_discrete() or build_discrete_engine_config()."
+            f"PopulationBuilder.for_discrete() or build_discrete_engine_config()."
         )
     if config.n_ages != 2 or config.new_adult_age != 1:
         raise ValueError(
@@ -134,8 +134,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             population_config: A fully initialized
                 ``ModelDraft`` in the discrete normalization.  A draft
                 violating the invariants is rejected with ``ValueError``;
-                build a discrete draft via ``Configurator.for_discrete()``
-                via ``Configurator.for_discrete()`` or
+                build a discrete draft via ``PopulationBuilder.for_discrete()``
+                via ``PopulationBuilder.for_discrete()`` or
                 ``build_discrete_engine_config()``.
             name: Human-readable population name.  Defaults to
                 ``"DiscreteGenerationPop"``.
@@ -228,14 +228,14 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         declared_genotypes: Sequence[str]
         | Sequence[int]
         | None = None,  # deprecated alias
-    ) -> Configurator:
+    ) -> PopulationBuilder:
         """Fluent population construction entry point.
 
-        Returns the unified ``Configurator`` wrapping a
+        Returns the unified ``PopulationBuilder`` wrapping a
         discrete-normalized draft.  Chain domain methods and end with
         ``.build()`` to create a Population.
         """
-        from natal.frontend.configurator import Configurator
+        from natal.frontend.builder import PopulationBuilder
 
         if declared_genotypes is not None:
             if declared_zygote_types is not None:
@@ -244,7 +244,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                     "declared_genotypes (deprecated alias)."
                 )
             declared_zygote_types = declared_genotypes
-        return Configurator.from_species(species, discrete=True).setup(
+        return PopulationBuilder.from_species(species, discrete=True).setup(
             name=name,
             stochastic=stochastic,
             continuous_sampling=continuous_sampling,

@@ -12,8 +12,8 @@ failed update publishes nothing.
 
 The parse/validate/compute cores (route-write parsing, genetic candidate
 compilation, candidate commitment) are plain functions with explicit
-inputs, shared with the build-side :class:`~natal.frontend.configurator.
-Configurator` chain methods and the population's preset/modifier refresh
+inputs, shared with the build-side :class:`~natal.frontend.builder.
+PopulationBuilder` chain methods and the population's preset/modifier refresh
 helpers.  The three former commit-target selections (``_make_writer``,
 ``custom()`` inline, ``_commit_genetic_candidate``) collapse into
 :func:`runtime_writer` plus the two target classes below.
@@ -28,9 +28,9 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence, cas
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.configurator._params import compute_expected_eggs_from_females
-from natal.frontend.configurator._routes import lookup_or_none
-from natal.frontend.configurator._writers import (
+from natal.frontend.builder._params import compute_expected_eggs_from_females
+from natal.frontend.builder._routes import lookup_or_none
+from natal.frontend.builder._writers import (
     NATIVE_SCALAR_FIELDS,
     AuditValue,
     CoreConfigWriter,
@@ -45,7 +45,7 @@ from natal.frontend.genetics.definition_compiler import (
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
-    from natal.frontend.configurator._writers import SessionChannel
+    from natal.frontend.builder._writers import SessionChannel
     from natal.frontend.data.definition import ModelDefinition
     from natal.frontend.genetics import Species
     from natal.frontend.genetics.compile import GameteList, ZygoteList
@@ -182,7 +182,7 @@ def reproduction_writes(
     """
     # Discrete drafts are normalized to 2 ages where age-0 does not
     # mate: per-age flexible specs are meaningless there and keep the
-    # historical rejection of the former DiscreteConfigurator.
+    # historical rejection of the former discrete-only builder.
     if discrete_generation and (
         female_age_based_mating_rate is not None
         or male_age_based_mating_rate is not None
@@ -809,7 +809,7 @@ def commit_genetic_update(
     if backend is None:
         raise RuntimeError("A runtime genetic commit requires a native session")
     from natal.contracts.materialize import materialize_params
-    from natal.frontend.configurator._writers import contract_to_draft_field
+    from natal.frontend.builder._writers import contract_to_draft_field
 
     backend.refresh_params(list(GENETIC_COMMIT_FIELDS), materialize_params(new))
     target.adopt(new)
@@ -979,7 +979,7 @@ def recompile_modifier_maps(target: _UpdateTarget) -> None:
     Args:
         target: The resolved commit target.
     """
-    from natal.frontend.configurator._registry_builder import rebuild_config_maps
+    from natal.frontend.builder._registry_builder import rebuild_config_maps
     from natal.frontend.genetics.definition_compiler import (
         _CompileHost,  # pyright: ignore[reportPrivateUsage]  # canonical isolated recipe host
     )

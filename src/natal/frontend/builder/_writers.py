@@ -2,7 +2,7 @@
 
 Writers are the only components that turn ``{name: value}`` batches
 into draft mutations and session pushes.  Every domain method of the
-Configurator collapses to: parse kwargs -> build a writes dict -> one
+PopulationBuilder collapses to: parse kwargs -> build a writes dict -> one
 ``writer.apply(writes)`` — method differences become data differences.
 
 - :class:`DraftWriter` — build path.  Writes a :class:`ModelDraft`
@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Mapping, Protocol, cast, runtime_checkable
 import numpy as np
 from numpy.typing import NDArray
 
-from natal.frontend.configurator._routes import (
+from natal.frontend.builder._routes import (
     ResolvedWrite,
     commit_write,
     lookup,
@@ -92,7 +92,7 @@ class SessionChannel(Protocol):
 
 
 class ConfigWriter(Protocol):
-    """Writer surface used by every collapsed Configurator method."""
+    """Writer surface used by every collapsed PopulationBuilder method."""
 
     @property
     def draft(self) -> ModelDraft:
@@ -391,7 +391,7 @@ class _DraftWriterBase:
         if self._species is None or self._registry is None:
             raise RuntimeError(
                 f"{entry.name!r} pattern patches require species context "
-                f"(a Species-bound Configurator or pop.update())"
+                f"(a Species-bound PopulationBuilder or pop.update())"
             )
         write_fitness_field(
             self._draft, entry.name, patch, mode,

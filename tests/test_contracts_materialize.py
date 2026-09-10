@@ -421,7 +421,7 @@ def test_name_directory_from_registry() -> None:
         structure={"chr1": {"loc": ["A"]}},
         gamete_labels=["default"],
     )
-    from natal.frontend.configurator._registry_builder import build_registry
+    from natal.frontend.builder._registry_builder import build_registry
 
     registry = build_registry(sp)
     names = ztype_names_from_registry(registry.index_to_ztype)

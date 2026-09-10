@@ -42,7 +42,7 @@ def config_snapshot_from_session(session: _ConfigReadSession, draft: ModelDraft)
     from dataclasses import fields as dataclass_fields
 
     from natal.contracts.params import Params
-    from natal.frontend.configurator._writers import contract_to_draft_field
+    from natal.frontend.builder._writers import contract_to_draft_field
 
     fields: dict[str, object] = {"custom": session.get_custom_slots()}
     for field in dataclass_fields(Params):

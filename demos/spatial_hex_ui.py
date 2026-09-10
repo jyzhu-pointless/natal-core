@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Callable  # noqa: E402
 
 import natal as nt
-from natal.frontend.spatial.configurator import batch_setting
+from natal.frontend.spatial.builder import batch_setting
 from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import HexGrid
 from natal.frontend.ui import launch

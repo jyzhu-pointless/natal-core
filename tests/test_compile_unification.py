@@ -14,8 +14,8 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.configurator import Configurator
-from natal.frontend.configurator._base import Configurator as BaseConfigurator
+from natal.frontend.builder import PopulationBuilder
+from natal.frontend.builder._base import PopulationBuilder as BasePopulationBuilder
 
 
 def _species(name: str, *, glabs: int = 1, slabs: int = 1) -> nt.Species:
@@ -41,14 +41,14 @@ def _drive(rate: float = 0.9) -> nt.HomingDrive:
     )
 
 
-def _build_configurator(species: nt.Species, drive: nt.HomingDrive,
-                        *, compress: bool = False) -> Configurator:
-    """Return a fully-chained configurator carrying the drive."""
+def _build_population_builder(species: nt.Species, drive: nt.HomingDrive,
+                        *, compress: bool = False) -> PopulationBuilder:
+    """Return a fully-chained builder carrying the drive."""
     setup_kwargs: dict[str, object] = {"stochastic": False}  # object: heterogeneous setup kwarg values
     if compress:
         setup_kwargs["compress"] = True
         setup_kwargs["declared_zygote_types"] = ("A|A", "A|B", "B|B")
-    cfg = BaseConfigurator.for_age_structured(species)
+    cfg = BasePopulationBuilder.for_age_structured(species)
     cfg.setup(**setup_kwargs)  # type: ignore[arg-type]  # literal union built above
     cfg.age_structure(n_ages=4, new_adult_age=1)
     cfg.initial_state(
@@ -75,7 +75,7 @@ def _manual_modifier() -> object:  # object: no-op probe callable of any modifie
 class TestCrossPathParity:
     """Same modifier list through both rebuild paths → bit-identical maps."""
 
-    def _parity_check(self, species: nt.Species, cfg: Configurator) -> None:
+    def _parity_check(self, species: nt.Species, cfg: PopulationBuilder) -> None:
         pop = cfg.build()
         build_tables = (
             pop.config.zygotes_to_gametes_map.copy(),
@@ -96,13 +96,13 @@ class TestCrossPathParity:
     def test_single_drive_uncompressed(self) -> None:
         """One preset, no compression: the plain-path anchor."""
         species = _species("__parity_plain__")
-        cfg = _build_configurator(species, _drive())
+        cfg = _build_population_builder(species, _drive())
         self._parity_check(species, cfg)
 
     def test_drive_plus_manual_modifier(self) -> None:
         """A preset-derived and a manual modifier coexist on the list."""
         species = _species("__parity_mixed__")
-        cfg = _build_configurator(species, _drive())
+        cfg = _build_population_builder(species, _drive())
         pop = cfg.build()
         pop.add_gamete_modifier(_manual_modifier(), name="manual")  # type: ignore[arg-type]  # no-op probe modifier
 
@@ -117,25 +117,25 @@ class TestCrossPathParity:
     def test_multi_glab_species(self) -> None:
         """Two gamete labels: the gtype axis is a product axis."""
         species = _species("__parity_glab__", glabs=2)
-        cfg = _build_configurator(species, _drive())
+        cfg = _build_population_builder(species, _drive())
         self._parity_check(species, cfg)
 
     def test_slab_species(self) -> None:
         """Somatic labels: the ztype axis carries the slab dimension."""
         species = _species("__parity_slab__", glabs=1, slabs=2)
-        cfg = _build_configurator(species, _drive())
+        cfg = _build_population_builder(species, _drive())
         self._parity_check(species, cfg)
 
     def test_compressed_with_declared_types(self) -> None:
         """Compression with all genotypes declared keeps both paths equal."""
         species = _species("__parity_compress__")
-        cfg = _build_configurator(species, _drive(), compress=True)
+        cfg = _build_population_builder(species, _drive(), compress=True)
         self._parity_check(species, cfg)
 
     def test_double_refresh_idempotent(self) -> None:
         """Two consecutive refreshes reproduce the build tables exactly."""
         species = _species("__parity_twice__")
-        pop = _build_configurator(species, _drive()).build()
+        pop = _build_population_builder(species, _drive()).build()
         build_z2g = pop.config.zygotes_to_gametes_map.copy()
 
         pop.refresh_modifiers()
@@ -156,7 +156,7 @@ class TestRuntimePresetsTransaction:
     def _population(self):
         species = _species("__tx_species__")
         pop = (
-            BaseConfigurator.for_age_structured(species)
+            BasePopulationBuilder.for_age_structured(species)
             .setup(stochastic=False)
             .age_structure(n_ages=4, new_adult_age=1)
             .initial_state(

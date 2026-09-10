@@ -1,6 +1,6 @@
 # 种群初始化（Panmictic）
 
-种群初始化是 NATAL Core 模拟的第一步，通过链式 API（`Configurator`）配置和构建种群。
+种群初始化是 NATAL Core 模拟的第一步，通过链式 API（`PopulationBuilder`）配置和构建种群。
 
 > **说明**：此文档覆盖 **panmictic（单 deme、均匀混合）** 种群的链式配置。空间种群（含拓扑、迁移、`batch_setting` 异构配置）见 [Spatial 模拟指南](3_spatial_simulation.md)。两者的链式语法一致，空间种群额外增加了 `.migration()` 方法和 `batch_setting` 支持。
 
@@ -36,7 +36,7 @@ pop.update().competition(carrying_capacity=5000)
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 ```
 
-参见 [Configurator API 参考](api/configurator.md)。
+参见 [PopulationBuilder API 参考](api/population_builder.md)。
 
 ## 配置流程
 
@@ -490,7 +490,7 @@ def release_drive_carriers():
 
 ## 实现原理
 
-链式 API 的底层通过 `Configurator` 对象管理配置。每个链式方法立即写入 `ModelDraft` 的 NumPy 数组——无延迟执行，无中间累积。配置的生效顺序：
+链式 API 的底层通过 `PopulationBuilder` 对象管理配置。每个链式方法立即写入 `ModelDraft` 的 NumPy 数组——无延迟执行，无中间累积。配置的生效顺序：
 
 1. **基础配置**：`setup()` 和 `age_structure()` 设置基本参数和维度
 2. **状态配置**：`initial_state()` 解析字典为 3-D 数组写入 config
@@ -502,7 +502,7 @@ def release_drive_carriers():
 
 ## 小结
 
-链式 API（`Configurator`）将种群参数组织为可链式配置的流程。每个方法立即写入 `ModelDraft`，`build()` 执行 sync 并创建 `Population` 对象。运行期修改使用 `pop.update()` 返回的专用 `RuntimeUpdater`——域方法语法相同，但不携带任何构建能力。
+链式 API（`PopulationBuilder`）将种群参数组织为可链式配置的流程。每个方法立即写入 `ModelDraft`，`build()` 执行 sync 并创建 `Population` 对象。运行期修改使用 `pop.update()` 返回的专用 `RuntimeUpdater`——域方法语法相同，但不携带任何构建能力。
 
 
 ## 相关章节

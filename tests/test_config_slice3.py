@@ -57,8 +57,8 @@ from numpy.typing import NDArray
 import natal as nt
 from natal.backends.rust.rust_backend import rust_backend_available
 from natal.contracts.params import Params
-from natal.frontend.configurator import Configurator
-from natal.frontend.configurator._routes import (
+from natal.frontend.builder import PopulationBuilder
+from natal.frontend.builder._routes import (
     ROUTES,
     commit_write,
     dispatch,
@@ -66,7 +66,7 @@ from natal.frontend.configurator._routes import (
     lookup,
     plan_write,
 )
-from natal.frontend.configurator._writers import (
+from natal.frontend.builder._writers import (
     CoreConfigWriter,
     DraftWriter,
 )
@@ -573,7 +573,7 @@ class TestVocabularyAxisCombos:
         field: str,
         expected: object,
     ):
-        cfg = Configurator.from_species(_fresh_age_species()).age_structure(3, 1)
+        cfg = PopulationBuilder.from_species(_fresh_age_species()).age_structure(3, 1)
         getattr(cfg, method)(**kwargs)
         np.testing.assert_allclose(
             np.asarray(getattr(cfg.config, field)), np.asarray(expected)
@@ -631,7 +631,7 @@ class TestVocabularyAxisCombos:
         field: str,
         expected: object,
     ):
-        cfg = Configurator.for_discrete(discrete_species)
+        cfg = PopulationBuilder.for_discrete(discrete_species)
         getattr(cfg, method)(**kwargs)
         np.testing.assert_allclose(
             np.asarray(getattr(cfg.config, field)), np.asarray(expected)
@@ -642,13 +642,13 @@ class TestVocabularyAxisCombos:
         # reproduction cell), exposed by dispatch rather than as a
         # reproduction() keyword.  The unified-vector cell must land
         # exactly, on both granularities.
-        cfg = Configurator.from_species(_fresh_age_species()).age_structure(3, 1)
+        cfg = PopulationBuilder.from_species(_fresh_age_species()).age_structure(3, 1)
         live = dispatch(cfg.config, "reproduction_rate", 0.66)
         np.testing.assert_allclose(
             np.asarray(live.age_based_reproduction_rates),
             [0.0, 0.66, 1.0],
         )
-        discrete = Configurator.for_discrete(_fresh_discrete_species())
+        discrete = PopulationBuilder.for_discrete(_fresh_discrete_species())
         live_d = dispatch(discrete.config, "reproduction_rate", 0.5)
         np.testing.assert_allclose(
             np.asarray(live_d.age_based_reproduction_rates), [0.0, 0.5]
@@ -670,7 +670,7 @@ class TestVocabularyAxisCombos:
     ):
         # Negative axis-combo contract: per-age specs are meaningless on a
         # 2-age discrete draft, and the rejection must not write anything.
-        cfg = Configurator.for_discrete(discrete_species)
+        cfg = PopulationBuilder.for_discrete(discrete_species)
         mating0 = np.asarray(cfg.config.age_based_mating_rates).copy()
         repro0 = np.asarray(cfg.config.age_based_reproduction_rates).copy()
         fert0 = np.asarray(cfg.config.female_age_based_fertility).copy()
@@ -1183,7 +1183,7 @@ class TestParamsViewReadSurface:
         assert "survival_rates" in names
 
     def test_contract_to_draft_field_default_is_identity(self):
-        from natal.frontend.configurator._writers import (
+        from natal.frontend.builder._writers import (
             contract_to_draft_field,
         )
 
@@ -1248,7 +1248,7 @@ class TestNegativeContractsSlice3:
             plan_write(_age_draft(), lookup("fecundity"), {"A|A": 0.5})
 
     def test_bool_row_with_config_path_rejected_at_build(self):
-        from natal.frontend.configurator import _routes
+        from natal.frontend.builder import _routes
         from natal.frontend.utils.parameters import ParamDescriptor
 
         entry = ParamDescriptor(
@@ -1267,7 +1267,7 @@ class TestNegativeContractsSlice3:
             _routes._build_routes({"setup.probe": entry})
 
     def test_route_level_name_collision_rejected_at_build(self):
-        from natal.frontend.configurator import _routes
+        from natal.frontend.builder import _routes
 
         # Both rows carry the same user-facing name: the second must fail
         # table construction instead of silently shadowing the first.

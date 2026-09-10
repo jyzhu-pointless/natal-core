@@ -12,7 +12,7 @@ from natal.backends.rust.rust_backend import (
     rust_migrate_csr_deterministic,
     rust_migrate_csr_stochastic,
 )
-from natal.frontend.configurator import Configurator
+from natal.frontend.builder import PopulationBuilder
 from natal.frontend.spatial.migration import fold_migration_csr
 from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import SquareGrid, build_adjacency_matrix
@@ -108,7 +108,7 @@ def config() -> object:
         gamete_labels=["default"],
     )
     return (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(4, 2)
         .setup(stochastic=False)
         .build()

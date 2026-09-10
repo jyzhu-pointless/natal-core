@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.configurator import Configurator
+from natal.frontend.builder import PopulationBuilder
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.entry.declarative import Op
 from natal.frontend.population.age_structured import AgeStructuredPopulation
@@ -37,7 +37,7 @@ def _build_population(
 ) -> AgeStructuredPopulation:
     """Build an identical deterministic age-structured population."""
     builder = (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(4, 2)
         .setup(stochastic=False, name=name)
         .initial_state(
@@ -107,7 +107,7 @@ def test_declarative_hooks_declared_at_build_run_in_engine(
 def test_setup_custom_hooks_run_on_rust_from_build(species: Species) -> None:
     """A build-time Python callback hook runs inside the Rust lifecycle."""
     pop = (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(4, 2)
         .setup(stochastic=False, name="auto_custom")
         .initial_state(individual_count={"female": {"A|A": 20}, "male": {"A|A": 20}})
@@ -143,7 +143,7 @@ def test_runtime_config_update_reaches_the_engine(species: Species) -> None:
 def test_custom_hooks_work_with_rust_backend(species: Species) -> None:
     """Python callbacks are bridged into the Rust engine, not rejected."""
     pop = (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(4, 2)
         .setup(stochastic=False, name="custom_hook_pop")
         .initial_state(

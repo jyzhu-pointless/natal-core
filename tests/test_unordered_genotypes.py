@@ -233,7 +233,7 @@ class TestUnorderedConfigBlueprint:
 
 
 class TestUnorderedPatternMatching:
-    """Verify pattern strings match unordered genotypes via configurator."""
+    """Verify pattern strings match unordered genotypes via builder."""
 
     def test_initial_state_with_both_ordered_forms(self):
         """Both 'A|a' and 'a|A' in initial state map to same unordered index."""
@@ -248,26 +248,26 @@ class TestUnorderedPatternMatching:
     def test_viability_string_both_forms(self):
         """Fitness string 'a|A' writes to the correct unordered genotype."""
         sp = nt.Species.from_dict("canon_pat2", {"c1": {"l1": ["A", "a"]}})
-        configurator = nt.Configurator.from_species(sp).setup(stochastic=False)
-        configurator.fitness(viability={"a|A": {"female": 0.5}})
-        arr = configurator._config.viability_fitness
+        builder = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
+        builder.fitness(viability={"a|A": {"female": 0.5}})
+        arr = builder._config.viability_fitness
         assert arr[0, 0, 1] == 0.5  # unordered heterozygous at idx 1
 
     def test_viability_string_A_a(self):
         """Fitness string 'A|a' also writes to idx 1."""
         sp = nt.Species.from_dict("canon_pat3", {"c1": {"l1": ["A", "a"]}})
-        configurator = nt.Configurator.from_species(sp).setup(stochastic=False)
-        configurator.fitness(viability={"A|a": {"female": 0.3}})
-        arr = configurator._config.viability_fitness
+        builder = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
+        builder.fitness(viability={"A|a": {"female": 0.3}})
+        arr = builder._config.viability_fitness
         assert arr[0, 0, 1] == 0.3
 
 
     def test_pattern_wildcard_matches_both_orderings(self):
         """Pattern '*|A' matches both AA and Aa in unordered mode (| → ::)."""
         sp = nt.Species.from_dict("canon_pat4", {"c1": {"l1": ["A", "a"]}})
-        configurator = nt.Configurator.from_species(sp).setup(stochastic=False)
-        configurator.fitness(viability={"*|A": {"female": 0.5}})
-        arr = configurator._config.viability_fitness
+        builder = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
+        builder.fitness(viability={"*|A": {"female": 0.5}})
+        arr = builder._config.viability_fitness
         # idx 0 = AA, idx 1 = Aa — both have A on at least one chromosome
         assert arr[0, 0, 0] == 0.5  # AA → matched
         assert arr[0, 0, 1] == 0.5  # Aa → matched (auto-promoted)
@@ -276,10 +276,10 @@ class TestUnorderedPatternMatching:
     def test_pattern_set_matches_unordered(self):
         """Pattern '{A}|{a}' matches Aa regardless of ordering — auto-promoted."""
         sp = nt.Species.from_dict("canon_pat5", {"c1": {"l1": ["A", "a"]}})
-        configurator = nt.Configurator.from_species(sp).setup(stochastic=False)
+        builder = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
         # {A}|{a} → in unordered space matches A|a (the unordered heterozygous)
-        configurator.fitness(viability={"{A}|{a}": {"female": 0.5}})
-        arr = configurator._config.viability_fitness
+        builder.fitness(viability={"{A}|{a}": {"female": 0.5}})
+        arr = builder._config.viability_fitness
         assert arr[0, 0, 0] == 1.0  # AA → maternal A, paternal A → paternal not {a}
         assert arr[0, 0, 1] == 0.5  # Aa → maternal A ∈ {A}, paternal a ∈ {a} → matched
         assert arr[0, 0, 2] == 1.0  # aa → maternal a ∉ {A} → not matched
@@ -290,9 +290,9 @@ class TestUnorderedPatternMatching:
             "canon_pat6",
             {"c1": {"l1": ["A", "a"], "l2": ["B", "b"]}},  # one chr, two linked loci
         )
-        configurator = nt.Configurator.from_species(sp).setup(stochastic=False)
-        configurator.fitness(viability={"(A|a; B|b)": {"female": 0.5}})
-        arr = configurator._config.viability_fitness
+        builder = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
+        builder.fitness(viability={"(A|a; B|b)": {"female": 0.5}})
+        arr = builder._config.viability_fitness
         # Unordered order: AB|AB=0, AB|Ab=1, AB|aB=2, AB|ab=3,
         # Ab|Ab=4, Ab|ab=5, aB|aB=6, aB|ab=7, ab|ab=8
         # (A|a; B|b) with :: matches AB|ab regardless of phase
@@ -306,9 +306,9 @@ class TestUnorderedPatternMatching:
             "canon_pat7",
             {"c1": {"l1": ["A", "a"]}, "c2": {"l2": ["B", "b"]}},
         )
-        configurator = nt.Configurator.from_species(sp).setup(stochastic=False)
-        configurator.fitness(viability={"A|a; B|b": {"female": 0.5}})
-        arr = configurator._config.viability_fitness
+        builder = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
+        builder.fitness(viability={"A|a; B|b": {"female": 0.5}})
+        arr = builder._config.viability_fitness
         # Unordered order (2 chr × 2 alleles → 9 genotypes):
         #   0:AA BB  1:AA Bb  2:Aa BB  3:Aa Bb  4:AA bb
         #   5:Aa bb  6:aa BB  7:aa Bb  8:aa bb

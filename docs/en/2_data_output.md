@@ -275,7 +275,7 @@ deme axis; only non-spatial Populations omit that axis.
 
 ### Recording Mode and Capacity
 
-The Configurator provides `record_history()` to set the recording mode and
+The PopulationBuilder provides `record_history()` to set the recording mode and
 capacity during the build phase. This method is **independent** of
 `with_observation()` — chain order does not matter.
 
@@ -311,7 +311,7 @@ pop.max_history = 1000  # Maximum of 1000 snapshots (legacy)
 
 The recording schema (mode, row size, layout) is **frozen at build time** and
 cannot change after the first row is recorded. Once configured via the
-Configurator, `pop.record_every` and `pop.max_history` only control the
+PopulationBuilder, `pop.record_every` and `pop.max_history` only control the
 recording **frequency** and **legacy limit**, not the schema.
 
 ```python

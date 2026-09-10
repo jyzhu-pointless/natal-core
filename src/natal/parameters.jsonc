@@ -2,7 +2,7 @@
   // Route table: every column is data — adding a parameter is adding
   // a row; a new parameter *shape* means touching _routes.py.
   // Columns:
-  //   method    — Configurator method that exposes the parameter
+  //   method    — PopulationBuilder method that exposes the parameter
   //   kind      — one of the seven shapes: scalar | mode_enum | age_vec |
   //               sex_row | slot | bool | geno_tensor
   //   section   — "ecology" (genotype-free) or "genetics" (genotype-indexed)

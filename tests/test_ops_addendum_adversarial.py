@@ -45,7 +45,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import natal as nt  # noqa: E402
-from natal.frontend.configurator import Configurator  # noqa: E402
+from natal.frontend.builder import PopulationBuilder  # noqa: E402
 from natal.frontend.hooks.entry.declarative import Op  # noqa: E402
 from natal.frontend.hooks.types import (  # noqa: E402
     ECO_PARAM_NAMES,
@@ -104,7 +104,7 @@ def _build_age_structured(
     if sperm is None:
         sperm = {"A|A": {"A|A": 3, "A|a": 3}}
     chain = (
-        Configurator.from_species(species)
+        PopulationBuilder.from_species(species)
         .age_structure(3, 1)
         .setup(stochastic=False, name=name)
         .initial_state(

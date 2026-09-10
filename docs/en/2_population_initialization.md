@@ -39,7 +39,7 @@ pop.update().competition(carrying_capacity=5000)
 pop.update().reproduction(eggs_per_female=100, sex_ratio=0.6)
 ```
 
-See the [Configurator API Reference](api/configurator.md).
+See the [PopulationBuilder API Reference](api/population_builder.md).
 
 ## Configuration Flow
 
@@ -495,7 +495,7 @@ The semantics of these methods are fully consistent with the age-structured mode
 
 ## Implementation Principles
 
-The chainable API is powered by a `Configurator` object. Each chain method writes immediately to
+The chainable API is powered by a `PopulationBuilder` object. Each chain method writes immediately to
 `ModelDraft` NumPy arrays — no deferred execution, no intermediate accumulation.
 
 1. **Basic config**: `setup()` and `age_structure()` set flags and dimensions
@@ -507,7 +507,7 @@ The chainable API is powered by a `Configurator` object. Each chain method write
 
 ## Summary
 
-The `Configurator` chainable API writes parameters immediately to `ModelDraft` arrays. `build()` creates the `Population` object. Runtime modification uses the dedicated `RuntimeUpdater` returned by `pop.update()` — same domain-method syntax, no build capability.
+The `PopulationBuilder` chainable API writes parameters immediately to `ModelDraft` arrays. `build()` creates the `Population` object. Runtime modification uses the dedicated `RuntimeUpdater` returned by `pop.update()` — same domain-method syntax, no build capability.
 
 ## Related Chapters
 

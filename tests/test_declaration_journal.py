@@ -1,8 +1,8 @@
 """Declaration-journal contract tests.
 
 The ``@_declared`` journal records every public chaining call of a
-Configurator with its explicitly-passed kwargs and live object
-references.  ``replay_declarations`` rebuilds a fresh configurator from
+PopulationBuilder with its explicitly-passed kwargs and live object
+references.  ``replay_declarations`` rebuilds a fresh builder from
 that journal — the ordered log is the replayable source of what the
 user declared, the seed of the future ModelDefinition.
 
@@ -17,8 +17,8 @@ from functools import partial
 import numpy as np
 
 import natal as nt
-from natal.frontend.configurator import Configurator
-from natal.frontend.configurator._base import replay_declarations
+from natal.frontend.builder import PopulationBuilder
+from natal.frontend.builder._base import replay_declarations
 
 
 def _species() -> nt.Species:
@@ -30,7 +30,7 @@ def _species() -> nt.Species:
     )
 
 
-def _typical_chain(cfg: Configurator) -> Configurator:
+def _typical_chain(cfg: PopulationBuilder) -> PopulationBuilder:
     """Run a representative declaration chain covering every journaled method."""
     drive = nt.HomingDrive(
         name="__journal_drive__",
@@ -74,7 +74,7 @@ class TestDeclarationJournal:
 
     def test_journal_records_call_order_with_explicit_kwargs(self) -> None:
         """Entries follow call order; only explicit kwargs are journaled."""
-        cfg = _typical_chain(Configurator.for_age_structured(_species()))
+        cfg = _typical_chain(PopulationBuilder.for_age_structured(_species()))
         log = cfg._declaration_log
 
         assert [name for name, _ in log] == [
@@ -109,7 +109,7 @@ class TestDeclarationJournal:
 
     def test_journal_preserves_live_object_references(self) -> None:
         """Preset/hook references are stored as-is (no copies)."""
-        cfg = _typical_chain(Configurator.for_age_structured(_species()))
+        cfg = _typical_chain(PopulationBuilder.for_age_structured(_species()))
         preset_entry = next(kw for name, kw in cfg._declaration_log if name == "presets")
         journaled_preset = preset_entry["__args__"]
         assert isinstance(journaled_preset, tuple)
@@ -120,9 +120,9 @@ class TestDeclarationJournal:
         import dataclasses
 
         species = _species()
-        original = _typical_chain(Configurator.for_age_structured(species))
+        original = _typical_chain(PopulationBuilder.for_age_structured(species))
         replayed = replay_declarations(
-            partial(Configurator.for_age_structured, species),
+            partial(PopulationBuilder.for_age_structured, species),
             original._declaration_log,
         )
 
@@ -158,7 +158,7 @@ class TestDeclarationJournal:
 
         species = _species()
         original = (
-            Configurator.for_discrete(species)
+            PopulationBuilder.for_discrete(species)
             .reproduction(eggs_per_female=6.0, sex_ratio=0.4)
             .survival(female_age0_survival=1.0, male_age0_survival=0.9)
             .competition(carrying_capacity=800.0, juvenile_growth_mode=2)
@@ -170,7 +170,7 @@ class TestDeclarationJournal:
             )
         )
         replayed = replay_declarations(
-            partial(Configurator.for_discrete, species),
+            partial(PopulationBuilder.for_discrete, species),
             original._declaration_log,
         )
         for field in original.config._fields:
@@ -184,13 +184,13 @@ class TestDeclarationJournal:
     def test_journal_excludes_runtime_and_terminal_methods(self) -> None:
         """build()/apply()/reconfigure_preset() never enter the journal."""
         species = _species()
-        pop = _typical_chain(Configurator.for_age_structured(species)).build()
+        pop = _typical_chain(PopulationBuilder.for_age_structured(species)).build()
         # pop.update() returns the runtime updater — its writes are
         # runtime updates, not declarations.
         cfg = pop.update()
         cfg.competition(carrying_capacity=4321.0)
-        # The journal is per-configurator; the update configurator's own
-        # journal records its calls (they are that configurator's
+        # The journal is per-builder; the update builder's own
+        # journal records its calls (they are that builder's
         # declarations), but the population's build journal is frozen at
         # build time — verified by replaying the build journal.
         names = [name for name, _ in pop._definition_journal_names()] if hasattr(
@@ -202,9 +202,9 @@ class TestDeclarationJournal:
         """An empty journal replays to the untouched factory state."""
         species = _species()
         replayed = replay_declarations(
-            partial(Configurator.for_age_structured, species), []
+            partial(PopulationBuilder.for_age_structured, species), []
         )
-        fresh = Configurator.for_age_structured(species)
+        fresh = PopulationBuilder.for_age_structured(species)
         for field in fresh.config._fields:
             lv = getattr(fresh.config, field)
             rv = getattr(replayed.config, field)
@@ -222,7 +222,7 @@ class TestDeclarationJournal:
         """
         species = _species()
         original = (
-            Configurator.for_age_structured(species)
+            PopulationBuilder.for_age_structured(species)
             .setup(stochastic=False, compress=True, declared_zygote_types=("A|A", "A|B"))
             .age_structure(n_ages=4, new_adult_age=1)
             .initial_state(
@@ -234,7 +234,7 @@ class TestDeclarationJournal:
             .competition(carrying_capacity=500.0, juvenile_growth_mode=3)
         )
         replayed = replay_declarations(
-            partial(Configurator.for_age_structured, species),
+            partial(PopulationBuilder.for_age_structured, species),
             original._declaration_log,
         )
         for field in original.config._fields:
@@ -352,7 +352,7 @@ class TestFailedCallsLeaveNoJournalEntry:
             drive_conversion_rate=0.9,
         )
         bound.bind_species(other)
-        cfg = Configurator.for_age_structured(_species()).age_structure(n_ages=2, new_adult_age=1)
+        cfg = PopulationBuilder.for_age_structured(_species()).age_structure(n_ages=2, new_adult_age=1)
         before = list(cfg._declaration_log)
 
         try:
@@ -373,7 +373,7 @@ class TestFailedCallsLeaveNoJournalEntry:
             target_allele="A",
             drive_conversion_rate=0.8,
         )
-        cfg = Configurator.for_age_structured(_species()).age_structure(n_ages=2, new_adult_age=1)
+        cfg = PopulationBuilder.for_age_structured(_species()).age_structure(n_ages=2, new_adult_age=1)
         bad = nt.HomingDrive(
             name="__journal_bad__",
             drive_allele="Q",
@@ -399,7 +399,7 @@ class TestFailedCallsLeaveNoJournalEntry:
         ], "journal must contain exactly the two successful calls"
 
         replayed = replay_declarations(
-            lambda: Configurator.for_age_structured(_species()),
+            lambda: PopulationBuilder.for_age_structured(_species()),
             cfg._declaration_log,
         )
         np.testing.assert_array_equal(
