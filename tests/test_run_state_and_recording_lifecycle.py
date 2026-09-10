@@ -569,7 +569,9 @@ def _spatial(name: str, *, stop_deme0: bool = True) -> tuple[Any, Any, Any]:
         demes.append(chain.build())
     spatial = nt.SpatialPopulation(demes, migration_rate=0.0)
     spatial._initialize_session(seed=0)  # noqa: SLF001 — test wires the owning session explicitly
-    return spatial, spatial.demes[0], spatial.demes[1]
+    # raw managed slots: tick/is_finished project the shared session on the
+    # deme objects (not on the aligned slice surface)
+    return spatial, spatial._deme_object(0), spatial._deme_object(1)  # noqa: SLF001 — test reads the projection at the slot level
 
 
 def test_spatial_demes_project_the_shared_session_status() -> None:

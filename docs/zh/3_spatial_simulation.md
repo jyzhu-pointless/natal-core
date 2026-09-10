@@ -434,7 +434,7 @@ aggregate = pop.aggregate_individual_count()
 # 按索引获取 deme
 deme_0 = pop.deme(0)
 print(deme_0.get_total_count())
-print(deme_0.compute_allele_frequencies())
+print(pop.compute_allele_frequencies())   # 等位基因频率是容器级查询
 
 # 遍历所有 deme
 for i in range(pop.n_demes):
@@ -442,9 +442,13 @@ for i in range(pop.n_demes):
     print(f"deme {i}: {d.get_total_count()}")
 ```
 
-每个 deme 通过 `DemeSlice` 视图访问（读操作委托给底层种群，写入走
-`write_ecology` / `write_genetics` 通道）；
-空间容器自身提供 canonical `observation`、`observe()` 和类型化 `history`。
+每个 deme 通过 `DemeSlice` 视图访问，访问面与 `Population` 对齐：读（`name`、
+`species`、`config`、`state`、`params`、`params_log`、`index_registry`、
+`presets`、`definition`）、查询（`get_total_count`、`get_female_count`、
+`get_male_count`、`export_config`、`export_state`）、`update()`（经父空间
+会话提交），以及 deme 独有的 `index`、`write_ecology`、`write_genetics`；
+未列出的属性一律抛出 `AttributeError`。空间容器自身提供 canonical
+`observation`、`observe()` 和类型化 `history`。
 
 ### 重置与控制
 
@@ -452,22 +456,19 @@ for i in range(pop.n_demes):
 # 重置所有 deme 到初始状态（清除终止标记）
 pop.reset()
 
-# 检查终止状态——容器自身没有 is_finished，逐 deme 检查
-any(d.is_finished for d in pop.demes)
-
 # 结束共享运行，不推进时间
 pop.run(0, finish=True)
 ```
 
-容器没有 `is_finished` / `finish_simulation()`：任何 deme 终止后，`run()` /
-`run_tick()` 会抛出 `RuntimeError`；由 hook 触发停止时，容器会把所有 deme
-标记为 finished。
+容器和 deme 对齐面都没有 `is_finished` / `finish_simulation()`：终止状态
+归共享原生会话所有，任何 deme 终止后，`run()` / `run_tick()` 会抛出
+`RuntimeError`；由 hook 触发停止时，会话整体进入 Stopped。
 
-受管理的 deme 句柄支持查询、参数更新以及限定到该 deme 的
-``trigger_event``。独立的 ``run``/``step``、``reset``、状态或配置导入、
-检查点恢复、记录、清空历史和 ``finish_simulation`` 均抛出 ``RuntimeError``。
-运行与历史控制必须由空间容器执行；初始状态使用构建器声明，运行中需要改变状态时，
-使用所选 deme 回调中的 ``TickContext.state``。
+受管理的 deme 句柄只暴露上述对齐面：`run`、`reset`、`restore_checkpoint`、
+`finish`、`clone`、`trigger_event`、`history`、`observe` 等生命周期与容器
+控制一律不存在（访问抛出 `AttributeError`）。运行与历史控制必须由空间容器
+执行；初始状态使用构建器声明，运行中需要改变状态时，使用所选 deme 回调中的
+``TickContext.state``。
 
 ### 数据输出
 
@@ -501,10 +502,10 @@ print(observed_history.values.shape)
 
 每次 `run_tick()` 的内部执行顺序：
 
-1. 检查每个 deme 是否已经 `is_finished`。
-2. 把所有 deme 的 state 拼成统一数组，构建 config bank。
-3. 运行空间生命周期：各 deme 生命周期按 deme 粒度并行执行 → 统一迁移，全部在同一引擎会话内。
-4. 将更新后的 state 写回每个 deme。
+1. 检查共享会话的执行状态（已终止则拒绝）。
+2. 会话持有堆叠 state 与 config bank；运行全程在同一引擎会话内。
+3. 空间生命周期：各 deme 生命周期按 deme 粒度执行 → 统一迁移。
+4. 更新后的 state 仍由会话持有，Python 读取按需派生。
 
 如果一个 deme 先触发终止条件（如种群灭绝），整个 `SpatialPopulation` 也会停止推进。详细执行流程见 [空间生命周期包装器](spatial_lifecycle_wrapper.md)。
 

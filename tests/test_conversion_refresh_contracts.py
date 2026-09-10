@@ -541,7 +541,9 @@ def _arrange_noncontiguous_config_groups(
     config_b = pop.deme(1).config
     assert config_b is not config_a
     for i, label in enumerate(layout):
-        pop.deme(i).set_config(config_a if label == "A" else config_b)
+        # set_config is a raw-deme (typed internal consumer) operation, not
+        # part of the slice's aligned surface: rearrange through the slots.
+        pop._deme_object(i).set_config(config_a if label == "A" else config_b)  # pyright: ignore[reportPrivateUsage]  # config-group identity rearrangement needs the raw slot
         expected_capacity = 200.0 if label == "A" else 700.0
         assert pop.deme(i).config.carrying_capacity == expected_capacity
     return config_a, config_b

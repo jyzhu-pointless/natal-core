@@ -928,7 +928,7 @@ def test_set_hook_duplicate_declaration_compiles_once() -> None:
         name="set_hook_shared_build",
         hook_calls=[((my_hook,), {}), ((my_hook,), {})],
     )
-    assert len(sp.deme(0).compiled_hook_descriptors) == 1  # type: ignore[attr-defined]  # deme access surface
+    assert len(sp._deme_object(0).compiled_hook_descriptors) == 1  # pyright: ignore[reportPrivateUsage]  # deme slot-level plan (not on the aligned slice surface)
 
     compact = sp._collect_compact_spatial_hooks()
     assert len(compact) == 1
@@ -1220,9 +1220,9 @@ def test_builder_homogeneous_demes_share_compiled_hooks() -> None:
         species, n_demes, hook_calls=[((add_one,), {})]
     )
     # Homogeneous clones share one descriptor tuple by identity.
-    ref = sp.deme(0).compiled_hook_descriptors  # type: ignore[attr-defined]  # deme access surface
+    ref = sp._deme_object(0).compiled_hook_descriptors  # pyright: ignore[reportPrivateUsage]  # deme slot-level plan (not on the aligned slice surface)
     for i in range(1, n_demes):
-        assert sp.deme(i).compiled_hook_descriptors is ref  # type: ignore[attr-defined]  # deme access surface
+        assert sp._deme_object(i).compiled_hook_descriptors is ref  # pyright: ignore[reportPrivateUsage]  # deme slot-level plan (not on the aligned slice surface)
 
     compact = sp._collect_compact_spatial_hooks()
     assert len(compact) == 1
@@ -1398,3 +1398,79 @@ def test_spatial_builder_custom_slots_reach_all_demes() -> None:
     )
     for i, d in enumerate(heterogeneous.demes):
         assert d.config.custom["x"] == 7, i
+
+
+# -----------------------------------------------------------------------
+# Container run window: cross-deme reads degrade to last-published values
+# -----------------------------------------------------------------------
+def test_cross_deme_reads_inside_a_run_window_degrade_safely() -> None:
+    """A hook in deme 0 reading deme 1 never touches the borrowed session.
+
+    During a container run the native session is mutably borrowed; the
+    run window is published on every managed deme, so cross-deme
+    lifecycle/state/count reads resolve to the last-published values
+    (pre-run: the build state) instead of raising ``Already mutably
+    borrowed``.  After the run ends, the same reads are fresh.
+    """
+    species = _make_species("run_window_reads")
+    holder: dict[str, SpatialPopulation] = {}
+    observed: list[dict[str, object]] = []
+
+    @nt.hook(event="first", priority=0, deme=0)
+    def cross_deme_reader(pop: object) -> int:
+        """Read sibling-deme values through the container inside the window."""
+        container = holder["run_window_reads"]
+        observed.append(
+            {
+                "total": container.deme(1).get_total_count(),
+                "state_tick": container.deme(1).state.n_tick,
+                "slot_tick": container._deme_object(1).tick,  # pyright: ignore[reportPrivateUsage]  # lifecycle projection lives on the slot
+                "slot_finished": container._deme_object(1).is_finished,  # pyright: ignore[reportPrivateUsage]
+            }
+        )
+        return 0
+
+    pop = _build_quiescent_age_pop(
+        species, n_demes=2, name="run_window_reads", hook_calls=[((cross_deme_reader,), {})]
+    )
+    holder["run_window_reads"] = pop
+
+    initial_total = pop.deme(1).get_total_count()
+    assert initial_total == 200.0
+    pop.run(2, record_every=0)
+
+    # Two firings (two ticks x one deme-0 slot): every in-window read saw
+    # the last-published boundary, and no native borrow error surfaced.
+    assert len(observed) == 2
+    for snapshot in observed:
+        assert snapshot["total"] == 200.0
+        assert snapshot["state_tick"] == 0
+        assert snapshot["slot_tick"] == 0
+        assert snapshot["slot_finished"] is False
+    # After the run the same reads are fresh and match the session state.
+    assert pop.tick == 2
+    assert pop._deme_object(1).tick == 2  # pyright: ignore[reportPrivateUsage]  # clock projects the session again
+    _tick, ind_all, _sperm = pop._native_stacked_state()  # pyright: ignore[reportPrivateUsage]  # session truth after the run
+    assert pop.deme(1).get_total_count() == float(ind_all[1].sum())
+
+
+def test_native_deme_count_accessor_matches_stacked_state() -> None:
+    """The additive session accessor agrees with the stacked state sums."""
+    species = _make_species("native_counts_accessor")
+    pop = _build_quiescent_age_pop(species, n_demes=3, name="native_counts_accessor")
+    pop.run(1, record_every=0)
+    backend = pop._rust_spatial_backend
+    assert backend is not None
+    _tick, ind_flat, _sperm_flat = backend.state_snapshot()
+    n_demes = pop.n_demes
+    draft = pop.deme(0).export_config()
+    ind_all = ind_flat.reshape(n_demes, int(draft.n_sexes), int(draft.n_ages), int(draft.n_ztypes))
+    for i in range(pop.n_demes):
+        total, female, male = backend.counts(i)
+        assert total == float(ind_all[i].sum())
+        assert female == float(ind_all[i, 0].sum())
+        assert male == float(ind_all[i, 1].sum())
+        # The per-deme state projection carries the same plane.
+        plane = pop.deme(i).state.individual_count
+        deme_plane = backend.state_snapshot_deme(i)[1]
+        assert deme_plane.tolist() == plane.ravel().tolist()

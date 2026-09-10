@@ -1,15 +1,17 @@
-"""Spatial runtime modification after the stage-3 write-plane change.
+"""Spatial runtime modification after the ownership change.
 
 The ``_SpatialUpdate`` builder chain (``pop.update()`` /
 ``pop.update_deme()``) is deleted.  Runtime modification of a spatial
 population goes through the params data plane instead:
 
-- ``pop.deme(i)`` returns a :class:`DemeSlice` compat view; reads delegate
-  to the underlying deme (``.config`` / ``.state`` / ``.registry`` deep
-  interfaces stay fully compatible for the UI and tests).
-- ``DemeSlice.write_ecology(field, value)`` writes the deme's ecology
-  column entry AND its draft (per-field clone-on-write, equilibrium
-  metrics re-synced) so every backend sees the same value.
+- ``pop.deme(i)`` returns a :class:`DemeSlice` exposing exactly the
+  aligned population surface (declaration reads, count/export queries,
+  ``update()``) plus ``index``/``write_ecology``/``write_genetics``;
+  every member resolves against the parent session and unlisted
+  attributes raise ``AttributeError``.
+- ``DemeSlice.write_ecology(field, value)`` writes the session's
+  authoritative ecology column and the deme's draft declaration
+  (per-field clone-on-write); Python column reads derive on demand.
 - ``DemeSlice.write_genetics(field, values)`` forks the deme's genetics
   variant (Rust bank) and detaches the draft tables, so demes that shared
   the genetics keep their numerics bitwise unchanged.
@@ -197,7 +199,7 @@ class TestDemeSliceReadCompat:
     """Reads through deme(i) must behave exactly like the raw deme."""
 
     def test_deep_interfaces_delegate(self, homogeneous_pop) -> None:
-        """config/state/registry/name hooks expose the deme's own objects."""
+        """config/state/index_registry/name hooks expose the deme's own objects."""
         pop = homogeneous_pop
         deme0 = pop.deme(0)
         np.testing.assert_array_equal(deme0.config.viability_fitness, pop._demes[0].config.viability_fitness)
@@ -212,7 +214,7 @@ class TestDemeSliceReadCompat:
         np.testing.assert_array_equal(snapshot.individual_count, live.individual_count)
         assert not np.may_share_memory(snapshot.individual_count, live.individual_count)
         assert deme0.name == pop._demes[0].name  # pyright: ignore[reportPrivateUsage]  # compat contract
-        assert deme0.registry is pop._demes[0].registry  # pyright: ignore[reportPrivateUsage]  # compat contract (UI reads)
+        assert deme0.index_registry is pop._demes[0].registry  # pyright: ignore[reportPrivateUsage]  # compat contract (UI reads)
         assert deme0.export_config().n_ages == pop._demes[0].export_config().n_ages  # pyright: ignore[reportPrivateUsage]  # compat contract
 
     def test_state_reads_are_snapshots_and_scoped_transaction_writes(
@@ -249,12 +251,23 @@ class TestDemeSliceReadCompat:
             float(pop.deme(2).state.individual_count[0, 0, 0]) == 77.0
         )  # reads see it
 
-    def test_attribute_writes_forward_to_deme(self, homogeneous_pop) -> None:
-        """Attribute assignment through the slice reaches the deme."""
+    def test_unlisted_slice_attributes_are_not_forwarded(self, homogeneous_pop) -> None:
+        """Unknown attributes neither read nor write through to the deme.
+
+        The dynamic proxy is revoked: the slice's surface is the explicit
+        aligned one, so an unlisted attribute raises AttributeError on
+        read and a write stays slice-local (the deme object never sees
+        it, and a fresh slice for the same deme does not observe it).
+        """
         pop = homogeneous_pop
+        with pytest.raises(AttributeError):
+            _ = pop.deme(1).custom_marker  # type: ignore[attr-defined]  # negative contract: no dynamic forwarding
         marker = object()
-        pop.deme(1).custom_marker = marker  # type: ignore[attr-defined]  # dynamic delegation contract
-        assert pop._demes[1].custom_marker is marker  # pyright: ignore[reportAttributeAccessIssue]  # dynamic delegation contract
+        pop.deme(1).custom_marker = marker  # type: ignore[attr-defined]  # slice-local assignment (no forwarding)
+        assert not hasattr(pop._demes[1], "custom_marker")  # pyright: ignore[reportAttributeAccessIssue]  # the deme never received the write
+        assert not hasattr(pop.deme(1), "custom_marker")  # a fresh slice does not observe it either
+        with pytest.raises(AttributeError):
+            del pop.deme(1).name  # negative contract: no delete forwarding
 
     def test_demes_property_yields_slices(self, homogeneous_pop) -> None:
         """The demes sequence holds one slice per deme in order."""
@@ -1102,3 +1115,126 @@ class TestEquilibriumChannelAdversarial:
         builder2.competition(carrying_capacity=100.0, juvenile_growth_mode=3)
         pop2 = builder2.build()
         assert float(pop2.demes[0].config.generation_time) == 3.0
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# DemeSlice aligned surface + session-derived reads (P8)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class TestDemeSliceAlignedSurface:
+    """The slice exposes exactly the aligned population surface."""
+
+    ALIGNED_MEMBERS = (
+        "name", "species", "config", "state", "params", "params_log",
+        "index_registry", "presets", "definition",
+        "get_total_count", "get_female_count", "get_male_count",
+        "export_config", "export_state", "update",
+        "index", "write_ecology", "write_genetics",
+    )
+
+    CONTAINER_ONLY_MEMBERS = (
+        "run", "reset", "restore_checkpoint", "finish", "clone",
+        "trigger_event", "history", "observe",
+        "tick", "is_finished", "is_failed", "registry",
+        "compiled_hook_descriptors", "import_state", "import_config",
+        "step", "record_snapshot", "clear_history", "n_demes",
+    )
+
+    def test_every_aligned_member_exists(self, homogeneous_pop) -> None:
+        """All aligned read/query/update members plus the deme extras exist."""
+        deme = homogeneous_pop.deme(0)
+        for member in self.ALIGNED_MEMBERS:
+            assert hasattr(deme, member), member
+
+    def test_container_only_members_raise(self, homogeneous_pop) -> None:
+        """Lifecycle and container controls are absent (AttributeError)."""
+        deme = homogeneous_pop.deme(0)
+        for member in self.CONTAINER_ONLY_MEMBERS:
+            with pytest.raises(AttributeError):
+                getattr(deme, member)
+
+    def test_native_deme_counts_match_state_sums(self, homogeneous_pop) -> None:
+        """Deme count queries equal the NumPy reductions over the state.
+
+        The session answers counts natively (no state export); the values
+        must be bitwise identical to the retired per-deme NumPy sums.
+        """
+        pop = homogeneous_pop
+        pop.run(1, record_every=0)
+        for i in range(pop.n_demes):
+            counts = pop.deme(i).state.individual_count
+            assert pop.deme(i).get_total_count() == float(counts.sum())
+            assert pop.deme(i).get_female_count() == float(counts[0].sum())
+            assert pop.deme(i).get_male_count() == float(counts[1].sum())
+        total = sum(
+            float(pop.deme(i).state.individual_count.sum()) for i in range(pop.n_demes)
+        )
+        assert pop.get_total_count() == int(total)
+
+    def test_container_aggregate_matches_deme_states(self, homogeneous_pop) -> None:
+        """The aggregate reads the native stacked state, not refreshed caches."""
+        pop = homogeneous_pop
+        pop.run(2, record_every=0)
+        stacked = pop._native_stacked_state()  # pyright: ignore[reportPrivateUsage]  # authority identity check
+        assert stacked is not None
+        aggregate = pop.aggregate_individual_count()
+        np.testing.assert_array_equal(
+            aggregate,
+            np.sum(np.stack([pop.deme(i).state.individual_count for i in range(pop.n_demes)]), axis=0),
+        )
+        assert aggregate.sum() == float(stacked[1].sum())
+
+    def test_derived_params_column_reflects_deme_write(self, homogeneous_pop) -> None:
+        """A write_ecology is visible on the next derived column read."""
+        pop = homogeneous_pop
+        pop.deme(0).write_ecology("carrying_capacity", 999.0)
+        column = pop.params.carrying_capacity
+        assert not column.flags.writeable
+        assert float(column[0]) == 999.0
+        # The sibling deme entry is untouched (isolation).
+        assert float(column[1]) != 999.0
+
+    def test_sessionless_params_column_matches_drafts(self) -> None:
+        """Without a session the column derives from the deme drafts."""
+        species = nt.Species.from_dict(
+            name="__aligned_sessionless__", structure={"auto": {"A": ["WT"]}}
+        )
+        demes = [
+            (
+                nt.DiscreteGenerationPopulation.setup(species=species, stochastic=False)
+                .initial_state(individual_count={"female": {"WT|WT": 10}, "male": {"WT|WT": 10}})
+                .reproduction(eggs_per_female=10)
+                .competition(carrying_capacity=222.0)
+                .build()
+            )
+            for _ in range(2)
+        ]
+        pop = SpatialPopulation(demes, migration_rate=0.0)
+        assert pop._rust_spatial_session() is None  # pyright: ignore[reportPrivateUsage]  # session-less branch
+        column = pop.params.carrying_capacity
+        np.testing.assert_array_equal(
+            column,
+            [deme.export_config().carrying_capacity for deme in pop.demes],
+        )
+
+
+def test_discrete_deme_counts_round_per_deme() -> None:
+    """Discrete deme counts round per deme before the container sum."""
+    species = nt.Species.from_dict(
+        name="__aligned_discrete_counts__", structure={"auto": {"A": ["WT"]}}
+    )
+    pop = (
+        SpatialPopulation.builder(species, n_demes=2, pop_type="discrete_generation")
+        .setup(name="aligned_discrete_counts", stochastic=True)
+        .initial_state(individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+        .reproduction(eggs_per_female=10, sex_ratio=0.5)
+        .competition(carrying_capacity=500.0, low_density_growth_rate=2.0)
+        .build()
+    )
+    pop.run(1, record_every=0)
+    per_deme = [int(pop.deme(i).get_total_count()) for i in range(pop.n_demes)]
+    for i in range(pop.n_demes):
+        counts = pop.deme(i).state.individual_count
+        assert per_deme[i] == int(round(float(counts.sum())))
+    assert pop.get_total_count() == int(sum(per_deme))

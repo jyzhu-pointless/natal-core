@@ -15,7 +15,9 @@ from tests.test_review_history_regressions import _history_population
 def test_every_mutable_config_field_is_detached(model: Literal["age", "discrete", "spatial"]) -> None:
     """Mutating any exported metadata/native array cannot reach later snapshots."""
     owner = _history_population(f"ConfigSnapshotAllFields_{model}", model)
-    pop = owner.demes[0] if isinstance(owner, nt.SpatialPopulation) else owner
+    # raw managed slot: the test inspects the private draft mirror, which
+    # lives on the deme object, not on the aligned slice surface
+    pop = owner._deme_object(0) if isinstance(owner, nt.SpatialPopulation) else owner  # pyright: ignore[reportPrivateUsage]
     pop.update().custom(flag=True, cohort=7, temperature=2.5, grid=np.arange(12.0).reshape(2, 2, 3))
     expected = pop.config
     before_draft = deepcopy(pop._config)
@@ -73,7 +75,7 @@ def test_spatial_reinitialization_rejects_missing_export_before_replacing_sessio
     seed = owner._rust_spatial_seed
     before = [deme.export_state().copy() for deme in owner.demes]
     with monkeypatch.context() as patch:
-        patch.setattr(owner.demes[1], "export_config", None)
+        patch.setattr(owner._deme_object(1), "export_config", None)  # pyright: ignore[reportPrivateUsage]  # malformed-slot handoff guard
         with pytest.raises(TypeError, match=r"deme\[1\].*export_config"):
             owner._initialize_session(seed=19)
     assert owner._rust_spatial_backend is backend

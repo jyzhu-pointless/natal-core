@@ -162,8 +162,9 @@ print(pop.config.custom["temperature"])  # 35.0
 
 ### 6.1 `pop.params`（between-tick 批量写入推荐）
 
-`pop.params` 只读返回 `(n_demes, ...)` 生态列的写保护视图；`tensor_write` 校验形状后
-通过共享写入通道按 deme 路由（列 + deme draft + Rust 会话列同步）：
+`pop.params` 按需派生 `(n_demes, ...)` 生态列并返回写保护视图（有会话时源自
+会话列，无会话时源自 deme draft）；`tensor_write` 校验形状后通过共享写入通道
+按 deme 路由（写入会话权威列与 deme draft 声明，读取随读随派生）：
 
 ```python
 from natal.frontend.spatial import batch_setting
@@ -186,11 +187,16 @@ print(pop.params.migration_rate.shape)  # (n_demes, S, A)
 
 ### 6.2 `deme(i).write_ecology` / `write_genetics`（单 deme 写入）
 
-`pop.deme(i)` 返回 `DemeSlice` 视图：其 `config`/`state`/`registry`/`name` 等读取
-全部委托给底层 deme 对象；写入走两个专用方法：
+`pop.deme(i)` 返回 `DemeSlice` 视图，访问面与 `Population` 对齐——读
+（`name`、`species`、`config`、`state`、`params`、`params_log`、
+`index_registry`、`presets`、`definition`）、查询（`get_total_count`、
+`get_female_count`、`get_male_count`、`export_config`、`export_state`）、
+`update()`（返回同一 `RuntimeUpdater`，经父空间会话提交），外加 deme 独有的
+`index`、`write_ecology`、`write_genetics`；所有读取都解析到父会话。
+未列出的属性一律抛出 `AttributeError`（无动态转发）；单 deme 写入走两个专用方法：
 
-- `write_ecology(field, value)`：同时写入生态列与该 deme 的 draft（按字段
-  clone-on-write），任何执行路径（Python 分派与 Rust 会话列）都看到同一值。
+- `write_ecology(field, value)`：写入会话权威列与该 deme 的 draft 声明（按字段
+  clone-on-write），任何执行路径（Python 读取与 Rust 会话列）都看到同一值。
 - `write_genetics(field, values)`：先 fork 该 deme 的遗传变体（Rust 侧），再分离
   draft 表，保证共享这些表的其他 deme 数值逐位不变。
 

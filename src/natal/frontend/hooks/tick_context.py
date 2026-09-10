@@ -885,8 +885,8 @@ class HookRunner:
             pop = self._pop
             from natal.frontend.hooks.types import EVENT_NAMES
 
-            original_active = getattr(pop, "_rust_run_active", False)
-            pop._rust_run_active = True  # pyright: ignore[reportAttributeAccessIssue]  # native callback holds the session borrow
+            original_active = getattr(pop, "_rust_run_active", False)  # pyright: ignore[reportPrivateUsage]  # run-window flag read on the hosting population
+            pop._rust_run_active = True  # pyright: ignore[reportPrivateUsage]  # native callback holds the session borrow
             previous_event = getattr(pop, "_active_event", None)
 
             def state_factory() -> Any:
@@ -923,7 +923,7 @@ class HookRunner:
                 raise
             finally:
                 pop._active_event = previous_event  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
-                pop._rust_run_active = original_active  # pyright: ignore[reportAttributeAccessIssue]
+                pop._rust_run_active = original_active  # pyright: ignore[reportPrivateUsage]  # run-window flag restore
 
         bridge.__natal_transaction__ = True  # pyright: ignore[reportFunctionMemberAccess]  # native bridge ABI discriminator
 

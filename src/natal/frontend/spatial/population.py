@@ -1,7 +1,8 @@
 """Composition-based spatial population container.
 
 `SpatialPopulation` intentionally does NOT inherit from ``BasePopulation``.
-Each deme is represented by one concrete ``BasePopulation`` subclass instance.
+Each deme is one managed ``BasePopulation`` slot of the parent spatial
+session; ``DemeSlice`` exposes the aligned population surface per deme.
 """
 
 from __future__ import annotations
@@ -10,7 +11,6 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import (
     TYPE_CHECKING,
-    Any,
     Callable,
     List,
     Literal,
@@ -25,7 +25,6 @@ from numpy.typing import NDArray
 
 from natal.contracts.blueprint import Blueprint
 from natal.contracts.materialize import SpatialMigration, materialize
-from natal.contracts.params import Params
 from natal.frontend.data import (
     DiscretePopulationState,
     ModelDefinition,
@@ -39,7 +38,7 @@ from natal.frontend.hooks import (
     HookProgram,
 )
 from natal.frontend.hooks._compile import build_hook_program
-from natal.frontend.population.base import BasePopulation
+from natal.frontend.population.base import BasePopulation, ParamChange
 from natal.frontend.spatial.migration import (
     MigrationCSR,
     RateDeclaration,
@@ -54,17 +53,23 @@ from natal.frontend.spatial.topology import (
 )
 
 if TYPE_CHECKING:
+    from typing import Protocol
+
     from natal.backends.rust.rust_backend import (
         RustHeterogeneousSpatialLifecycleBackend,
     )
+    from natal.frontend.builder import RuntimeUpdater
     from natal.frontend.output.history import History
     from natal.frontend.output.observation import Observation, ObservationResult
+    from natal.frontend.population._params_view import ParamsView
+    from natal.frontend.presets import GeneticPreset
+    from natal.frontend.registry.index import IndexRegistry
     from natal.frontend.spatial.builder import SpatialPopulationBuilder
 
 __all__ = ["SpatialPopulation"]
 
 ConfigObject: TypeAlias = object
-SpatialStateTuple: TypeAlias = tuple[NDArray[np.float64], NDArray[np.float64], int]
+SpatialStateTuple: TypeAlias = tuple[int, NDArray[np.float64], NDArray[np.float64]]
 DemePopulation: TypeAlias = (
     BasePopulation[PopulationState] | BasePopulation[DiscretePopulationState]
 )
@@ -164,28 +169,86 @@ def _coerce_adjacency_dense(
     return dense
 
 
+if TYPE_CHECKING:
+
+    class PopulationView(Protocol):
+        """Internal alignment contract for the deme/population shared surface.
+
+        Both ``BasePopulation`` and ``DemeSlice`` must satisfy this
+        protocol; the module-level assignments after ``DemeSlice`` let
+        pyright reject drift on either side (an aligned member added,
+        retyped, or removed on one side only fails type checking).
+        Not exported and never instantiated.
+        """
+
+        @property
+        def name(self) -> str: ...
+
+        @property
+        def species(self) -> Species: ...
+
+        @property
+        def config(self) -> ModelDraft: ...
+
+        @property
+        def state(self) -> PopulationState | DiscretePopulationState: ...
+
+        @property
+        def params(self) -> ParamsView: ...
+
+        @property
+        def params_log(self) -> Tuple[ParamChange, ...]: ...
+
+        @property
+        def index_registry(self) -> IndexRegistry: ...
+
+        @property
+        def presets(self) -> List[GeneticPreset]: ...
+
+        @property
+        def definition(self) -> ModelDefinition: ...
+
+        def get_total_count(self) -> float: ...
+
+        def get_female_count(self) -> float: ...
+
+        def get_male_count(self) -> float: ...
+
+        def export_config(self) -> ModelDraft: ...
+
+        def export_state(self) -> NDArray[np.float64]: ...
+
+        def update(self) -> RuntimeUpdater: ...
+
+
 class DemeSlice:
-    """Compatible view of one deme over the spatial SoA contract.
+    """Explicit aligned view of one deme of the parent spatial session.
 
-    ``spatial.deme(i)`` returns this view instead of the
-    raw per-deme population.  Reads are fully compatible — every missing
-    attribute (``config``, ``state``, ``registry``, ``name``, …) is
-    delegated to the underlying deme object, so UI code and the ~15 test
-    files that consume the deep ``.config`` / ``.state`` interfaces keep
-    working unchanged.
+    ``spatial.deme(i)`` returns this view.  Its attribute surface is
+    exactly the aligned ``Population`` surface — declaration reads
+    (``name``, ``species``, ``config``, ``state``, ``params``,
+    ``params_log``, ``index_registry``, ``presets``, ``definition``),
+    count/export queries, and ``update()`` — plus the deme-specific
+    ``index``, ``write_ecology``, and ``write_genetics``.  The internal
+    ``PopulationView`` protocol above fixes the aligned members on both
+    sides, so the slice and a population cannot drift apart silently.
 
-    Writes follow the stage-3 data plane:
+    Every member resolves against the parent session through the deme's
+    slot: reads project the session's authoritative columns and state,
+    and ``update()`` commits through the deme's native parameter channel
+    (the same target ``pop.update(deme=i)`` uses).
 
-    - ``write_ecology`` writes the deme's ecology column entry AND the
-      deme's draft (per-field clone-on-write), so the Rust session columns
-      and every Python reader see the same value.
-    - ``write_genetics`` forks the deme's genetics variant (Rust bank) and
-      clones the draft arrays, so divergence at one deme never leaks into
-      the demes that previously shared its tables.
+    Nothing else exists on the slice: lifecycle, state import, history,
+    and observation controls belong to the container, and unlisted
+    attribute access raises ``AttributeError`` instead of being forwarded
+    dynamically.
 
-    ``params`` and ``update()`` commit through the owning spatial session.
-    Lifecycle, state import, and history controls belong to the container;
-    a managed deme cannot start, restore, reset, or finish a separate run.
+    ``write_ecology`` writes the deme's ecology entry into the session's
+    column (and the deme's draft declaration, per-field clone-on-write),
+    so the session and every Python reader see the same value.
+    ``write_genetics`` forks the deme's genetics variant (Rust bank) and
+    clones the draft arrays, so divergence at one deme never leaks into
+    the demes that previously shared its tables.
     """
 
     def __init__(self, pop: SpatialPopulation, index: int) -> None:
@@ -203,99 +266,132 @@ class DemeSlice:
         """int: Zero-based deme index of this slice."""
         return self._index
 
-    def __setattr__(self, name: str, value: object) -> None:
-        """Forward attribute writes to the underlying deme.
+    def _deme(self) -> DemePopulation:
+        """Return the deme slot this slice reads through and commits to.
 
-        Args:
-            name: Attribute name.
-            value: Attribute value.
+        The deme object carries the parent session's read/write channels;
+        slice members resolve through it, so there is exactly one
+        projection mechanism for both internal and aligned-surface use.
         """
-        if name in ("_pop", "_index"):
-            object.__setattr__(self, name, value)
-            return
-        deme = object.__getattribute__(self, "_pop")._demes[  # pyright: ignore[reportPrivateUsage]  # delegated write channel
-            object.__getattribute__(self, "_index")
-        ]
-        setattr(deme, name, value)
+        return self._pop._demes[self._index]  # pyright: ignore[reportPrivateUsage]  # slot access implies a constructed deme
 
-    def __delattr__(self, name: str) -> None:
-        """Forward attribute deletion to the underlying deme.
+    # -- aligned declaration reads -------------------------------------------
 
-        Args:
-            name: Attribute name.
-        """
-        if name in ("_pop", "_index"):
-            object.__delattr__(self, name)
-            return
-        deme = object.__getattribute__(self, "_pop")._demes[  # pyright: ignore[reportPrivateUsage]  # delegated write channel
-            object.__getattribute__(self, "_index")
-        ]
-        delattr(deme, name)
+    @property
+    def name(self) -> str:
+        """str: The deme's human-readable name."""
+        return self._deme().name
 
-    # -- delegated reads (full backward compatibility) ----------------------
-
-    def __getattr__(self, name: str) -> Any:
-        """Delegate unknown attributes to the underlying deme.
-
-        The return type is ``Any`` on purpose: the slice's attribute
-        surface is exactly the wrapped population's (config, state,
-        registry, hooks, ...), which is statically unknowable from the
-        view; consumers keep their existing concrete types through the
-        delegation.
-
-        Args:
-            name: Attribute name.
-
-        Returns:
-            The deme attribute value.
-        """
-        population = object.__getattribute__(self, "_pop")
-        population._ensure_rust_states_fresh()
-        deme = population._demes[object.__getattribute__(self, "_index")]
-        value = getattr(deme, name)
-        if callable(value):
-            # A user may retain a bound export/count method across a run.
-            # Refresh when it is called, not only when the method is fetched.
-            def delegated(*args: Any, **kwargs: Any) -> Any:  # Any: preserve the dynamically delegated population method signature
-                population._ensure_rust_states_fresh()
-                return value(*args, **kwargs)
-            return delegated
-        return value
+    @property
+    def species(self) -> Species:
+        """Species: The genetic architecture shared by all demes."""
+        return self._deme().species
 
     @property
     def config(self) -> ModelDraft:
-        """ModelDraft: The deme's live draft (read projection; see class notes)."""
-        return self._pop._demes[self._index].config  # pyright: ignore[reportPrivateUsage]  # delegated read channel
+        """ModelDraft: The deme's live draft (session-projected; see class notes)."""
+        return self._deme().config
 
     @property
     def state(self) -> PopulationState | DiscretePopulationState:
         """The deme's state snapshot.
 
-        When the container Rust backend is enabled, the session owns the
-        authoritative stacked state; reading refreshes the per-deme caches
-        from one session snapshot, then returns an independent copy so a
-        retained reference cannot mutate the real run state.  State
-        modifications belong to initial-state declarations or a callback's
-        ``TickContext.state`` transaction.
+        The parent session owns the authoritative stacked state; reading
+        refreshes this deme's derived cache from the deme's native plane
+        and returns an independent copy, so a retained reference cannot
+        mutate the real run state.  State modifications belong to
+        initial-state declarations or a callback's ``TickContext.state``
+        transaction.
         """
-        pop = self._pop
-        pop._ensure_rust_states_fresh()  # pyright: ignore[reportPrivateUsage]  # container lazy refresh
-        deme = pop._demes[self._index]  # pyright: ignore[reportPrivateUsage]  # slot access implies a constructed deme
-        assert deme is not None  # constructed demes always carry a container
-        state = deme._live_state()  # pyright: ignore[reportPrivateUsage]  # fresh after the refresh above
-        assert state is not None
-        # Independent copy: arrays handed out must not alias the caches.
-        replacements: dict[str, NDArray[np.float64]] = {
-            name: np.array(getattr(state, name), copy=True)
-            for name in ("individual_count", "sperm_storage")
-            if getattr(state, name, None) is not None
-        }
-        return state._replace(**replacements)
+        self._pop._refresh_deme_state(self._index)  # pyright: ignore[reportPrivateUsage]  # session-side per-deme refresh
+        return self._deme().state
 
-    # -- stage-3 write path --------------------------------------------------
+    @property
+    def params(self) -> ParamsView:
+        """ParamsView: The deme's validated runtime-parameter surface."""
+        return self._deme().params
+
+    @property
+    def params_log(self) -> Tuple[ParamChange, ...]:
+        """Tuple[ParamChange, ...]: Read-only parameter snapshot log of this deme."""
+        return self._deme().params_log
+
+    @property
+    def index_registry(self) -> IndexRegistry:
+        """IndexRegistry: Genetic-object-to-index mapping of this deme."""
+        return self._deme().index_registry
+
+    @property
+    def presets(self) -> List[GeneticPreset]:
+        """List[GeneticPreset]: Snapshot of the genetic presets applied to this deme."""
+        return self._deme().presets
+
+    @property
+    def definition(self) -> ModelDefinition:
+        """The frozen declaration snapshot this deme was built from.
+
+        Raises:
+            AttributeError: If the deme was not built through a builder.
+        """
+        return self._deme().definition
+
+    # -- aligned queries -------------------------------------------------------
+
+    def get_total_count(self) -> float:
+        """Return this deme's total individual count.
+
+        Reads the owning session's native per-deme sum when a session is
+        enabled; otherwise the deme slot's own query (local cache).
+        """
+        native = self._pop._native_deme_counts(self._index)  # pyright: ignore[reportPrivateUsage]  # session-side per-deme sum
+        if native is not None:
+            return native[0]
+        return self._deme().get_total_count()
+
+    def get_female_count(self) -> float:
+        """Return this deme's total female count (session sum or local cache)."""
+        native = self._pop._native_deme_counts(self._index)  # pyright: ignore[reportPrivateUsage]  # session-side per-deme sum
+        if native is not None:
+            return native[1]
+        return self._deme().get_female_count()
+
+    def get_male_count(self) -> float:
+        """Return this deme's total male count (session sum or local cache)."""
+        native = self._pop._native_deme_counts(self._index)  # pyright: ignore[reportPrivateUsage]  # session-side per-deme sum
+        if native is not None:
+            return native[2]
+        return self._deme().get_male_count()
+
+    def export_config(self) -> ModelDraft:
+        """Export a detached model configuration for this deme."""
+        return self._deme().export_config()
+
+    def export_state(self) -> NDArray[np.float64]:
+        """Export this deme's state as a flattened array.
+
+        The deme's derived cache is refreshed from the session plane
+        first, so the export reflects the current tick.
+        """
+        self._pop._refresh_deme_state(self._index)  # pyright: ignore[reportPrivateUsage]  # session-side per-deme refresh
+        return self._deme().export_state()
+
+    # -- aligned update ----------------------------------------------------------
+
+    def update(self) -> RuntimeUpdater:
+        """Return the deme's ``RuntimeUpdater``.
+
+        The updater is the same type ``pop.update()`` returns and commits
+        through the deme's native channel of the parent spatial session.
+
+        Returns:
+            A ``RuntimeUpdater`` bound to this deme's commit target.
+        """
+        return self._deme().update()
+
+    # -- deme-specific write path -------------------------------------------------
 
     def write_ecology(self, field: str, value: float | NDArray[np.float64]) -> None:
-        """Write one ecology value for this deme (column + draft + Rust).
+        """Write one ecology value for this deme (draft declaration + session).
 
         Args:
             field: Contract ecology field name (``carrying_capacity``,
@@ -325,105 +421,17 @@ class DemeSlice:
         return f"DemeSlice(index={self._index}, pop={self._pop.name!r})"
 
 
-def _minimal_contract(
-    *,
-    n_demes: int,
-    n_sexes: int,
-    n_ages: int,
-    migration_csr: MigrationCSR,
-    rate3d: NDArray[np.float64],
-) -> tuple[Blueprint, Params]:
-    """Build a minimal spatial contract without a reference draft.
-
-    Only used for lightweight deme doubles that predate the contract
-    era (test fixtures): dimensions come from the state shapes and the
-    genetics section stays empty.
-
-    Args:
-        n_demes: Number of demes.
-        n_sexes: Number of sexes.
-        n_ages: Number of age classes.
-        migration_csr: Folded migration CSR.
-        rate3d: ``(n_demes, n_sexes, n_ages)`` rate column.
-
-    Returns:
-        A ``(Blueprint, Params)`` pair with placeholder genetics.
-    """
-    from natal.contracts.blueprint import frozen
-
-    blueprint = Blueprint(
-        n_sexes=n_sexes,
-        n_ages=n_ages,
-        n_ztypes=0,
-        n_gtypes=0,
-        n_glabs=0,
-        new_adult_age=0,
-        adult_ages=frozen(np.zeros(0, dtype=np.int64)),
-        stochastic=False,
-        continuous_sampling=False,
-        fixed_egg_count=False,
-        has_sex_chromosomes=False,
-        extreme_speed_mode=0,
-        ztype_names=(),
-        gtype_names=(),
-        female_only_by_sex_chrom=frozen(np.zeros(0, dtype=np.bool_)),
-        male_only_by_sex_chrom=frozen(np.zeros(0, dtype=np.bool_)),
-        initial_individual_count=frozen(np.zeros((0,), dtype=np.float64)),
-        initial_sperm_storage=frozen(np.zeros((0,), dtype=np.float64)),
-        n_demes=n_demes,
-        # np.array (not asarray): the CSR inputs are already int64/float64,
-        # so asarray would return the CALLER's buffers — freezing those
-        # would both pollute the caller and leave the blueprint mutable
-        # through any holder that re-enables the write flag.
-        migration_indptr=frozen(np.array(migration_csr.indptr, dtype=np.int64)),
-        migration_dest_idx=frozen(np.array(migration_csr.dest_idx, dtype=np.int64)),
-        migration_weights=frozen(np.array(migration_csr.weights, dtype=np.float64)),
-    )
-    params = Params(
-        carrying_capacity=0.0,
-        eggs_per_female=0.0,
-        sex_ratio=0.5,
-        sperm_displacement_rate=0.0,
-        low_density_growth_rate=0.0,
-        growth_mode=0,
-        external_expected_eggs=-1.0,
-        survival_rates=np.zeros((n_sexes, n_ages), dtype=np.float64),
-        mating_rates=np.zeros((n_sexes, n_ages), dtype=np.float64),
-        reproduction_rates=np.zeros(n_ages, dtype=np.float64),
-        fertility=np.zeros(n_ages, dtype=np.float64),
-        competition_weights=np.zeros(n_ages, dtype=np.float64),
-        equilibrium_distribution=np.zeros((0, 0), dtype=np.float64),
-        viability_fitness=np.zeros((0,), dtype=np.float64),
-        fecundity_fitness=np.zeros((0,), dtype=np.float64),
-        sexual_selection_fitness=np.zeros((0,), dtype=np.float64),
-        zygote_viability_fitness=np.zeros((0,), dtype=np.float64),
-        offspring_tensor=np.zeros((0,), dtype=np.float64),
-        meiosis_map=np.zeros((0,), dtype=np.float64),
-        female_ztype_compatibility=np.zeros((0,), dtype=np.float64),
-        male_ztype_compatibility=np.zeros((0,), dtype=np.float64),
-        migration_rate=rate3d,
-    )
-    return blueprint, params
+if TYPE_CHECKING:
+    # Static drift guards (never evaluated): assigning the class objects to
+    # ``type[PopulationView]`` makes pyright verify every aligned member on
+    # both sides of the deme/population alignment.
+    _population_view_check: type[PopulationView] = BasePopulation[PopulationState]
+    _discrete_view_check: type[PopulationView] = BasePopulation[DiscretePopulationState]
+    _slice_view_check: type[PopulationView] = DemeSlice
 
 
-# Draft field -> contract column name for the runtime ecology fields a
-# Python hook may write through its TickContext (migration_rate has its
-# own dedicated channel and is excluded).
-_ECO_DRAFT_TO_COLUMN: tuple[tuple[str, str], ...] = (
-    ("carrying_capacity", "carrying_capacity"),
-    ("eggs_per_female", "eggs_per_female"),
-    ("sex_ratio", "sex_ratio"),
-    ("sperm_displacement_rate", "sperm_displacement_rate"),
-    ("low_density_growth_rate", "low_density_growth_rate"),
-    ("juvenile_growth_mode", "growth_mode"),
-    ("external_expected_eggs", "external_expected_eggs"),
-    ("age_based_survival_rates", "survival_rates"),
-    ("age_based_mating_rates", "mating_rates"),
-    ("age_based_reproduction_rates", "reproduction_rates"),
-    ("female_age_based_fertility", "fertility"),
-    ("age_based_relative_competition_strength", "competition_weights"),
-)
-
+# Contract ecology columns (migration_rate has its own dedicated channel
+# and reads through the live Params array instead of a derived column).
 _ECOLOGY_COLUMN_FIELDS: frozenset[str] = frozenset(
     {
         "carrying_capacity",
@@ -476,12 +484,12 @@ _GENETICS_DRAFT_FIELDS: dict[str, str] = {
 class SpatialParamsView:
     """Validated spatial runtime-parameter surface (stage-3 columns).
 
-    Reads return write-protected views of the live ``(n_demes, ...)``
-    ecology columns (engines see updates immediately).  Writes go through
-    :meth:`SpatialParamsView.tensor_write`, which validates the shape and
-    then routes the per-deme values through the deme write channel, so the
-    columns, the deme drafts, and the Rust session's ecology columns stay
-    in lockstep.
+    Reads derive each ecology column on demand from its single authority —
+    the live session when one exists, otherwise the deme drafts — so a
+    write is visible on the next read without mirror bookkeeping.  Writes
+    go through :meth:`SpatialParamsView.tensor_write`, which validates the
+    shape and then routes the per-deme values through the deme write
+    channel (draft declaration plus, when enabled, the session column).
     """
 
     def __init__(self, pop: SpatialPopulation) -> None:
@@ -493,27 +501,25 @@ class SpatialParamsView:
         self._pop = pop
 
     def __getattr__(self, name: str) -> NDArray[np.float64]:
-        """Read-protected view of one ecology column (or raise).
+        """Read-protected view of one derived ecology column (or raise).
 
         Args:
             name: Contract ecology field name.
 
         Returns:
             A write-protected ``(n_demes, ...)`` column view.
+
+        Raises:
+            KeyError: If *name* is a contract field with no derived column.
+            AttributeError: If *name* is not an ecology column at all.
         """
-        columns = self._pop._ecology_columns  # pyright: ignore[reportPrivateUsage]  # column read channel
-        if name in columns:
-            backend = getattr(self._pop, "_rust_spatial_backend", None)
-            if backend is not None:
-                values = np.asarray(backend.ecology_columns_snapshot()[name], dtype=np.float64)
-                arr = values if name == "equilibrium_distribution" else values.reshape(columns[name].shape)
-            else:
-                arr = columns[name].copy()
-            readonly = arr.view()
+        if name in _ECOLOGY_COLUMN_FIELDS or name == "equilibrium_declared":
+            column = self._pop._derive_ecology_column(name)  # pyright: ignore[reportPrivateUsage]  # column derivation is container-owned
+            if column is None:
+                raise KeyError(f"ecology column {name!r} is not materialized")
+            readonly = column.view()
             readonly.flags.writeable = False
             return readonly
-        if name in _ECOLOGY_COLUMN_FIELDS:
-            raise KeyError(f"ecology column {name!r} is not materialized")
         raise AttributeError(name)
 
     @property
@@ -586,8 +592,7 @@ class SpatialParamsView:
 
         if field not in _ECOLOGY_COLUMN_FIELDS:
             raise ValueError(f"unknown spatial params field {field!r}")
-        columns = self._pop._ecology_columns  # pyright: ignore[reportPrivateUsage]  # column write channel
-        column = columns.get(field)
+        column = self._pop._derive_ecology_column(field)  # pyright: ignore[reportPrivateUsage]  # shape anchor derives from the owning authority
         if column is None:
             raise ValueError(f"ecology column {field!r} is not materialized")
         column_arr = np.asarray(column)
@@ -625,7 +630,7 @@ class SpatialPopulation:
 
     Attributes:
         name (str): Human-readable name for the spatial container.
-        demes (Sequence[DemePopulation]): Immutable view of managed demes.
+        demes (Sequence[DemeSlice]): Immutable view of aligned per-deme slices.
         n_demes (int): Number of demes in the spatial system.
         species (object): Shared species object used by all demes.
         topology (GridTopology | None): Spatial topology used by the landscape.
@@ -884,39 +889,23 @@ class SpatialPopulation:
         )
         self._migration_csr = migration_csr
         rate3d = np.tile(rate_2d, (n_demes, 1, 1))
-        try:
-            draft = self._export_reference_draft()
-        except TypeError:
-            # Lightweight test doubles may not implement ``export_config``;
-            # the contract pair degrades to the shape-level minimum while
-            # the CSR and rate column stay fully functional.
-            self._blueprint, self._params = _minimal_contract(
-                n_demes=n_demes,
-                n_sexes=rate_2d.shape[0],
-                n_ages=rate_2d.shape[1],
-                migration_csr=migration_csr,
-                rate3d=rate3d,
-            )
-        else:
-            self._blueprint, self._params = materialize(
-                draft,
-                SpatialMigration(
-                    indptr=migration_csr.indptr,
-                    dest_idx=migration_csr.dest_idx,
-                    weights=migration_csr.weights,
-                    rate=rate3d,
-                ),
-            )
+        self._blueprint, self._params = materialize(
+            self._export_reference_draft(),
+            SpatialMigration(
+                indptr=migration_csr.indptr,
+                dest_idx=migration_csr.dest_idx,
+                weights=migration_csr.weights,
+                rate=rate3d,
+            ),
+        )
         # Spatial container and all demes share one logical tick counter.
         self._tick = int(self._demes[0].tick)
-
-        # -- stage-3 ecology columns (contract name -> column array) --------
-        # Every ecology field lives as an (n_demes, ...) column on this
-        # container.  The migration-rate entry shares the live Params array
-        # (never a copy), so engines reading pop._params.migration_rate see
-        # column writes zero-copy.  Deme-slice ecology writes keep the
-        # columns and the deme drafts in lockstep.
-        self._ecology_columns = self._collect_ecology_columns()
+        # Lifecycle model the session will run; re-read at the session
+        # handoff, and probed once here so deme-scoped count shaping is a
+        # declared attribute from construction on.
+        self._session_model: Literal["age_structured", "discrete_generation"] = (
+            "discrete_generation" if self._is_discrete_demes() else "age_structured"
+        )
 
         # Observation-based history recording.
         self._observation: Optional[Observation] = None
@@ -943,9 +932,8 @@ class SpatialPopulation:
     def _rate_axes(self, n_demes: int) -> tuple[int, int, int]:
         """Resolve ``(n_sexes, n_ages, adult_start_age)`` for the rate column.
 
-        Prefers the reference deme's draft (authoritative build-time
-        axes); falls back to the state tensor shape for lightweight test
-        doubles without a draft.
+        The reference deme's draft is the authoritative build-time axes
+        source; every managed deme declares one.
 
         Args:
             n_demes: Number of demes (unused by the resolution itself;
@@ -959,14 +947,8 @@ class SpatialPopulation:
         """
         if n_demes < 1:
             raise ValueError("n_demes must be >= 1")
-        export_fn = getattr(self._demes[0], "export_config", None)
-        if callable(export_fn):
-            draft = cast(ModelDraft, export_fn())
-            return int(draft.n_sexes), int(draft.n_ages), int(draft.new_adult_age)
-        ind = self._demes[0]._live_state().individual_count  # pyright: ignore[reportPrivateUsage]  # orchestration consumer
-        if ind.ndim == 3:
-            return int(ind.shape[0]), int(ind.shape[1]), (1 if ind.shape[1] > 1 else 0)
-        return 2, 1, 0
+        draft = self._export_reference_draft()
+        return int(draft.n_sexes), int(draft.n_ages), int(draft.new_adult_age)
 
     def _export_reference_draft(self) -> ModelDraft:
         """Return deme 0's exported draft as the spatial contract reference.
@@ -1140,11 +1122,12 @@ class SpatialPopulation:
     def deme(self, idx: int) -> DemeSlice:
         """Return one deme slice by positional index.
 
-        The slice delegates every read to the underlying deme population
-        (``config``, ``state``, ``registry``, …), so deep read interfaces
-        stay fully compatible.  Writes go through the stage-3 channels:
-        :meth:`DemeSlice.write_ecology` (column + draft + Rust session)
-        and :meth:`DemeSlice.write_genetics` (variant fork).
+        The slice exposes the aligned population surface (declaration
+        reads, count/export queries, ``update()``) plus ``index``,
+        ``write_ecology``, and ``write_genetics``; every member resolves
+        against the parent session.  Unlisted members raise
+        ``AttributeError`` — lifecycle, history, and observation controls
+        belong to the container.
 
         Args:
             idx: Zero-based deme index.
@@ -1169,53 +1152,79 @@ class SpatialPopulation:
         """
         return self._demes[idx]
 
-    # -- stage-3 write channels (ecology columns + genetics fork) --------
+    # -- derived ecology columns + write channels ------------------------------
 
-    def _collect_ecology_columns(self) -> dict[str, NDArray[np.float64]]:
-        """Gather the (n_demes, ...) ecology columns from the deme drafts.
+    def _derive_ecology_column(self, name: str) -> NDArray[np.float64] | None:
+        """Derive one ``(n_demes, ...)`` ecology column on demand.
 
-        The migration-rate entry shares the live Params array (zero-copy),
-        and every other column is a fresh gather.  Lightweight deme
-        doubles without ``export_config`` degrade to the migration-rate
-        column only.
+        The session is the column authority when one is enabled; without
+        a session the deme drafts (the declaration-side authority before
+        the build handoff) are gathered with the same boundary function
+        the session construction uses.  Nothing is cached, so a write is
+        visible on the next read with no mirror bookkeeping.
+
+        Args:
+            name: Contract ecology column name.
 
         Returns:
-            The ecology column mapping keyed by contract field name.
+            The float64 column (logical shape for vector fields), or
+            ``None`` when the name has no column representation.
         """
-        n_demes = len(self._demes)
-        columns: dict[str, NDArray[np.float64]] = {}
-        try:
-            from natal.backends.rust.rust_backend import ecology_columns_from_drafts
-
-            drafts = self._export_deme_drafts(compact=True)
-            columns.update(
-                {
-                    name: np.asarray(column_values, dtype=np.float64)
-                    for name, column_values in ecology_columns_from_drafts(
-                        drafts
-                    ).items()
-                }
+        backend = self._rust_spatial_session()
+        if backend is not None:
+            backend_obj = cast(
+                "RustHeterogeneousSpatialLifecycleBackend", backend
             )
-            # Reshape the session-boundary flat columns to their logical
-            # ``(n_demes, *per_deme)`` shapes so reads and writes see the
-            # contract's dimensionality.
-            for name, draft_field in _ECOLOGY_DRAFT_FIELDS.items():
-                column = columns.get(name)
-                if column is None or column.ndim != 1:
-                    continue
-                first = getattr(drafts[0], draft_field, None)
-                if first is None or np.asarray(first).ndim == 0:
-                    continue
-                per_deme: tuple[int, ...] = np.asarray(first).shape
-                if column.size == n_demes * int(np.prod(per_deme)):
-                    columns[name] = column.reshape((n_demes,) + per_deme)
+            snapshot = backend_obj.ecology_columns_snapshot()
+            if name not in snapshot:
+                return None
+            values = np.asarray(snapshot[name], dtype=np.float64)
+            # The declared/derived equilibrium column keeps the session's
+            # flat layout; every other columnized field reshapes to the
+            # contract's dimensionality anchored on the reference draft.
+            if name == "equilibrium_distribution":
+                return values
+            per_deme = self._ecology_per_deme_shape(name)
+            if per_deme is not None:
+                return values.reshape((self.n_demes,) + per_deme)
+            return values
+
+        from natal.backends.rust.rust_backend import ecology_columns_from_drafts
+
+        try:
+            drafts = self._export_deme_drafts(compact=True)
         except TypeError:
-            # Lightweight test doubles: keep only the shared rate column.
-            pass
-        columns["migration_rate"] = np.asarray(
-            self._params.migration_rate, dtype=np.float64
-        )
-        return columns
+            return None
+        gathered = ecology_columns_from_drafts(drafts)
+        if name not in gathered:
+            return None
+        column = np.asarray(gathered[name], dtype=np.float64)
+        per_deme = self._ecology_per_deme_shape(name)
+        if (
+            column.ndim == 1
+            and per_deme is not None
+            and column.size == self.n_demes * int(np.prod(per_deme))
+        ):
+            return column.reshape((self.n_demes,) + per_deme)
+        return column
+
+    def _ecology_per_deme_shape(self, name: str) -> tuple[int, ...] | None:
+        """Return one ecology field's per-deme logical shape, or ``None``.
+
+        Args:
+            name: Contract ecology column name.
+
+        Returns:
+            The per-deme shape for vector fields; ``None`` for scalar or
+            non-draft columns (flat ``(n_demes,)`` layout).
+        """
+        draft_field = _ECOLOGY_DRAFT_FIELDS.get(name)
+        if draft_field is None or not self._demes:
+            return None
+        first = getattr(self._demes[0].config, draft_field, None)
+        if first is None or np.asarray(first).ndim == 0:
+            return None
+        return tuple(np.asarray(first).shape)
 
     def _rust_spatial_session(self) -> object | None:
         """Return the enabled Rust spatial backend, or ``None``.
@@ -1273,12 +1282,14 @@ class SpatialPopulation:
     def _write_deme_ecology(
         self, deme_index: int, field: str, value: float | NDArray[np.float64]
     ) -> None:
-        """Write one ecology value for one deme (column + draft + Rust).
+        """Write one ecology value for one deme (draft declaration + session).
 
-        The write lands in three synchronized places: the deme's draft
-        (per-field clone-on-write, equilibrium metrics re-synced), the
-        container's ecology column, and — when the Rust backend is
-        enabled — the session's per-deme ecology column.
+        The session is the runtime authority: when enabled, the value is
+        pushed into the deme's native ecology column.  The deme's draft
+        (declaration side) is updated per-field with clone-on-write so
+        session-less reads and later materializations see the same value.
+        Python readers derive columns on demand, so no column mirror is
+        written here.
 
         Args:
             deme_index: Zero-based deme index.
@@ -1308,15 +1319,6 @@ class SpatialPopulation:
 
         # The equilibrium metrics are derived on read (the stored copies
         # are retired), so no post-write refresh is needed here.
-
-        column = self._ecology_columns.get(field)
-        if column is not None and field != "migration_rate":
-            column_arr = np.asarray(column)
-            if column_arr.ndim == 1 and column_arr.size == self.n_demes:
-                column_arr[deme_index] = value
-            else:
-                flat = column_arr.reshape(self.n_demes, -1)
-                flat[deme_index] = np.asarray(value, dtype=np.float64).ravel()
 
         backend = self._rust_spatial_session()
         if backend is not None and field != "migration_rate":
@@ -1593,45 +1595,31 @@ class SpatialPopulation:
     def _restore_from_rust_checkpoint(
         self, backend: RustHeterogeneousSpatialLifecycleBackend, tick: int
     ) -> bool:
-        """Restore the full runtime from the session checkpoint store.
+        """Restore the runtime from the session checkpoint store.
+
+        The session is the single authority, so restore is the native
+        rollback (state, RNG, ecology columns, execution status) plus
+        derived-cache invalidation: every managed deme's Python state
+        cache is marked stale and re-derived from the deme's native plane
+        on the next read, and the deme ``config`` read projects the
+        restored columns.  Only the live migration-rate contract array —
+        a stable Python-side view with an identity contract — is copied
+        back explicitly.
 
         Args:
             backend: The live spatial backend.
             tick: Target tick.
 
         Returns:
-            ``True`` when a checkpoint covered *tick* (the runtime, the
-            ecology columns, the deme drafts, and the caches are rewound);
-            ``False`` when no checkpoint covers *tick* (untouched).
+            ``True`` when a checkpoint covered *tick*; ``False`` when no
+            checkpoint covers *tick* (the runtime is untouched).
         """
         restored_tick = backend.restore_from_checkpoint(int(tick))
         if restored_tick is None:
             return False
-        # Roll the Python-side mirrors back to the checkpoint: container
-        # columns first, then the per-deme drafts that project them.  The
-        # snapshot columns are flat while the container columns carry their
-        # logical (n_demes, ...) shape — roll by size and refuse unknown
-        # shapes loudly rather than silently leaving a stale column.
-        columns = backend.ecology_columns_snapshot()
-        for name, column in columns.items():
-            if name == "migration_rate":
-                continue  # dedicated live contract array, rolled below
-            local = self._ecology_columns.get(name)
-            if local is None:
-                continue  # not a materialized container column
-            target = np.asarray(local)
-            flat = np.asarray(column, dtype=np.float64)
-            if name == "equilibrium_distribution":
-                self._ecology_columns[name] = flat.copy()
-                continue
-            if target.size != flat.size:
-                raise ValueError(
-                    f"checkpoint rollback: ecology column {name!r} size "
-                    f"{flat.size} does not fit the container column size "
-                    f"{target.size}"
-                )
-            local[...] = flat.reshape(target.shape)
-        rate = np.asarray(columns["migration_rate"], dtype=np.float64)
+        rate = np.asarray(
+            backend.ecology_columns_snapshot()["migration_rate"], dtype=np.float64
+        )
         if self._params.migration_rate.size == rate.size:
             self._params.migration_rate[...] = rate.reshape(
                 self._params.migration_rate.shape
@@ -1642,57 +1630,28 @@ class SpatialPopulation:
                 f"{rate.size} does not fit the contract array "
                 f"{self._params.migration_rate.size}"
             )
-        n_demes = len(self._demes)
-        for deme_id, deme in enumerate(self._demes):
-            self._rollback_deme_draft(deme, columns, deme_id, restored_tick)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
-        # The checkpoint carries the shared execution status: every managed
-        # deme projects it through the owning session's read channels, so
-        # ``deme.is_finished``/``is_failed`` follow the restore with no
-        # per-deme flag reconciliation.
-        # The session state was rewound: refresh the deme caches from it.
-        self._rust_states_dirty = True
-        self._ensure_rust_states_fresh()
-        assert self._tick == restored_tick  # noqa: S101 — the refresh installs the restored tick
-        assert n_demes == len(self._demes)  # noqa: S101 — deme set is fixed at build
+        # The checkpoint carries the shared execution status and clock:
+        # every managed deme projects them through the owning session's
+        # read channels, so ``deme.tick``/``is_finished``/``is_failed``
+        # follow the restore with no per-deme flag reconciliation.  The
+        # Python state caches are published metadata only; invalidate them
+        # and let the per-deme readers re-derive on demand.
+        self._tick = int(restored_tick)
+        self._invalidate_deme_states()
+        for deme in self._demes:
+            deme._tick = int(restored_tick)  # pyright: ignore[reportPrivateUsage]  # container restores the shared clock
         return True
 
-    def _rollback_deme_draft(
-        self,
-        deme: BasePopulation[Any],
-        columns: dict[str, NDArray[Any]],
-        deme_id: int,
-        tick: int,
-    ) -> None:
-        """Write the checkpoint ecology values back into one deme draft."""
-        n_demes = len(self._demes)
-        draft = deme.config
-        updates: dict[str, object] = {}
-        for draft_field, column_name in _ECO_DRAFT_TO_COLUMN:
-            column = np.asarray(columns[column_name])
-            if column.ndim == 1 and column.size == n_demes:
-                updates[draft_field] = float(column[deme_id])
-                continue
-            per_deme = column.reshape(n_demes, -1)[deme_id]
-            # Reshape back to the draft field's logical extent.
-            current = cast(
-                "NDArray[np.float64]", np.asarray(getattr(draft, draft_field))
-            )
-            if current.size == per_deme.size:
-                updates[draft_field] = per_deme.reshape(current.shape)
-        new_draft = draft
-        for field, value in updates.items():
-            current_value = cast(
-                "NDArray[np.float64] | float | None",
-                getattr(new_draft, field, None),
-            )
-            if isinstance(current_value, np.ndarray) and isinstance(value, np.ndarray):
-                new_draft = new_draft._replace(
-                    **{field: value.reshape(current_value.shape)}
-                )
-            else:
-                new_draft = new_draft._replace(**{field: value})
-        deme.set_config(new_draft)
-        deme._tick = int(tick)  # pyright: ignore[reportPrivateUsage]  # container restores the shared clock
+    def _invalidate_deme_states(self) -> None:
+        """Mark every managed deme's derived state cache stale.
+
+        The session owns the authoritative state; a stale cache is
+        re-derived from the deme's native plane at the next read.  The
+        flag write is the whole contract, so lightweight duck-typed deme
+        hosts (which share the flag shape) invalidate uniformly.
+        """
+        for deme in self._demes:
+            deme._state_cache_stale = True  # pyright: ignore[reportPrivateUsage]  # owning container invalidates the derived deme caches
 
     @property
     def hooks(self) -> HookProgram:
@@ -1882,19 +1841,75 @@ class SpatialPopulation:
             return self._demes[deme_id].trigger_event(event_name, deme_id)
         return 0  # RESULT_CONTINUE
 
+    def _native_deme_counts(self, deme_index: int) -> tuple[float, float, float] | None:
+        """Return one deme's native ``(total, female, male)`` sums, or ``None``.
+
+        The sums are computed natively over the session's authoritative
+        state — no state array is exported.  ``None`` means the query
+        must fall back to the deme slot's own (cache-based) reads: no
+        session exists, or a container run currently holds the session
+        borrow (managed demes degrade to last-published values).
+
+        Args:
+            deme_index: Zero-based deme index.
+        """
+        if getattr(self, "_running", False):
+            return None
+        backend = self._rust_spatial_session()
+        if backend is None:
+            return None
+        backend_obj = cast("RustHeterogeneousSpatialLifecycleBackend", backend)
+        counts = backend_obj.counts(deme_index)
+        if self._session_model == "discrete_generation":
+            # Discrete deme queries round to whole individuals per deme
+            # before any cross-deme summation (historical contract).
+            return (
+                float(int(round(counts[0]))),
+                float(int(round(counts[1]))),
+                float(int(round(counts[2]))),
+            )
+        return counts
+
+    def _native_all_deme_counts(self) -> List[tuple[float, float, float]] | None:
+        """Return per-deme native count rows in deme order, or ``None``.
+
+        Returns:
+            One ``(total, female, male)`` row per deme, or ``None`` when
+            any deme cannot be answered natively (session-less or inside
+            a container run).
+        """
+        rows: List[tuple[float, float, float]] = []
+        for deme_index in range(self.n_demes):
+            row = self._native_deme_counts(deme_index)
+            if row is None:
+                return None
+            rows.append(row)
+        return rows
+
     def get_total_count(self) -> int:
-        """Return the total count across all demes."""
-        self._ensure_rust_states_fresh()
+        """Return the total count across all demes.
+
+        Summed natively per deme over the session state when available;
+        the evaluation order (per-deme sums, then a Python sum across
+        demes) matches the historical cache-based query bitwise.
+        """
+        native = self._native_all_deme_counts()
+        if native is not None:
+            return int(sum(row[0] for row in native))
         return int(sum(deme.get_total_count() for deme in self._demes))
 
     def get_female_count(self) -> int:
         """Return the total female count across all demes."""
-        self._ensure_rust_states_fresh()
+        native = self._native_all_deme_counts()
+        if native is not None:
+            return int(sum(row[1] for row in native))
         return int(sum(deme.get_female_count() for deme in self._demes))
 
     def get_male_count(self) -> int:
         """Return the total male count across all demes."""
-        self._ensure_rust_states_fresh()
+        native = self._native_all_deme_counts()
+        if native is not None:
+            return int(sum(row[2] for row in native))
         return int(sum(deme.get_male_count() for deme in self._demes))
 
     def reset(self) -> None:
@@ -1916,7 +1931,7 @@ class SpatialPopulation:
             backend.reseed(int(self._rust_spatial_seed or 0))
             backend.clear_checkpoints()
             self._tick = 0
-            self._rust_states_dirty = True
+            self._invalidate_deme_states()
             for deme in self._demes:
                 deme._tick = 0  # pyright: ignore[reportPrivateUsage]  # metadata follows the shared native clock
         # set_state restored the shared Ready boundary, so deme
@@ -1927,8 +1942,16 @@ class SpatialPopulation:
             history_obj.clear()
 
     def aggregate_individual_count(self) -> NDArray[np.float64]:
-        """Return the total individual-count tensor summed over all demes."""
-        self._ensure_rust_states_fresh()
+        """Return the total individual-count tensor summed over all demes.
+
+        The session owns the stacked state, so the aggregate reads the
+        native stacked array directly and sums the deme axis — no
+        per-deme cache refresh and no re-stacking.
+        """
+        stacked = self._native_stacked_state()
+        if stacked is not None:
+            _tick, ind_all, _sperm_all = stacked
+            return np.sum(ind_all, axis=0)
         return np.sum(
             np.stack([deme.state.individual_count for deme in self._demes], axis=0),
             axis=0,
@@ -2001,18 +2024,22 @@ class SpatialPopulation:
     def _stack_deme_state_arrays(
         self,
     ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
-        """Stack per-deme state arrays along a new deme axis.
+        """Return the stacked ``(ind_all, sperm_all)`` state planes.
 
-        Returns:
-            A tuple ``(ind_all, sperm_all)`` where each array has deme as its
-            leading axis.
+        With a live session the stacked state is read directly from the
+        native owner (it is already stacked there — no per-deme caches
+        are refreshed or re-stacked).  Without a session the deme caches
+        are the build-time declarations and are stacked locally.
 
         Note:
             Discrete-generation demes may not expose sperm storage. In that
-            case this method synthesizes zero-valued storage arrays with a
-            shape compatible with the deme's age/genotype dimensions.
+            case the local branch synthesizes zero-valued storage arrays
+            with a shape compatible with the deme's age/genotype dimensions.
         """
-        self._ensure_rust_states_fresh()
+        stacked = self._native_stacked_state()
+        if stacked is not None:
+            _tick, ind_all, sperm_all = stacked
+            return ind_all, sperm_all
         ind_all = np.stack(
             [deme.state.individual_count for deme in self._demes], axis=0
         )
@@ -2033,33 +2060,35 @@ class SpatialPopulation:
         sperm_all = np.stack(sperm_list, axis=0)
         return ind_all, sperm_all
 
-    def _apply_stacked_state(
-        self, ind_all: NDArray[np.float64], sperm_all: NDArray[np.float64], tick: int
-    ) -> None:
-        """Write one stacked spatial state back into each managed deme.
+    def _native_stacked_state(self) -> SpatialStateTuple | None:
+        """Read the session-owned stacked state ``(tick, ind, sperm)``, or ``None``.
 
-        Args:
-            ind_all: Stacked individual-count array with deme as the first axis.
-            sperm_all: Stacked sperm-storage array with deme as the first axis.
-            tick: Tick value to assign to each deme and this container.
+        The native arrays are reshaped to their logical stacked shapes.
+        ``None`` means no session exists yet (the local deme caches stay
+        the build-time authority until the session handoff).
 
         Note:
-            This method is the only write-back point from stacked kernel state
-            into per-deme objects. Keeping it centralized helps preserve tick
-            synchronization invariants.
+            During a container run the session borrow is held, so this
+            reader is not consulted on that path (callers fall back to
+            the last-published caches).
         """
-        for deme_id, deme in enumerate(self._demes):
-            new_fields = {
-                "n_tick": int(tick),
-                "individual_count": ind_all[deme_id],
-            }
-            if hasattr(deme.state, "sperm_storage"):
-                new_fields["sperm_storage"] = sperm_all[deme_id]
-
-            # Replace immutable state tuple and keep mirror tick fields aligned.
-            deme._state = deme._live_state()._replace(**new_fields)  # type: ignore[attr-defined]  # duck-typed deme doubles carry the same container shape
-            deme._tick = int(tick)  # pyright: ignore[reportPrivateUsage]  # owning container publishes snapshot metadata
-        self._tick = int(tick)
+        if getattr(self, "_running", False):
+            return None
+        backend = self._rust_spatial_session()
+        if backend is None:
+            return None
+        backend_obj = cast("RustHeterogeneousSpatialLifecycleBackend", backend)
+        tick, ind_flat, sperm_flat = backend_obj.state_snapshot()
+        n_demes = len(self._demes)
+        n_ages = int(self._blueprint.n_ages)
+        n_ztypes = int(self._blueprint.n_ztypes)
+        ind_all = np.asarray(ind_flat, dtype=np.float64).reshape(
+            n_demes, 2, n_ages, n_ztypes
+        )
+        sperm_all = np.asarray(sperm_flat, dtype=np.float64).reshape(
+            n_demes, n_ages, n_ztypes, n_ztypes
+        )
+        return int(tick), ind_all, sperm_all
 
     def _shared_config(self) -> ConfigObject:
         """Return one shared config for spatial kernels.
@@ -2335,10 +2364,11 @@ class SpatialPopulation:
         )
         from natal.backends.rust.rust_backend import RustDemeParameters
 
+        self._session_model = model
         for index, deme in enumerate(self._demes):
             channel = RustDemeParameters(self._rust_spatial_backend, index, self._invalidate_rust_states, self._prepare_explicit_event)
             channel.set_custom_slots(custom_slots[index])
-            deme._runtime_state_reader = self._ensure_rust_states_fresh  # pyright: ignore[reportPrivateUsage]  # retained deme objects share the owning session's lazy read boundary
+            deme._runtime_state_reader = self._make_deme_state_reader(index)  # pyright: ignore[reportPrivateUsage]  # the deme's cache derives from its own native plane on demand
             deme._runtime_config_reader = channel.config_snapshot  # pyright: ignore[reportPrivateUsage]  # owning container binds the native read projection
             deme._runtime_parameter_writer = channel  # pyright: ignore[reportPrivateUsage]  # owning container binds the native write channel
             # Lifecycle status and tick project the shared spatial session:
@@ -2349,7 +2379,6 @@ class SpatialPopulation:
             deme._runtime_tick_reader = channel.current_tick  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # duck-typed deme hosts share the owning session's clock
             deme._rust_lifecycle_backend = None  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # ownership was transferred; no second standalone session may remain. The backend attribute is subclass-owned (no base declaration), so this lone None write needs the access rule.
         self._rust_spatial_seed = seed
-        self._rust_states_dirty = False
         self._rust_needs_rebuild = False
         # The fresh session already carries every deme's hook structure;
         # stale per-deme panmictic flags must not re-trigger rebuilds.
@@ -2358,6 +2387,64 @@ class SpatialPopulation:
         if self._has_python_hooks():
             self._register_spatial_rust_callbacks(self._rust_spatial_backend)
         return self
+
+    def _make_deme_state_reader(self, deme_index: int) -> Callable[[], None]:
+        """Build the lazy per-deme state projection for one managed deme.
+
+        The returned reader refreshes the deme's Python state cache from
+        the deme's own native plane when (and only when) the cache is
+        stale — never the whole stacked state, and never the other demes'
+        planes.  During a container run (or without a session) it is a
+        no-op, so reads degrade to the last-published cache values
+        instead of touching the borrowed session.
+
+        Args:
+            deme_index: Zero-based deme index the reader serves.
+
+        Returns:
+            A zero-argument reader suitable for ``_runtime_state_reader``.
+        """
+        def refresh() -> None:
+            deme = self._demes[deme_index]
+            if not getattr(deme, "_state_cache_stale", False):
+                return
+            if getattr(self, "_running", False):
+                return
+            backend = self._rust_spatial_session()
+            if backend is None:
+                return
+            backend_obj = cast("RustHeterogeneousSpatialLifecycleBackend", backend)
+            tick, ind_flat, sperm_flat = backend_obj.state_snapshot_deme(deme_index)
+            state = deme._state  # pyright: ignore[reportPrivateUsage]  # same-package slot access; the cache is the projection target
+            if state is None:
+                return
+            n_ages = int(self._blueprint.n_ages)
+            n_ztypes = int(self._blueprint.n_ztypes)
+            new_fields: dict[str, object] = {
+                "n_tick": int(tick),
+                "individual_count": np.asarray(ind_flat, dtype=np.float64).reshape(
+                    2, n_ages, n_ztypes
+                ),
+            }
+            if hasattr(state, "sperm_storage"):
+                new_fields["sperm_storage"] = np.asarray(
+                    sperm_flat, dtype=np.float64
+                ).reshape(n_ages, n_ztypes, n_ztypes)
+            deme._state = state._replace(**new_fields)  # type: ignore[attr-defined]  # NamedTuple._replace is not static per state type
+            deme._tick = int(tick)  # pyright: ignore[reportPrivateUsage]  # the refreshed plane carries the session clock
+            deme._state_cache_stale = False  # pyright: ignore[reportPrivateUsage]  # the derived cache matches the session again
+
+        return refresh
+
+    def _refresh_deme_state(self, deme_index: int) -> None:
+        """Demand-refresh one deme's derived state cache from the session.
+
+        Public slice readers call this before handing out deme state so
+        the value reflects the owning session's current plane.
+        """
+        reader = self._demes[deme_index]._runtime_state_reader  # pyright: ignore[reportPrivateUsage]  # the injected per-deme projection
+        if reader is not None:
+            reader()
 
     def _register_spatial_rust_callbacks(
         self, backend: RustHeterogeneousSpatialLifecycleBackend
@@ -2457,32 +2544,8 @@ class SpatialPopulation:
         self._bind_history_recording(backend)
 
     def _invalidate_rust_states(self) -> None:
-        """Invalidate every deme snapshot after a native explicit event."""
-        self._rust_states_dirty = True
-
-    def _ensure_rust_states_fresh(self) -> None:
-        """Refresh the per-deme state caches from the session snapshot.
-
-        One bulk snapshot per boundary: the session owns the authoritative
-        stacked state, and the tick boundary (or an explicit reader guard)
-        pulls it once instead of Python shuttling arrays through every
-        tick.  Idempotent: a no-op when the caches already match.
-        """
-        backend = getattr(self, "_rust_spatial_backend", None)
-        if backend is None or not getattr(self, "_rust_states_dirty", False):
-            return
-        tick, ind_flat, sperm_flat = backend.state_snapshot()
-        n_demes = len(self._demes)
-        n_ages = int(self._blueprint.n_ages)
-        n_ztypes = int(self._blueprint.n_ztypes)
-        ind_all = np.asarray(ind_flat, dtype=np.float64).reshape(
-            n_demes, 2, n_ages, n_ztypes
-        )
-        sperm_all = np.asarray(sperm_flat, dtype=np.float64).reshape(
-            n_demes, n_ages, n_ztypes, n_ztypes
-        )
-        self._rust_states_dirty = False
-        self._apply_stacked_state(ind_all, sperm_all, int(tick))
+        """Invalidate every derived deme state cache after a native change."""
+        self._invalidate_deme_states()
 
     def _run_rust_spatial_steps(
         self,
@@ -2490,7 +2553,13 @@ class SpatialPopulation:
         record_every: int,
         clear_history_on_start: bool,
     ) -> bool:
-        """Run multiple spatial ticks through the Rust backend with recording."""
+        """Run multiple spatial ticks through the Rust backend with recording.
+
+        The run window is published on every managed deme
+        (``_rust_run_active``): lifecycle/config/state reads that arrive
+        from inside a callback degrade to last-published values instead
+        of touching the session borrow.
+        """
         if clear_history_on_start:
             self.clear_history()
         if getattr(self, "_rust_spatial_backend", None) is None:
@@ -2501,11 +2570,17 @@ class SpatialPopulation:
         # Observation selector, history ownership, and the checkpoint
         # pruner bind once per (container, History); later runs skip.
         self._bind_history_recording(backend)
-        tick, stopped = backend.run_steps(n_steps, record_every)
+        for deme in self._demes:
+            deme._rust_run_active = True  # pyright: ignore[reportPrivateUsage]  # container publishes the run window on its demes
+        try:
+            tick, stopped = backend.run_steps(n_steps, record_every)
+        finally:
+            for deme in self._demes:
+                deme._rust_run_active = False  # pyright: ignore[reportPrivateUsage]  # the borrow ends with the native call in either case
         self._tick = tick
         for deme in self._demes:
             deme._tick = tick  # pyright: ignore[reportPrivateUsage]  # metadata only; arrays remain native
-        self._rust_states_dirty = True
+        self._invalidate_deme_states()
         return stopped
 
     def run_tick(self) -> SpatialPopulation:
@@ -2587,8 +2662,8 @@ class SpatialPopulation:
             return self
         except BaseException:
             # The session marks itself Failed for native kernel errors; the
-            # state caches are stale on any abort either way.
-            self._rust_states_dirty = True
+            # derived deme caches are stale on any abort either way.
+            self._invalidate_deme_states()
             raise
         finally:
             self._running = False

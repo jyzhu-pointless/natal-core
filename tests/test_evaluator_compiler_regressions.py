@@ -265,7 +265,7 @@ def test_managed_deme_cannot_start_a_second_execution_owner(model: str, operatio
     if model == "age_structured":
         builder = builder.age_structure(n_ages=3, new_adult_age=1)
     pop = builder.build()
-    deme = pop.demes[0]
+    deme = pop._deme_object(0)  # pyright: ignore[reportPrivateUsage]  # standalone-owner guard lives on the raw managed slot
     before = deme.export_state().copy()
     pop.record_snapshot()
     with pytest.raises(RuntimeError):

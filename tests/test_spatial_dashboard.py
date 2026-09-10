@@ -22,10 +22,16 @@ class _FakeRegistry:
 
 
 class _FakeDeme:
+    """Deme-slice double exposing the aligned surface the dashboard reads."""
+
     def __init__(self, config: SimpleNamespace) -> None:
-        self.registry = _FakeRegistry()
+        self.index_registry = _FakeRegistry()
         self.state = SimpleNamespace(individual_count=np.array([[[1, 0], [0, 2], [3, 0]], [[0, 4], [5, 0], [0, 0]]]))
         self._config = config
+
+    @property
+    def config(self):
+        return self._config
 
     def export_config(self):
         return self._config

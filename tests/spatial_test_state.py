@@ -24,4 +24,4 @@ def set_deme_state(population: nt.SpatialPopulation, index: int, payload: Mappin
     population._rust_spatial_backend.set_state(  # noqa: SLF001  # native state handoff, identical to reset()
         ind_all, sperm_all, int(population.tick)
     )
-    population._rust_states_dirty = True  # noqa: SLF001  # refresh deme caches from the session
+    population._invalidate_deme_states()  # noqa: SLF001  # derived deme caches re-derive from the session on the next read

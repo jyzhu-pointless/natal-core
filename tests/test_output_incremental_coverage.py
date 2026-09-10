@@ -526,11 +526,11 @@ def test_spatial_lifecycle_errors_clear_reset_and_finish_are_exact() -> None:
     population.reset()
     assert population.history.ticks == ()
     assert population.tick == 0
-    assert all(deme.tick == 0 for deme in population.demes)
+    assert all(deme.tick == 0 for deme in population._demes)  # pyright: ignore[reportPrivateUsage]  # slot-level clock projection check
 
     population.run(0, finish=True, clear_history_on_start=True)
     assert population.history.ticks == (0,)
-    assert all(deme.is_finished for deme in population.demes)
+    assert all(deme.is_finished for deme in population._demes)  # pyright: ignore[reportPrivateUsage]  # slot-level status projection check
 
     runnable = _build_spatial("spatial_negative_steps", history_mode="raw")
     initial_counts = np.stack(
