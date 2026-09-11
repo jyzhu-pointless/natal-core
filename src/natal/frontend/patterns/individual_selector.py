@@ -82,6 +82,10 @@ def _to_tuple_age(value: AgeInput) -> Tuple[int, ...]:
         return tuple(value)
     if isinstance(value, bool):
         raise TypeError(f"Unsupported age selector: {value!r} (not an age index)")
+    # ``int`` first (pyright narrows the concrete class away below),
+    # ``numbers.Integral`` as the NumPy/other-scalar fallback.
+    if isinstance(value, int):
+        return (value,)
     if isinstance(value, numbers.Integral):
         return (int(value),)
     return tuple(sorted(int(v) for v in value))
@@ -108,6 +112,10 @@ def _to_tuple_sex(value: SexInput) -> Tuple[int, ...]:
         return ()
     if isinstance(value, bool):
         raise TypeError(f"Unsupported sex selector: {value!r} (not a sex index)")
+    # ``int``/``Sex`` first (pyright narrows the concrete classes away
+    # below), ``numbers.Integral`` as the NumPy/other-scalar fallback.
+    if isinstance(value, (int, Sex)):
+        return (int(value),)
     if isinstance(value, numbers.Integral):
         return (int(value),)
     if isinstance(value, str):
@@ -126,7 +134,9 @@ def _to_tuple_sex(value: SexInput) -> Tuple[int, ...]:
     for item in value:
         if isinstance(item, bool):
             raise TypeError(f"Unsupported sex selector: {item!r} (not a sex index)")
-        if isinstance(item, numbers.Integral):
+        if isinstance(item, (int, Sex)):
+            out.add(int(item))
+        elif isinstance(item, numbers.Integral):
             out.add(int(item))
         else:
             s = str(item).lower()
