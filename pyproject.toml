@@ -24,7 +24,6 @@ classifiers = [
 dependencies = [
     "fastapi>=0.110.0",
     "matplotlib>=3.0.0",
-    "nicegui[highcharts]>=3.0.0",
     "numpy>=2.0.0",
     "pandas>=2.1.0",
     "plotly>=6.0.0",

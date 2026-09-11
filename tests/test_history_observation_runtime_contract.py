@@ -17,7 +17,6 @@ from natal.frontend.spatial.builder import (
     _object_sequence,  # type: ignore[reportPrivateUsage]  # directly verify positional replay boundary
     batch_setting,
 )
-from natal.frontend.ui.spatial_dashboard import SpatialDashboard
 from tests.spatial_test_state import set_deme_state
 
 
@@ -406,33 +405,6 @@ def test_spatial_output_accessors_reject_unbuilt_state_and_shape_empty_history()
         observation_history=False,
     )
     assert built.history._to_numpy().shape == (0, built.history.schema.row_size)
-
-
-def test_spatial_dashboard_rebuilds_exact_totals_from_typed_raw_history() -> None:
-    """Spatial charts consume History tensors without legacy flat-row parsing."""
-    population = _spatial_discrete(
-        "spatial_dashboard_history",
-        observation_history=False,
-    )
-    population.run(1, record_every=1)
-
-    dashboard = object.__new__(SpatialDashboard)
-    dashboard.pop = population
-    dashboard._chart_history = []
-    dashboard._allele_freq_history = {}
-    dashboard._last_chart_tick = -1
-    dashboard._rebuild_chart_history()
-
-    expected = [
-        [float(tick), float(counts.sum())]
-        for tick, counts in zip(
-            population.history.ticks,
-            population.history.individual_count,
-        )
-    ]
-    assert dashboard._chart_history == expected
-    assert dashboard._last_chart_tick == population.history.ticks[-1]
-    assert set(dashboard._allele_freq_history) == {"WT", "Dr"}
 
 
 def test_age_structured_snapshot_collapses_canonical_observation_exactly() -> None:

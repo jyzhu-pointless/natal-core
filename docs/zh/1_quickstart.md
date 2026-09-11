@@ -317,23 +317,7 @@ python demos/mosquito.py
 
 ### 🎛️ 使用内置可视化面板（可选）
 
-NATAL 提供了一个基于 NiceGUI 的实时可视化面板，可以在浏览器中观察种群动态：
-
-```python
-import natal as nt
-from natal.frontend.ui import launch
-
-# ... 定义遗传架构、构建种群 ...
-
-# 启动面板
-launch(pop, port=8080, title="My Simulation")
-```
-
-启动后，在浏览器中打开 <http://localhost:8080> 即可查看种群数量变化、基因型频率等动态图表。
-
-### 🎛️ 使用 Vue 可视化面板（可选）
-
-`launch_vue` 是基于 Vue 3 前端 + FastAPI 后端的新一代面板入口，与上面的 NiceGUI 面板并存：
+`launch_vue` 是基于 Vue 3 前端 + FastAPI 后端的实时可视化面板入口：
 
 ```python
 import natal as nt

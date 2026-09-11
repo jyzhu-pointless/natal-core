@@ -102,13 +102,13 @@ def test_legacy_scalar_log_ignores_no_change_and_retains_event_metadata() -> Non
     assert pop.params_log_details[0][1:4] == ("update", 0, "temperature")
 
 
-def test_dashboard_equilibrium_metrics_follow_current_configuration() -> None:
-    """The UI read helper must agree with current native ecology after updates."""
-    from natal.frontend.ui.dashboard_population import _derive_metrics
+def test_equilibrium_metrics_follow_current_configuration() -> None:
+    """Equilibrium derivation must agree with current native ecology after updates."""
+    from natal.frontend.model.ecology import derive_equilibrium_metrics_from_draft
 
-    pop = _population("DashboardMetricBoundary", "age", stochastic=False)
+    pop = _population("MetricBoundaryAfterUpdate", "age", stochastic=False)
     pop.update().competition(carrying_capacity=1234)
-    c_star, s_star = _derive_metrics(pop.config)
+    c_star, s_star = derive_equilibrium_metrics_from_draft(pop.config)
     assert c_star == pop.params.expected_competition_strength
     assert s_star == pop.params.expected_survival_rate
 

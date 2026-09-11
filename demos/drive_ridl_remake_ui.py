@@ -11,7 +11,7 @@ Here we will remake the model using NATAL, and compare the results with the orig
 """
 
 import natal as nt
-from natal.frontend.ui import launch
+from natal import launch_vue
 
 # 1. Define the mosquito species
 sp_complete_drive = nt.Species.from_dict(
@@ -98,4 +98,4 @@ pop = (nt.AgeStructuredPopulation.setup(
 
 print(pop.config.zygote_viability_fitness)
 
-launch(pop)
+launch_vue(pop)

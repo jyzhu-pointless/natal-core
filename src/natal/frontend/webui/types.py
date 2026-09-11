@@ -1,7 +1,6 @@
 """Shared types for the Vue web UI server layer.
 
-The web UI server holds a population object in-process (same ownership model
-as the legacy NiceGUI dashboards).  ``SpatialPopulation`` intentionally does
+The web UI server holds a population object in-process.  ``SpatialPopulation`` intentionally does
 not share a base class with the panmictic populations, so the server layer
 works on the ``DashboardPopulation`` union and narrows via ``isinstance``.
 """

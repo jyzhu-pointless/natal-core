@@ -1,24 +1,27 @@
-"""
-Visualization utilities for genetic entities.
+"""Visualization helpers for the web UI serialization layer.
 
-Provides helper functions to render genetic entities (Genotypes, HaploidGenotypes)
-as visual representations (SVG, colors, etc.).
+Pure display utilities: allele display colors, genotype cell SVG rendering,
+and unordered genotype label construction.  These are internal to the webui
+package — nothing here is re-exported at the ``natal`` top level.
 """
+
+from __future__ import annotations
 
 import hashlib
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from natal.frontend.genetics import HaploidGenotype, Species
+    from natal.frontend.genetics import HaploidGenotype, Haplotype, Locus, Species
 
-__all__ = ["get_allele_color", "render_cell_svg"]
+__all__ = ["get_allele_color", "get_unordered_genotype_labels", "render_cell_svg"]
+
 
 def get_allele_color(allele_name: str) -> str:
     """Determine a display color for an allele based on naming conventions.
-    
+
     Args:
         allele_name: The name of the allele.
-        
+
     Returns:
         Hex color string (e.g., "#ff0000").
     """
@@ -39,17 +42,59 @@ def get_allele_color(allele_name: str) -> str:
     h = hashlib.md5(allele_name.encode('utf-8')).hexdigest()
     return f"#{h[:6]}"
 
-def render_cell_svg(entity: Any, species_def: "Species", size: int = 100) -> str:  # entity: duck-typed for Genotype and HaploidGenotype
+
+def get_unordered_genotype_labels(genotypes: list[Any]) -> list[str]:
+    """Generate unique unordered (``::``) genotype labels from a genotype list.
+
+    For each genotype, builds a label in the form ``hapstrA::hapstrB``
+    (sorted alphabetically so ``WT|Dr`` and ``Dr|WT`` both become ``WT::Dr``).
+    Multi-chromosome: ``hapA::hapB; hapC::hapC``.
+
+    Returns:
+        Sorted unique labels suitable for dropdown options.
+    """
+    seen: set[str] = set()
+    labels: list[str] = []
+    for gt in genotypes:
+        chrom_pairs: list[str] = []
+        for chrom in gt.species.chromosomes:
+            mat_hap = gt.maternal.get_haplotype_for_chromosome(chrom)
+            pat_hap = gt.paternal.get_haplotype_for_chromosome(chrom)
+
+            def _hap_str(hap: "Haplotype | None", loci: "list[Locus]") -> str:
+                if hap is None:
+                    return ""
+                names: list[str] = []
+                for locus in loci:
+                    gene = hap.get_gene_at_locus(locus)
+                    names.append(gene.name if gene else "")
+                return "/".join(names)
+
+            mat_str = _hap_str(mat_hap, chrom.loci)
+            pat_str = _hap_str(pat_hap, chrom.loci)
+            a_str, b_str = sorted([mat_str, pat_str])
+            chrom_pairs.append(f"{a_str}::{b_str}")
+
+        label = "; ".join(chrom_pairs)
+        if label not in seen:
+            seen.add(label)
+            labels.append(label)
+
+    labels.sort()
+    return labels
+
+
+def render_cell_svg(entity: Any, species_def: "Species", size: int = 100) -> str:
     """Generate an SVG string representing a cell's genotype.
-    
-    Draws a cell circle containing chromosome bars. Can render both diploid 
+
+    Draws a cell circle containing chromosome bars. Can render both diploid
     Genotypes and HaploidGenotypes.
-    
+
     Args:
-        entity: Genotype or HaploidGenotype instance.
+        entity: Genotype or HaploidGenotype instance (duck-typed).
         species_def: Species instance defining the chromosome structure.
         size: Width/Height of the SVG in pixels.
-        
+
     Returns:
         String containing the SVG XML.
     """
@@ -79,16 +124,12 @@ def render_cell_svg(entity: Any, species_def: "Species", size: int = 100) -> str
         seg_height = bar_height / max(1, n_loci)
 
         def draw_chrom_bar(x: float, source_obj: "HaploidGenotype | None") -> None:
-            # Get haplotype for this chromosome
-            if source_obj is None: # Missing chromosome
+            # Get haplotype for this chromosome; ``None`` means the chromosome
+            # is missing from this genome, so nothing is drawn.
+            if source_obj is None:
                 return
 
-            # Try to get haplotype (works for both Genotype via helper or HaploidGenotype direct access)
-            # For Genotype, source_obj is a HaploidGenotype
-            # For HaploidGenotype, source_obj is self
             haplo = source_obj.get_haplotype_for_chromosome(chrom)
-            if haplo is None:  # type: ignore[comparison-overlap]
-                return
 
             for l_idx, locus in enumerate(loci):
                 gene = haplo.get_gene_at_locus(locus)
@@ -105,10 +146,10 @@ def render_cell_svg(entity: Any, species_def: "Species", size: int = 100) -> str
                     svg.append(f'<line x1="{x-bar_width/2}" y1="{y}" x2="{x+bar_width/2}" y2="{y}" stroke="white" stroke-width="1"/>')
 
         if is_diploid:
-            draw_chrom_bar(cx - 5, entity.maternal) # Maternal (Left)
-            draw_chrom_bar(cx + 5, entity.paternal) # Paternal (Right)
+            draw_chrom_bar(cx - 5, entity.maternal)  # Maternal (Left)
+            draw_chrom_bar(cx + 5, entity.paternal)  # Paternal (Right)
         else:
-            draw_chrom_bar(cx, entity) # Haploid (Center)
+            draw_chrom_bar(cx, entity)  # Haploid (Center)
 
     svg.append('</svg>')
     return "".join(svg)

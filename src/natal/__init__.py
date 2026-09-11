@@ -156,10 +156,6 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "SpatialPopulationBuilder", "SpatialPopulation", "SquareGrid", "batch_setting",
         "build_adjacency_matrix", "build_gaussian_kernel",
     ],
-    "frontend.ui": [
-        "Dashboard", "PopulationDashboard", "SpatialDashboard", "get_allele_color",
-        "launch", "launch_population", "launch_spatial", "render_cell_svg",
-    ],
     "frontend.utils": [
         "Sex", "Age", "GameteLabel", "resolve_sex_label", "validate_name",
         "ALL_PARAMETERS", "PARAM_IDS", "PARAMETERS_BY_DOMAIN", "ParamDescriptor",

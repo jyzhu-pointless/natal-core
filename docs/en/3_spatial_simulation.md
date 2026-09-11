@@ -761,15 +761,7 @@ pop.run(10)
 
 ## WebUI Debugging
 
-Spatial models can be directly connected to `natal.frontend.ui.launch(...)`.
-
-```python
-from natal.frontend.ui import launch
-
-launch(spatial, port=8080, title="Spatial Debug Dashboard")
-```
-
-The Vue dashboard is also available (hexagonal landscape map, click-to-inspect demes, migration panel, Debug tab):
+Spatial models can be directly connected to the Vue dashboard (hexagonal landscape map, click-to-inspect demes, migration panel, Debug tab):
 
 ```python
 from natal import launch_vue

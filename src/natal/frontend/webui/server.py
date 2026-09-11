@@ -1,8 +1,7 @@
 """Entry point for the Vue-based web dashboard.
 
-``launch_vue`` is the NiceGUI ``launch`` replacement during the migration
-window; both stay available so existing demos keep working until parity is
-accepted.
+``launch_vue`` serves the built Vue frontend and the FastAPI backend as
+one self-contained call.
 """
 
 from __future__ import annotations

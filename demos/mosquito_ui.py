@@ -1,7 +1,7 @@
 """Interactive mosquito population simulation with NATAL UI dashboard.
 
 Demonstrates the same age-structured mosquito model as ``mosquito.py``
-but launches the interactive NiceGUI-based dashboard for real-time
+but launches the interactive Vue dashboard for real-time
 simulation control and visualization.
 """
 
@@ -107,4 +107,4 @@ pop = nt.AgeStructuredPopulation\
         drive
     ).hooks(release_drive_carriers_overl).build()
 
-nt.ui.launch(pop)
+nt.launch_vue(pop)

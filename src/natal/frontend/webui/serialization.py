@@ -919,15 +919,15 @@ class RegistryPayload(TypedDict):
 
 
 def _genotype_svg(gt: Genotype, species: Species) -> str:
-    """Render the genotype cell SVG (legacy visualization helper)."""
-    from natal.frontend.ui.visualization import render_cell_svg
+    """Render the genotype cell SVG (shared visualization helper)."""
+    from natal.frontend.webui.visualization import render_cell_svg
 
     return render_cell_svg(gt, species, size=80)
 
 
 def registry_payload(population: GeneticStructureLike) -> RegistryPayload:
     """Serialize the static genetic structure the UI needs once at load."""
-    from natal.frontend.ui.visualization import get_allele_color
+    from natal.frontend.webui.visualization import get_allele_color
 
     registry = population.registry
     species = population.species
@@ -992,11 +992,11 @@ def registry_payload(population: GeneticStructureLike) -> RegistryPayload:
 def _unordered_genotype_labels(registry: IndexRegistry) -> list[str]:
     """Unique unordered (``::``) genotype labels, sorted alphabetically.
 
-    Reuses the legacy dashboard helper: for each genotype it builds
+    Shared visualization helper: for each genotype it builds
     ``hapA::hapB`` per chromosome with alphabetically sorted haplotype
     strings, joined by ``; `` across chromosomes.
     """
-    from natal.frontend.ui.dashboard_helpers import get_unordered_genotype_labels
+    from natal.frontend.webui.visualization import get_unordered_genotype_labels
 
     return get_unordered_genotype_labels(registry.index_to_genotype)
 
@@ -1013,7 +1013,7 @@ def export_payload(
     include_history: bool = True,
     include_hooks: bool = True,
 ) -> dict[str, object]:  # object: heterogeneous legacy export schema
-    """Build the full export dict (schema-compatible with the NiceGUI UI)."""
+    """Build the full export dict consumed by the dashboard export endpoint."""
     payload: dict[str, object] = {  # object: heterogeneous legacy export schema
         "population_name": population.name
     }

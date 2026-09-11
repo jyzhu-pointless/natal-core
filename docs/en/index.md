@@ -70,7 +70,7 @@ pip install natal-core
 
 ```python
 import natal as nt
-from natal.frontend.ui import launch
+from natal import launch_vue
 
 # 1. Define the species' genetic architecture
 sp = nt.Species.from_dict(

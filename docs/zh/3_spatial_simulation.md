@@ -757,15 +757,7 @@ pop.run(10)
 
 ## WebUI 调试
 
-Spatial 模型可以直接接到 `natal.frontend.ui.launch(...)`。
-
-```python
-from natal.frontend.ui import launch
-
-launch(spatial, port=8080, title="Spatial Debug Dashboard")
-```
-
-也可以使用 Vue 面板（六边形景观图、deme 点选检视、迁移面板、Debug 标签页）：
+Spatial 模型可以直接接到 Vue 面板（六边形景观图、deme 点选检视、迁移面板、Debug 标签页）：
 
 ```python
 from natal import launch_vue

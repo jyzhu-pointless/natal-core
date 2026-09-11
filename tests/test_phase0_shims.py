@@ -42,7 +42,9 @@ import natal
 # below (its shim exported no ``__all__`` names).  ``configurator`` lost its
 # legacy key to the P5 ``builder`` rename and is covered by the P5 negative
 # contract at the end of this module; ``model`` joined with the P9 package
-# split (``natal.model`` resolves to ``natal.frontend.model``).
+# split (``natal.model`` resolves to ``natal.frontend.model``); ``ui`` was
+# deleted outright with the NiceGUI dashboards (its submodules join the
+# unimportable list below like ``configurator``'s).
 _RELOCATED_PACKAGES: Tuple[str, ...] = (
     "patterns",
     "registry",
@@ -56,7 +58,6 @@ _RELOCATED_PACKAGES: Tuple[str, ...] = (
     "builder",
     "population",
     "spatial",
-    "ui",
     "webui",
     "hooks",
     "utils",
@@ -74,6 +75,14 @@ _LEGACY_SUBMODULE_PATHS: Tuple[str, ...] = tuple(
         "configurator._registry_builder",
         "configurator._routes",
         "configurator._writers",
+        # The NiceGUI dashboard package was deleted outright; its
+        # surviving helpers moved to ``frontend.webui.visualization``.
+        "ui",
+        "ui.dashboard",
+        "ui.dashboard_helpers",
+        "ui.dashboard_population",
+        "ui.spatial_dashboard",
+        "ui.visualization",
         "data._builders",
         "data._config",
         "data._engine",
@@ -376,7 +385,7 @@ def test_lazy_map_every_name_resolves_to_owner_export() -> None:
 
 
 def test_lazy_map_owner_axes_and_size() -> None:
-    """The lazy map is built from exactly the 17 expected owning modules.
+    """The lazy map is built from exactly the 16 expected owning modules.
 
     Invariant (axis combination): the owner set of the index must be the 16
     relocated frontend packages plus ``contracts`` — the legacy shims are

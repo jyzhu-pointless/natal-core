@@ -1,5 +1,5 @@
 import natal as nt
-from natal.frontend.ui import launch
+from natal import launch_vue
 
 # 1. Define the genetics architecture of a species
 sp = nt.Species.from_dict(
@@ -61,4 +61,4 @@ pop = (nt.DiscreteGenerationPopulation
     .presets(drive).fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}}).build())
 
 # 5. Launch interactive WebUI and run simulation
-launch(pop)
+launch_vue(pop)

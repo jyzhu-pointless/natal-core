@@ -1,10 +1,8 @@
 """Simulation session: server-side owner of the population object.
 
-The session is the single authority over the simulation lifecycle.  Unlike
-the legacy NiceGUI dashboards (where the tick loop lived inside each browser
-page's ``ui.timer``), the run loop lives here so the simulation keeps
-running when no browser is connected and every connected tab observes the
-same run.
+The session is the single authority over the simulation lifecycle.  The run loop
+lives here so the simulation keeps running when no browser is connected
+and every connected tab observes the same run.
 
 Concurrency model
 -----------------

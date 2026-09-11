@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any, Callable  # noqa: E402
 
 import natal as nt
+from natal import launch_vue
 from natal.frontend.spatial.builder import batch_setting
 from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import HexGrid
-from natal.frontend.ui import launch
 
 MAP_SIZE = 9
 LOCAL_CAPACITY = 10000
@@ -104,7 +104,7 @@ def time_perf_wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
 def main() -> None:
     """Launch the hex-grid spatial UI demo."""
     spatial = time_perf_wrapper(build_hex_spatial_population)()
-    launch(spatial, port=8081, title="Spatial Hex UI Demo")
+    launch_vue(spatial, port=8000, title="Spatial Hex UI Demo")
 
 
 if __name__ == "__main__":

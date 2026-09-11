@@ -318,23 +318,7 @@ For more scenarios, refer to the `demos/` directory.
 
 ### Using the Built-in Visualization Dashboard (Optional)
 
-NATAL provides a NiceGUI-based real-time visualization dashboard that allows you to observe population dynamics in a browser:
-
-```python
-import natal as nt
-from natal.frontend.ui import launch
-
-# ... define genetic architecture, build population ...
-
-# Launch the dashboard
-launch(pop, port=8080, title="My Simulation")
-```
-
-Once launched, open <http://localhost:8080> in your browser to view dynamic charts of population counts, genotype frequencies, etc.
-
-### Using the Vue Visualization Dashboard (Optional)
-
-`launch_vue` is the next-generation dashboard entry point built on a Vue 3 frontend with a FastAPI backend, coexisting with the NiceGUI dashboard above:
+`launch_vue` is the real-time dashboard entry point built on a Vue 3 frontend with a FastAPI backend:
 
 ```python
 import natal as nt

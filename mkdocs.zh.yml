@@ -146,5 +146,4 @@ nav:
     - 空间种群: api/spatial.md
     - 适应度: api/fitness.md
     - 索引注册表: api/registry.md
-    - 仪表盘与启动: api/ui.md
     - 工具函数: api/utils.md

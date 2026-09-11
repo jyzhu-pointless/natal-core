@@ -70,7 +70,7 @@ pip install natal-core
 
 ```python
 import natal as nt
-from natal.frontend.ui import launch
+from natal import launch_vue
 
 # 1. 定义物种的遗传架构
 sp = nt.Species.from_dict(

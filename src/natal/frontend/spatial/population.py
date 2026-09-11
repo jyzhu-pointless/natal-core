@@ -2316,7 +2316,7 @@ class SpatialPopulation:
             try:
                 deme.trigger_event("finish", deme_id=deme._deme_id)  # pyright: ignore[reportPrivateUsage]  # SpatialPopulation owns its demes; finish hooks must observe the firing deme's own index.
             finally:
-                deme._lifecycle_finish_firing = False
+                deme._lifecycle_finish_firing = False  # pyright: ignore[reportPrivateUsage]  # container owns the stopped-deme finish boundary
 
     def _initialize_session(self, seed: int = 0) -> SpatialPopulation:
         """Enable the Rust spatial backend for subsequent runs.

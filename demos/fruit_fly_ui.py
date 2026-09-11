@@ -92,4 +92,4 @@ population = (
     .build()
 )
 
-nt.ui.launch(population)
+nt.launch_vue(population)

@@ -12,7 +12,6 @@ from numpy.typing import NDArray
 import natal as nt
 from natal.frontend.output import History
 from natal.frontend.patterns import IndividualSelector
-from natal.frontend.ui.dashboard_population import Dashboard
 
 InvalidGroups: TypeAlias = (
     None
@@ -281,21 +280,6 @@ def test_runtime_updater_rejects_output_schema_mutation() -> None:
         population.update().record_history(mode="observation")
 
 
-def test_dashboard_rebuilds_typed_state_from_public_raw_history() -> None:
-    """Dashboard consumes typed History arrays instead of legacy flat rows."""
-    population = _build_population("contract_dashboard_typed_history")
-    population.run(n_steps=1, record_every=1)
-    history = population.history
-    assert len(history) == 2
-
-    dashboard = object.__new__(Dashboard)
-    dashboard.pop = population
-    first_state = dashboard._raw_history_state(0)
-    assert first_state.n_tick == history.ticks[0]
-    np.testing.assert_array_equal(
-        first_state.individual_count,
-        history.individual_count[0],
-    )
 
 
 @pytest.mark.parametrize(
