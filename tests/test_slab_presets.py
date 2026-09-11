@@ -1,6 +1,7 @@
 """Tests for slab-aware presets (Wolbachia, TransgenicBackground)."""
 
 import natal as nt
+from natal.frontend import presets
 
 
 def _make_species_with_slabs():
@@ -115,4 +116,4 @@ class TestPresetIntegration:
         """Smoke test: presets should be importable and in __all__."""
         for name in ("Wolbachia", "TransgenicBackground"):
             assert hasattr(nt, name), f"{name} not importable from natal"
-            assert name in nt.presets.__all__, f"{name} not in __all__"
+            assert name in presets.__all__, f"{name} not in __all__"
