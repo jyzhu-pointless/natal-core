@@ -1,4 +1,10 @@
-"""Type stub for the optional native Rust extension ``natal._engine_rs``."""
+"""Type stub for the native Rust engine extension ``natal._engine_rs``.
+
+The extension is the only execution backend: a source checkout without
+a maturin build imports fine (the adapter probes availability and raises
+a build hint at run time), and this stub keeps type checking working in
+such checkouts.
+"""
 
 from collections.abc import Callable
 
