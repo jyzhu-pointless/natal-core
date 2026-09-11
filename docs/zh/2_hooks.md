@@ -19,20 +19,12 @@ Hook 的作用时机包括：
 
 ## 声明式 Hook
 
-对于大多数用户，推荐使用 `@nt.hook` 与 `nt.Op.*`，在种群对象上链式注册：
+对于大多数用户，推荐直接把 `nt.Op.*` 对象传给 `.hooks()`，在种群构建链上声明：
 
 ```python
 import natal as nt
 
 sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
-
-@nt.hook(event="first", priority=10)
-def periodic_release():
-    return [
-        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0"),
-        nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98),
-    ]
-
 
 pop = (
     nt.AgeStructuredPopulation
@@ -51,24 +43,29 @@ pop = (
         low_density_growth_rate=6.0,
         age_1_carrying_capacity=10000
     )
-    .hooks(periodic_release)
+    .hooks(
+        [
+            nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0"),
+            nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98),
+        ],
+        event="first",
+        priority=10,
+    )
     .build()
 )
 
 pop.run(n_steps=200, record_every=10)
 ```
 
-这种方式可读性高、维护成本低，也更便于团队复核模型规则。
+`Op` 对象本身就是声明：构建时（`build()`）被编译为 CSR 计划注入种群，不再需要包裹函数。这种方式可读性高、维护成本低，也更便于团队复核模型规则。
 
-## 三种 Hook 编写形态
+## Hook 的编写形态
 
-`@nt.hook` 根据函数签名自动识别三种形态（在构建期编译时判定）：
+- **声明式（Declarative）**：直接把 `Op` 对象（或其列表）传给 `.hooks()`，构建期编译为 CSR 计划。这是推荐写法。
+- **回调（Callback）**：单参数 `def hook(pop: TickContext) -> int`，用 `@nt.hook` 装饰后传入（也可直接传裸函数，事件在 `.hooks(..., event=...)` 上指定）。
+- **选择器回调（Selector）**：`@nt.hook(..., selectors={...})`，选择器值在构建期解析、调用时注入。
 
-| 形态 | 函数签名 | 说明 |
-|------|----------|------|
-| 声明式（Declarative） | 无参数，返回 `List[HookOp]` | 构建期调用一次，返回值编译为 CSR 计划 |
-| 回调（Callback） | 单参数 `def hook(pop: TickContext) -> int` | 每个 tick 调用一次，通过 `TickContext` 读写状态与参数 |
-| 选择器回调（Selector） | 单参数 + `selectors={...}` 关键字参数 | 选择器值在构建期解析、调用时注入 |
+`@nt.hook` 装饰器按函数签名识别后两类形态（构建期编译时判定）；零参数、返回 `List[HookOp]` 的函数也会被识别为声明式——构建期调用一次、把返回的 Op 列表送入同一条编译管线。当 Op 自带的 event / priority 均为默认值时，效果等同直接传这些 Op；装饰器上的 priority 对整组具有最终决定权。
 
 旧的 `(state, config, deme_id)` 三参数签名已被显式拒绝（`TypeError` —— 该签名是 njit 时代的遗物，没有迁移通道）。回调 Hook 返回值 `0`（或 `RESULT_CONTINUE`）继续模拟，非零值（或 `RESULT_STOP`）停止模拟。
 
@@ -94,7 +91,7 @@ pop.run(n_steps=200, record_every=10)
 - `Op.set_param`：按 tick 计划表调度一个生态参数（见下文）。
 - `Op.convert`：一对一概率性基因型转换（见下文）。
 
-把它们理解为"对状态张量进行声明式变换"。
+把它们理解为"对状态张量进行声明式变换"。所有 `Op` 工厂方法都接受 `event` 与 `priority` 关键字参数：`event` 是 Op 级事件（优先于调用级），`priority` 是 Op 级优先级（调用级 `priority` 赋值时覆盖它）。
 
 ### `Op.set_param`：无代码参数调度
 
@@ -182,22 +179,14 @@ when="tick % 7 == 0 and not (tick == 14)"
 
 ## 多个 Hook 的注册
 
-链式 API 中的 `.hooks()` 方法支持传入多个 Hook 函数：
+链式 API 中的 `.hooks()` 方法可以调用多次，也可以一次传入多个条目（Op、Op 列表、回调函数混排）。
+
+`priority` 是 Op 级数据：调用级 `priority` 为本次声明的 Op 赋同一个优先级；把 Op 打包成列表本身就是声明
+整组共用一个优先级（不指定时，组员自带的 `priority` 必须一致，否则构建期报 `ValueError`）。装饰器函数不受调用级 `priority` 影响，保持装饰器上的值。`event` 的解析方向不同：Op 自带的
+`event`（如 `Op.set_param(..., event="late")`）优先于调用级，调用级优先于装饰器上的值。
 
 ```python
 import natal as nt
-
-@nt.hook(event="first", priority=10)
-def release_hook():
-    return [nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
-
-@nt.hook(event="late", priority=5)
-def culling_hook():
-    return [nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.95, when="tick > 50")]
-
-@nt.hook(event="late", priority=0)
-def stop_hook():
-    return [nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000)]
 
 pop = (
     nt.AgeStructuredPopulation
@@ -207,7 +196,18 @@ pop = (
         "female": {"WT|WT": 1000},
         "male": {"WT|WT": 1000}
     })
-    .hooks(release_hook, culling_hook, stop_hook)
+    .hooks(
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0"),
+        event="first", priority=10,
+    )
+    .hooks(
+        nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.95, when="tick > 50"),
+        event="late", priority=5,
+    )
+    .hooks(
+        nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000),
+        event="late",
+    )
     .build()
 )
 
@@ -224,7 +224,7 @@ Rust 原生引擎是唯一的执行后端，Hook 只有一条执行路径：
 - 单参数回调（`TickContext`）在事件边界跨 Python↔Rust 桥进入会话，每次调用获得独立的上下文封装；回调写入进入该次调用的事件事务，成功才提交、失败则丢弃本次候选。
 - 同一事件内，声明式操作与 Python 回调按 `priority` **跨类型统一排序**（数值小者先执行；同 priority 时按声明顺序）。两类 Hook 的 `priority` 互相可比：无论回调还是声明式操作，`priority` 更小者总是先执行，后面的 Hook 能看到前面 Hook 的写入。
 
-Hook 是"Op 即 hook"的声明式编译模型：`Op` 对象本身构成 hook 程序，`@hook` 声明式函数只是返回 Op 列表的编译器入口。`initialize` 事件不存在 —— 初始化阶段的逻辑请用 `first` 事件的首个 tick（`when="tick == 1"`）或 `finish` 事件表达。
+Hook 是"Op 即 hook"的声明式编译模型：`Op` 对象本身构成 hook 程序，直接传入 `.hooks()` 即完成声明（`@hook` 装饰的零参数函数仍可作为返回 Op 列表的工厂入口，效果等价）。`initialize` 事件不存在 —— 初始化阶段的逻辑请用 `first` 事件的首个 tick（`when="tick == 1"`）或 `finish` 事件表达。
 
 `SpatialPopulation` 中，local Hook 的 `priority` 只在 deme 内部生效；不同 deme 之间不定义全局顺序。空间模型见 [空间模拟](3_spatial_simulation.md)。
 
@@ -245,14 +245,6 @@ import natal as nt
 
 sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
 
-@nt.hook(event="first", priority=0)
-def release():
-    return [nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
-
-@nt.hook(event="late", priority=5)
-def stop_if_no_female():
-    return [nt.Op.stop_if_zero(sex="female")]
-
 pop = (
     nt.AgeStructuredPopulation
     .setup(species=sp, stochastic=True)
@@ -261,7 +253,14 @@ pop = (
         "female": {"WT|WT": 1000},
         "male": {"WT|WT": 1000}
     })
-    .hooks(release, stop_if_no_female)
+    .hooks(
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0"),
+        event="first",
+    )
+    .hooks(
+        nt.Op.stop_if_zero(sex="female"),
+        event="late", priority=5,
+    )
     .build()
 )
 

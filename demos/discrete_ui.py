@@ -28,14 +28,7 @@ drive = nt.HomingDrive(
     cas9_deposition_glab="cas9_deposited"
 )
 
-# 3. Define a release event using hooks
-@nt.hook(event="first", priority=0)
-def release_drive_carriers():
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
-    ]
-
-# 4. Build a panmictic population
+# 3. Build a panmictic population
 pop = (nt.DiscreteGenerationPopulation
     .setup(
         species=sp,
@@ -55,9 +48,11 @@ pop = (nt.DiscreteGenerationPopulation
         carrying_capacity=100000,
         juvenile_growth_mode="beverton_holt"
     )
-    # The decorated function must be passed explicitly: @nt.hook only tags
-    # the callable, it does not register it with any population.
-    .hooks(release_drive_carriers)
+    # 3b. Declare the release event: bare Op objects passed to .hooks()
+    .hooks(
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
+        event="first",
+    )
     .presets(drive).fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}}).build())
 
 # 5. Launch interactive WebUI and run simulation

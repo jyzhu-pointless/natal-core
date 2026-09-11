@@ -228,32 +228,24 @@ pop = (nt.AgeStructuredPopulation
 
 ## 4️⃣ Step 4: Define Simulation Logic -- Hooks
 
-The **Hook system** allows you to inject custom intervention or monitoring logic at key points in the simulation loop (e.g., at the start of each step, after survival screening). Using the declarative `Op` syntax is the most efficient and intuitive approach:
+The **Hook system** allows you to inject custom intervention or monitoring logic at key points in the simulation loop (e.g., at the start of each step, after survival screening). Using the declarative `Op` syntax is the most efficient and intuitive approach — `Op` objects go straight into `.hooks()` on the build chain:
 
 ```python
-from natal.frontend.hooks import hook, Op
+from natal.frontend.hooks import Op
 
-@hook(event='first')
-def release_drive_males():
-    """Release drive-carrying males at tick == 10"""
-    return [
+pop = (nt.AgeStructuredPopulation
+    .setup(species=sp, name="MyPop")
+    # ... (other initialization methods)
+    .hooks(
         Op.add(
             genotypes='WT|Drive',    # Select WT|Drive genotype
             ages=2,                  # Adult age (only effective for age-structured models)
             sex='male',              # Release only males
             delta=500,               # Add 500 individuals
             when='tick == 10'        # Condition
-        )
-    ]
-
-# Register with the population
-release_drive_males.register(pop)
-
-# Or register during the build process
-pop = (nt.AgeStructuredPopulation
-    .setup(species=sp, name="MyPop")
-    # ... (other initialization methods)
-    .hooks(release_drive_males)
+        ),
+        event='first',               # Firing event
+    )
     .build()
 )
 ```
@@ -363,7 +355,7 @@ This process is transparent to the user, but understanding it is important. See:
 ```python
 import natal as nt
 from natal import HomingDrive
-from natal.frontend.hooks import hook, Op
+from natal.frontend.hooks import Op
 
 sp = nt.Species.from_dict(
     name="FruitFly",
@@ -379,10 +371,6 @@ drive = HomingDrive(
     late_germline_resistance_formation_rate=0.03
 )
 
-@hook(event='first')
-def release_drive():
-    return [Op.add(genotypes='Drive|WT', delta=50, when='tick == 10')]
-
 pop = (nt.DiscreteGenerationPopulation
     .setup(species=sp, name="FruitFlyPop", stochastic=True)
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
@@ -390,7 +378,10 @@ pop = (nt.DiscreteGenerationPopulation
     .competition(low_density_growth_rate=6.0, carrying_capacity=100000,
                  juvenile_growth_mode="beverton_holt")   # Density dependence keeps the population bounded
     .presets(drive)
-    .hooks(release_drive)              # Register Hook
+    .hooks(                              # Register Hook
+        Op.add(genotypes='Drive|WT', delta=50, when='tick == 10'),
+        event='first',
+    )
     .build()
 )
 
@@ -404,7 +395,7 @@ print(f"Allele frequencies: {pop.compute_allele_frequencies()}")
 ```python
 import natal as nt
 from natal import HomingDrive
-from natal.frontend.hooks import hook, Op
+from natal.frontend.hooks import Op
 
 sp = nt.Species.from_dict(
     name="AnophelesGambiae",
@@ -420,10 +411,6 @@ drive = HomingDrive(
     drive_conversion_rate=0.95,
     late_germline_resistance_formation_rate=0.03
 )
-
-@hook(event='first')
-def release_drive():
-    return [Op.add(genotypes='Drive|WT', ages=[2,3,4,5,6,7], delta=100, when='tick == 10')]
 
 pop = (nt.AgeStructuredPopulation
     .setup(species=sp, name="MosquitoPop", stochastic=False)
@@ -443,7 +430,10 @@ pop = (nt.AgeStructuredPopulation
     .competition(juvenile_growth_mode=1, age_1_carrying_capacity=1200)
     .fitness(viability={"Drive|Drive": {"female": 0.0}})
     .presets(drive)
-    .hooks(release_drive)
+    .hooks(
+        Op.add(genotypes='Drive|WT', ages=[2,3,4,5,6,7], delta=100, when='tick == 10'),
+        event='first',
+    )
     .build()
 )
 

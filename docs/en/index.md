@@ -99,14 +99,7 @@ drive = nt.HomingDrive(
     cas9_deposition_glab="cas9_deposited"
 )
 
-# 3. Define a release event using hooks
-@nt.hook(event="first", priority=0)
-def release_drive_carriers():
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
-    ]
-
-# 4. Build a random-mating population
+# 3. Build a random-mating population and declare the release event with an Op
 pop = (nt.DiscreteGenerationPopulation
     .setup(
         species=sp,
@@ -126,9 +119,14 @@ pop = (nt.DiscreteGenerationPopulation
         carrying_capacity=100000,
         juvenile_growth_mode="beverton_holt"
     )
-    .presets(drive).hooks(release_drive_carriers).build())
+    .presets(drive)
+    .hooks(
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
+        event="first",
+    )
+    .build())
 
-# 5. Launch the interactive WebUI and run the simulation
+# 4. Launch the interactive WebUI and run the simulation
 launch(pop)
 ```
 

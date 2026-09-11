@@ -26,18 +26,7 @@ drive = nt.HomingDrive(
 )
 
 
-@nt.hook(event="first", priority=0)
-def release_drive_males() -> list[nt.HookOp]:
-    """Release one equilibrium cohort of heterozygous adult males at week 10.
-
-    Returns:
-        Declarative operation that performs the release.
-    """
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=2, sex="male", delta=500, when="tick == 10")
-    ]
-
-
+# Release one equilibrium cohort of heterozygous adult males at week 10.
 # Age 0 is produced during the current tick; age 1 combines larvae and pupae.
 population = (
     nt.AgeStructuredPopulation.setup(
@@ -78,7 +67,10 @@ population = (
         expected_num_new_adult_females=500,
     )
     .presets(drive)
-    .hooks(release_drive_males)
+    .hooks(
+        nt.Op.add(genotypes="WT|Dr", ages=2, sex="male", delta=500, when="tick == 10"),
+        event="first",
+    )
     .with_observation(
         groups={
             "drive_adults": IndividualSelector(ztype="*|Dr", age=range(2, 12)),

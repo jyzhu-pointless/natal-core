@@ -227,32 +227,24 @@ pop = (nt.AgeStructuredPopulation
 
 ## 4️⃣ 第四步：定义模拟逻辑 - Hook
 
-**Hook 系统**允许你在模拟循环的关键节点（如每步开始、生存筛选后等）注入自定义干预或监测逻辑。使用声明式 `Op` 语法最为高效直观：
+**Hook 系统**允许你在模拟循环的关键节点（如每步开始、生存筛选后等）注入自定义干预或监测逻辑。使用声明式 `Op` 语法最为高效直观——`Op` 对象直接传入构建链的 `.hooks()`：
 
 ```python
-from natal.frontend.hooks import hook, Op
+from natal.frontend.hooks import Op
 
-@hook(event='first')
-def release_drive_males():
-    """在 tick == 10 时释放携带驱动的雄性"""
-    return [
+pop = (nt.AgeStructuredPopulation
+    .setup(species=sp, name="MyPop")
+    # ...（其他初始化方法）
+    .hooks(
         Op.add(
             genotypes='WT|Drive',    # 选择 WT|Drive 基因型
             ages=2,                  # 成年年龄（仅对年龄结构模型有效）
             sex='male',              # 仅释放雄性
             delta=500,               # 增加 500 只
             when='tick == 10'        # 条件
-        )
-    ]
-
-# 注册到种群
-release_drive_males.register(pop)
-
-# 也可在构建过程中注册
-pop = (nt.AgeStructuredPopulation
-    .setup(species=sp, name="MyPop")
-    # ...（其他初始化方法）
-    .hooks(release_drive_males)
+        ),
+        event='first',               # 触发时机
+    )
     .build()
 )
 ```
@@ -362,7 +354,7 @@ launch_vue(pop, port=8000, title="My Simulation")
 ```python
 import natal as nt
 from natal import HomingDrive
-from natal.frontend.hooks import hook, Op
+from natal.frontend.hooks import Op
 
 sp = nt.Species.from_dict(
     name="FruitFly",
@@ -378,10 +370,6 @@ drive = HomingDrive(
     late_germline_resistance_formation_rate=0.03
 )
 
-@hook(event='first')
-def release_drive():
-    return [Op.add(genotypes='Drive|WT', delta=50, when='tick == 10')]
-
 pop = (nt.DiscreteGenerationPopulation
     .setup(species=sp, name="FruitFlyPop", stochastic=True)
     .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
@@ -389,7 +377,10 @@ pop = (nt.DiscreteGenerationPopulation
     .competition(low_density_growth_rate=6.0, carrying_capacity=100000,
                  juvenile_growth_mode="beverton_holt")   # 密度制约，避免种群指数爆炸
     .presets(drive)
-    .hooks(release_drive)              # 注册 Hook
+    .hooks(                                   # 注册 Hook
+        Op.add(genotypes='Drive|WT', delta=50, when='tick == 10'),
+        event='first',
+    )
     .build()
 )
 
@@ -403,7 +394,7 @@ print(f"等位基因频率: {pop.compute_allele_frequencies()}")
 ```python
 import natal as nt
 from natal import HomingDrive
-from natal.frontend.hooks import hook, Op
+from natal.frontend.hooks import Op
 
 sp = nt.Species.from_dict(
     name="AnophelesGambiae",
@@ -419,10 +410,6 @@ drive = HomingDrive(
     drive_conversion_rate=0.95,
     late_germline_resistance_formation_rate=0.03
 )
-
-@hook(event='first')
-def release_drive():
-    return [Op.add(genotypes='Drive|WT', ages=[2,3,4,5,6,7], delta=100, when='tick == 10')]
 
 pop = (nt.AgeStructuredPopulation
     .setup(species=sp, name="MosquitoPop", stochastic=False)
@@ -442,7 +429,10 @@ pop = (nt.AgeStructuredPopulation
     .competition(juvenile_growth_mode=1, age_1_carrying_capacity=1200)
     .fitness(viability={"Drive|Drive": {"female": 0.0}})
     .presets(drive)
-    .hooks(release_drive)
+    .hooks(
+        Op.add(genotypes='Drive|WT', ages=[2,3,4,5,6,7], delta=100, when='tick == 10'),
+        event='first',
+    )
     .build()
 )
 

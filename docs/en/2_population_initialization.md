@@ -358,19 +358,16 @@ Notes:
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `*hook_items` | `Callable` or `HookMap` | Hook functions or hook registration mappings | Empty | Event points (first / early / late / finish, etc.) | Pass functions directly (with `@hook` decorator). |
+| `*hook_items` | `HookOp` / `Op` list / `Callable` | Declarative ops (or lists of them), `@hook`-decorated functions, or single-parameter callbacks | Empty | Event points (first / early / late / finish, etc.) | Declarative ops are passed directly; the event comes from `.hooks(..., event=...)` or the op's own fields. |
 
 **Example**:
 
 ```python
-@nt.hook(event="first", priority=0)
-def release_drive_carriers():
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
-    ]
-
 # ...
-.hooks(release_drive_carriers)
+.hooks(
+    nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
+    event="first",
+)
 ```
 
 Common errors:

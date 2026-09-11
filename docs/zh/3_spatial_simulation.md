@@ -163,7 +163,7 @@ pop = (
 | `migration` | `kernel` | NDArray |
 
 以下参数**不接受** `batch_setting`：
-- **hooks**：通过 `@hook(deme=...)` 实现 per-deme 选择性执行。
+- **hooks**：通过 `.hooks(..., deme=...)` 实现 per-deme 选择性执行。
 - **空间函数需要 topology**：`(row, col)` 形式要求 builder 传入了 `topology`。`(flat_idx)` 形式不依赖 topology。
 
 ## batch_setting 异构配置

@@ -163,7 +163,7 @@ See the "Migration Paths" and "migration_rate and Boundary Effects" sections for
 | `migration` | `kernel` | NDArray |
 
 The following parameters do **not** accept `batch_setting`:
-- **hooks**: Per-deme selective execution is achieved via `@hook(deme=...)`.
+- **hooks**: Per-deme selective execution is achieved via `.hooks(..., deme=...)`.
 - **Spatial functions require topology**: `(row, col)` form requires the builder to have been given a `topology`. The `(flat_idx)` form does not depend on topology.
 
 ## batch_setting Heterogeneous Configuration

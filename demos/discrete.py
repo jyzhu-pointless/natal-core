@@ -26,12 +26,6 @@ drive = nt.HomingDrive(
     cas9_deposition_glab="cas9_deposited"
 )
 
-@nt.hook(event="first", priority=0)
-def release_drive_carriers():
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=5000, when="tick % 10 == 0 and tick > 0")
-    ]
-
 pop = nt.DiscreteGenerationPopulation \
     .setup(
         species=sp,
@@ -57,7 +51,10 @@ pop = nt.DiscreteGenerationPopulation \
         juvenile_growth_mode="beverton_holt"
     ) \
     .presets(drive) \
-    .hooks(release_drive_carriers) \
+    .hooks(
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=5000, when="tick % 10 == 0 and tick > 0"),
+        event="first",
+    ) \
     .with_observation(
         groups={
             "wildtype": IndividualSelector(ztype="WT|WT"),
