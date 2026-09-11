@@ -4,6 +4,41 @@
 
 ### Breaking Changes
 
+- **The NiceGUI dashboards are removed**: `natal.frontend.ui` (Dashboard /
+  PopulationDashboard / SpatialDashboard / launch), the `nt.ui.*` exports,
+  and the `nicegui[highcharts]` dependency are gone. `launch_vue` (Vue 3 +
+  FastAPI) is the interactive surface; the visualization helpers it still
+  uses live inside `natal.frontend.webui`.
+- **Migration-era package keys removed**: `natal.hooks`, `natal.data`, and
+  the other pre-Phase-0 short keys now raise `AttributeError`. Import from
+  the real paths (`natal.frontend.hooks`, ...) or the top-level lazy API.
+- **Configurator → PopulationBuilder / RuntimeUpdater**: the `Configurator`
+  chain is renamed back to `PopulationBuilder` (`from_species().setup()...`
+  `build()`), spatial construction moved to
+  `SpatialPopulation.builder(...)`, and runtime modification goes through
+  `pop.update()` / `deme.update()` returning one shared `RuntimeUpdater`.
+  The `natal.configurator` package is deleted.
+- **Runtime hook registration removed**: `register_hooks()` and the whole
+  post-registration machinery are gone. Hooks are declared on the build
+  chain (`.hooks(...)`) and packed once at build; per-population factories
+  and the `_pop_ref` / `_hook_context` internals no longer exist.
+- **Model layer split**: `NormalizedModel`, `CompiledModel`, `_ComputedMaps`,
+  and `RunProgram` are deleted. `natal.frontend.model` holds the frozen
+  `ModelDefinition` (declaration snapshot) and the build-time `ModelDraft`.
+- **Kernel Config snapshot layer removed**: the Rust kernels read the
+  Blueprint / Params / genetics tensors directly instead of a per-tick
+  rebuilt Config snapshot (`rust/src/kernels/config.rs` deleted).
+- **`extreme_speed_mode` is chain-only**: `setup(extreme_speed_mode=...)`
+  on the discrete-generation chain (modes: 3 deterministic, 1 multinomial,
+  2 Poisson); the age-structured entry rejects non-zero, and the
+  documented public low-level construction path is retired.
+- **`DemeSlice` aligned surface**: `spatial.deme(i)` returns an explicit
+  view of exactly the 15 `Population`-aligned members plus
+  `index` / `write_ecology` / `write_genetics`; dynamic proxies and
+  `_minimal_contract` are gone, and unlisted attributes raise
+  `AttributeError`.
+- **Undocumented exports removed without aliases**: the `_PUBLIC_EXPORTS`
+  list is the whole public top-level API.
 - **The Rust engine is the only execution backend**: the pure-Python
   reference package (`natal.backends.reference`) is deleted together with
   the `backend=` selector and the `disable_rust_backend` /
@@ -46,14 +81,39 @@
 
 ### New Features
 
+- **`launch_vue` — Vue 3 + FastAPI dashboard**: real-time curves,
+  per-genotype inspection, hooks / genetics-matrix panels, a spatial hex
+  landscape with click-to-inspect demes and a migration panel, and a debug
+  tab (event log, parameter audit, between-tick state diff, raw arrays).
+  The simulation runs server-side; closing the browser keeps the run going.
 - **Composable individual selectors**: add immutable `IndividualSelector`
   rules over ZType, sex, and age coordinates.
 - **Structured history storage**: add immutable schemas, bounded history,
   read-only result ownership, post-hoc observation, and lifecycle-safe state
   restoration.
 
+### Performance
+
+- **Spatial ticks without the kernel Config layer**: reading the contracts
+  directly cut spatial tick time by roughly 35% on the drive benchmarks.
+- **Light direct-write refreshes**: `deme(i).write_ecology(...)`, the
+  per-deme routing of `pop.params.tensor_write(...)`, and
+  `deme(i).write_genetics(...)` hand the engine a source carrying only the
+  named fields instead of a fully materialized contract (which copied
+  every genetics table per write). Numeric outputs are bit-identical
+  (pinned by the digest baselines).
+
 ### Bug Fixes
 
+- **Manual `trigger_event("finish")` semantics**: a manually fired finish
+  event is a rehearsal — `is_finished` now reads false during and after
+  the event (it used to flip true-then-false because the session never
+  reached Stopped). The production finish paths (finish_simulation,
+  hook STOP, the spatial stop path) keep their true/true answers.
+- **Selector value edges**: NumPy integer sex and age values are accepted
+  like any `numbers.Integral`; booleans are rejected (``True`` used to
+  silently mean sex 1); an empty sex label raises with the same
+  "use None for a wildcard" guidance as an empty container.
 - **Spatial runtime updates**: validate complete per-deme updates before commit,
   preserve shared configuration identity, and propagate replacement configs to
   every affected deme without leaving partial state on failure.
