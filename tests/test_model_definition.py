@@ -302,7 +302,12 @@ class TestReconfigurationProvenance:
 
 
 def test_inline_build_hooks_are_normalized_with_dispatch_defaults() -> None:
-    """Inline hooks execute and remain part of the frozen declaration."""
+    """Inline hooks execute and remain part of the frozen declaration.
+
+    ``priority=None`` is the faithful record of "no call-level
+    assignment" (ops keep their own priorities); it must not be
+    normalized to ``0``, which would now mean an explicit assignment.
+    """
     calls: list[int] = []
 
     def callback(ctx: nt.TickContext) -> int:
@@ -316,7 +321,7 @@ def test_inline_build_hooks_are_normalized_with_dispatch_defaults() -> None:
     pop.run(2)
     assert len(calls) == 2
     definition.hook_calls[0][1]["priority"] = 999
-    assert pop.definition.hook_calls[0][1]["priority"] == 0
+    assert pop.definition.hook_calls[0][1]["priority"] is None
 
 
 def test_failed_modifier_registration_leaves_declarations_and_products_unchanged() -> None:

@@ -1398,7 +1398,7 @@ class SpatialPopulationBuilder:
         self,
         *hook_items: _HookItem,
         event: Optional[str] = None,
-        priority: int = 0,
+        priority: Optional[int] = None,
         deme: DemeSelector = "*",
         name: Optional[str] = None,
     ) -> SpatialPopulationBuilder:
@@ -1411,7 +1411,9 @@ class SpatialPopulationBuilder:
         Args:
             *hook_items: Functions decorated with ``@hook`` or hook mappings.
             event: Default event for items that do not carry one.
-            priority: Execution priority — lower values run first.
+            priority: Priority assigned to the op items of this call
+                (packing = one shared priority); ``None`` keeps the ops'
+                own values, which must then agree within a list.
             deme: Deme selector for the compiled descriptors.
             name: Optional name for grouped op declarations.
 

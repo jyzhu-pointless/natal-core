@@ -1385,7 +1385,7 @@ class PopulationBuilder:
         self,
         *hook_items: _HookItem,
         event: str | None = None,
-        priority: int = 0,
+        priority: int | None = None,
         deme: DemeSelector = "*",
         name: str | None = None,
     ) -> Self:
@@ -1403,7 +1403,11 @@ class PopulationBuilder:
             *hook_items: Hook declarations.
             event: Default event for items that do not carry one
                 (``"first"``, ``"early"``, ``"late"``, ``"finish"``).
-            priority: Execution priority — lower values run first.
+            priority: Priority assigned to the op items of this call.
+                Ops in one list share it (packing = one priority);
+                without it the ops' own priorities are used and must
+                agree. Decorated functions keep their decorator
+                priority.
             deme: Deme selector for spatial populations.
             name: Optional name for grouped op declarations.
 
@@ -1413,7 +1417,9 @@ class PopulationBuilder:
         Raises:
             TypeError: If an item has an unsupported shape (including the
                 removed ``(state, config, deme_id)`` signature).
-            ValueError: If an event name is unknown or cannot be resolved.
+            ValueError: If an event name is unknown or cannot be resolved,
+                or a list mixes ops with differing priorities and no
+                ``priority`` is given.
         """
         self._hook_calls.append(
             (
@@ -1632,7 +1638,7 @@ class PopulationBuilder:
                 layout,
                 *items,
                 event=cast("str | None", kwargs["event"]),
-                priority=cast("int", kwargs["priority"]),
+                priority=cast("int | None", kwargs["priority"]),
                 deme=cast("DemeSelector", kwargs["deme"]),
                 name=cast("str | None", kwargs["name"]),
                 allowed_events=BasePopulation.ALLOWED_EVENTS,
