@@ -156,7 +156,7 @@ def test_one_genetic_compile_invokes_user_modifier_once() -> None:
 @pytest.mark.parametrize("compressed", [False, True])
 def test_normalized_definition_recompiles_same_genetic_products(compressed: bool) -> None:
     """The stored inputs reproduce products without relying on cached tensors."""
-    from natal.frontend.genetics.definition_compiler import compile_definition
+    from natal.frontend.model.definition_compiler import compile_definition
     from tests.test_compile_unification import _build_population_builder, _drive, _species
 
     pop = (
@@ -183,7 +183,7 @@ def test_normalized_definition_recompiles_same_genetic_products(compressed: bool
 def test_bare_definition_cannot_compile() -> None:
     """A declaration without normalized inputs is rejected, not silently built."""
     from natal.frontend.model.definition import ModelDefinition
-    from natal.frontend.genetics.definition_compiler import compile_definition
+    from natal.frontend.model.definition_compiler import compile_definition
     from tests.test_compile_unification import _species
 
     with pytest.raises(ValueError, match="normalized model declarations"):

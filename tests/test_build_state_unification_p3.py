@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 
 import natal as nt
-from natal.frontend.genetics.definition_compiler import compile_definition
+from natal.frontend.model.definition_compiler import compile_definition
 from natal.frontend.presets import GeneticPreset
 from natal.frontend.spatial.builder import SpatialPopulationBuilder
 

@@ -36,12 +36,12 @@ from natal.frontend.builder._writers import (
     CoreConfigWriter,
 )
 from natal.frontend.genetics.compile import next_modifier_id
-from natal.frontend.genetics.definition_compiler import (
+from natal.frontend.model import ModelDraft
+from natal.frontend.model.definition_compiler import (
     FITNESS_FIELDS,
     CompiledProducts,
     compile_definition,
 )
-from natal.frontend.model import ModelDraft
 from natal.frontend.registry.index import IndexRegistry
 
 if TYPE_CHECKING:
@@ -983,7 +983,7 @@ def recompile_modifier_maps(target: _UpdateTarget) -> None:
         target: The resolved commit target.
     """
     from natal.frontend.builder._registry_builder import rebuild_config_maps
-    from natal.frontend.genetics.definition_compiler import (
+    from natal.frontend.model.definition_compiler import (
         _CompileHost,  # pyright: ignore[reportPrivateUsage]  # canonical isolated recipe host
     )
 

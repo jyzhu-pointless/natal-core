@@ -463,7 +463,7 @@ class PopulationBuilder:
         self.zygote_modifiers: list[tuple[int, str | None, ZygoteModifier]] = []
         # Preset identity must survive build() so runtime refresh and
         # reconfiguration can reconstruct modifiers from the original recipes.
-        from natal.frontend.genetics.definition_compiler import FITNESS_FIELDS
+        from natal.frontend.model.definition_compiler import FITNESS_FIELDS
 
         self._fitness_base = tuple(getattr(config, field).copy() for field in FITNESS_FIELDS)
         self._fitness_steps: list[tuple[int, dict[str, object]]] = []
@@ -1536,7 +1536,7 @@ class PopulationBuilder:
 
     def _compile_specification(self, *, preserve_fitness: bool = False) -> None:
         """Expand recipes once; map-only changes preserve current fitness overrides."""
-        from natal.frontend.genetics.definition_compiler import (
+        from natal.frontend.model.definition_compiler import (
             FITNESS_FIELDS,
             compile_definition,
         )
@@ -1676,7 +1676,7 @@ class PopulationBuilder:
             depending on whether *self._config* carries the
             discrete-generation flag.
         """
-        from natal.frontend.genetics.definition_compiler import (
+        from natal.frontend.model.definition_compiler import (
             GENETIC_PRODUCT_FIELDS,
             compile_definition,
         )

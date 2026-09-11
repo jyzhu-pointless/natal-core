@@ -629,7 +629,7 @@ def test_p3_retired_exports_stay_removed() -> None:
     for name in ("NormalizedModel", "CompiledModel"):
         assert not hasattr(natal, name), f"retired export {name!r} is back"
 
-    compiler = importlib.import_module("natal.frontend.genetics.definition_compiler")
+    compiler = importlib.import_module("natal.frontend.model.definition_compiler")
     for name in ("NormalizedModel", "CompiledModel", "snapshot_inputs"):
         assert not hasattr(compiler, name), f"retired export {name!r} is back"
 
