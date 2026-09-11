@@ -56,10 +56,6 @@ This section provides module-level API references, organized by subpackage.
 
 - [IndexRegistry](registry.md)
 
-## UI
-
-- [Dashboard & Launch](ui.md)
-
 ## Utils
 
 - [Utilities](utils.md)

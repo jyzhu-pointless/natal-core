@@ -47,7 +47,6 @@ _LEGACY_SUBMODULE_PATHS: Tuple[str, ...] = (
         "modifiers", "output", "data", "model", "builder", "population",
         "spatial", "webui", "hooks", "utils",
         "configurator._base",
-        "configurator._base",
         "configurator._factory",
         "configurator._fitness",
         "configurator._params",

@@ -61,9 +61,7 @@ def get_unordered_genotype_labels(genotypes: list[Any]) -> list[str]:
             mat_hap = gt.maternal.get_haplotype_for_chromosome(chrom)
             pat_hap = gt.paternal.get_haplotype_for_chromosome(chrom)
 
-            def _hap_str(hap: "Haplotype | None", loci: "list[Locus]") -> str:
-                if hap is None:
-                    return ""
+            def _hap_str(hap: "Haplotype", loci: "list[Locus]") -> str:
                 names: list[str] = []
                 for locus in loci:
                     gene = hap.get_gene_at_locus(locus)
