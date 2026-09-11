@@ -91,6 +91,9 @@
 - **Structured history storage**: add immutable schemas, bounded history,
   read-only result ownership, post-hoc observation, and lifecycle-safe state
   restoration.
+- **Op-level `event` / `priority` on every factory**: `scale`, `set_count`,
+  `add`, `subtract`, `kill`, `sample`, and the `stop_if_*` family accept
+  `event=` and `priority=` like `Op.set_param` / `Op.convert` already did.
 
 ### Performance
 
@@ -178,6 +181,16 @@
   `deme.state` returns an independent snapshot (the live write-through is
   retired — `deme.import_state(...)` is the write channel), and
   `SpatialPopulation.reset()` reseeds the RNG bank.
+- **Hook priority is op-level data with assignment resolution**: a call-level
+  `.hooks(..., priority=P)` assigns one shared priority to the op items of
+  that declaration (single ops included); without it the ops' own priorities
+  are used and must agree within a packed list (mixed declarations raise
+  `ValueError` at build time).  This fixes two silent drops: the call-level
+  priority never reached a bare op, and an op-level priority (e.g.
+  `Op.set_param(..., priority=5)`) was discarded when the op was packed into
+  a list.  `.hooks()` now records `priority=None` (no assignment) instead of
+  defaulting the declaration to `0`; decorated callbacks keep their decorator
+  priority and are not reachable by the call-level assignment.
 
 ## v0.2.0b (2026.7.14)
 
