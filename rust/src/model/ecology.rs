@@ -583,7 +583,8 @@ impl EcologyParams {
         } else {
             return Err(PyValueError::new_err(format!(
                 "Params.{name}: column holds {} elements, expected {total}; \
-                 cannot write one deme of a sentinel column",
+                 cannot write one deme of an undeclared column — declare {name} \
+                 at build time to enable per-deme writes",
                 column.len()
             )));
         }

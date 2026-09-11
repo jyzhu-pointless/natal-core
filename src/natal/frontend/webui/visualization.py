@@ -47,7 +47,7 @@ def get_unordered_genotype_labels(genotypes: list[Any]) -> list[str]:
     """Generate unique unordered (``::``) genotype labels from a genotype list.
 
     For each genotype, builds a label in the form ``hapstrA::hapstrB``
-    (sorted alphabetically so ``WT|Dr`` and ``Dr|WT`` both become ``WT::Dr``).
+    (sorted alphabetically so ``WT|Dr`` and ``Dr|WT`` both become ``Dr::WT``).
     Multi-chromosome: ``hapA::hapB; hapC::hapC``.
 
     Returns:

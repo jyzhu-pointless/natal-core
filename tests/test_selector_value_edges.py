@@ -43,7 +43,7 @@ class TestSexIntegralValues:
 
 
 class TestSexBoolRejected:
-    """Booleans are not sex indices."""
+    """Booleans (Python and NumPy) are not sex indices."""
 
     @pytest.mark.parametrize("caller", [ObservationFilter._flatten_sex_values])
     def test_flatten_rejects_bool(self, caller) -> None:
@@ -57,6 +57,18 @@ class TestSexBoolRejected:
     def test_constructor_rejects_bool_inside_collection(self) -> None:
         with pytest.raises(TypeError, match="not a sex index"):
             IndividualSelector(sex=[0, True])
+
+    def test_constructor_rejects_numpy_bool_with_index_taxonomy(self) -> None:
+        """``np.bool_`` is not Integral; it must hit the same clean rejection.
+
+        Pre-fix it fell through to the raw ``'numpy.bool' object is not
+        iterable`` (or an ``Unknown sex label: np.False_`` inside a
+        collection) instead of the not-an-index message.
+        """
+        with pytest.raises(TypeError, match="not a sex index"):
+            IndividualSelector(sex=np.bool_(True))
+        with pytest.raises(TypeError, match="not a sex index"):
+            IndividualSelector(sex=[0, np.bool_(False)])
 
 
 class TestEmptySexLabel:
@@ -84,3 +96,8 @@ class TestAgeIntegralValues:
     def test_age_bool_rejected(self) -> None:
         with pytest.raises(TypeError, match="not an age index"):
             IndividualSelector(age=True)
+
+    def test_age_numpy_bool_rejected_with_index_taxonomy(self) -> None:
+        """``np.bool_`` ages get the clean rejection, not a raw iter error."""
+        with pytest.raises(TypeError, match="not an age index"):
+            IndividualSelector(age=np.bool_(True))
