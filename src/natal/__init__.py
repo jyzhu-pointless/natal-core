@@ -35,11 +35,13 @@ def _scan_unit(module_name: str, names: list[str], allow_legacy_key: bool) -> No
     Args:
         module_name: Dotted module name of the unit (e.g. ``frontend.hooks``).
         names: The unit's exported names, from ``_PUBLIC_EXPORTS``.
-        allow_legacy_key: Whether the legacy short package key (e.g. ``hooks``)
-            is registered alongside the exported names.  ``contracts`` keeps its
-            own key because the package path did not change; ``frontend`` and
-            ``backends`` subpackages keep their pre-Phase-0 keys so that
-            ``natal.<legacy-key>`` attribute access keeps resolving.
+        allow_legacy_key: Whether the unit's short package key is registered
+            alongside the exported names.  Only ``contracts`` qualifies: it is
+            a real top-level package whose lazy attribute entry matches its
+            own name.  The relocated ``frontend.*`` units register no short
+            keys — the migration-era aliases (``natal.hooks``,
+            ``natal.data``, ...) were removed once the Rust-only migration
+            settled, and the phase-0 shim suite pins them unimportable.
     """
     if allow_legacy_key:
         short = module_name.rsplit(".", 1)[-1]
@@ -168,7 +170,7 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
 # Build the lazy index from the explicit list (deterministic first-wins
 # semantics on repeated names; units are listed alphabetically).
 for _unit, _names in _PUBLIC_EXPORTS.items():
-    _scan_unit(_unit, _names, allow_legacy_key=True)
+    _scan_unit(_unit, _names, allow_legacy_key=_unit == "contracts")
 
 # Public export list.
 #

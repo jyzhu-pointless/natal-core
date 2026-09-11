@@ -41,7 +41,8 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.hooks import Op
+import natal.frontend.hooks
+from natal.frontend.hooks import CompiledHookDescriptor, Op
 from natal.frontend.hooks.tick_context import TickContext
 
 # ---------------------------------------------------------------------------
@@ -506,7 +507,7 @@ def test_removed_hook_surface_inaccessible() -> None:
     assert desc.plan is None
 
     # Codegen module and template directory removed from the package.
-    hooks_dir = Path(nt.hooks.__file__).parent
+    hooks_dir = Path(natal.frontend.hooks.__file__).parent
     assert not (hooks_dir / "templates").exists()
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("natal.frontend.hooks.compile.codegen")
@@ -861,11 +862,11 @@ def test_deme_selector_serialization_and_panmictic_filter() -> None:
         return cb
 
     selectors: list[object] = [2, range(0, 2), [1, 3]]
-    descriptors: list["nt.hooks.CompiledHookDescriptor"] = []
+    descriptors: list[CompiledHookDescriptor] = []
     for idx, sel in enumerate(selectors):
         cb = make_cb(f"t{idx}")
         descriptors.append(
-            nt.hooks.CompiledHookDescriptor(
+            CompiledHookDescriptor(
                 name=f"sel_{idx}",
                 event="first",
                 deme_selector=sel,  # type: ignore[arg-type]
