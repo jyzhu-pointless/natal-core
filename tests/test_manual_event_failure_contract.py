@@ -121,7 +121,7 @@ _BUILDERS = {"discrete": _discrete, "age": _age}
 
 
 @pytest.mark.parametrize("builder_kind", ["discrete", "age"])
-@pytest.mark.parametrize("event", ["finish", "first", "early"])
+@pytest.mark.parametrize("event", ["finish", "first", "early", "late"])
 def test_panmictic_manual_event_failure_is_uniform(
     builder_kind: str, event: str
 ) -> None:
@@ -145,7 +145,7 @@ def test_panmictic_manual_event_failure_is_uniform(
     pop.run(1, record_every=0)  # the hook now behaves; runnable again
 
 
-@pytest.mark.parametrize("event", ["finish", "first", "early"])
+@pytest.mark.parametrize("event", ["finish", "first", "early", "late"])
 def test_spatial_manual_event_failure_is_uniform(event: str) -> None:
     """The spatial container's per-deme trigger fails the shared session."""
     spat = _spatial(f"FailUniformSp{event}", event)
