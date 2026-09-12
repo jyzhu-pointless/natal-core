@@ -468,14 +468,14 @@ class PopulationBuilder:
         self._fitness_base = tuple(getattr(config, field).copy() for field in FITNESS_FIELDS)
         self._fitness_steps: list[tuple[int, dict[str, object]]] = []
         self._compilation_key = object()
-        # Compile-validity bookkeeping: ``_compiled_key`` records which
+        # Compile-validity bookkeeping: ``_cached_compilation_key`` records which
         # declaration identity the products in ``_compiled_draft`` were
         # computed from. ``_compiled_draft`` holds the last compile's
         # (uncompressed) products even after build-time compression
         # replaces ``_config``, so finalization and group reuse never
         # re-execute recipes while the declaration identity matches.
         self._compiled_draft: ModelDraft | None = None
-        self._compiled_key: object | None = None
+        self._cached_compilation_key: object | None = None
         self._presets: list[GeneticPreset] = []
         self._manual_gamete: list[tuple[int, str | None, GameteModifier]] = []
         self._manual_zygote: list[tuple[int, str | None, ZygoteModifier]] = []
@@ -1538,7 +1538,7 @@ class PopulationBuilder:
         self.gamete_modifiers = list(gamete_modifiers)
         self.zygote_modifiers = list(zygote_modifiers)
         self._compiled_draft = config
-        self._compiled_key = self._compilation_key
+        self._cached_compilation_key = self._compilation_key
 
     def _compile_specification(self, *, preserve_fitness: bool = False) -> None:
         """Expand recipes once; map-only changes preserve current fitness overrides."""
@@ -1563,7 +1563,7 @@ class PopulationBuilder:
         self._manual_gamete = list(candidate._manual_gamete)
         self._manual_zygote = list(candidate._manual_zygote)
         self._compilation_key = candidate._compilation_key
-        self._compiled_key = candidate._compiled_key
+        self._cached_compilation_key = candidate._cached_compilation_key
 
     # -- apply / build ---------------------------------------------------------
 
@@ -1703,7 +1703,7 @@ class PopulationBuilder:
             self._record_history_max_rows = definition.history_max_rows
             self._compress = definition.compress
             self._declared_zygote_types = None if definition.declared_zygote_types is None else cast("set[str] | set[int]", set(definition.declared_zygote_types))  # homogeneous selector kind is retained by freezing.
-            if self._compiled_key is self._compilation_key and self._compiled_draft is not None:
+            if self._cached_compilation_key is self._compilation_key and self._compiled_draft is not None:
                 # Finalization only: this exact declaration identity already
                 # ran its recipes, so re-materialize the stored products
                 # privately instead of executing them again.

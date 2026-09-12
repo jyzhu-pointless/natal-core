@@ -1801,7 +1801,7 @@ class SpatialPopulationBuilder:
             # marker directly: same declaration identity, so group builds
             # finalize instead of re-running the recipes.
             template._compiled_draft = compiled_template._compiled_draft  # pyright: ignore[reportPrivateUsage]
-            template._compiled_key = compiled_template._compiled_key  # pyright: ignore[reportPrivateUsage]
+            template._cached_compilation_key = compiled_template._cached_compilation_key  # pyright: ignore[reportPrivateUsage]
         template._hook_calls = list(definition.hook_calls)  # pyright: ignore[reportPrivateUsage]
         template._observation_groups = definition.observation_groups  # pyright: ignore[reportPrivateUsage]
         template._observation_collapse_age = definition.observation_collapse_age  # pyright: ignore[reportPrivateUsage]
@@ -2254,7 +2254,7 @@ class SpatialPopulationBuilder:
             # A cold compile creates products once; subsequent ecology groups
             # and the post-BFS build can reuse them under the same input key.
             self._template._compiled_draft = template_cfg._compiled_draft  # pyright: ignore[reportPrivateUsage]
-            self._template._compiled_key = template_cfg._compiled_key  # pyright: ignore[reportPrivateUsage]
+            self._template._cached_compilation_key = template_cfg._cached_compilation_key  # pyright: ignore[reportPrivateUsage]
             return result
         if self._pop_type == "age_structured":
             template_cfg = PopulationBuilder.for_age_structured(self._species)

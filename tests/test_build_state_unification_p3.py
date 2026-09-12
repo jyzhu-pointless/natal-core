@@ -1,7 +1,7 @@
 """Evaluator-strengthened contracts for the P3 build-state unification.
 
 Pins the validity bookkeeping the phase introduced (``compilation_key`` /
-``_compiled_key`` / ``_compression_applied``) against the plan's
+``_cached_compilation_key`` / ``_compression_applied``) against the plan's
 acceptance row: recipe counts, candidate isolation, cold rebuild, and
 spatial group reuse must be preserved (ARCHITECTURE_SIMPLIFICATION_PLAN,
 phase P3). Each test counts real recipe invocations, so a bookkeeping
