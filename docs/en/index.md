@@ -127,7 +127,7 @@ pop = (nt.DiscreteGenerationPopulation
     .build())
 
 # 4. Launch the interactive WebUI and run the simulation
-launch(pop)
+launch_vue(pop)
 ```
 
 For more ready-to-run examples, see the [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) directory in the GitHub repository.

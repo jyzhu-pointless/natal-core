@@ -127,7 +127,7 @@ pop = (nt.DiscreteGenerationPopulation
     .build())
 
 # 4. 启动交互式 WebUI 并运行模拟
-launch(pop)
+launch_vue(pop)
 ```
 
 更多可即时使用的示例，请参阅 GitHub 仓库中的 [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) 目录。

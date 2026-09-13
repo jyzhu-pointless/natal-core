@@ -70,7 +70,7 @@ pip install natal-core
 
 ```python
 import natal as nt
-from natal.ui import launch
+from natal import launch_vue
 
 # 1. Define the genetics architecture of a species
 sp = nt.Species.from_dict(
@@ -117,7 +117,7 @@ pop = (nt.DiscreteGenerationPopulation
     .competition(
         low_density_growth_rate=6.0,
         carrying_capacity=100000,
-        juvenile_growth_mode="concave"
+        juvenile_growth_mode="beverton_holt"
     )
     .presets(drive)
     .hooks(
@@ -127,7 +127,7 @@ pop = (nt.DiscreteGenerationPopulation
     .build())
 
 # 4. Launch interactive WebUI and run simulation
-launch(pop)
+launch_vue(pop)
 ```
 
 For more ready-to-run examples, see the [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) directory in the GitHub repository.
