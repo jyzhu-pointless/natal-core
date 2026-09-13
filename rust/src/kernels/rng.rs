@@ -133,6 +133,10 @@ impl SeedableRng for SessionRng {
     /// Create a generator from a u64 seed via SplitMix64 expansion,
     /// matching ``rand_core``'s default and rand's ``SmallRng`` streams.
     fn seed_from_u64(mut state: u64) -> Self {
+        // SplitMix64 expansion: add the golden-ratio increment, then apply the
+        // xorshift-multiply finalizer.  The constants, shift widths, and wrapping
+        // order are the stream-parity contract with rand's SmallRng: changing any
+        // of them changes every stream derived from a seed.
         const PHI: u64 = 0x9e37_79b9_7f4a_7c15;
         let mut s = [0_u64; 4];
         for slot in &mut s {
@@ -158,6 +162,10 @@ impl TryRng for SessionRng {
 
     #[inline]
     fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        // Xoshiro256++ output from the pre-update state, followed by the state
+        // transition.  The output expression and the four-word update order below
+        // define the stream: reordering them (or changing the rotate/shift
+        // constants) breaks stream identity and checkpoint continuation.
         let res = self.s[0]
             .wrapping_add(self.s[3])
             .rotate_left(23)
@@ -207,6 +215,7 @@ pub fn binomial(rng: &mut SessionRng, n: i64, p: f64) -> f64 {
     if p >= 1.0 {
         return n as f64;
     }
+    // n > 0 and 0 < p < 1 after the guards above, so the parameters are valid.
     let dist = Binomial::new(n as u64, p).expect("clamped binomial parameters must be valid");
     dist.sample(rng) as f64
 }
@@ -252,15 +261,20 @@ pub fn gamma(rng: &mut SessionRng, shape: f64) -> f64 {
     // Use mean for degenerate/extreme shapes; approximate with Normal
     // for large shapes; otherwise sample a standard Gamma.
     if shape >= RESOLUTION_LIMIT {
+        // Extreme shape: the documented Python precedent returns the mean, which
+        // for a unit-scale Gamma is exactly the shape value itself.
         return shape;
     }
     if shape >= GAMMA_NORMAL_APPROXIMATION_THRESHOLD {
+        // Large shapes use Normal(shape, sqrt(shape)) -- the same mean and variance
+        // as Gamma(shape, 1) -- then clamp the lower tail back to the support.
         let sample = Normal::new(shape, shape.sqrt())
             .expect("finite gamma parameters must be valid")
             .sample(rng);
         return sample.max(0.0);
     }
     if shape <= EPS {
+        // Degenerate shape: Gamma(0) is the point mass at 0.
         return 0.0;
     }
     Gamma::new(shape, 1.0)
@@ -282,6 +296,7 @@ pub fn gamma(rng: &mut SessionRng, shape: f64) -> f64 {
 /// ## Panics
 /// Panics if `lambda` is not finite.
 pub fn continuous_poisson(rng: &mut SessionRng, lambda: f64) -> f64 {
+    // Non-finite lambda is rejected loudly (documented panic) rather than sampled.
     if !lambda.is_finite() {
         panic!("continuous_poisson(): lambda must be finite");
     }
@@ -319,6 +334,11 @@ pub fn continuous_binomial(rng: &mut SessionRng, n: f64, p: f64) -> f64 {
         return n * p;
     }
 
+    // Beta(alpha, beta) proportion via two unit-scale Gamma draws, with
+    // concentration n - 1 so E[p] = alpha/(alpha+beta) = p.  The two gamma()
+    // calls happen in this fixed order because each consumes the stream;
+    // swapping them changes every downstream sample.  A zero numerator is
+    // short-circuited to avoid a 0/0 NaN when both Gammas underflow.
     let concentration = n - 1.0;
     let alpha = (p * concentration).max(EPS);
     let beta = ((1.0 - p) * concentration).max(EPS);
@@ -352,7 +372,11 @@ pub fn multinomial(rng: &mut SessionRng, n: i64, p: &[f64], out: &mut [f64]) {
         return;
     }
     let mut n_remaining = n;
+    // p_sum is the probability mass not yet assigned; p_j / p_sum is the
+    // conditional probability of category j given the earlier ones did not win.
     let mut p_sum = 1.0;
+    // The last category is intentionally excluded from the draw loop: it takes
+    // the remainder below, which conserves the total exactly.
     for (idx, &p_j) in p.iter().enumerate().take(p.len().saturating_sub(1)) {
         if n_remaining <= 0 {
             break;
@@ -386,12 +410,17 @@ pub fn continuous_multinomial(rng: &mut SessionRng, n: f64, p: &[f64], out: &mut
     // Draw independent Gamma variates and normalize to the target total.
     // A final correction handles floating-point drift in the sum.
     if n <= 1.0 + EPS {
+        // Small totals collapse to the exact scaled proportions: no sampling,
+        // hence no normalization drift.
         for (slot, &prob) in out.iter_mut().zip(p.iter()) {
             *slot = n * prob;
         }
         return;
     }
 
+    // Dirichlet-style split: independent Gamma(prob * (n-1), 1) magnitudes,
+    // normalized below to sum to n.  Draw order over `p` is stream-consuming
+    // and must stay fixed.
     let concentration = n - 1.0;
     let mut sum_gamma = 0.0;
     for (slot, &prob) in out.iter_mut().zip(p.iter()) {
@@ -402,6 +431,7 @@ pub fn continuous_multinomial(rng: &mut SessionRng, n: f64, p: &[f64], out: &mut
     }
 
     if sum_gamma > EPS {
+        // Normalize the Gamma magnitudes to the requested total.
         let factor = n / sum_gamma;
         for slot in out.iter_mut() {
             *slot *= factor;
@@ -413,6 +443,8 @@ pub fn continuous_multinomial(rng: &mut SessionRng, n: f64, p: &[f64], out: &mut
     }
 
     let total: f64 = out.iter().sum();
+    // Rescale only when the normalized sum drifted beyond a relative tolerance,
+    // so tiny rounding noise does not perturb already-correct outputs.
     let tolerance = 1e-6 * n.max(1.0);
     if total > EPS && (total - n).abs() > tolerance {
         let correction = n / total;

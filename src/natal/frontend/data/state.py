@@ -65,6 +65,7 @@ class PopulationState(NamedTuple):
         """
         if n_sexes is None:
             n_sexes = 2
+        # Validate dimensions before allocating so bad declarations fail fast.
         assert n_ztypes > 0, "n_ztypes must be positive"
         assert n_ages > 0, "n_ages must be positive"
         assert n_tick >= 0, "n_tick must be non-negative"
@@ -76,6 +77,7 @@ class PopulationState(NamedTuple):
             assert individual_count.shape == expected_shape, (
                 f"Invalid shape for individual_count: expected {expected_shape}, got {individual_count.shape}"
             )
+            # astype always copies, so the container never aliases caller memory.
             ind = individual_count.astype(np.float64)
 
         if sperm_storage is None:
@@ -85,6 +87,7 @@ class PopulationState(NamedTuple):
             assert sperm_storage.shape == expected_shape, (
                 f"Invalid shape for sperm_storage: expected {expected_shape}, got {sperm_storage.shape}"
             )
+            # Same copy-on-ingest rule for the (age, female ztype, male ztype) plane.
             sperm = sperm_storage.astype(np.float64)
 
         return cls(n_tick=int(n_tick), individual_count=ind, sperm_storage=sperm)
@@ -157,6 +160,8 @@ class PopulationState(NamedTuple):
         Returns:
             1D array of floats.
         """
+        # Flat format [tick, counts.ravel(), sperm.ravel()] is shared with
+        # parse_flattened_state and the recorded history rows; C-order must match.
         tick_arr = np.array([float(self.n_tick)], dtype=np.float64)
         return np.concatenate((tick_arr, self.individual_count.flatten(), self.sperm_storage.flatten()))
 
@@ -210,6 +215,7 @@ class DiscretePopulationState(NamedTuple):
             assert individual_count.shape == expected_shape, (
                 f"Invalid shape for individual_count: expected {expected_shape}, got {individual_count.shape}"
             )
+            # astype copies, keeping the container detached from the caller's array.
             ind = individual_count.astype(np.float64)
 
         return cls(n_tick=int(n_tick), individual_count=ind)
@@ -222,6 +228,7 @@ class DiscretePopulationState(NamedTuple):
         Returns:
             1D array of floats.
         """
+        # Same layout minus the sperm block: [tick, counts.ravel()].
         tick_arr = np.array([float(self.n_tick)], dtype=np.float64)
         return np.concatenate((tick_arr, self.individual_count.flatten()))
 
@@ -247,11 +254,14 @@ def parse_flattened_state(
     Returns:
         A PopulationState instance.
     """
+    # Fixed layout [tick | counts | sperm]; end marks the sperm block's start offset.
     n_tick = int(flat_array[0])
     end = 1 + n_sexes * n_ages * n_ztypes
     individual_count = flat_array[1:end].reshape((n_sexes, n_ages, n_ztypes))
     sperm_storage = flat_array[end:].reshape((n_ages, n_ztypes, n_ztypes))
 
+    # copy=False leaves these as views into flat_array, so the caller must keep
+    # that buffer alive; the default detaches both arrays.
     if copy:
         individual_count = individual_count.copy()
         sperm_storage = sperm_storage.copy()
@@ -284,9 +294,11 @@ def parse_flattened_discrete_state(
     Returns:
         A DiscretePopulationState instance.
     """
+    # Same fixed layout minus the sperm block: tick then the counts.
     n_tick = int(flat_array[0])
     individual_count = flat_array[1:].reshape((n_sexes, n_ages, n_ztypes))
 
+    # copy=False views flat_array; copy=True detaches the state from the source row.
     if copy:
         individual_count = individual_count.copy()
 

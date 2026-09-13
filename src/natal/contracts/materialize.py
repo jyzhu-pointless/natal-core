@@ -80,6 +80,9 @@ def _custom_slots(draft: ModelDraft) -> dict[str, CustomValue]:
         A fresh ``{name: value}`` mapping owning its storage: scalars
         are native Python values, arrays come back as float64 copies.
     """
+    # Copy each slot so the contract owns its storage: NumPy scalars become
+    # native Python values, arrays become independent float64 C-order copies,
+    # and other values are stored as-is.
     slots: dict[str, CustomValue] = {}
     for name, value in draft.custom.items():
         if isinstance(value, np.generic):
@@ -105,12 +108,17 @@ def _params(draft: ModelDraft, migration_rate: NDArray[np.float64]) -> Params:
     Returns:
         A fully owned ``Params`` instance.
     """
+    # Sentinel: a (0, 0) equilibrium tells the engine to derive the age
+    # distribution itself; a declared vector is copied into the contract.
     equilibrium = getattr(draft, "equilibrium_individual_distribution", None)
     if equilibrium is None:
         equilibrium = np.zeros((0, 0), dtype=np.float64)
     else:
         equilibrium = np.array(equilibrium, dtype=np.float64, order="C")
+    # A negative external_expected_eggs is the "no external eggs" sentinel.
     external_eggs = draft.external_expected_eggs
+    # Every array below is re-copied as float64 C order so the engine can read
+    # contiguous memory that the draft does not alias.
     return Params(
         carrying_capacity=float(draft.carrying_capacity),
         eggs_per_female=float(draft.eggs_per_female),
@@ -168,16 +176,21 @@ def _blueprint(
         directory.
     """
     sperm = draft.initial_sperm_storage
+    # A panmictic blueprint carries exactly one deme and empty CSR arrays;
+    # spatial callers supply a fully resolved CSR triple instead.
     if migration is None:
         n_demes = 1
         indptr = np.zeros(0, dtype=np.int64)
         dest_idx = np.zeros(0, dtype=np.int64)
         weights = np.zeros(0, dtype=np.float64)
     else:
+        # The rate column's leading axis is the authoritative deme count.
         n_demes = int(migration.rate.shape[0])
         indptr = np.array(migration.indptr, dtype=np.int64, order="C")
         dest_idx = np.array(migration.dest_idx, dtype=np.int64, order="C")
         weights = np.array(migration.weights, dtype=np.float64, order="C")
+    # Array fields are frozen (read-only) copies; every mutable runtime value
+    # lives in Params instead.
     return Blueprint(
         n_sexes=int(draft.n_sexes),
         n_ages=int(draft.n_ages),
@@ -202,6 +215,8 @@ def _blueprint(
         initial_individual_count=frozen(
             np.array(draft.initial_individual_count, dtype=np.float64, order="C")
         ),
+        # Discrete-generation drafts carry no sperm array; keep an explicit
+        # empty sentinel rather than a shape-mismatched dummy.
         initial_sperm_storage=(
             frozen(np.array(sperm, dtype=np.float64, order="C"))
             if sperm.size
@@ -231,6 +246,8 @@ def materialize(
         A :class:`Materialized` pair owning fresh copies of every
         array; the draft is safe to discard afterwards.
     """
+    # One owned rate column is derived here and consumed by the params
+    # projection, so neither artefact aliases the caller's migration payload.
     rate = _copy_migration_rate(draft, None if migration is None else migration.rate)
     return Materialized(
         blueprint=_blueprint(draft, migration),
@@ -311,6 +328,8 @@ def contract_field_source(draft: ModelDraft, names: Sequence[str]) -> SimpleName
     Raises:
         KeyError: If a name has no draft mapping.
     """
+    # Rebuild each requested field with the exact conversion _params applies, so
+    # the engine sees bit-identical values from either source.
     source = SimpleNamespace()
     for name in names:
         try:
@@ -318,6 +337,8 @@ def contract_field_source(draft: ModelDraft, names: Sequence[str]) -> SimpleName
         except KeyError:
             raise KeyError(f"{name!r} has no contract field source mapping") from None
         value = getattr(draft, draft_attr)
+        # "tensor" is a full ownership copy; the "optional_*" kinds reproduce
+        # the empty-matrix and negative-float sentinels; the fallback is float.
         if kind == "tensor":
             converted: object = np.ascontiguousarray(
                 np.asarray(value, dtype=np.float64)
@@ -340,6 +361,8 @@ def _copy_migration_rate(
     draft: ModelDraft, migration_rate: NDArray[np.float64] | None
 ) -> NDArray[np.float64]:
     """Return an owned migration-rate column for Params-only materialization."""
+    # Panmictic default: a single-deme zero rate matching the (n_demes, n_sexes,
+    # n_ages) column shape the engines expect.
     if migration_rate is None:
         return np.zeros((1, int(draft.n_sexes), int(draft.n_ages)), dtype=np.float64)
     return np.array(migration_rate, dtype=np.float64, order="C")

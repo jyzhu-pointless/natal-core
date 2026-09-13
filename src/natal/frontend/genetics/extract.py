@@ -59,9 +59,13 @@ def extract_gamete_frequencies(
     gamete_freqs_array = zygotes_to_gametes_map[sex_idx, genotype_idx, :]
     result: dict[HaploidGenotype, float] = {}
 
+    # Walk the compressed HL axis and fold every glab variant of one haplotype
+    # into a single aggregated frequency.
     for compressed_idx, freq in enumerate(gamete_freqs_array):
         if freq > 0:  # Only include non-zero frequencies
+            # Inverse of compress_hl: floor-divide away the label index.
             hg_idx = compressed_idx // n_glabs
+            # Slots beyond the provided catalog are dropped, not raised.
             if hg_idx < len(haploid_genotypes):
                 hg = haploid_genotypes[hg_idx]
                 # Aggregate frequencies across all glab variants
@@ -103,10 +107,14 @@ def extract_gamete_frequencies_by_glab(
     gamete_freqs_array = zygotes_to_gametes_map[sex_idx, genotype_idx, :]
     result: dict[tuple[HaploidGenotype, int], float] = {}
 
+    # Same walk as extract_gamete_frequencies, but the label index is kept:
+    # keys stay (haplotype, glab) pairs instead of being summed away.
     for compressed_idx, freq in enumerate(gamete_freqs_array):
         if freq > 0:
+            # Inverse of compress_hl: // selects the haplotype, % the label.
             hg_idx = compressed_idx // n_glabs
             glab_idx = compressed_idx % n_glabs
+            # Slots beyond the provided catalog are dropped, not raised.
             if hg_idx < len(haploid_genotypes):
                 hg = haploid_genotypes[hg_idx]
                 result[(hg, glab_idx)] = freq
@@ -149,13 +157,17 @@ def extract_zygote_frequencies(
         ... )
         >>> # zygote_freqs = {genotype1: 1.0 or {genotype2: 0.5, genotype3: 0.5}, etc}
     """
+    # Slice the fused zygote plane for this ordered gamete pair; the last axis
+    # is the ZType axis (genotype x slab).
     zygote_freqs_array = gametes_to_zygotes_map[gamete1_compressed_idx, gamete2_compressed_idx, :]
     result: dict[Genotype, float] = {}
 
     for genotype_idx, freq in enumerate(zygote_freqs_array):
         if freq > 0:  # Only include non-zero frequencies
+            # Indices beyond the provided catalog are dropped, not raised.
             if genotype_idx < len(diploid_genotypes):
                 genotype = diploid_genotypes[genotype_idx]
+                # Accumulate (not overwrite) when the list repeats an object.
                 result[genotype] = result.get(genotype, 0.0) + freq
 
     return result

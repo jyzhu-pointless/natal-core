@@ -93,6 +93,9 @@ fn compute_mating_probability_matrix(
             out[gf * n_ztypes + gm] = value;
             row_sum += value;
         }
+        // Zero or non-finite totals (no available males, or overflowed weights)
+        // collapse to an all-zero row so no matings are drawn and normalization
+        // never divides by a subnormal total.
         if row_sum.is_finite() && row_sum > EPS {
             for gm in 0..n_ztypes {
                 out[gf * n_ztypes + gm] /= row_sum;
@@ -147,11 +150,15 @@ fn sample_mating(
         for gf in 0..n_ztypes {
             let n_female = female_counts[age * n_ztypes + gf];
             let mut mated_count = 0.0;
+            // Stored sperm partitions mated females by male genotype; the row sum
+            // is the number of already-mated females of this age/genotype.
             for gm in 0..n_ztypes {
                 mated_count += sperm[sperm_idx(age, gf, gm, n_ztypes)];
             }
             let virgins = (n_female - mated_count).max(0.0);
 
+            // Virgins mate with the age's clamped mating probability; the
+            // deterministic branch evaluates the expectation without sampling.
             let n_mating_virgins = if stochastic {
                 if continuous {
                     continuous_binomial(rng, virgins, p_mating)
@@ -162,6 +169,9 @@ fn sample_mating(
                 virgins * p_mating
             };
 
+            // Remating (and hence displacement of stored sperm) is possible only
+            // for females that mate again this tick, so the effective rate is the
+            // displacement rate scaled by the age's mating probability.
             let p_remating = p_displace * p_mating;
             let n_remating = if stochastic {
                 if mated_count > EPS && p_remating > EPS {
@@ -200,6 +210,10 @@ fn sample_mating(
                 removed
             };
 
+            // New sperm comes from virgin matings plus the mass freed by
+            // displacement, routed to male genotypes through this female's row.
+            // RNG order here (virgin draw, per-category removals, allocation) is
+            // the stream identity — do not reorder the draws.
             let n_new = n_mating_virgins + n_remating;
             if n_new > EPS {
                 if stochastic {
@@ -286,16 +300,24 @@ fn fertilize(
         for gf in 0..n_ztypes {
             let ff = genetics.fecundity_fitness[gf];
             for gm in 0..n_ztypes {
+                // A sperm-storage cell counts mated females of genotype gf whose
+                // partner was genotype gm; empty cells contribute nothing.
                 let n_pairs = sperm[sperm_idx(age, gf, gm, n_ztypes)];
                 if n_pairs <= 0.0 {
                     continue;
                 }
                 has_any = true;
+                // Clutch per mated pair = base eggs x female fecundity x male
+                // fecundity x the age's relative fertility.  The multiplication
+                // order matches the reference for bit parity.
                 let eggs_per_pair = eggs_per_female
                     * ff
                     * genetics.fecundity_fitness[n_ztypes + gm]
                     * fertility_factor;
 
+                // Egg count: first thin the pairs by the reproduction rate, then
+                // draw Poisson on the expected clutch (fixed_egg_count keeps the
+                // mean instead).  Binomial-then-Poisson is the reference RNG order.
                 let n_total = if stochastic {
                     let n_pairs_eff = if continuous { n_pairs } else { n_pairs.round() };
                     if n_pairs_eff <= 0.0 {
@@ -330,6 +352,9 @@ fn fertilize(
                     continue;
                 }
 
+                // The offspring tensor need not sum to one: its row sum is the
+                // probability that the cross yields any viable zygote.  It gates
+                // thinning/normalization and never rescales the stored tensor.
                 let mut p_surv = 0.0;
                 for go in 0..n_ztypes {
                     p_surv += genetics.offspring_tensor[(gf * n_ztypes + gm) * n_ztypes + go];
@@ -339,6 +364,8 @@ fn fertilize(
                     if p_surv <= EPS {
                         continue;
                     }
+                    // Thin the egg batch by the viable fraction; batches already
+                    // fully viable pass through without consuming an RNG draw.
                     let n_viable = if p_surv >= 1.0 - EPS {
                         n_total
                     } else if continuous {
@@ -349,6 +376,8 @@ fn fertilize(
                     if n_viable <= EPS {
                         continue;
                     }
+                    // Re-normalize the offspring genotype distribution over viable
+                    // genotypes, then multinomially split the viable eggs.
                     let inv = 1.0 / p_surv;
                     for go in 0..n_ztypes {
                         prob_norm[go] =
@@ -375,6 +404,8 @@ fn fertilize(
         }
     }
 
+    // No mated pair existed anywhere, or nothing survived thinning: the age-0
+    // outputs stay at zero (the freshly allocated vectors are already zero).
     if !has_any {
         return;
     }
@@ -384,6 +415,8 @@ fn fertilize(
     }
 
     let sex_ratio = clamp01(eco.sex_ratio[deme]);
+    // Sex assignment: sex-chromosome genotypes are fixed to one sex; all other
+    // genotypes split their total between female and male.
     for go in 0..n_ztypes {
         let n_g = offspring_acc[go];
         if n_g <= EPS {
@@ -394,6 +427,8 @@ fn fertilize(
         } else if bp.has_sex_chromosomes && bp.male_only_by_sex_chrom[go] {
             n_m[go] = n_g;
         } else {
+            // Compatibility weights are per-sex gamete availability, not a pair
+            // of sex probabilities; normalize them so the two sexes conserve n_g.
             let p_f = if bp.has_sex_chromosomes {
                 let denom =
                     genetics.female_ztype_compatibility[go] + genetics.male_ztype_compatibility[go];
@@ -415,6 +450,7 @@ fn fertilize(
                 n_g * p_f
             };
             n_f[go] = n_fem;
+            // Males take the remainder so the two sex outputs sum exactly to n_g.
             n_m[go] = n_g - n_fem;
         }
     }
@@ -456,6 +492,9 @@ pub fn reproduction(
     let n_ztypes = bp.n_ztypes;
     let mating_rates = &eco.mating_rates[deme * 2 * n_ages..(deme + 1) * 2 * n_ages];
     let mut effective_male_counts = vec![0.0; n_ztypes];
+    // Effective male pool = sum over adult ages of male_count(age, ztype) times
+    // that age's male mating rate.  The (sex, age) table is row-major, so male
+    // rates start at offset n_ages.
     for &age in &bp.adult_ages {
         let age = age as usize;
         if age < n_ages {
@@ -466,6 +505,8 @@ pub fn reproduction(
             }
         }
     }
+    // No mating-capable males (or all rates zero): no new matings or offspring,
+    // matching the reference's early return that leaves the state untouched.
     if effective_male_counts.iter().sum::<f64>() == 0.0 {
         return Ok(());
     }
@@ -500,11 +541,15 @@ pub fn reproduction(
         &mut n_female,
         &mut n_male,
     );
+    // Age-0 slots are overwritten (not accumulated), so a stage run is idempotent.
     for ztype in 0..n_ztypes {
         ind[ind_idx(0, 0, ztype, n_ages, n_ztypes)] = n_female[ztype];
         ind[ind_idx(1, 0, ztype, n_ages, n_ztypes)] = n_male[ztype];
     }
 
+    // Zygote viability is independent per-individual thinning after fertilization.
+    // A zero count skips its binomial draw entirely, keeping the RNG stream
+    // aligned with the reference.
     if bp.stochastic {
         for ztype in 0..n_ztypes {
             let f = ind[ind_idx(0, 0, ztype, n_ages, n_ztypes)];
@@ -586,6 +631,8 @@ fn scaling_factor(bp: &Blueprint, eco: &EcologyParams, deme: usize, ind: &[f64])
             male_sum += ind[ind_idx(1, 0, ztype, n_ages, n_ztypes)];
         }
         let total_age_0 = female_sum + male_sum;
+        // Mode 1 caps the total at K through the single-division min(1, K/total)
+        // form; going through the ratio form 1/(total/K) would double-round.
         return density_regulation::regulation_scaling(
             FIXED,
             total_age_0,
@@ -611,10 +658,14 @@ fn scaling_factor(bp: &Blueprint, eco: &EcologyParams, deme: usize, ind: &[f64])
         }
         juvenile_counts[age] = female_sum + male_sum;
     }
+    // Current competition strength C = sum over juvenile ages of
+    // juvenile_count(age) times competition_weight(age).
     let mut actual_comp = 0.0;
     for age in 0..new_adult_age {
         actual_comp += juvenile_counts[age] * competition_weights[age];
     }
+    // Equilibrium reference C* and s* are recomputed from the live deme column
+    // each tick so set_param writes take effect without stored derived state.
     let (expected_competition_strength, expected_survival_rate) =
         equilibrium_metrics(bp, eco, deme);
     density_regulation::regulation_scaling(
@@ -657,6 +708,8 @@ fn recruit_juveniles(rng: &mut SessionRng, bp: &Blueprint, ind: &mut [f64], scal
     for sex in 0..2 {
         for ztype in 0..n_ztypes {
             let mut value = ind[ind_idx(sex, 0, ztype, n_ages, n_ztypes)];
+            // Discrete sampling needs integer trial totals; continuous and
+            // deterministic paths keep the fractional mass.
             if stochastic && !continuous {
                 value = value.round();
             }
@@ -679,6 +732,8 @@ fn recruit_juveniles(rng: &mut SessionRng, bp: &Blueprint, ind: &mut [f64], scal
         return;
     }
 
+    // Target cohort size after density regulation; discrete sampling rounds it
+    // to an integer number of recruits.
     let desired = if stochastic && !continuous {
         (total * scaling).round()
     } else {
@@ -705,6 +760,8 @@ fn recruit_juveniles(rng: &mut SessionRng, bp: &Blueprint, ind: &mut [f64], scal
             multinomial(rng, desired.round() as i64, &probs, &mut draws);
         }
     } else {
+        // Deterministic mode scales each category by the grouped-total ratio,
+        // preserving genotype/sex proportions without sampling.
         for (draw, &count) in draws.iter_mut().zip(combined.iter()) {
             *draw = count * (desired / total);
         }
@@ -754,6 +811,9 @@ fn sample_survival_with_sperm(
             for gm in 0..n_ztypes {
                 total_sperm += sperm[sperm_idx(age, g, gm, n_ztypes)];
             }
+            // The invariant check uses raw float mass (before per-category rounding)
+            // so rounding drift cannot fake a negative virgin count; a real
+            // deficit is a corrupted state.
             let mut n_virgins_raw = n_f_raw - total_sperm;
             if n_virgins_raw < -EPS {
                 return Err(format!(
@@ -762,12 +822,15 @@ fn sample_survival_with_sperm(
                 ));
             }
             n_virgins_raw = n_virgins_raw.max(0.0);
+            // Only discrete sampling integerizes the virgin trial count.
             let n_virgins = if continuous {
                 n_virgins_raw
             } else {
                 n_virgins_raw.round()
             };
 
+            // Each sperm category survives independently with the female's
+            // survival probability; their sum is the surviving mated females.
             let mut new_sperm_sum = 0.0;
             for gm in 0..n_ztypes {
                 let idx = sperm_idx(age, g, gm, n_ztypes);
@@ -796,6 +859,8 @@ fn sample_survival_with_sperm(
             } else {
                 0.0
             };
+            // Rebuild the female count as surviving mated + surviving virgins so
+            // the count/sperm-storage relationship stays consistent.
             ind[ind_idx(0, age, g, n_ages, n_ztypes)] = new_sperm_sum + surv_virgins;
 
             let n_m = if continuous {
@@ -837,6 +902,8 @@ fn apply_survival_deterministic(
     // by the combined age/viability survival probability.
     let n_ages = bp.n_ages;
     let n_ztypes = bp.n_ztypes;
+    // The female rate also scales the whole sperm row, keeping mated-female
+    // accounting consistent; the male rate applies to males only.
     for age in 0..n_ages {
         for g in 0..n_ztypes {
             let f_rate = s_combined_f[age * n_ztypes + g];
@@ -887,6 +954,8 @@ pub fn survival(
     let survival_rates = &eco.survival_rates[deme * 2 * n_ages..(deme + 1) * 2 * n_ages];
     let mut s_combined_f = vec![1.0; n_ages * n_ztypes];
     let mut s_combined_m = vec![1.0; n_ages * n_ztypes];
+    // Viability selection acts once, on the last juvenile age; every other age
+    // carries a unit viability multiplier.
     let target_viability_age = bp.new_adult_age - 1;
     for age in 0..n_ages {
         let age_survival_f = survival_rates[age];
@@ -902,6 +971,7 @@ pub fn survival(
             } else {
                 1.0
             };
+            // Combined survival = age-specific survival x genotype viability.
             s_combined_f[age * n_ztypes + ztype] = age_survival_f * viability_f;
             s_combined_m[age * n_ztypes + ztype] = age_survival_m * viability_m;
         }
@@ -929,6 +999,8 @@ pub fn aging(bp: &Blueprint, ind: &mut [f64], sperm: &mut [f64]) {
     // Then zero the newborn age class (age 0) for counts and sperm.
     let n_ages = bp.n_ages;
     let n_ztypes = bp.n_ztypes;
+    // Shift oldest-to-youngest so each source slot is read before it is
+    // overwritten; the oldest class falls off and age 0 is cleared below.
     for age in (1..n_ages).rev() {
         let older = age - 1;
         for sex in 0..2 {
@@ -1015,6 +1087,8 @@ impl EcoCtx<'_> {
                     self.tick
                 ));
             }
+            // Only real changes enter the audit journal, so params_log stays a
+            // sparse and replayable record of the tick's transitions.
             let old = self.params.eco_value(id, self.deme);
             if old != *value {
                 self.journal.push((self.tick, id, old, *value, self.phase));
@@ -1035,6 +1109,8 @@ pub(crate) fn stage_sources<'a>(
     columns: Option<(&'a EcologyParams, &'a GeneticsTensors, usize)>,
 ) -> (&'a EcologyParams, &'a GeneticsTensors, usize) {
     match ctx {
+        // Live context: read the committed ECO column at the context's deme and
+        // prefer any callback-committed genetics for the rest of the tick.
         Some(ctx) => (
             &*ctx.params,
             ctx.updated_genetics.as_ref().unwrap_or(ctx.genetics),
@@ -1097,6 +1173,7 @@ pub fn run_tick(
         ctx.phase = 0;
     }
 
+    // Event 0 (first hook): runs before reproduction.
     let mut result = hooks.execute_event(
         rng,
         0,
@@ -1113,6 +1190,8 @@ pub fn run_tick(
         eco_ctx,
     )?;
     if let Some(ctx) = eco_ctx.as_mut() {
+        // Commit hook writes at the event boundary so the later stages of this
+        // same tick observe them.
         ctx.commit(eco_values)?;
     }
     if result != 0 {
@@ -1122,12 +1201,14 @@ pub fn run_tick(
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 1;
     }
+    // Stage: reproduction (mating, sperm update, fertilization, zygote viability).
     let (eco, genetics, deme) = stage_sources(eco_ctx.as_ref(), columns);
     reproduction(rng, bp, eco, genetics, deme, ind, sperm)?;
 
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 2;
     }
+    // Event 1 (early hook): runs between reproduction and survival.
     result = hooks.execute_event(
         rng,
         1,
@@ -1153,12 +1234,14 @@ pub fn run_tick(
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 3;
     }
+    // Stage: survival (juvenile density regulation, then viability/survival).
     let (eco, genetics, deme) = stage_sources(eco_ctx.as_ref(), columns);
     survival(rng, bp, eco, genetics, deme, ind, sperm)?;
 
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 4;
     }
+    // Event 2 (late hook): runs between survival and aging.
     result = hooks.execute_event(
         rng,
         2,
@@ -1184,6 +1267,7 @@ pub fn run_tick(
     if let Some(ctx) = eco_ctx.as_mut() {
         ctx.phase = 5;
     }
+    // Stage: aging (advance age classes, clear newborns and their sperm).
     aging(bp, ind, sperm);
     Ok(0)
 }
@@ -1228,6 +1312,8 @@ pub(crate) fn capture_checkpoint(
     eco_ctx: &Option<EcoCtx<'_>>,
     store: &mut Vec<TickCheckpoint>,
 ) -> Result<(), String> {
+    // Idempotent: at most one checkpoint per tick, so a repeated capture at the
+    // same tick is a no-op.
     if store.iter().any(|checkpoint| checkpoint.tick == tick) {
         return Ok(());
     }
@@ -1239,6 +1325,8 @@ pub(crate) fn capture_checkpoint(
         Some(Err(err)) => return Err(err.to_string()),
         None => (Vec::new(), Vec::new()),
     };
+    // One atomic record: state arrays, the RNG continuation words, and the
+    // ecology section, so a restore rolls back everything, not just counts.
     store.push(TickCheckpoint {
         execution: crate::sessions::status::ExecutionStatus::Ready,
         phase: 0,

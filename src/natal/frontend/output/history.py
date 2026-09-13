@@ -95,6 +95,7 @@ class PopulationLayout:
 
     def __post_init__(self) -> None:
         """Derive the immutable layout fingerprint from all schema fields."""
+        # Frozen dataclass: the derived field must be set through object.__setattr__.
         object.__setattr__(
             self,
             "fingerprint",
@@ -139,10 +140,14 @@ class PopulationLayout:
         Returns:
             A frozen ``PopulationLayout``.
         """
+        # Registry tuples are (genotype, slab): a non-empty slab renders as
+        # "genotype[slab]", the default/empty slab as the bare genotype.
         ztype_labels = tuple(
             f"{str(gt)}[{slab}]" if slab else str(gt)
             for gt, slab in registry.index_to_ztype
         )
+        # The registry is the source of truth for the ZType count; a mismatch
+        # means the caller's dimensions are stale and the row layout would be wrong.
         if len(ztype_labels) != n_ztypes:
             raise ValueError(
                 f"Registry ztype count ({len(ztype_labels)}) does not match "
@@ -189,11 +194,14 @@ class SpatialHistoryLayout:
         Returns:
             A derived ``SpatialHistoryLayout``.
         """
+        # Per-deme sperm width is n_ages * n_ztypes * n_ztypes (age x female
+        # ztype x male ztype); discrete-generation models have no sperm storage.
         sperm_per_deme = (
             population.n_ages * population.n_ztypes * population.n_ztypes
             if population.has_sperm_storage
             else 0
         )
+        # Per-deme individual width is n_sexes * n_ages * n_ztypes.
         return cls(
             n_demes=population.n_demes,
             ind_per_deme=population.n_sexes * population.n_ages * population.n_ztypes,
@@ -335,7 +343,11 @@ class History:
             raise ValueError(f"max_rows must be >= 1 or None, got {max_rows}")
         self._schema = schema
         pop = schema.population
+        # Optional hook installed by the Population so a capacity shrink can drop
+        # the paired restore checkpoints immediately.
         self._checkpoint_pruner: Callable[[int], None] | None = None
+        # Native ring positions are (deme, sex, age, ztype); this must match the
+        # raw row payload layout that query() slices below.
         self._store = HistoryStore(
             schema.row_size,
             (pop.n_demes, pop.n_sexes, pop.n_ages, pop.n_ztypes),
@@ -367,6 +379,8 @@ class History:
     def max_rows(self, value: Optional[int]) -> None:
         """Update the native retention limit."""
         self._store.max_rows = value
+        # Native eviction already ran inside the setter; prune restore checkpoints
+        # older than the new first retained tick so none outlive their rows.
         ticks = self.ticks
         if ticks and self._checkpoint_pruner is not None:
             self._checkpoint_pruner(ticks[0])
@@ -383,8 +397,13 @@ class History:
             observation: Canonical rule matching the history layout.
         """
         pop = self._schema.population
+        # Compile the frozen Observation into native state: the mask is the
+        # (groups, sexes, ages, ztypes) selector flattened C order, and a
+        # non-spatial observation passes a dummy single-deme selection.
         mask = observation.build_mask(pop.n_sexes, pop.n_ages, pop.n_ztypes)
         selected = observation.deme_indices
+        # aggregate makes the native projection sum the selected demes instead
+        # of keeping a deme axis.
         self._store.configure_observation(
             np.ascontiguousarray(mask, dtype=np.float64).ravel(),
             list(selected) if selected is not None else [0],
@@ -416,6 +435,8 @@ class History:
     @property
     def axes(self) -> Tuple[str, ...]:
         """Axis names for the primary typed array exposed by this History."""
+        # Raw rows keep the complete state, so their axes mirror the native
+        # (deme,) sex, age, ztype layout; only spatial raw rows carry a deme axis.
         if self._schema.mode == "raw":
             axes: Tuple[str, ...] = ("record",)
             if self._schema.spatial_layout is not None:
@@ -424,6 +445,8 @@ class History:
 
         observation = self._schema.observation
         assert observation is not None
+        # Observation rows are group-first; a deme axis survives only for a
+        # preserved (not aggregated) spatial selection, and age only when kept.
         axes = ("record", "group")
         if (
             observation.deme_indices is not None
@@ -445,11 +468,15 @@ class History:
         if self._schema.mode != "raw":
             raise ValueError("individual_count is only available in raw mode")
         pop = self._schema.population
+        # Payload starts after the tick column: slice columns [1, 1 + size) and
+        # reshape to (record, [deme,] sex, age, ztype); the deme axis appears only
+        # for spatial raw rows.
         size = pop.n_demes * pop.n_sexes * pop.n_ages * pop.n_ztypes
         shape = (len(self),)
         if self._schema.spatial_layout is not None:
             shape += (pop.n_demes,)
         shape += (pop.n_sexes, pop.n_ages, pop.n_ztypes)
+        # Read-only: the exported array owns its buffer and never aliases the ring.
         result = self._store.query(1, 1 + size).reshape(shape)
         result.flags.writeable = False
         return result
@@ -466,6 +493,9 @@ class History:
         pop = self._schema.population
         if not pop.has_sperm_storage:
             return None
+        # Sperm follows the whole individual-count block, so it starts after
+        # 1 (tick) + n_demes*n_sexes*n_ages*n_ztypes; shape is
+        # (record, [deme,] age, female_ztype, male_ztype).
         start = 1 + pop.n_demes * pop.n_sexes * pop.n_ages * pop.n_ztypes
         shape = (len(self),)
         if self._schema.spatial_layout is not None:
@@ -487,6 +517,8 @@ class History:
         pop = self._schema.population
         observation = self._schema.observation
         assert observation is not None
+        # Row layout mirrors the public axes with the tick at column 0: query(1)
+        # skips it, and the shape follows groups, preserved demes, sexes, ages.
         shape = (len(self), observation.n_groups)
         if observation.deme_indices is not None and observation.deme_mode == "preserve":
             shape += (len(observation.deme_indices),)
@@ -533,6 +565,8 @@ class History:
         """
         if batch.schema != self._schema:
             raise ValueError("Batch schema does not match History schema")
+        # continuation=True lets the batch repeat the last stored boundary once;
+        # Rust verifies the payload is identical and skips the duplicate.
         self._store.append(batch.rows, True)
 
     def clear(self) -> None:
@@ -570,19 +604,26 @@ class History:
         if self._schema.mode != "raw":
             raise ValueError("Cannot restore state from observation-mode history.")
         pop = self._schema.population
+        # Raw row layout is [tick, individual counts, sperm storage]; the offsets
+        # below mirror individual_count / sperm_storage exactly.
         is_spatial = self._schema.spatial_layout is not None
         ind_per_deme = pop.n_sexes * pop.n_ages * pop.n_ztypes
         ind_size = ind_per_deme * pop.n_demes
+        # The deme axis is present only for spatial layouts.
         ind_shape = (
             (pop.n_demes, pop.n_sexes, pop.n_ages, pop.n_ztypes)
             if is_spatial
             else (pop.n_sexes, pop.n_ages, pop.n_ztypes)
         )
 
+        # row() already raises for a missing tick, so this loop runs exactly once;
+        # the branch below keeps the lookup-or-raise shape explicit.
         for row in (self._store.row(tick),):
             if int(row[0]) == tick:
+                # copy() detaches the restored state from the native ring.
                 ic = row[1 : 1 + ind_size].reshape(ind_shape).copy()
                 ss: Optional[NDArray[np.float64]] = None
+                # Sperm follows the individual block, with the same deme-axis rule.
                 if pop.has_sperm_storage:
                     n_ztypes = pop.n_ztypes
                     sperm_per_deme = pop.n_ages * n_ztypes * n_ztypes
@@ -624,6 +665,8 @@ class History:
                 "observe() is only valid on raw-mode History."
             )
 
+        # Fingerprint, not array shape, is the compatibility test: equal shapes
+        # can still describe different species / ZType layouts.
         expected_fingerprint = self._schema.population.fingerprint
         if observation.population_fingerprint != expected_fingerprint:
             raise ValueError(
@@ -646,6 +689,9 @@ class History:
         n_sexes = pop.n_sexes
         n_ages = pop.n_ages
         n_groups = observation.n_groups
+        # Row width mirrors the public values shape: tick + groups x selected
+        # demes x sexes x ages; an aggregate or non-spatial selection contributes
+        # width 1 for the deme axis.
         age_width = 1 if observation.collapse_age else n_ages
         selected_demes = (
             len(observation.deme_indices)
@@ -669,6 +715,8 @@ class History:
         )
         obs_history = History(obs_schema)
 
+        # Projection runs natively over the retained raw rows into an independent
+        # store; the destination store must differ from the source.
         obs_history._configure_observation(observation)
         self._store.observe(obs_history._store)
 
@@ -723,6 +771,7 @@ class History:
                         per_deme.append(payload[start:end].tolist())
                     record["individual_count_per_deme"] = per_deme
                     if sperm_per_deme > 0:
+                        # Sperm follows the whole per-deme individual block.
                         sperm_start = ind_size
                         sperm_payload = payload[sperm_start:]
                         per_deme_sperm: list[list[float]] = []
@@ -751,6 +800,8 @@ class History:
             genotype_labels = list(population.ztype_labels)
             sex_labels = list(population.sex_labels)
 
+            # Discrete-generation rows use the discrete flattened parser; every
+            # other raw kind is age-structured.
             parse_fn = (
                 parse_flattened_discrete_state
                 if population.kind == "discrete_generation"
@@ -764,6 +815,7 @@ class History:
 
             for row in self._rows:
                 tick = int(row[0])
+                # copy=True detaches the parsed state from the exported row buffer.
                 parsed = parse_fn(
                     row,
                     n_sexes=n_sexes,
@@ -794,6 +846,8 @@ class History:
         for row in self._rows:
             tick = int(row[0])
             payload = row[1:]
+            # Flattened payload is [group, (deme,) sex, (age,)]; reshape by mode,
+            # matching the layout the row width was computed from.
             if n_demes > 0 and obs_meta.deme_mode == "preserve":
                 if obs_meta.collapse_age:
                     observed = payload.reshape(
@@ -876,6 +930,8 @@ def _state_to_dict(
     n_ages = int(state.individual_count.shape[1])
     payload: Dict[str, Dict[str, Dict[str, float]]] = {}
 
+    # Legacy nested shape: sex -> "age_i" -> genotype label -> count; zero leaves
+    # (and the empty blocks they leave behind) are dropped unless requested.
     for sex_idx, sex_name in enumerate(sex_labels):
         sex_block: Dict[str, Dict[str, float]] = {}
         for age_idx in range(n_ages):
@@ -894,6 +950,8 @@ def _state_to_dict(
     result: Dict[str, Any] = {"tick": int(state.n_tick)}  # Any: JSON-serializable nested dict
     result["individual_count"] = payload
 
+    # Only age-structured states carry sperm storage; it is indexed
+    # (age, female ztype, male ztype) and nested here as age -> female -> male.
     sperm_storage = getattr(state, "sperm_storage", None)
     if isinstance(state, PopulationState) and sperm_storage is not None:
         sperm_payload: Dict[str, Dict[str, Dict[str, float]]] = {}
@@ -937,6 +995,7 @@ def _build_observation_payload(
     """
     n_groups = len(labels)
     payload: Dict[str, Any] = {}  # Any: JSON-serializable nested dict
+    # One key per group label; each sub-array is serialized by the remaining axes.
     for group_index in range(n_groups):
         group_payload: Any = _serialize_with_axes(  # Any: recursive JSON value
             observed[group_index],
@@ -965,10 +1024,13 @@ def _serialize_with_axes(
     Returns:
         Nested dict, or float scalar at leaf.
     """
+    # Leaf: every axis has been consumed, so the remaining value is the scalar count.
     if len(axes) == 0:
         return float(arr)
     axis = axes[0]
     rest = axes[1:]
+    # Keys are per-axis: sex labels, "age_i", and "deme_i"; zero leaves and the
+    # empty subtrees they leave behind are pruned unless zeros were requested.
     if axis == "sex":
         result: Dict[str, Any] = {}  # Any: JSON-serializable nested dict
         for si, sex_name in enumerate(sex_labels):

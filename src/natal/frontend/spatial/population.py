@@ -117,10 +117,13 @@ def _coerce_adjacency_dense(
         if len(csr_items) != 3:
             raise TypeError("adjacency tuple input must be CSR (indptr, indices, data)")
         csr_tuple = csr_items
+        # Fixed triplet order: (indptr, indices, data).
         indptr = np.asarray(csr_tuple[0], dtype=np.int64)
         indices = np.asarray(csr_tuple[1], dtype=np.int64)
         data = np.asarray(csr_tuple[2], dtype=np.float64)
 
+        # Structural checks run before reconstruction, so a malformed triplet
+        # fails loudly instead of being partly copied into the dense matrix.
         if indptr.ndim != 1 or indices.ndim != 1 or data.ndim != 1:
             raise ValueError("CSR adjacency tuple entries must be 1D arrays")
         if indptr.shape[0] != n_demes + 1:
@@ -554,16 +557,25 @@ class SpatialParamsView:
             ValueError: On an unknown field or a shape mismatch.
         """
         if field == "migration_rate":
+            # Rates keep the build-time sugar below; every other ecology
+            # column takes the generic per-deme write path further down.
             params = self._pop._params  # pyright: ignore[reportPrivateUsage]  # single validated write channel
             live = params.migration_rate
+            # The live contract column anchors the broadcast shape (demes,
+            # sexes, ages) so a smaller declaration can be tiled up.
             n_demes, n_sexes, n_ages = live.shape
             if isinstance(values, dict):
+                # Per-sex mapping (scalar values also land here) normalizes to
+                # one (S, A) table that is tiled over every deme.
                 bp = self._pop._blueprint  # pyright: ignore[reportPrivateUsage]  # frozen adult-age anchor
                 rate_2d = normalize_migration_rate(
                     values, n_sexes, n_ages, int(bp.new_adult_age)
                 )
                 new_live = np.tile(rate_2d, (n_demes, 1, 1))
             else:
+                # Explicit inputs: the full 3-D column is accepted without
+                # tiling, an (S, A) table is tiled over demes, and anything
+                # shallower falls through to the scalar/vector sugar.
                 arr = np.asarray(values, dtype=np.float64)
                 if arr.ndim == 3:
                     if arr.shape != live.shape:
@@ -584,6 +596,8 @@ class SpatialParamsView:
                         values, n_sexes, n_ages, int(bp.new_adult_age)
                     )
                     new_live = np.tile(rate_2d, (n_demes, 1, 1))
+            # In-place write keeps the contract array identity stable, so the
+            # write-protected read views stay valid.
             live[...] = new_live
             # The session owns the rate the migration stage consumes; a
             # runtime write must reach it or Rust ticks silently keep the
@@ -598,6 +612,8 @@ class SpatialParamsView:
         column = self._pop._derive_ecology_column(field)  # pyright: ignore[reportPrivateUsage]  # shape anchor derives from the owning authority
         if column is None:
             raise ValueError(f"ecology column {field!r} is not materialized")
+        # Accept the full column, a scalar, or the per-deme shape; each row is
+        # then routed through the same per-deme write channel as a single write.
         column_arr = np.asarray(column)
         per_deme_shape = column_arr.shape[1:]
         arr = np.asarray(values, dtype=np.float64)
@@ -891,7 +907,11 @@ class SpatialPopulation:
             mode=migration_mode,
         )
         self._migration_csr = migration_csr
+        # Homogeneous build-time default: every deme starts from the same
+        # (S, A) row, tiled to the (n_demes, S, A) contract column.
         rate3d = np.tile(rate_2d, (n_demes, 1, 1))
+        # Freeze the contract pair: the Blueprint carries the CSR the Rust
+        # session consumes at handoff, the Params carry the rate column.
         self._blueprint, self._params = materialize(
             self._export_reference_draft(),
             SpatialMigration(
@@ -1186,6 +1206,8 @@ class SpatialPopulation:
                 "RustHeterogeneousSpatialLifecycleBackend", backend
             )
             snapshot = backend_obj.ecology_columns_snapshot()
+            # The live session is the column authority: a name it does not
+            # expose has no column representation.
             if name not in snapshot:
                 return None
             values = np.asarray(snapshot[name], dtype=np.float64)
@@ -1201,6 +1223,8 @@ class SpatialPopulation:
 
         from natal.backends.rust.rust_backend import ecology_columns_from_drafts
 
+        # No session yet: gather the columns from the deme drafts, which are
+        # the declaration-side authority before the session handoff.
         try:
             drafts = self._export_deme_drafts(compact=True)
         except TypeError:
@@ -1228,6 +1252,8 @@ class SpatialPopulation:
             The per-deme shape for vector fields; ``None`` for scalar or
             non-draft columns (flat ``(n_demes,)`` layout).
         """
+        # The reference deme's draft field fixes the per-deme shape; a missing
+        # or scalar-valued field means the column is flat (n_demes,).
         draft_field = _ECOLOGY_DRAFT_FIELDS.get(name)
         if draft_field is None or not self._demes:
             return None
@@ -1276,6 +1302,8 @@ class SpatialPopulation:
         )
         if isinstance(field_value, np.ndarray):
             typed_value = field_value
+            # Clone-on-write: copy only when another deme aliases this exact
+            # array object, so an in-place write cannot reach the sharers.
             shared = any(
                 getattr(other.config, draft_field, None) is typed_value
                 for j, other in enumerate(self._demes)
@@ -1314,6 +1342,8 @@ class SpatialPopulation:
         draft_field = _ECOLOGY_DRAFT_FIELDS[field]
         config, field_value = self._detach_deme_field(deme_index, draft_field)
         if isinstance(field_value, np.ndarray):
+            # Array field: write in place into the (detached) array; a
+            # non-scalar field reshapes the value to its declared shape.
             field_array: NDArray[np.float64] = cast("NDArray[np.float64]", field_value)
             if field_array.ndim == 0:
                 field_array[()] = value
@@ -1378,9 +1408,13 @@ class SpatialPopulation:
                 f"{field!r} expects a tensor-backed draft field, got a scalar"
             )
         field_array: NDArray[np.float64] = cast("NDArray[np.float64]", field_value)
+        # Reshape to the table's logical shape first, so a meiosis-table
+        # validation sees complete rows.
         candidate = np.asarray(values, dtype=np.float64).reshape(field_array.shape)
         if field == "meiosis_map":
             validate_meiosis_table(candidate)
+        # In-place into the detached array: demes still sharing the original
+        # tables keep their numerics bitwise unchanged.
         field_array[...] = candidate
 
         refresh_fields = [field]
@@ -1906,6 +1940,8 @@ class SpatialPopulation:
             any deme cannot be answered natively (session-less or inside
             a container run).
         """
+        # Atomic decision: if any deme cannot be served natively the whole
+        # query returns None, so callers fall back to the local caches.
         rows: List[tuple[float, float, float]] = []
         for deme_index in range(self.n_demes):
             row = self._native_deme_counts(deme_index)
@@ -1921,6 +1957,8 @@ class SpatialPopulation:
         the evaluation order (per-deme sums, then a Python sum across
         demes) matches the historical cache-based query bitwise.
         """
+        # Native per-deme sums are the session authority; the Python sum over
+        # the rows (not over one big array) preserves the historical order.
         native = self._native_all_deme_counts()
         if native is not None:
             return int(sum(row[0] for row in native))
@@ -1979,6 +2017,7 @@ class SpatialPopulation:
         stacked = self._native_stacked_state()
         if stacked is not None:
             _tick, ind_all, _sperm_all = stacked
+            # Sum over the deme axis only, keeping (sex, age, ztype).
             return np.sum(ind_all, axis=0)
         return np.sum(
             np.stack([deme.state.individual_count for deme in self._demes], axis=0),
@@ -1987,6 +2026,8 @@ class SpatialPopulation:
 
     def aggregate_state(self) -> PopulationState:
         """Build one aggregate state for global summaries across all demes."""
+        # Aggregate = element-wise sum of the stacked per-deme planes, tagged
+        # with the shared tick.
         ind_all, sperm_all = self._stack_deme_state_arrays()
         return PopulationState(
             n_tick=int(self._tick),
@@ -1998,15 +2039,21 @@ class SpatialPopulation:
         """Compute allele frequencies from the aggregate multi-deme state."""
         allele_counts: dict[str, float] = {}
         locus_totals: dict[str, float] = {}
+        # Counts are summed over demes, sex and age first, leaving one number
+        # per ztype.
         genotype_counts = self.aggregate_individual_count().sum(axis=(0, 1))
         registry = self._demes[0].registry
 
+        # Seed every allele and locus counter so alleles absent from the
+        # current state are reported as 0.0 rather than missing.
         for chromosome in self.species.chromosomes:
             for locus in chromosome.loci:
                 locus_totals[locus.name] = 0.0
                 for gene in locus.alleles:
                     allele_counts[gene.name] = 0.0
 
+        # Each ztype's count contributes both of its alleles at every locus;
+        # the same count feeds the locus total as the denominator.
         for z_idx, (genotype, _slab) in enumerate(registry.index_to_ztype):
             count = genotype_counts[z_idx]
             if count <= 0:
@@ -2019,6 +2066,7 @@ class SpatialPopulation:
                             allele_counts[allele.name] += float(count)
                             locus_totals[locus.name] += float(count)
 
+        # Frequency = allele count / its locus total; an empty locus is 0.0.
         frequencies: dict[str, float] = {}
         for allele_name, count in allele_counts.items():
             gene = self.species.gene_index.get(allele_name)
@@ -2043,6 +2091,8 @@ class SpatialPopulation:
             A dense float64 vector of length ``n_demes`` with outbound weights
             from ``source_idx``.
         """
+        # Folded rows are not guaranteed to be distributions (adjacency stores
+        # its raw weights), so the readout is renormalized to sum to one.
         weights = csr_dense_row(self._migration_csr, source_idx, self.n_demes)
         total = float(weights.sum())
         if total > 0.0:
@@ -2068,6 +2118,8 @@ class SpatialPopulation:
         if stacked is not None:
             _tick, ind_all, sperm_all = stacked
             return ind_all, sperm_all
+        # Local fallback: without a session the per-deme caches are the
+        # build-time declarations, so stack them on the deme axis.
         ind_all = np.stack(
             [deme.state.individual_count for deme in self._demes], axis=0
         )
@@ -2110,6 +2162,8 @@ class SpatialPopulation:
         n_demes = len(self._demes)
         n_ages = int(self._blueprint.n_ages)
         n_ztypes = int(self._blueprint.n_ztypes)
+        # Native flat buffers are reshaped to their logical stacked layouts:
+        # individuals (demes, sex, age, ztype), sperm (demes, age, ztype, ztype).
         ind_all = np.asarray(ind_flat, dtype=np.float64).reshape(
             n_demes, 2, n_ages, n_ztypes
         )
@@ -2370,9 +2424,13 @@ class SpatialPopulation:
         # banks, no per-config-bank execution sessions).
         deme_drafts = self._export_deme_drafts(compact=True)
         columns = ecology_columns_from_drafts(deme_drafts)
+        # The rate contract is already (n_demes, S, A); the native migration
+        # stage consumes it as one flat rate column.
         columns["migration_rate"] = np.asarray(
             self._params.migration_rate, dtype=np.float64
         ).ravel()
+        # Genetics bank deduplicated by tensor content, plus each deme's id
+        # into that bank.
         tensor_bank, deme_variant_ids = genetics_variant_bank(deme_drafts)
         custom_slots = [draft.custom for draft in deme_drafts]
         # Columns and the variant bank own their buffers. Release the full
@@ -2384,6 +2442,9 @@ class SpatialPopulation:
         # One-time build handoff: the session owns the stacked state and
         # the per-deme RNG streams from here on.
         ind_all, sperm_all = self._stack_deme_state_arrays()
+        # One session owns stacked state, per-deme RNG streams, the hook
+        # program, and the frozen CSR; stay_after_send carries the migration
+        # bookkeeping order recorded at fold time.
         self._rust_spatial_backend = RustHeterogeneousSpatialLifecycleBackend(
             self._blueprint,
             columns,

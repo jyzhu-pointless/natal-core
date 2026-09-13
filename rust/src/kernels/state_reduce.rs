@@ -20,6 +20,7 @@ const PAIRWISE_BLOCKSIZE: usize = 128;
 pub(crate) fn numpy_pairwise_sum(values: &[f64]) -> f64 {
     let n = values.len();
     if n < 8 {
+        // NumPy's scalar path: fewer than eight elements sum left-to-right.
         let mut sum = 0.0;
         for value in values {
             sum += *value;
@@ -27,6 +28,8 @@ pub(crate) fn numpy_pairwise_sum(values: &[f64]) -> f64 {
         return sum;
     }
     if n <= PAIRWISE_BLOCKSIZE {
+        // Eight independent accumulators; value i is folded into r[i mod 8],
+        // mirroring NumPy's unrolled inner block.
         let mut r = [
             values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],
         ];
@@ -38,6 +41,9 @@ pub(crate) fn numpy_pairwise_sum(values: &[f64]) -> f64 {
                 i += 1;
             }
         }
+        // Combine the eight accumulators as this exact balanced tree, then drain
+        // the at-most-seven tail sequentially; both associations are load-bearing
+        // for bit parity.
         let mut sum = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
         while i < n {
             sum += values[i];
@@ -45,6 +51,9 @@ pub(crate) fn numpy_pairwise_sum(values: &[f64]) -> f64 {
         }
         return sum;
     }
+    // Split at the first half rounded down to a multiple of eight and recurse
+    // left-then-right, as NumPy does; the split point and addition order are part
+    // of the bitwise contract.
     let mut n2 = n / 2;
     n2 -= n2 % 8;
     numpy_pairwise_sum(&values[..n2]) + numpy_pairwise_sum(&values[n2..])

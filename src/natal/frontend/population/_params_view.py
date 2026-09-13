@@ -107,6 +107,7 @@ class TensorView:
         copy: bool | None = None,
     ) -> NDArray[np.float64]:
         """NumPy conversion — always hands out a copy."""
+        # The optional dtype cast applies to the copy, never the source tensor.
         arr = self._getter().copy()
         if dtype is not None:
             arr = arr.astype(dtype)
@@ -133,11 +134,14 @@ class TensorView:
                 axis, or the key is not a valid index expression.
         """
         arr = self._getter()
+        # Non-tuple key: a plain slice or mask over the whole tensor.
         if not isinstance(key, tuple):
             # cast: passthrough index expression into a float64 ndarray.
             result = cast("NDArray[np.float64]", arr[key])  # type: ignore[index]
             return result.copy()
         key_tuple = cast("tuple[object, ...]", key)
+        # Pattern strings are only meaningful on the ztype axis, which must be
+        # the last axis.
         if any(isinstance(k, str) for k in key_tuple[:-1]):
             raise TypeError(
                 "pattern strings are only accepted at the last axis "
@@ -153,6 +157,8 @@ class TensorView:
                 f"genotype pattern {pattern!r} matches no zygote type"
             )
         cells = cast("NDArray[np.float64]", arr[head + (tuple(indices),)])  # type: ignore[index]
+        # Many matches collapse into one aggregated scalar so a pattern can
+        # address a group of ztypes.
         return float(np.sum(cells))
 
     def __setitem__(self, key: object, value: object) -> None:
@@ -239,6 +245,8 @@ class ParamsView:
     @property
     def _draft(self) -> ModelDraft:
         """The population's current draft (the event candidate in a callback)."""
+        # Callback scope: the event's candidate is the committed answer; it is
+        # materialized on read.
         if self._validate is not None:
             self._validate()
             candidate = self._pop._event_candidate()  # pyright: ignore[reportPrivateUsage]  # the callback's isolated candidate
@@ -246,6 +254,8 @@ class ParamsView:
                 return candidate
             assert self._pop._config is not None  # pyright: ignore[reportPrivateUsage]  # population config property raises the canonical error otherwise
             return self._pop._config  # pyright: ignore[reportPrivateUsage]  # callback owns the committed draft when no candidate exists
+        # Outside a callback: the public property performs the native snapshot
+        # pull / deepcopy and is the authoritative value.
         return self._pop.config
 
     def _static_draft(self) -> ModelDraft:
@@ -261,6 +271,8 @@ class ParamsView:
         candidate = self._pop._prepared_event_candidate()  # pyright: ignore[reportPrivateUsage]  # lazy: never materializes
         if candidate is not None:
             return candidate
+        # Declaration draft only: it carries metadata (shapes, flags) without a
+        # native pull or a deepcopy.
         draft = self._pop._config  # pyright: ignore[reportPrivateUsage]  # metadata source; the full pull stays on pop.config
         if draft is None:
             # Delegate to the public property: it raises the canonical
@@ -288,6 +300,8 @@ class ParamsView:
             return None
         if pop._active_event is not None or getattr(pop, "_rust_run_active", False):  # pyright: ignore[reportPrivateUsage]  # callback scope withholds the session channel
             return None
+        # Outside callbacks the deme/writer adapter is preferred, then the
+        # panmictic session adapter.
         writer = getattr(pop, "_runtime_parameter_writer", None)
         if writer is not None and hasattr(writer, "get_tensor"):
             return writer
@@ -300,8 +314,10 @@ class ParamsView:
     def _entry_reads_native(entry: ParamDescriptor) -> bool:
         """Whether *entry*'s value lives in the session's live params."""
         if entry.kind in ("scalar", "mode_enum"):
+            # Native only for the scalars the session keeps live.
             return entry.contract_field in NATIVE_SCALAR_FIELDS
         if entry.kind in ("slot", "age_vec", "sex_row", "geno_tensor"):
+            # Tensor-shaped kinds are native when the contract exposes the field.
             return entry.contract_field in _PARAMS_CONTRACT_FIELDS
         # bool rows are frozen blueprint flags: session structure, not values.
         return False
@@ -320,6 +336,8 @@ class ParamsView:
         def resolve(pattern: str) -> list[int]:
             from natal.frontend.patterns import ZygoteTypePattern
 
+            # Parse against the species, then map to this population's ztype
+            # indices: the registry is the axis reference, not the species.
             parsed = ZygoteTypePattern.parse(pattern, self._species())
             return list(self._registry().resolve_ztype_indices(parsed))
 
@@ -328,6 +346,8 @@ class ParamsView:
     def _writer(self) -> CoreConfigWriter:
         """A fresh runtime writer bound to the population."""
 
+        # Publication choice: a callback's write extends its candidate; a bare
+        # write commits to the population draft.
         def _publish(draft: ModelDraft) -> None:
             event = self._pop._active_event  # pyright: ignore[reportPrivateUsage]  # event writes adopt into the callback scope
             if self._validate is not None and event is not None:
@@ -335,6 +355,9 @@ class ParamsView:
             else:
                 self._pop.set_config(draft)
 
+        # In a callback the channel is the event transaction; outside, writes
+        # during a run are rejected (native borrow) and otherwise go to the
+        # runtime/deme writer.
         if self._validate is not None:
             self._validate()
             backend: object = self._channel
@@ -378,6 +401,8 @@ class ParamsView:
         """
         # Only called when normal attribute lookup fails, i.e. never for
         # the _pop binding and other real attributes.
+        # Route names win; unresolved names fall through to the contract-tensor
+        # names, then to AttributeError.
         entry = lookup_or_none(name)
         if entry is not None:
             return self._read_entry(entry.name)
@@ -399,6 +424,8 @@ class ParamsView:
                 parameter (vectors and genetics tensors go through
                 :meth:`tensor_write`).
         """
+        # Underscore names are real instance attributes (wiring, guards), not
+        # parameters.
         if name.startswith("_"):
             super().__setattr__(name, value)
             return
@@ -410,12 +437,16 @@ class ParamsView:
                 f"pop.params.{name} is a read-only derived metric; "
                 "it follows the population's ecology automatically"
             )
+        # Only scalar-shaped, bounds-checked kinds are settable here; vectors
+        # and genetics tensors go through tensor_write.
         entry = lookup_or_none(name)
         if entry is None or entry.kind not in ("scalar", "mode_enum", "slot", "bool"):
             raise AttributeError(
                 f"pop.params.{name} is not a settable scalar; use "
                 f"pop.update().<method>(...) or pop.params.tensor_write()"
             )
+        # One-field writer batch: full bounds validation plus one atomic
+        # draft + session commit.
         self._writer().apply({name: value})
         if entry.kind == "bool":
             # Boolean rows are frozen Blueprint flags: they never flow to
@@ -437,6 +468,8 @@ class ParamsView:
         channel (never materializing a full snapshot); declaration
         metadata and populations without a live channel read the draft.
         """
+        # lookup (not lookup_or_none): this name was already resolved. A None
+        # config_field means the value lives on the spatial container.
         entry = lookup(name)
         if entry.config_field is None:
             raise AttributeError(
@@ -470,6 +503,8 @@ class ParamsView:
                 # Native -1.0 sentinel ↔ draft Optional translation.
                 return None
             return float(value)
+        # Native tensors are flat; the declaration draft supplies the shape to
+        # reshape into, while the values come from the session.
         draft = self._static_draft()
         shape = self._draft_field_shape(draft, entry)
         values: NDArray[np.float64] = channel.get_tensor(contract)
@@ -559,8 +594,12 @@ class ParamsView:
         """
         from natal.frontend.builder._writers import contract_to_draft_field
 
+        # Contract names may differ from draft field names (the rename table
+        # lives in _writers).
         draft_field = contract_to_draft_field(name)
         channel = self._native_read_channel()
+        # Native only for session-resident fields; other contract names stay on
+        # the draft.
         if channel is not None and name in _PARAMS_CONTRACT_FIELDS:
             values: NDArray[np.float64] = channel.get_tensor(name)
             shape = np.shape(getattr(self._static_draft(), draft_field))
@@ -591,6 +630,8 @@ class ParamsView:
                 channel. Native deme and hook transactions fork changed
                 variants and keep other demes isolated.
         """
+        # Shared-deme guard: without an owning native write channel this write
+        # would mutate the draft table shared by every deme.
         has_native_candidate = self._validate is not None or getattr(self._pop, "_runtime_parameter_writer", None) is not None
         if not has_native_candidate and field in _GENETICS_TENSORS and getattr(
             self._pop, "_shares_genetics_draft", False
@@ -601,4 +642,6 @@ class ParamsView:
                 "write would leak into all of them; use the deme's "
                 "write_genetics channel instead"
             )
+        # The writer validates size/shape and commits draft + session together
+        # (a mismatch is zero writes).
         self._writer().tensor_write(field, values)

@@ -61,11 +61,15 @@ def equilibrium_metrics_dispatch(
     """
     from natal._engine_rs import equilibrium_metrics_flat as rust_metrics
 
+    # Derive-mode sentinel: None or an empty array reaches Rust as None, which
+    # selects the carrying-capacity derivation; otherwise copy to contiguous f64.
     declared = (
         np.ascontiguousarray(declared_distribution, dtype=np.float64)
         if declared_distribution is not None and declared_distribution.size > 0
         else None
     )
+    # Every vector is copied to C-contiguous float64 because Rust's as_slice()
+    # rejects strided views instead of reordering the kernel's flat indexing.
     return rust_metrics(
         float(carrying_capacity),
         float(eggs_per_female),
@@ -99,11 +103,15 @@ def derive_equilibrium_metrics_from_draft(
         ``(expected_competition_strength, expected_survival_rate)`` —
         always freshly computed, never a cached copy.
     """
+    # None means "not declared": fall back to the female mating row (sex index 0),
+    # the documented default for reproduction participation when unset.
     reproduction = (
         draft.age_based_reproduction_rates
         if draft.age_based_reproduction_rates is not None
         else draft.age_based_mating_rates[0]
     )
+    # Argument order mirrors the flat Rust kernel signature: survival matrix,
+    # reproduction, fertility, competition weights, then the two draft sentinels.
     return equilibrium_metrics_dispatch(
         draft.carrying_capacity,
         draft.eggs_per_female,

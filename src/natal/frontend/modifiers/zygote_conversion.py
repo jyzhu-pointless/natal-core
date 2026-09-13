@@ -208,14 +208,21 @@ class ZygoteConversionRuleSet:
             from natal.frontend.builder._registry_builder import build_registry
 
             registry = build_registry(species)
+        # Rules compile against the complete species registry, so their indices
+        # never depend on a later compressed runtime axis.
         compiled = self._compile(species, registry)
 
         from natal.frontend.genetics.compile import project_mendelian_maps
 
+        # Fusion baseline of shape (n_gtypes, n_gtypes, n_ztypes); each (c1, c2)
+        # row is the joint (Genotype, slab) distribution of one gamete pair.
         _meiosis, fertilization = project_mendelian_maps(species, registry)
 
         from .module import CompiledRuleModifier
 
+        # rows_for re-derives each row on any entering tensor of the baseline
+        # shape, so the (maternal gtype, paternal gtype, ztype) axes must stay
+        # registry-aligned with the fusion table the Rust offspring kernel reads.
         return CompiledRuleModifier(
             fertilization, lambda row, first, second: _cascade_row(row, first, second, compiled)
         )
@@ -232,11 +239,14 @@ class ZygoteConversionRuleSet:
 
         compiled: List[_CompiledZygoteRule] = []
 
+        # Resolve each declaration once into match/convert closures, so per-row
+        # evaluation costs only integer lookups and pattern tests.
         for rule in self.rules:
             maternal_matcher: Optional[Tuple[object, Callable[[Tuple[object, str]], bool]]] = None
             paternal_matcher: Optional[Tuple[object, Callable[[Tuple[object, str]], bool]]] = None
             current_pattern: Optional[ZygoteTypePattern] = None
 
+            # Filter keys are AND-ed; omitted keys leave the rule unrestricted.
             for key, pattern in rule.filter_pairs:
                 if key == "current":
                     try:
@@ -261,6 +271,8 @@ class ZygoteConversionRuleSet:
 
             if isinstance(rule, ZygoteZtypeConversionRule):
                 genotype_part, label_part = rule.target_parts
+                # `*` keeps the branch's own part, so "*@*" is the identity and
+                # "*@tag" only relabels without touching the genotype.
                 target_gt: Optional[Genotype] = None
                 if genotype_part != "*":
                     try:
@@ -299,6 +311,8 @@ class ZygoteConversionRuleSet:
 
                 _rule_z: ZygoteZtypeConversionRule = rule
 
+                # Default arguments freeze this rule's target and rate, since the
+                # enclosing loop rebinds the locals for the next rule.
                 def convert_branches(
                     zidx: int,
                     prob: float,
@@ -318,6 +332,8 @@ class ZygoteConversionRuleSet:
                         ) from exc
                     if target == zidx:
                         return {zidx: prob}
+                    # Success takes `rate`, failure keeps `1 - rate`; the two
+                    # shares sum to the entering mass.
                     out: Dict[int, float] = {}
                     if _rate > 0.0:
                         out[target] = out.get(target, 0.0) + prob * _rate
@@ -330,6 +346,8 @@ class ZygoteConversionRuleSet:
             else:  # ZygoteAlleleConversionRule
                 _require_same_locus(species, rule, self.name)
 
+                # Filters combine as AND: both forming gametes' patterns and the
+                # entering branch's (genotype, slab).
                 def matches(
                     c1: int,
                     c2: int,
@@ -369,6 +387,9 @@ class ZygoteConversionRuleSet:
                     for (mat_hg, mat_p) in mat_options:
                         for (pat_hg, pat_p) in pat_options:
                             new_gt = Genotype(species, mat_hg, pat_hg)
+                            # Joint mass is the product of the two independent
+                            # copy probabilities; equal genotypes from different
+                            # paths accumulate onto the same ztype index.
                             try:
                                 target = registry.ztype_index(new_gt, slab)
                             except KeyError as exc:
@@ -398,11 +419,16 @@ def _copy_options(
         source allele is present and the copy is selected) and no-op.
     """
     if not selected:
+        # An unselected copy never changes: one certain, unconverted outcome.
         return [(haploid, 1.0)]
     converted = replace_allele_in_haploid(haploid, from_allele, to_allele)
     if converted is None or converted is haploid:
+        # Source allele absent or the replacement is a no-op: stay unchanged
+        # with probability 1 rather than emitting a zero-mass branch.
         return [(haploid, 1.0)]
     options: List[Tuple[HaploidGenotype, float]] = []
+    # The copy either keeps its allele (1 - rate) or converts (rate); the strict
+    # bounds skip a branch that would carry zero probability.
     if rate < 1.0:
         options.append((haploid, 1.0 - rate))
     if rate > 0.0:
@@ -428,6 +454,8 @@ def _require_same_locus(
             "is not registered in the species"
         )
     target = species.get_gene(rule.to_allele)
+    # The locus is located through the source allele; requiring the target at the
+    # same locus keeps a conversion from moving a gene to another chromosome.
     if target is None or target.locus is not source.locus:
         raise ValueError(
             f"{rs_name}: rule {rule!r} target allele {rule.to_allele!r} "
@@ -453,6 +481,8 @@ def _compile_gamete_matcher(
     from natal.frontend.patterns.parser import GenotypePatternParser
 
     base, lab = pattern, None
+    # Split the optional label qualifier off the genotype pattern; both parts are
+    # validated separately against the species catalog and gamete labels.
     if "@" in pattern:
         base, suffix = pattern.rsplit("@", 1)
         if suffix and suffix != "*":
@@ -472,6 +502,8 @@ def _compile_gamete_matcher(
         ) from exc
 
     def matcher(pair: Tuple[object, str]) -> bool:
+        # Both the haploid-genome pattern and, when declared, the gamete-label
+        # pattern must match for the forming gamete to qualify.
         haploid, glab = pair
         if not genome_pattern.matches(cast("HaploidGenome", haploid)):
             return False
@@ -501,16 +533,22 @@ def _cascade_row(
         (empty when the row is empty).
     """
     branches: Dict[int, float] = {}
+    # Sparse branch map: only positive-mass ztype states are carried forward.
     for zidx, prob in enumerate(row):
         if prob > 0.0:
             branches[zidx] = float(prob)
 
+    # Cascade in declaration order without priority or first-match stop: each rule
+    # sees the branches produced by the previous rule.
     for step in compiled:
         # A zero-rate event has no target branch; that state may be pruned.
         if step.rule.rate == 0.0:
             continue
         if not branches:
             break
+        # Non-matching branches pass through; matching ones are replaced by the
+        # rule's own outcome distribution. `+=` accumulation keeps each row's
+        # total intact, so no later renormalization is needed.
         next_branches: Dict[int, float] = {}
         for zidx, prob in branches.items():
             if not step.matches(c1, c2, zidx):
@@ -520,4 +558,6 @@ def _cascade_row(
                 next_branches[target] = next_branches.get(target, 0.0) + mass
         branches = next_branches
 
+    # Drop numerical dust below 1e-15; the retained mass may fall short of 1 by
+    # at most that tolerance.
     return {z: p for z, p in branches.items() if p > 1e-15}

@@ -197,6 +197,9 @@ class Observation:
         from natal._engine_rs import project_observation
 
         arr = np.ascontiguousarray(individual_count, dtype=np.float64)
+        # The native projection always works on (deme, sex, age, ztype); lower-rank
+        # inputs are lifted to one deme and/or one age, and a 4-D input is accepted
+        # only for a spatial Observation with an explicit deme selection.
         if arr.ndim == 2:
             dimensions = (1, arr.shape[0], 1, arr.shape[1])
         elif arr.ndim == 3:
@@ -206,18 +209,23 @@ class Observation:
         else:
             raise ValueError(f"Unsupported individual_count ndim: {arr.ndim}")
         d, sexes, ages, ztypes = dimensions
+        # Non-spatial inputs have no deme axis, so pass a dummy single-deme selection.
         selected = list(self.deme_indices) if arr.ndim == 4 and self.deme_indices is not None else [0]
+        # Fail before native indexing so an invalid selection cannot read out of bounds.
         if not selected:
             raise ValueError("Observation selects no demes")
         if any(index < 0 or index >= d for index in selected):
             raise ValueError("Observation deme selection is outside the population layout")
         mask = self.build_mask(sexes, ages, ztypes)
+        # A 2-D input has no age axis, so it is always collapsed; deme
+        # aggregation only applies to spatial 4-D inputs.
         collapse = self.collapse_age or arr.ndim == 2
         aggregate = arr.ndim == 4 and self.deme_mode == "aggregate"
         values = project_observation(
             arr.ravel(), np.ascontiguousarray(mask).ravel(), dimensions,
             selected, collapse, aggregate,
         )
+        # Group-first result: (groups, [selected demes if preserved], sexes, [ages]).
         shape = (self.n_groups,)
         if arr.ndim == 4 and not aggregate:
             shape += (len(selected),)
@@ -243,13 +251,19 @@ class Observation:
         Returns:
             The binary mask.
         """
+        # Identity observations store no dense mask: rebuild the one-hot mask
+        # from the ZType index map, one group per ZType over every sex and age.
         if self._is_identity and self._identity_map is not None:
             mask = np.zeros((len(self._identity_map), n_sexes, n_ages, n_ztypes), dtype=np.float64)
             for group, ztype in enumerate(self._identity_map):
                 mask[group, :, :, int(ztype)] = 1.0
             return mask
+        # Copy so callers cannot mutate the baked mask through this handle.
         if self.mask is not None:
             return self.mask.copy()
+        # No baked mask (n_ztypes was unknown at compile time): rebuild from the
+        # stored selectors. collapse_age stays False because the mask always
+        # carries the full age axis; the projection applies the collapse.
         return self._rebuild_mask_dim(n_sexes, n_ages, n_ztypes, collapse_age=False)
 
     def _rebuild_mask_dim(
@@ -303,6 +317,8 @@ class Observation:
             :class:`ObservationResult` with projected values and axes.
         """
         projected = self.apply(individual_count)
+        # Recover axis names from collapse_age and the projected rank; the deme
+        # axis exists only for a spatial preserve result.
         if self.collapse_age:
             axes: Tuple[str, ...] = (
                 ("group", "deme", "sex")
@@ -375,6 +391,9 @@ class ObservationFilter:
         """
         if diploid_genotypes is None:
             return None
+        # Species is detected structurally (qualname or a ``.species`` attribute)
+        # to avoid importing the genetics layer here; both branches expand to the
+        # species' genotype list, and any resolution failure degrades to None.
         cls_name = type(diploid_genotypes).__qualname__
         if cls_name == "Species":
             try:
@@ -418,6 +437,7 @@ class ObservationFilter:
             Float64 binary mask ``(n_groups, n_sexes, [n_ages,] n_ztypes)``.
         """
         n_groups = len(selectors)
+        # Full mask keeps the age axis: one (n_sexes, n_ages, n_ztypes) plane per group.
         if not collapse_age:
             mask = np.zeros(
                 (n_groups, n_sexes, n_ages, n_ztypes), dtype=np.float64
@@ -429,6 +449,9 @@ class ObservationFilter:
                 mask[gi] = bool_mask.astype(np.float64)
             return mask
 
+        # Collapsed mask drops the age axis by OR-ing over ages: a coordinate is
+        # selected when any age matched. Production baking always requests the
+        # full mask above; this form exists for direct compiler use.
         mask = np.zeros((n_groups, n_sexes, n_ztypes), dtype=np.float64)
         for gi, sel in enumerate(selectors):
             bool_mask = sel.compile(
@@ -480,12 +503,16 @@ class ObservationFilter:
         labels = tuple(groups.keys())
         selectors = tuple(groups.values())
 
+        # n_ztypes=None means "dimensions unknown yet": no mask is baked and the
+        # registry reference is retained for a later lazy rebuild.
         effective_n_ztypes = (
             n_ztypes if n_ztypes is not None else self.registry.n_ztypes
         )
         if effective_n_ztypes <= 0:
             raise ValueError("Cannot build observation with n_ztypes <= 0")
 
+        # Identity observations deliberately skip the dense mask; every other
+        # observation bakes one so later projections need no recompilation.
         mask: Optional[NDArray[np.float64]] = None
         identity_map: Optional[NDArray[np.int32]] = None
         if n_ztypes is not None:
@@ -498,9 +525,13 @@ class ObservationFilter:
                     collapse_age=False,
                 )
 
+        # Identity map is group -> ZType index: group g selects ZType g, which is
+        # what makes an identity projection lossless.
         if is_identity and n_ztypes is not None:
             identity_map = np.arange(effective_n_ztypes, dtype=np.int32)
 
+        # Fingerprint covers labels, ZType count, and collapse; the population
+        # builder later rebinds it to the frozen PopulationLayout fingerprint.
         fingerprint = _build_fingerprint(
             tuple(labels), effective_n_ztypes, collapse_age
         )
@@ -789,6 +820,8 @@ class ObservationFilter:
             TypeError: If the input shape is unsupported.
         """
         if groups is None:
+            # groups=None asks for the identity spelling: one group per genotype
+            # index, labeled g<index>.
             if diploid_genotypes is None:
                 raise ValueError("diploid_genotypes required when groups is None")
             from natal.frontend.patterns.individual_selector import (
@@ -857,6 +890,8 @@ class ObservationFilter:
                 or dimensions are missing.
             TypeError: If a group spelling is unsupported.
         """
+        # Normalize every legacy group spelling (dict/sequence/duck-typed) to
+        # selectors first, so the compiler below sees only the unified form.
         resolved_diploid = self.resolve_diploid_genotypes(diploid_genotypes)
         selector_groups = self._normalize_groups_to_selectors(
             groups, resolved_diploid
@@ -913,6 +948,8 @@ def build_identity_observation(
 
     from natal.frontend.patterns.individual_selector import IndividualSelector
 
+    # Labels always include the slab ("genotype@slab") for stability and
+    # uniqueness; the default slab still uses a bare genotype pattern below.
     labels: List[str] = []
     selectors: List[IndividualSelector] = []
     for i in range(effective_n_ztypes):
@@ -927,6 +964,8 @@ def build_identity_observation(
         ("identity", tuple(labels)), effective_n_ztypes, collapse_age
     )
 
+    # Identity observations bake no dense mask; the ZType index map is only
+    # created once the concrete dimensions are known.
     mask: Optional[NDArray[np.float64]] = None
     identity_map: Optional[NDArray[np.int32]] = None
     if n_ztypes is not None:
@@ -975,6 +1014,8 @@ def apply_rule(
 
     arr = np.ascontiguousarray(individual_count, dtype=np.float64)
     mask = np.asarray(rule, dtype=np.float64)
+    # Lift counts and rule to the 4-D (deme, sex, age, ztype) form the native
+    # projection expects; a 3-D rule means the age axis was already collapsed.
     if arr.ndim == 3:
         sexes, ages, ztypes = arr.shape
         collapse = mask.ndim == 3
@@ -994,6 +1035,8 @@ def apply_rule(
             raise ValueError("Unsupported rule ndim for non-age state")
     else:
         raise ValueError("Unsupported individual_count ndim")
+    # One dummy deme and no aggregation: apply_rule never handles spatial input,
+    # so the native projection only performs the group/ztype reduction.
     values = project_observation(
         arr.ravel(), np.ascontiguousarray(mask).ravel(), (1, sexes, ages, ztypes), [0], collapse, False,
     )

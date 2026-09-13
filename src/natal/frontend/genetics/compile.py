@@ -71,13 +71,20 @@ def project_mendelian_maps(
     """
     from natal.frontend.builder._registry_builder import build_registry
 
+    # A published registry has already pruned axes, so the full species
+    # baseline no longer lines up with it.
     if registry.published:
         raise ValueError("Mendelian projection requires an unpublished full registry.")
     full = build_registry(species)
+    # Tables are addressed positionally: any missing or reordered ztype/gtype
+    # entry makes the baseline arrays address the wrong biology.
     if (registry.index_to_ztype != full.index_to_ztype
             or registry.index_to_gtype != full.index_to_gtype):
         raise ValueError("Mendelian projection requires the complete species registry.")
     baseline = species.get_config_blueprint()
+    # copy=True detaches the result from the species' cached blueprint so
+    # downstream modifiers may mutate it in place. Order is (meiosis = z2g,
+    # fusion = g2z), matching compile_modifier_maps' parameter order.
     return (
         np.array(baseline["zygotes_to_gametes_map"], dtype=np.float64, copy=True),
         np.array(baseline["gametes_to_zygotes_map"], dtype=np.float64, copy=True),
@@ -133,6 +140,8 @@ def compile_modifier_maps(
     """
     from natal.frontend.modifiers.module import build_modifier_wrappers
 
+    # Resolve the declarations into tensor-level callables once; the host is
+    # the only population-like surface recipes may read.
     gamete_funcs, zygote_funcs = build_modifier_wrappers(
         gamete_modifiers=gamete_modifiers,
         zygote_modifiers=zygote_modifiers,
@@ -140,12 +149,17 @@ def compile_modifier_maps(
         registry=registry,
     )
 
+    # Copy both baselines: wrappers may mutate in place, and the caller's
+    # (often cached) arrays must stay untouched.
     z2g = np.array(baseline_z2g, dtype=np.float64, copy=True)
     g2z = np.array(baseline_g2z, dtype=np.float64, copy=True)
+    # Application order is part of the contract: every gamete wrapper in list
+    # order first, then every zygote wrapper. Modifiers need not commute.
     for fn in gamete_funcs:
         z2g = fn(z2g)
     for fn in zygote_funcs:
         g2z = fn(g2z)
+    # Rust consumers read C-contiguous buffers; a wrapper may hand back a view.
     z2g = np.ascontiguousarray(z2g)
     g2z = np.ascontiguousarray(g2z)
     return z2g, g2z

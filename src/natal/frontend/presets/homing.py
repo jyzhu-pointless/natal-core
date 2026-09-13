@@ -148,6 +148,8 @@ class HomingDrive(GeneticPreset):
             ... )
             >>> population.apply_preset(drive)
         """
+        # Allele specifiers are reduced to names now; binding to Gene objects is
+        # deferred until a species is attached.
         self._str_drive_allele = self._resolve_allele_name(drive_allele)
         self._str_target_allele = self._resolve_allele_name(target_allele)
         self._str_resistance_allele = (self._resolve_allele_name(resistance_allele)
@@ -156,6 +158,8 @@ class HomingDrive(GeneticPreset):
             if functional_resistance_allele else None)
         self._str_cas9_allele = self._resolve_allele_name(cas9_allele) if cas9_allele else None
 
+        # Scalar/dict/tuple input is normalized to a (female, male) pair; the
+        # gamete and zygote modifiers read it per sex.
         self.drive_conversion_rate = self._resolve_rates(drive_conversion_rate)
         self.late_germline_resistance_formation_rate = self._resolve_rates(late_germline_resistance_formation_rate)
         self.embryo_resistance_formation_rate = self._resolve_rates(embryo_resistance_formation_rate)
@@ -187,6 +191,8 @@ class HomingDrive(GeneticPreset):
         if self._str_resistance_allele:
             alleles.append(self._str_resistance_allele)
 
+        # The shared per-allele config feeds every fitness channel, each with its
+        # own scaling mode; the patch stays declarative and is applied later.
         patch = make_fitness_patch_given_allele_scaling(
             alleles,
             self.viability_scaling,
@@ -280,12 +286,16 @@ class HomingDrive(GeneticPreset):
         required = [self.drive_allele.name] + (
             [self.cas9_allele.name] if self.cas9_allele else []
         )
+        # A parent is a carrier only when it carries every required allele (drive
+        # plus, for split drives, Cas9); this conjunction gates homing.
         carrier = carrier_pattern(host.species, *required)
 
         # RuleSet compiles these rules into a Sequential Cascade.
         # This means the target pool shrinks after every rule.
         # So Rule 2 (Resistance) only acts on the targets that FAILED Rule 1 (Homing).
         rule_set = GameteConversionRuleSet(f"{self.name}_Homing")
+        # One set of rules per sex, because every rule is gated by parent_sex and
+        # each sex has its own conversion and resistance rates.
         for sex in (Sex.FEMALE, Sex.MALE):
             homing_rate = HomingDrive._rate_at(self.drive_conversion_rate, sex)
             res_rate = HomingDrive._rate_at(self.late_germline_resistance_formation_rate, sex)
@@ -358,6 +368,8 @@ class HomingDrive(GeneticPreset):
         Cleavage in the embryo (due to deposited Cas9 or zygotic expression)
         converts wild-type alleles into resistance alleles.
         """
+        # Embryo editing compiles as one ruleset per build; each sex below
+        # contributes its own rate and filter source.
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoResistance")
 
         from natal.frontend.presets._types import carrier_pattern
@@ -372,6 +384,9 @@ class HomingDrive(GeneticPreset):
         for sex in (Sex.FEMALE, Sex.MALE):
             rate = HomingDrive._rate_at(self.embryo_resistance_formation_rate, sex)
             if rate > 0:
+                # The filter source decides which embryos are edited: a deposition
+                # label hits every embryo formed from that parent's gamete, while
+                # the no-label path restricts to embryos carrying the Cas9 source.
                 m_glab = None
                 p_glab = None
                 g_filter = None
@@ -403,6 +418,9 @@ class HomingDrive(GeneticPreset):
                         filters=self._zygote_filters(m_glab, p_glab, zygote_has_cas9),
                     )
                     # 2. Non-functional resistance on remaining targets
+                    # Same remainder rescaling as the germline path: divide by the
+                    # target pool left after the functional rule so the
+                    # unconditional non-functional mass equals rate*(1-ratio).
                     target_remaining = 1.0 - (rate * func_res_ratio)
                     nf_rate = (rate * (1.0 - func_res_ratio)) / target_remaining if target_remaining > 0 else 0.0
                     if nf_rate > 0:

@@ -36,6 +36,8 @@ pub struct HistoryData {
 
 impl HistoryData {
     fn empty(width: usize, dimensions: [usize; 4], raw: bool, max_rows: Option<usize>) -> Self {
+        // `selected` starts as every deme; mask/collapse/aggregate stay unset
+        // until an observation slice is configured.
         Self {
             rows: VecDeque::new(),
             width,
@@ -55,12 +57,15 @@ impl HistoryData {
 
     /// Create an unbound store used by low-level session callers.
     pub(crate) fn transient(width: usize, dimensions: [usize; 4], raw: bool) -> SharedHistory {
+        // Unbound stores are unbounded: low-level callers size their own runs.
         Arc::new(Mutex::new(Self::empty(width, dimensions, raw, None)))
     }
 
     /// Configure an unbound store from the session's compiled observation mask.
     pub(crate) fn configure_observation_slice(&mut self, mask: Vec<f64>) -> PyResult<()> {
         let selected = (0..self.dimensions[0]).collect::<Vec<_>>();
+        // Reuse the projection on a zero row to validate the mask and learn the
+        // reduced width (tick column + values), matching record()'s layout.
         let projected = project(
             &vec![0.0; self.dimensions.iter().product()],
             &mask,
@@ -69,6 +74,7 @@ impl HistoryData {
             false,
             false,
         )?;
+        // Only mutate metadata after project() accepted the mask.
         self.width = 1 + projected.len();
         self.mask = mask;
         self.selected = selected;
@@ -78,6 +84,7 @@ impl HistoryData {
     /// Copy retained rows into the legacy low-level flat layout.
     pub(crate) fn flat_rows(&self) -> (Vec<f64>, usize) {
         let n_rows = self.rows.len();
+        // Row-major flattening; the caller reshapes by the returned row count.
         let flat = self
             .rows
             .iter()
@@ -88,11 +95,16 @@ impl HistoryData {
 
     /// Validate the overlap before changing either rows or retention metadata.
     pub fn append_row(&mut self, row: Vec<f64>, continuation: bool) -> PyResult<bool> {
+        // A row must match the schema and start with a finite integer tick; the
+        // tick is also the checkpoint key used by restore_timeline.
         if row.len() != self.width || !row[0].is_finite() || row[0].fract() != 0.0 {
             return Err(PyValueError::new_err(
                 "History row has an invalid width or tick",
             ));
         }
+        // Ticks are monotonic. A repeat of the last tick is a duplicate, except
+        // for a continuation boundary whose payload is identical to the latest
+        // row — that one was already recorded and is skipped.
         if let Some(last) = self.rows.back() {
             if row[0] < last[0] {
                 return Err(PyValueError::new_err(
@@ -112,8 +124,12 @@ impl HistoryData {
             }
         }
         let tick = row[0] as i64;
+        // Rows, boundary status, and per-log cursors are appended in lockstep:
+        // evict() and restore_timeline() retain them by matching positions.
         self.rows.push_back(row);
         self.boundaries.push_back((tick, 0, "Ready".to_owned()));
+        // Snapshot each bound log's length at this tick so a rollback can
+        // truncate the parameter timeline to exactly the recorded state.
         let mut cursors = vec![self.log.lock().unwrap().len()];
         cursors.extend(self.extra_logs.iter().map(|log| log.lock().unwrap().len()));
         self.cursors.push_back((tick, cursors));
@@ -123,6 +139,8 @@ impl HistoryData {
     /// Evict numerical rows and their matching log cursor together.
     pub fn evict(&mut self) {
         if let Some(limit) = self.max_rows {
+            // Drop the oldest tick from all three deques together so their
+            // positions keep describing the same retained window.
             while self.rows.len() > limit {
                 self.rows.pop_front();
                 self.cursors.pop_front();
@@ -139,6 +157,9 @@ impl HistoryData {
         continuation: bool,
     ) -> PyResult<bool> {
         let mut row = vec![tick as f64];
+        // Row layout is [tick, payload...]: raw mode stores the complete state,
+        // observation mode stores the projection only, so observe() can feed
+        // raw rows into a second, observation-configured store.
         if self.raw {
             row.extend_from_slice(ind);
             row.extend_from_slice(sperm);
@@ -156,12 +177,16 @@ impl HistoryData {
     }
     /// Drop future history and log entries at an exact retained boundary.
     pub fn restore_timeline(&mut self, tick: i64) -> PyResult<()> {
+        // Locate the tick's cursor first (a missing tick is an error) before
+        // dropping anything, so a bad request leaves history untouched.
         let cursor = self
             .cursors
             .iter()
             .find(|(t, _)| *t == tick)
             .map(|(_, c)| c.clone())
             .ok_or_else(|| PyValueError::new_err(format!("Tick {tick} not found in history.")))?;
+        // Drop every row, boundary, and log entry recorded after the boundary;
+        // each log's cursor is its committed length at that tick.
         self.rows.retain(|r| r[0] as i64 <= tick);
         self.cursors.retain(|(t, _)| *t <= tick);
         self.boundaries.retain(|(t, _, _)| *t <= tick);
@@ -190,6 +215,7 @@ impl HistoryStore {
         raw: bool,
         max_rows: Option<usize>,
     ) -> PyResult<Self> {
+        // Zero width or zero retention is meaningless; None stays unbounded.
         if width == 0 || max_rows == Some(0) {
             return Err(PyValueError::new_err(
                 "row_size and max_rows must be positive",
@@ -203,10 +229,14 @@ impl HistoryStore {
     }
     /// Attach the population's native parameter timeline before execution.
     fn bind_log(&self, log: PyRef<'_, ParameterLog>) {
+        // Share the Arc, not the entries: the session and this store must see
+        // the same timeline.
         self.data.lock().unwrap().log = Arc::clone(&log.rows);
     }
     /// Attach all per-deme native log streams for exact checkpoint cursors.
     fn bind_logs(&self, py: Python<'_>, logs: Vec<Py<ParameterLog>>) {
+        // Spatial runs bind one log per deme so every checkpoint can restore
+        // each deme's timeline, not just the first.
         self.data.lock().unwrap().extra_logs = logs
             .iter()
             .map(|log| Arc::clone(&log.borrow(py).rows))
@@ -222,6 +252,8 @@ impl HistoryStore {
     ) -> PyResult<()> {
         let mut data = self.data.lock().unwrap();
         let mask = mask.as_slice()?.to_vec();
+        // Validate the selector by projecting a zero row first; a bad mask must
+        // not leave the store partially configured.
         project(
             &vec![0.0; data.dimensions.iter().product()],
             &mask,
@@ -242,6 +274,8 @@ impl HistoryStore {
     }
     #[setter]
     fn set_max_rows(&self, value: Option<usize>) -> PyResult<()> {
+        // Reject zero explicitly, then evict so the new cap takes effect on the
+        // already retained window.
         if value == Some(0) {
             return Err(PyValueError::new_err("max_rows must be >= 1 or None"));
         }
@@ -265,6 +299,8 @@ impl HistoryStore {
     }
     /// Describe partial snapshots separately from complete tick boundaries.
     fn boundaries(&self) -> Vec<(i64, usize, String)> {
+        // Cloned tuples: the caller must not observe later in-place updates to
+        // the boundary status recorded by the sessions.
         self.data
             .lock()
             .unwrap()
@@ -278,6 +314,8 @@ impl HistoryStore {
     fn append(&self, rows: PyReadonlyArray2<'_, f64>, continuation: bool) -> PyResult<()> {
         let shape = rows.shape();
         let mut data = self.data.lock().unwrap();
+        // Check the column count first: a row with the wrong width cannot be
+        // interpreted against the schema at all.
         if shape[1] != data.width {
             return Err(PyValueError::new_err(
                 "History row width does not match schema",
@@ -295,6 +333,9 @@ impl HistoryStore {
                     "History tick must be a finite integer",
                 ));
             }
+            // Only the batch's first row may repeat the latest tick, and only
+            // as a payload-identical continuation boundary; every later row
+            // must increase strictly.
             if let Some(last) = previous {
                 if i == 0 && continuation && tick == last {
                     if row
@@ -337,6 +378,8 @@ impl HistoryStore {
         }
         let arr = PyArray2::zeros(py, [data.rows.len(), end - start], false);
         let mut view = arr.readwrite();
+        // Copy each retained row's requested column slice into a fresh C-order
+        // array; dropping the view releases the numpy borrow before returning.
         let output = view.as_slice_mut()?;
         for (index, row) in data.rows.iter().enumerate() {
             output[index * (end - start)..(index + 1) * (end - start)]
@@ -356,6 +399,8 @@ impl HistoryStore {
         Ok(PyArray1::from_vec(py, row.clone()))
     }
     fn clear(&self) {
+        // Clears recorded rows and their metadata; bound parameter logs keep
+        // their entries because the session owns them.
         let mut data = self.data.lock().unwrap();
         data.rows.clear();
         data.cursors.clear();
@@ -363,6 +408,7 @@ impl HistoryStore {
     }
     fn truncate(&self, tick: i64) -> PyResult<()> {
         let mut data = self.data.lock().unwrap();
+        // Refuse a tick that would delete every row and leave no boundary.
         if !data.rows.iter().any(|r| r[0] as i64 <= tick) {
             return Err(PyValueError::new_err(format!(
                 "No records with tick <= {tick} exist."
@@ -378,6 +424,8 @@ impl HistoryStore {
     }
     /// Recompute retained raw observations entirely within native storage.
     fn observe(&self, target: PyRef<'_, HistoryStore>) -> PyResult<()> {
+        // The destination must be a distinct store, or the projection would
+        // read from the ring it is writing into.
         if Arc::ptr_eq(&self.data, &target.data) {
             return Err(PyValueError::new_err(
                 "Observation destination must be independent",
@@ -385,6 +433,8 @@ impl HistoryStore {
         }
         let source = self.data.lock().unwrap();
         let mut output = target.data.lock().unwrap();
+        // Only raw-mode history carries complete state; observation mode has
+        // already discarded the ztypes and demes needed to re-project.
         if !source.raw {
             return Err(PyValueError::new_err(
                 "observe() is only valid on raw-mode History",
@@ -402,6 +452,8 @@ impl HistoryStore {
                 PyValueError::new_err("Raw history row width does not match population dimensions")
             })?;
         for row in &source.rows {
+            // Re-project each raw row through the destination's configured
+            // mask; raw history has no sperm payload, hence the empty slice.
             output.record(row[0] as i64, &row[1..raw_end], &[], false)?;
         }
         Ok(())

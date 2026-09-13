@@ -75,6 +75,8 @@ pub type EcoJournalRow = (i64, usize, f64, f64, usize);
 /// naming the parameter and its allowed interval (mirrors the Python
 /// ``'<name>' requires a value in [lo, hi], got <v>`` wording).
 pub fn validate_eco_param(id: usize, value: f64) -> Result<(), String> {
+    // Clamp defensively so a corrupt wire id can never index past the generated
+    // bounds table; the last row is the fallback.
     let idx = id.min(N_ECO_PARAMS - 1);
     let (lo, hi) = ECO_PARAM_BOUNDS[idx];
     if value.is_finite() && lo <= value && value <= hi {
@@ -202,6 +204,7 @@ impl HookProgram {
         if self.op_offsets.is_empty() {
             self.op_offsets.push(0);
         }
+        // One slot per hook, plus a deme-selector prefix sum of n_hooks+1.
         while (self.python_callback_slots.len() as i64) < self.n_hooks {
             self.python_callback_slots.push(-1);
         }
@@ -213,14 +216,19 @@ impl HookProgram {
             self.deme_selector_types.push(0);
         }
         if (self.hook_offsets.len() as i64) < self.n_events + 1 {
+            // hook_offsets is an n_events+1 prefix sum; grow it so a program
+            // with only callbacks still has a valid (empty) schedule.
             let last = self.hook_offsets.last().copied().unwrap_or(0);
             self.hook_offsets.resize(self.n_events as usize + 1, last);
         }
         if self.n_events < lists.len() as i64 {
+            // Expose one event segment per supplied list even when the program
+            // declared fewer events (standalone callback-only usage).
             let last = *self.hook_offsets.last().unwrap_or(&0);
             self.hook_offsets.resize(lists.len() + 1, last);
             self.n_events = lists.len() as i64;
         }
+        // Repair pairing per event: a shrink demotes, a growth appends slots.
         for event in 0..lists.len() {
             let existing = self.event_callback_count(event);
             let wanted = lists[event].len();
@@ -237,6 +245,8 @@ impl HookProgram {
 
     /// Count the callback slots inside one event's hook segment.
     fn event_callback_count(&self, event: usize) -> usize {
+        // Count live (>= 0) slots only; the bounds clamp keeps a partially
+        // built program from panicking.
         if event + 1 >= self.hook_offsets.len() {
             return 0;
         }
@@ -253,6 +263,8 @@ impl HookProgram {
     /// inert ``-1`` slots (the standalone shrink-list path; the slots stay
     /// as zero-op CSR hooks so no dangling callback reference remains).
     fn demote_callback_slots(&mut self, event: usize, keep: usize) {
+        // Clear surplus references span-wise; the slots stay in the CSR arrays
+        // as inert zero-op hooks so no later trigger can reach a dead callback.
         if event + 1 >= self.hook_offsets.len() {
             return;
         }
@@ -275,6 +287,8 @@ impl HookProgram {
     /// and slot indexes starting at *first_index*; later event offsets
     /// shift by the inserted count.
     fn append_callback_slots(&mut self, event: usize, first_index: usize, count: usize) {
+        // Insertions happen at the event's hook segment end, so its preceding
+        // hooks and all earlier events keep their offsets.
         let seg_end = self.hook_offsets[event + 1] as usize;
         let op_boundary = self.op_offsets.get(seg_end).copied().unwrap_or(0);
         let sel_boundary = self
@@ -282,6 +296,8 @@ impl HookProgram {
             .get(seg_end)
             .copied()
             .unwrap_or(0);
+        // One new hook per callback: a slot entry plus parallel op/selector
+        // columns so every CSR array stays the same length.
         for step in 0..count {
             self.python_callback_slots
                 .insert(seg_end + step, (first_index + step) as i64);
@@ -290,6 +306,8 @@ impl HookProgram {
             self.deme_selector_offsets
                 .insert(seg_end + step + 1, sel_boundary);
         }
+        // Shift every later event boundary by the inserted count, then grow the
+        // hook count once.
         for offset in self.hook_offsets.iter_mut().skip(event + 1) {
             *offset += count as i64;
         }
@@ -302,6 +320,9 @@ impl HookProgram {
     /// trigger cannot reference a cleared callback.  A callbacks-only
     /// program (no declarative ops at all) resets to the empty default.
     pub fn clear_callbacks(&mut self) {
+        // A callbacks-only program has no declarative ops worth keeping, so
+        // reset it entirely; a mixed program keeps its ops and only demotes the
+        // callback slots to inert entries.
         if self.n_hooks > 0 && self.op_types.is_empty() {
             *self = HookProgram::default();
             self.python_callbacks = vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()];
@@ -353,11 +374,15 @@ impl HookProgram {
         eco_ctx: &mut Option<crate::kernels::age_structured::EcoCtx<'_>>,
     ) -> Result<i32, String> {
         Python::with_gil(|py| -> PyResult<i32> {
+            // The marker attribute selects the callback ABI: transactional
+            // hooks receive a candidate, raw hooks receive state arrays.
             let transactional = callback
                 .bind(py)
                 .getattr("__natal_transaction__")
                 .and_then(|value| value.extract::<bool>())
                 .unwrap_or(false);
+            // Raw hooks get private copies; mutations are validated and written
+            // back after the call, so the live slices never alias Python memory.
             let arrays = if transactional {
                 None
             } else {
@@ -372,6 +397,9 @@ impl HookProgram {
                         "callback requires a session transaction",
                     )
                 })?;
+                // The candidate snapshots live session state: parameters,
+                // genetics, RNG words, and both state arrays are cloned so the
+                // callback can work detached from the session.
                 Some(Py::new(
                     py,
                     crate::hooks::transaction::HookTransaction {
@@ -393,6 +421,8 @@ impl HookProgram {
             } else {
                 None
             };
+            // Two call signatures: transactional receives (None, None, tick,
+            // deme, tx); raw receives (ind, sperm, tick, deme).
             let outcome = if let Some(tx) = transaction.as_ref() {
                 callback
                     .bind(py)
@@ -410,6 +440,8 @@ impl HookProgram {
                 tx.borrow_mut(py).active = false;
             }
             let result = outcome?;
+            // Collect the state candidate: the transactional path validates
+            // shape and finiteness in candidate_state, the raw path here.
             let state_candidate = if let Some(tx) = transaction.as_ref() {
                 tx.borrow(py).candidate_state(py)?
             } else {
@@ -434,6 +466,8 @@ impl HookProgram {
                     candidate.params.validate(&candidate.blueprint)?;
                     candidate.genetics.validate(&candidate.blueprint)?;
                     let ctx = eco_ctx.as_mut().expect("transaction requires context");
+                    // Refresh the live ECO scratch so later hooks and stages of
+                    // this tick observe the committed write.
                     for (id, value) in eco_values.iter_mut().enumerate() {
                         *value = candidate.params.eco_value(id, ctx.deme);
                     }
@@ -448,6 +482,8 @@ impl HookProgram {
                         candidate.params.clone(),
                         candidate.genetics.clone(),
                     );
+                    // Last write per deme wins; the spatial scheduler merges
+                    // these candidates in stable deme order.
                     if let Some(previous) =
                         commits.iter_mut().find(|entry| entry.0 == deme_id as usize)
                     {
@@ -456,14 +492,20 @@ impl HookProgram {
                         commits.push(update);
                     }
                 }
+                // Cloning the candidate RNG back commits exactly the draws the
+                // callback consumed into the live stream.
                 *rng = candidate.rng.clone();
             }
             if let Some((ind_candidate, sperm_candidate)) = state_candidate {
+                // State lands last, after the parameter and RNG commits of the
+                // same successful call.
                 ind.copy_from_slice(&ind_candidate);
                 sperm.copy_from_slice(&sperm_candidate);
             }
             Ok(result)
         })
+        // Keep the original Python exception in the thread-local so the PyO3
+        // entry point can re-raise it instead of the kernel error string.
         .map_err(crate::hooks::transaction::preserve_error)
     }
 }
@@ -482,14 +524,19 @@ impl HookProgram {
 /// ## Returns
 /// ``true`` when the atomic condition holds.
 fn atomic_condition(cond_type: i64, cond_param: i64, tick: i64) -> bool {
+    // Atomic opcodes only (0..=6); the RPN logical opcodes are handled by
+    // eval_condition, which never calls this branch.
     match cond_type {
         COND_ALWAYS => true,
         COND_TICK_EQ => tick == cond_param,
+        // Guard the divisor: a zero modulus would panic, so it is never true.
         COND_TICK_MOD => cond_param > 0 && tick % cond_param == 0,
         COND_TICK_GE => tick >= cond_param,
         COND_TICK_LT => tick < cond_param,
         COND_TICK_LE => tick <= cond_param,
         COND_TICK_GT => tick > cond_param,
+        // Fallback for unlisted opcodes: true below the RPN range (unknown
+        // negatives), false for logical opcodes the caller never sends here.
         _ => cond_type < COND_OP_AND,
     }
 }
@@ -520,10 +567,12 @@ fn eval_condition(
     if cond_end <= cond_start {
         return true;
     }
+    // Bits are i32 0/1; the capacity is exact for a well-formed program.
     let mut stack: Vec<i32> = Vec::with_capacity(cond_end - cond_start + 1);
     for idx in cond_start..cond_end {
         let token_type = cond_types[idx];
         let token_param = cond_params[idx];
+        // Atomic conditions push their boolean result.
         if token_type <= COND_TICK_GT {
             stack.push(if atomic_condition(token_type, token_param, tick) {
                 1
@@ -533,6 +582,8 @@ fn eval_condition(
             continue;
         }
         if token_type == COND_OP_NOT {
+            // Malformed programs (stack underflow or unknown tokens) evaluate
+            // false instead of panicking; the condition simply does not match.
             if stack.is_empty() {
                 return false;
             }
@@ -560,6 +611,7 @@ fn eval_condition(
         }
         return false;
     }
+    // A valid program leaves exactly one boolean on the stack.
     stack.len() == 1 && stack[0] != 0
 }
 
@@ -600,6 +652,7 @@ fn deme_matches(program: &HookProgram, hook_idx: usize, deme_id: i64) -> bool {
             }
             false
         }
+        // Unknown selector types are treated as global (true).
         _ => true,
     }
 }
@@ -624,10 +677,14 @@ fn sample_survivors(
 ) -> f64 {
     // Deterministic path multiplies by probability.
     // Stochastic path uses discrete binomial or continuous binomial.
+    // An empty slot returns before any draw, so it never advances the RNG
+    // stream relative to a run where the slot is skipped.
     if n_base <= 0.0 {
         return 0.0;
     }
     if stochastic_flag {
+        // Dirichlet mode keeps the continuous count and samples continuously;
+        // discrete mode rounds to an integer number of trials.
         if dirichlet_flag {
             return continuous_binomial(rng, n_base, survival_prob);
         }
@@ -659,17 +716,21 @@ fn apply_target_without_sperm(
 ) -> f64 {
     // If the target is not a reduction, keep the current value.
     // Otherwise sample survivors with probability target/current.
+    // Discrete binomial needs an integer n; deterministic and Dirichlet modes
+    // keep the fractional count.
     let current_count = if stochastic_flag && !dirichlet_flag {
         current_count.round()
     } else {
         current_count
     };
+    // A non-reducing target is a pure assignment: no sampling, no draw.
     if target_count >= current_count {
         return target_count;
     }
     if current_count <= 0.0 {
         return 0.0;
     }
+    // Reduction is a binomial survival with p = target/current (clamped).
     let survival_prob = clamp01(target_count / current_count);
     sample_survivors(
         rng,
@@ -709,15 +770,19 @@ fn apply_target_with_sperm(
 ) -> f64 {
     // Female reductions must also reduce stored sperm.
     // Scale each sperm category and sample surviving virgins independently.
+    // Same rounding rule as the non-sperm path: only discrete binomial mode
+    // needs integer counts.
     let current_count = if stochastic_flag && !dirichlet_flag {
         current_count.round()
     } else {
         current_count
     };
+    // Non-reducing targets leave the sperm buckets untouched.
     if target_count >= current_count {
         return target_count;
     }
     if current_count <= 0.0 {
+        // An empty female slot cannot retain sperm.
         for slot in sperm_row.iter_mut() {
             *slot = 0.0;
         }
@@ -725,14 +790,20 @@ fn apply_target_with_sperm(
     }
     let survival_prob = clamp01(target_count / current_count);
     if !stochastic_flag {
+        // Deterministic reduction scales every bucket by the survival
+        // probability; this path consumes no RNG.
         for slot in sperm_row.iter_mut() {
             *slot *= survival_prob;
         }
         return target_count;
     }
 
+    // Mated females are those carrying sperm; the remainder of the count is
+    // virgins and must be reduced separately.
     let total_sperm: f64 = sperm_row.iter().sum();
     let mut n_virgins_raw = current_count - total_sperm;
+    // Absorb floating-point cancellation at the zero boundary; a genuinely
+    // negative remainder is an inconsistent state and panics below.
     if n_virgins_raw >= -EPS {
         n_virgins_raw = n_virgins_raw.max(0.0);
     }
@@ -750,6 +821,8 @@ fn apply_target_with_sperm(
     };
 
     let mut new_sperm_sum = 0.0;
+    // Draw order is part of the stream contract: every sperm bucket in index
+    // order first, then the surviving virgins.
     for gm_idx in 0..sperm_row.len() {
         let n_sperm = if dirichlet_flag {
             sperm_row[gm_idx]
@@ -785,12 +858,15 @@ fn eval_rpn_value(
     eco_values: &[f64],
 ) -> f64 {
     let mut stack: Vec<f64> = Vec::with_capacity(rpn_end - rpn_start + 1);
+    // Value stack machine: operands push, binary operators pop rhs then lhs.
     for idx in rpn_start..rpn_end {
         let kind = program.rpn_kinds[idx];
         match kind {
             RPN_LITERAL => stack.push(program.sp_literals[program.rpn_payload[idx] as usize]),
             RPN_PARAM => stack.push(eco_values[program.rpn_payload[idx] as usize]),
             _ => {
+                // Missing operands become NaN rather than panicking, matching
+                // the Python reference's tolerant evaluation.
                 let rhs = stack.pop().unwrap_or(f64::NAN);
                 let lhs = stack.pop().unwrap_or(f64::NAN);
                 let value = match kind {
@@ -799,6 +875,9 @@ fn eval_rpn_value(
                     RPN_MUL => lhs * rhs,
                     RPN_DIV => {
                         // Explicit IEEE semantics (see docstring).
+                        // Zero divisors are special-cased to +inf / -inf / NaN
+                        // so the result is the documented convention and never
+                        // an error path.
                         if rhs == 0.0 {
                             if lhs > 0.0 {
                                 f64::INFINITY
@@ -817,6 +896,8 @@ fn eval_rpn_value(
             }
         }
     }
+    // A well-formed expression leaves exactly one value; taking the bottom of
+    // the stack returns it (an exhausted stream yields NaN).
     stack.first().copied().unwrap_or(f64::NAN)
 }
 
@@ -842,6 +923,8 @@ fn convert_count(
     stochastic_flag: bool,
     dirichlet_flag: bool,
 ) -> f64 {
+    // Same sampling conventions as sample_survivors: an empty source consumes
+    // no RNG, and Dirichlet mode uses the continuous binomial.
     if n_base <= 0.0 {
         return 0.0;
     }
@@ -909,6 +992,8 @@ impl HookProgram {
         eco_values: &mut [f64],
         eco_ctx: &mut Option<crate::kernels::age_structured::EcoCtx<'_>>,
     ) -> Result<i32, String> {
+        // Reject unknown opcodes before touching state so a malformed program
+        // cannot partially apply its earlier operations.
         for (op_index, &op_type) in self.op_types.iter().enumerate() {
             if !(OP_SCALE..=OP_CONVERT).contains(&op_type) {
                 return Err(format!(
@@ -921,13 +1006,17 @@ impl HookProgram {
         // Callback slots fire through the GIL boundary inline; CSR slots
         // interpret their operations in place.  Stop requests from either
         // kind short-circuit the whole event immediately.
+        // An out-of-range or empty event is a no-op, not an error.
         if event_id < 0 || event_id >= self.n_events || self.n_hooks == 0 {
             return Ok(RESULT_CONTINUE);
         }
+        // The event's hook range comes from its CSR offset pair.
         let hook_start = self.hook_offsets[event_id as usize] as usize;
         let hook_end = self.hook_offsets[event_id as usize + 1] as usize;
 
         for hook_idx in hook_start..hook_end {
+            // Bounds guard plus the per-hook deme selector: hooks outside the
+            // current deme are skipped without consuming RNG.
             if hook_idx >= self.n_hooks as usize || !deme_matches(self, hook_idx, deme_id) {
                 continue;
             }
@@ -937,11 +1026,14 @@ impl HookProgram {
                 .copied()
                 .unwrap_or(-1);
             if callback_slot >= 0 {
+                // Callback slots fire through the GIL between CSR hooks,
+                // preserving the program's cross-type priority order.
                 // Commit pending set_param writes first so the callback's
                 // transaction snapshot observes the earlier CSR hooks.
                 if let Some(ctx) = eco_ctx.as_mut() {
                     ctx.commit(eco_values)?;
                 }
+                // A dangling reference is a program error, not a silent skip.
                 let Some(callback) = self
                     .python_callbacks
                     .get(event_id as usize)
@@ -963,14 +1055,18 @@ impl HookProgram {
                     eco_ctx,
                 )?;
                 if result != RESULT_CONTINUE {
+                    // A stop from either hook kind aborts the remaining event.
                     return Ok(result);
                 }
                 continue;
             }
+            // CSR plan slot: interpret its operations in order.
             let op_start = self.op_offsets[hook_idx] as usize;
             let op_end = self.op_offsets[hook_idx + 1] as usize;
 
             for op_idx in op_start..op_end {
+                // The condition gates this single operation; false (or an empty
+                // program) skips it and leaves the state untouched.
                 let cond_start = self.condition_offsets[op_idx] as usize;
                 let cond_end = self.condition_offsets[op_idx + 1] as usize;
                 if !eval_condition(
@@ -985,6 +1081,8 @@ impl HookProgram {
 
                 let op_type = self.op_types[op_idx];
                 let param = self.params[op_idx];
+                // Decode this operation's payload: numeric parameter, ztype and
+                // age spans, and the two sex flags.
                 let zidx_start = self.zidx_offsets[op_idx] as usize;
                 let zidx_end = self.zidx_offsets[op_idx + 1] as usize;
                 let age_start = self.age_offsets[op_idx] as usize;
@@ -993,7 +1091,11 @@ impl HookProgram {
                 let sex_male = self.sex_masks[op_idx * 2 + 1];
 
                 if op_type <= OP_SAMPLE {
+                    // Count mutations share one span walk; only the target
+                    // computation below differs per opcode.
                     for sex_idx in 0..n_sexes {
+                        // Sex index 0 is female, 1 is male; other indexes are
+                        // not addressable by the current op set.
                         let selected = if sex_idx == 0 {
                             sex_female
                         } else if sex_idx == 1 {
@@ -1006,6 +1108,8 @@ impl HookProgram {
                         }
                         for age_ptr in age_start..age_end {
                             let age = self.age_data[age_ptr] as usize;
+                            // Out-of-range age/ztype indexes are skipped: they
+                            // have no state or RNG effect.
                             if age >= n_ages {
                                 continue;
                             }
@@ -1014,8 +1118,14 @@ impl HookProgram {
                                 if zidx >= n_ztypes {
                                     continue;
                                 }
+                                // (sex, age, ztype) row-major flat index, the
+                                // layout Python serializes.
                                 let flat = (sex_idx * n_ages + age) * n_ztypes + zidx;
                                 let current = individual_count[flat];
+                                // Per-op intent: scale multiplies, set replaces,
+                                // add/subtract shift, kill removes a fraction,
+                                // sample caps at the parameter. Counts clamp at
+                                // zero and this computation uses no RNG.
                                 let target = match op_type {
                                     OP_SCALE => (current * param).max(0.0),
                                     OP_SET => param.max(0.0),
@@ -1026,6 +1136,10 @@ impl HookProgram {
                                     _ => current,
                                 };
 
+                                // Females in age-structured models carry stored
+                                // sperm, so a reduction must scale their
+                                // buckets too; every other slot uses the plain
+                                // path.
                                 individual_count[flat] = if sex_idx == 0
                                     && !sperm_storage.is_empty()
                                 {
@@ -1060,6 +1174,8 @@ impl HookProgram {
                     // write-back into its ecology columns.
                     let start_tick = self.sp_start[op_idx];
                     let every_ticks = self.sp_every[op_idx];
+                    // Firing plan is tick >= start and (tick - start) % every
+                    // == 0; Op.set_param enforces every >= 1, so no zero modulus.
                     if tick >= start_tick && (tick - start_tick) % every_ticks == 0 {
                         let rpn_start = self.rpn_offsets[op_idx] as usize;
                         let rpn_end = self.rpn_offsets[op_idx + 1] as usize;
@@ -1079,9 +1195,12 @@ impl HookProgram {
                     let src_z = self.convert_source_z[op_idx] as usize;
                     let dst_z = self.convert_target_z[op_idx] as usize;
                     let prob = param;
+                    // Guard both endpoints before indexing the flat state.
                     if src_z < n_ztypes && dst_z < n_ztypes {
                         let has_sperm = !sperm_storage.is_empty();
                         for age in 0..n_ages {
+                            // Males: move plain counts and add exactly the moved
+                            // amount to the target, so the total is conserved.
                             let male_flat = (n_ages + age) * n_ztypes + src_z;
                             let moved_male = convert_count(
                                 rng,
@@ -1104,6 +1223,9 @@ impl HookProgram {
                                         sperm_storage[(age * n_ztypes + src_z) * n_ztypes + mz];
                                 }
                                 let mut moved_mated = 0.0;
+                                // Each bucket is sampled independently; the
+                                // accumulated moved_mated feeds the source
+                                // subtraction below.
                                 for mz in 0..n_ztypes {
                                     let bucket_flat = (age * n_ztypes + src_z) * n_ztypes + mz;
                                     let moved_bucket = convert_count(
@@ -1121,6 +1243,8 @@ impl HookProgram {
                                 let virgins = (individual_count[age * n_ztypes + src_z]
                                     - sperm_row_sum)
                                     .max(0.0);
+                                // Virgin conversion is drawn after the buckets;
+                                // the clamp guards independent sampling noise.
                                 let moved_virgin = convert_count(
                                     rng,
                                     virgins,
@@ -1133,6 +1257,8 @@ impl HookProgram {
                                 individual_count[age * n_ztypes + dst_z] +=
                                     moved_mated + moved_virgin;
                             } else {
+                                // Discrete-generation females have no sperm
+                                // storage, so only their own count migrates.
                                 let female_flat = age * n_ztypes + src_z;
                                 let moved_female = convert_count(
                                     rng,
@@ -1149,6 +1275,8 @@ impl HookProgram {
                 }
 
                 if (OP_STOP_IF_ZERO..=OP_STOP_IF_ABOVE).contains(&op_type) {
+                    // Stop checks sum the selected slots using the same sex,
+                    // age, and ztype span walk as the count ops.
                     let mut selected_total = 0.0;
                     for sex_idx in 0..n_sexes {
                         let selected = if sex_idx == 0 {
@@ -1176,6 +1304,8 @@ impl HookProgram {
                             }
                         }
                     }
+                    // stop_if_zero triggers on an empty selection (<= 0);
+                    // below/above compare the total against the op parameter.
                     if op_type == OP_STOP_IF_ZERO && selected_total <= 0.0 {
                         return Ok(RESULT_STOP);
                     }
@@ -1186,6 +1316,8 @@ impl HookProgram {
                         return Ok(RESULT_STOP);
                     }
                 } else if op_type == OP_STOP_IF_EXTINCTION
+                    // Extinction looks at the whole flat state, ignoring
+                    // selectors.
                     && individual_count.iter().sum::<f64>() <= 0.0
                 {
                     return Ok(RESULT_STOP);

@@ -70,6 +70,8 @@ def _resolve_age_counts_age_structured(
         ValueError: If counts are negative or ages are out of range.
         TypeError: If data type is unsupported.
     """
+    # Mapping form: explicit {age: count}; ages must lie in [0, n_ages) and counts
+    # must be non-negative.  Zero counts are omitted because callers accumulate.
     if isinstance(age_data, Mapping):
         age_map = age_data
         out: Dict[int, float] = {}
@@ -83,6 +85,8 @@ def _resolve_age_counts_age_structured(
                 out[age] = fcount
         return out
 
+    # Sequence form: positional by age index, so trailing elements beyond n_ages
+    # are truncated rather than rejected (no lower bound needed for an index).
     if isinstance(age_data, (Sequence, np.ndarray)) and not isinstance(
         age_data, (str, bytes, bytearray)
     ):
@@ -97,6 +101,8 @@ def _resolve_age_counts_age_structured(
                 out[age] = float(count)
         return out
 
+    # Scalar form: one count replicated over every adult age [new_adult_age, n_ages);
+    # zero places no individuals at all.
     fcount = float(age_data)
     if fcount < 0:
         raise ValueError(f"Count must be non-negative, got {fcount}")
@@ -133,6 +139,8 @@ def resolve_genotype_key_ztype_index(
         KeyError: If the resolved genotype is not in the registry.
         ValueError: If an exact string cannot be parsed.
     """
+    # (genotype, slab) tuple: the slab is explicit, so the registry's identity map
+    # resolves the pair directly, with no string round trip to re-canonicalize.
     if isinstance(genotype_key, tuple):
         _key, _slab = cast("tuple[object, str]", genotype_key)
         if isinstance(_key, Genotype):
@@ -179,10 +187,14 @@ def resolve_genotype_key_ztype_index(
 
 def _fresh_species_registry(species: Species) -> IndexRegistry:
     """Build a registry holding exactly the species' active genotype set."""
+    # Mirror the species product order used by build_registry(), so key resolution
+    # agrees with the population's full-catalog ztype axis.
     registry = IndexRegistry()
     slabs = species.somatic_labels or ["default"]
     for slab in slabs:
         registry.register_somatic_label(slab)
+    # Enumerate with the species' own unordered flag so the key canonicalization
+    # here matches the population's catalog (parental order may collapse).
     genotypes = species.get_all_genotypes(unordered=species.unordered)
     for gt in genotypes:
         registry.register_genotype(gt)
@@ -207,6 +219,8 @@ def resolve_age_structured_initial_individual_count(
         A 3D array ``[sex, age, genotype]``.
     """
     registry = _fresh_species_registry(species)
+    # Plane layout [sex, age, genotype]: Rust stacks one such plane per deme into
+    # its (n_demes, 2, n_ages, n_ztypes) row-major state tensor.
     out = np.zeros((2, n_ages, registry.n_ztypes), dtype=np.float64)
     for sex_key, genotype_dist in distribution.items():
         sex_idx = _resolve_sex_index(sex_key)
@@ -216,6 +230,8 @@ def resolve_age_structured_initial_individual_count(
                 age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
             )
             for age, count in age_counts.items():
+                # Accumulate: distinct key spellings (bare genotype, @slab, tuple,
+                # reversed parental order) can canonicalize to the same cell.
                 out[sex_idx, age, z_idx] += float(count)
     return out
 
@@ -241,6 +257,8 @@ def resolve_age_structured_initial_sperm_storage(
         TypeError: If storage value is not a dictionary.
     """
     registry = _fresh_species_registry(species)
+    # Layout [age, female_genotype, male_genotype]: Rust stacks this into its
+    # (n_demes, n_ages, n_ztypes, n_ztypes) sperm-storage tensor.
     out = np.zeros((n_ages, registry.n_ztypes, registry.n_ztypes), dtype=np.float64)
 
     for female_key, male_dict in sperm_storage.items():
@@ -253,6 +271,7 @@ def resolve_age_structured_initial_sperm_storage(
                 age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
             )
             for age, count in age_counts.items():
+                # Accumulate over canonicalized key spellings, as for individual_count.
                 out[age, f_z, m_z] += float(count)
     return out
 
@@ -271,12 +290,16 @@ def _resolve_discrete_age_distribution(
     Raises:
         ValueError: If negative counts or invalid lengths are provided.
     """
+    # Discrete models expose two age classes; a plain number means age 1 (the
+    # adult entry age), matching the age-structured scalar rule.
     if isinstance(age_data, (int, float)) and not isinstance(age_data, bool):
         value = float(age_data)
         if value < 0:
             raise ValueError(f"Count must be non-negative, got {value}")
         return 0.0, value
 
+    # List/array form: positional (age 0, age 1); a single element is again
+    # treated as age 1, and more than two elements is rejected.
     if isinstance(age_data, (Sequence, np.ndarray)) and not isinstance(
         age_data, (str, bytes, bytearray)
     ):
@@ -293,6 +316,7 @@ def _resolve_discrete_age_distribution(
             return float(arr[0]), float(arr[1])
         raise ValueError(f"Discrete initial list/array must have length <= 2, got {arr.size}")
 
+    # Dict form: only explicit age keys 0 and 1 are accepted; missing keys are 0.
     if isinstance(age_data, Mapping):
         age_map = age_data
         unsupported_keys = [k for k in age_map.keys() if k not in (0, 1)]
@@ -323,6 +347,8 @@ def resolve_discrete_initial_individual_count(
         A 3D array ``[sex, age, genotype]`` with age max 2.
     """
     registry = _fresh_species_registry(species)
+    # Fixed two-age plane [sex, age, genotype] (age 0 newborns, age 1 adults);
+    # its per-deme shape matches the engine's discrete state tensor.
     out = np.zeros((2, 2, registry.n_ztypes), dtype=np.float64)
 
     for sex_key, genotype_dist in distribution.items():
@@ -330,6 +356,7 @@ def resolve_discrete_initial_individual_count(
         for genotype_key, age_data in genotype_dist.items():
             z_idx = resolve_genotype_key_ztype_index(genotype_key, species, registry)
             age0, age1 = _resolve_discrete_age_distribution(age_data)
+            # Accumulate: several genotype keys can share one canonical ztype cell.
             out[sex_idx, 0, z_idx] += age0
             out[sex_idx, 1, z_idx] += age1
     return out

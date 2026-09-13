@@ -20,9 +20,13 @@ pub(crate) fn custom_slots_from_python(
     dict: &Bound<'_, PyAny>,
 ) -> PyResult<HashMap<String, CustomSlot>> {
     let dict = dict.downcast::<PyDict>()?;
+    // Copy every Python value into owned Rust storage so the session never holds a
+    // borrowed Python reference.
     let mut slots = HashMap::new();
     for (key, value) in dict.iter() {
         let key = key.extract::<String>()?;
+        // Order matters: Python bool is a subclass of int, so test bool first or
+        // True/False would be stored as 1/0.
         let slot = if value.is_instance_of::<PyBool>() {
             CustomSlot::Bool(value.extract()?)
         } else if value.is_instance_of::<PyInt>() {
@@ -30,6 +34,7 @@ pub(crate) fn custom_slots_from_python(
         } else if value.is_instance_of::<PyFloat>() {
             CustomSlot::Float(value.extract()?)
         } else {
+            // Anything else must be a float64 array (the only supported container).
             let array = value.extract::<PyReadonlyArrayDyn<'_, f64>>()?;
             CustomSlot::Array {
                 shape: array.shape().to_vec(),
@@ -46,6 +51,7 @@ pub(crate) fn custom_slots_to_python<'py>(
     py: Python<'py>,
     slots: &HashMap<String, CustomSlot>,
 ) -> PyResult<Bound<'py, PyDict>> {
+    // Rebuild fresh Python values so no caller aliases Rust-owned storage.
     let dict = PyDict::new(py);
     for (name, slot) in slots {
         match slot {
@@ -53,6 +59,8 @@ pub(crate) fn custom_slots_to_python<'py>(
             CustomSlot::Int(value) => dict.set_item(name, value)?,
             CustomSlot::Float(value) => dict.set_item(name, value)?,
             CustomSlot::Array { shape, values } => {
+                // Rebuild the original ndarray shape, not a flat vector; a shape
+                // mismatch here is a bug in the stored slot, reported as ValueError.
                 let array = numpy::ndarray::ArrayD::from_shape_vec(
                     numpy::ndarray::IxDyn(shape),
                     values.clone(),

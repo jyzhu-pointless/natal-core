@@ -32,8 +32,14 @@ pub fn compute_offspring_tensor_flat(
 ) -> Vec<f64> {
     let mut out = vec![0.0f64; z * z * z];
     for gf in 0..z {
+        // Each output cell is the probability that a (gf, gm) cross produces
+        // offspring genotype go.
         for gm in 0..z {
             for go in 0..z {
+                // Sum the haplotype-pair contributions in (hf, hm) lexicographic
+                // order.  The retired Python kernel used this exact order with the
+                // same zero-skips, so the f64 accumulation must stay bit-identical
+                // here (do not reassociate, vectorize, or fuse the multiply-adds).
                 let mut s = 0.0f64;
                 for hf in 0..g {
                     let mf = meiosis[gf * g + hf];
@@ -41,6 +47,7 @@ pub fn compute_offspring_tensor_flat(
                         continue;
                     }
                     for hm in 0..g {
+                        // Male meiosis occupies rows [z, 2z) of the (2, z, g) table.
                         let mm = meiosis[(z + gm) * g + hm];
                         if mm == 0.0 {
                             continue;
@@ -48,6 +55,7 @@ pub fn compute_offspring_tensor_flat(
                         s += mf * mm * fusion[(hf * g + hm) * z + go];
                     }
                 }
+                // Store in row-major (gf, gm, go) order consumed by the Python layer.
                 out[(gf * z + gm) * z + go] = s;
             }
         }
@@ -95,6 +103,8 @@ pub fn compute_offspring_tensor<'py>(
     let f_slice = f_view
         .as_slice()
         .ok_or_else(|| PyValueError::new_err("fusion must be C-contiguous"))?;
+    // Delegate to the flat kernel so the PyO3 wrapper and in-crate callers share
+    // one accumulation order.
     let out = compute_offspring_tensor_flat(m_slice, f_slice, z, g);
     Ok(out.into_pyarray(py))
 }

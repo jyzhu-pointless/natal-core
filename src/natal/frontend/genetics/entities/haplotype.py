@@ -120,6 +120,8 @@ class Haplotype(GeneticEntity['Chromosome']):
         missing_loci = set(chrom_loci) - seen_loci
         if missing_loci:
             # Check if this is allowed (e.g., sex chromosomes)
+            # _allow_incomplete_haplotype is the explicit opt-out for chromosomes
+            # (e.g. sex chromosomes) whose haplotypes legitimately omit loci.
             if not getattr(chromosome, '_allow_incomplete_haplotype', False):
                 missing_names = [locus.name for locus in missing_loci]
                 raise ValueError(
@@ -136,6 +138,8 @@ class Haplotype(GeneticEntity['Chromosome']):
         self.linkage = chromosome
 
         # Store custom parameters as attributes
+        # Extra keyword arguments are kept verbatim so callers/parsers can carry
+        # metadata without a declared attribute.
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -147,6 +151,8 @@ class Haplotype(GeneticEntity['Chromosome']):
 
     def get_gene_at_locus(self, locus: Locus) -> Optional[Gene]:
         """Get the gene at a specific locus."""
+        # A locus lives on exactly one chromosome, so the first haplotype that
+        # owns it holds the answer.
         for gene in self.genes:
             if gene.locus is locus:
                 return gene
@@ -264,6 +270,8 @@ class HaploidGenotype(GeneticEntity['Species']):
 
         if sex_chr_groups:
             sex_chr_groups = cast(Dict[str, List[Chromosome]], sex_chr_groups)
+            # With sex groups, coverage is per group (exactly one member), so both
+            # X|Y and X|X genomes pass without requiring every chromosome.
             # For sex chromosomes: must have exactly one from each group
             for group_name, group_chroms in sex_chr_groups.items():
                 group_chroms_set = set(group_chroms)
@@ -321,6 +329,8 @@ class HaploidGenotype(GeneticEntity['Species']):
 
     def get_haplotype_for_chromosome(self, chromosome: Chromosome) -> Haplotype:
         """Get the haplotype for a specific chromosome."""
+        # Structures are cached singletons, so identity comparison is exact; a
+        # miss raises rather than returning None, so coverage cannot be skipped.
         for hap in self.haplotypes:
             if hap.chromosome is chromosome:
                 return hap
@@ -346,6 +356,7 @@ class HaploidGenotype(GeneticEntity['Species']):
 
     def get_gene_at_locus(self, locus: Locus) -> Optional[Gene]:
         """Get the gene at a specific locus across all haplotypes."""
+        # Each locus belongs to one chromosome, so the first hit is the only one.
         for hap in self.haplotypes:
             gene = hap.get_gene_at_locus(locus)
             if gene is not None:
@@ -378,6 +389,7 @@ def create_haplotype_from_allele_names(
         A new Haplotype instance.
     """
     if len(allele_names) != len(chromosome.loci):
+        # Allele names are positional: one per locus, in chromosome order.
         raise ValueError(
             f"Number of alleles ({len(allele_names)}) must match "
             f"number of loci ({len(chromosome.loci)}) in chromosome."
@@ -392,6 +404,7 @@ def create_haplotype_from_allele_names(
                 f"No allele named {allele_name!r} found at locus {locus.name!r}. "
                 f"Available alleles: {[g.name for g in locus.alleles]}"
             )
+        # Genes are locus-owned singletons, so the first name match is canonical.
         genes.append(matching_genes[0])
 
     return Haplotype(chromosome=chromosome, genes=genes)

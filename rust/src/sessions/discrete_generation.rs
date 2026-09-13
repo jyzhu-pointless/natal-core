@@ -64,9 +64,13 @@ impl DiscreteGenerationSession {
     /// Execute an explicit event on the same native state and RNG stream.
     #[pyo3(signature = (event, deme_id=0))]
     fn trigger_event(&mut self, event: usize, deme_id: i64) -> PyResult<i32> {
+        // Event ids index the four fixed hook slots; reject unknown ids before
+        // touching any session state.
         if event >= 4 {
             return Err(PyValueError::new_err("unknown hook event"));
         }
+        // Live ECO scratch for set_param: hooks write scalars here and
+        // ``commit`` folds them into the single discrete ecology column.
         let mut values = self.params.eco_values_row(0);
         let mut ctx = Some(crate::kernels::age_structured::EcoCtx {
             bp: &self.blueprint,
@@ -80,6 +84,9 @@ impl DiscreteGenerationSession {
         });
         let mut result = 0;
         let operation = (|| -> Result<(), String> {
+            // Discrete sessions carry no sperm storage, so the sperm argument
+            // stays an empty slice; n_ages is fixed at 2 (juvenile, adult) and
+            // the adult index is 1.
             result = self.hooks.execute_event(
                 &mut self.rng,
                 event as i64,
@@ -100,6 +107,9 @@ impl DiscreteGenerationSession {
             }
             Ok(())
         })();
+        // Route audit rows: a bound HistoryStore owns the shared parameter
+        // log, while unbound callers accumulate into ``eco_journal`` for
+        // ``drain_eco_journal``.
         if let Some(context) = ctx.as_mut() {
             if let Some(shared) = &self.history_store {
                 let store = shared.lock().unwrap();
@@ -120,6 +130,8 @@ impl DiscreteGenerationSession {
                 self.eco_journal.append(&mut context.journal);
             }
         }
+        // A callback may have produced a validated genetics candidate; take it
+        // out of the borrowed context and move it into the session.
         let genetics = ctx
             .as_mut()
             .and_then(|context| context.updated_genetics.take());
@@ -127,6 +139,8 @@ impl DiscreteGenerationSession {
         if let Some(genetics) = genetics {
             self.genetics = genetics;
         }
+        // A failed event marks the session Failed; a nonzero hook result marks
+        // it Stopped but keeps the mutated state and the advanced RNG.
         if let Err(error) = operation {
             self.execution = crate::sessions::status::ExecutionStatus::Failed;
             return Err(map_lifecycle_error(error));
@@ -166,6 +180,8 @@ impl DiscreteGenerationSession {
         params: &Bound<'_, PyAny>,
         seed: u64,
     ) -> PyResult<Self> {
+        // Freeze the blueprint and split the contract into session-owned
+        // pieces; all three are validated before any state is seeded.
         let bp = Blueprint::from_python(blueprint)?;
         // Panmictic sessions carry one deme: length-1 ecology columns and
         // the session-owned genetics tables split out of the contract.
@@ -270,6 +286,8 @@ impl DiscreteGenerationSession {
         fixed_egg_count: bool,
         extreme_speed_mode: i64,
     ) -> PyResult<()> {
+        // ``extreme_speed_mode`` selects a fixed enum (0..=3); reject an
+        // out-of-range value before mutating the frozen blueprint.
         if !(0..=3).contains(&extreme_speed_mode) {
             return Err(PyValueError::new_err(
                 "extreme_speed_mode must be between 0 and 3",
@@ -303,6 +321,8 @@ impl DiscreteGenerationSession {
         late: Vec<Py<PyAny>>,
         finish: Option<Vec<Py<PyAny>>>,
     ) {
+        // Four callback lists in event order; ``None`` for finish installs an
+        // empty finish slot rather than clearing the other lists.
         self.hooks
             .install_callback_lists(vec![first, early, late, finish.unwrap_or_default()]);
     }
@@ -326,6 +346,9 @@ impl DiscreteGenerationSession {
     /// ## Returns
     /// A list of ``(tick, param_id, old, new)`` tuples.
     fn drain_eco_journal(&mut self) -> Vec<(i64, usize, f64, f64)> {
+        // ``mem::take`` leaves the session store empty (drain semantics); the
+        // phase element is dropped because the Python contract carries only
+        // tick/param/old/new.
         std::mem::take(&mut self.eco_journal)
             .into_iter()
             .map(|(tick, id, old, new, _)| (tick, id, old, new))
@@ -343,6 +366,8 @@ impl DiscreteGenerationSession {
     /// ``0`` or ``1`` (stop).
     #[pyo3(signature = (wf))]
     fn tick(&mut self, py: Python<'_>, wf: bool) -> PyResult<i32> {
+        // A single tick is a one-step batch with recording disabled; ``wf``
+        // selects the fused Wright-Fisher update instead of the staged tick.
         self.run(py, 1, 0, wf, None, 0)
             .map(|(_, _, stopped)| i32::from(stopped))
     }
@@ -385,6 +410,8 @@ impl DiscreteGenerationSession {
                 self.genetics = genetics;
             }
         }
+        // Batch status mirrors ``tick``: stop → Stopped, a clean batch → Ready
+        // with the phase cursor reset, error → Failed.
         self.execution = match &outcome {
             Ok(value) if value.2 => crate::sessions::status::ExecutionStatus::Stopped,
             Ok(_) => {
@@ -414,6 +441,8 @@ impl DiscreteGenerationSession {
     /// Returns ``PyValueError`` when the vector has the wrong length.
     #[pyo3(signature = (ind_flat, tick))]
     fn set_state(&mut self, ind_flat: Vec<f64>, tick: i64) -> PyResult<()> {
+        // Discrete layout: [sex, age, ztype] with two sexes and two ages
+        // (juvenile, adult), so the flat length is 2 * 2 * n_ztypes.
         let want = 2 * 2 * self.blueprint.n_ztypes;
         if ind_flat.len() != want {
             return Err(PyValueError::new_err(format!(
@@ -421,6 +450,9 @@ impl DiscreteGenerationSession {
                 ind_flat.len()
             )));
         }
+        // Reject NaN/negative counts and negative ticks up front, then move the
+        // buffer into the session and reset the lifecycle to Ready because
+        // Python pushed a fresh, un-run state.  Sperm is empty for discrete.
         crate::model::validation::validate_state_values(&ind_flat, &[], tick)?;
         self.state_ind = ind_flat;
         self.state_tick = tick;
@@ -441,6 +473,8 @@ impl DiscreteGenerationSession {
     /// ``individual_count.sum()`` reductions over the same state (the
     /// reduction replicates NumPy's pairwise summation order).
     fn counts(&self) -> (f64, f64, f64) {
+        // Flattened state puts the sex plane outermost: [female | male] blocks
+        // of n_ages * n_ztypes, so the two sex halves are contiguous slices.
         let plane = self.blueprint.n_ages * self.blueprint.n_ztypes;
         let female = crate::kernels::state_reduce::numpy_pairwise_sum(&self.state_ind[..plane]);
         let male =
@@ -459,6 +493,8 @@ impl DiscreteGenerationSession {
 
     fn snapshot_state<'py>(&self, py: Python<'py>) -> PyResult<DiscreteSnapshot<'py>> {
         let ind_flat = PyArray1::from_slice(py, &self.state_ind);
+        // Four raw state words let ``restore_state`` continue the exact stream
+        // (continuation), not reseed it.
         let rng_words = self.rng.state_words().to_vec();
         let ecology = ecology_snapshot(py, &self.params)?;
         Ok((self.state_tick, ind_flat, rng_words, ecology))
@@ -488,6 +524,7 @@ impl DiscreteGenerationSession {
         rng_words: Vec<u64>,
         ecology: &Bound<'_, PyAny>,
     ) -> PyResult<i64> {
+        // A checkpoint always carries exactly the four Xoshiro256++ words.
         if rng_words.len() != 4 {
             return Err(PyValueError::new_err(format!(
                 "rng_words must contain 4 state words, got {}",
@@ -503,8 +540,13 @@ impl DiscreteGenerationSession {
             ));
         }
         crate::model::validation::validate_state_values(ind_src, &[], tick)?;
+        // Restore the ecology section into a clone so a malformed checkpoint
+        // aborts before the live params are touched.
         let mut params = self.params.clone();
         restore_ecology(&mut params, &self.blueprint, ecology)?;
+        // Overwrite the owned buffer in place, drop back to Ready, then
+        // rebuild the generator from the captured words (exact continuation)
+        // and commit the validated params last.
         self.state_ind.copy_from_slice(ind_src);
         self.state_tick = tick;
         self.execution = crate::sessions::status::ExecutionStatus::Ready;
@@ -538,19 +580,27 @@ impl DiscreteGenerationSession {
         let Some(cp) = found else {
             return Ok(None);
         };
+        // A checkpoint captured under a different blueprint shape cannot be
+        // folded into this state, so refuse instead of truncating.
         if cp.ind.len() != self.state_ind.len() {
             return Err(PyValueError::new_err(
                 "checkpoint arrays do not match the live state size",
             ));
         }
+        // Rewind the bound history timeline (rows, cursors, and logs) to the
+        // restored tick so a rerun can re-record the future ticks.
         if let Some(store) = &self.history_store {
             store.lock().unwrap().restore_timeline(tick)?;
         }
+        // Custom slots travel with the checkpoint; the genetics section stays
+        // out of scope (a checkpoint saves, it does not uninstall mods).
         self.params.custom_slots[0] = cp.custom_slots.clone();
         self.state_ind.copy_from_slice(&cp.ind);
         self.state_tick = cp.tick;
         self.execution = cp.execution;
         self.phase = cp.phase;
+        // Bulk-restore the ecology from wire words that were captured from this
+        // same blueprint; per-field validation still runs inside.
         self.rng = SessionRng::from_state_words(cp.rng_words);
         self.params
             .ecology_restore_words(&self.blueprint, &cp.eco_scalars, &cp.eco_vectors)?;
@@ -569,6 +619,8 @@ impl DiscreteGenerationSession {
         collapse_age: bool,
         aggregate: bool,
     ) -> PyResult<(i64, Bound<'py, PyArray1<f64>>)> {
+        // Dimensions follow the [sex, age, ztype] flat layout; ``project``
+        // applies the compiled observation mask and returns an owned vector.
         let values = crate::output::observation::project(
             &self.state_ind,
             mask.as_slice()?,
@@ -587,6 +639,8 @@ impl DiscreteGenerationSession {
 
     /// Attach the same native history object used by the public query adapter.
     fn bind_history(&mut self, history: PyRef<'_, HistoryStore>) {
+        // Share ownership of the row store with the Python HistoryStore; the
+        // session only records into it, it never owns or frees the log.
         self.history_store = Some(std::sync::Arc::clone(&history.data));
     }
 
@@ -597,6 +651,9 @@ impl DiscreteGenerationSession {
             .as_ref()
             .ok_or_else(|| PyValueError::new_err("History is not initialized"))?;
         let mut history = shared.lock().unwrap();
+        // ``record`` returns false when the exact boundary is already the
+        // latest row (idempotent continuation); stamping then targets the
+        // existing boundary with the current phase and status.
         let added = history.record(self.state_tick, &self.state_ind, &[], continuation)?;
         if added {
             if let Some(boundary) = history.boundaries.back_mut() {
@@ -604,6 +661,9 @@ impl DiscreteGenerationSession {
                 boundary.2 = self.execution.name().to_owned();
             }
         }
+        // Raw-mode recording pairs every row with a full checkpoint (state,
+        // RNG words, ecology, custom slots); discrete sessions leave the sperm
+        // vector empty.
         if added && history.raw {
             let (eco_scalars, eco_vectors) = self.params.ecology_snapshot_words()?;
             self.checkpoints
@@ -619,6 +679,8 @@ impl DiscreteGenerationSession {
                     custom_slots: self.params.custom_slots[0].clone(),
                 });
         }
+        // Restorable ticks must be a subset of retained history rows: drop
+        // checkpoints whose row was evicted by the bounded store.
         if let Some(row) = history.rows.front() {
             self.checkpoints.retain(|cp| cp.tick >= row[0] as i64);
         }
@@ -638,6 +700,8 @@ impl DiscreteGenerationSession {
     }
 
     fn truncate_checkpoints(&mut self, retain_until_tick: i64) {
+        // Keep checkpoints at or before the restored tick; a rerun overwrites
+        // the later ticks, so their stale checkpoints must not survive.
         self.checkpoints.retain(|cp| cp.tick <= retain_until_tick);
     }
 }
@@ -648,6 +712,8 @@ impl DiscreteGenerationSession {
     /// ## Returns
     /// A length-``N_ECO_PARAMS`` array in ``ECO_PARAM_COLUMNS`` order.
     fn eco_values(&self) -> [f64; crate::hooks::interpreter::N_ECO_PARAMS] {
+        // Flatten the single deme's ecology into the canonical
+        // ``ECO_PARAM_COLUMNS`` order the CSR interpreter indexes by id.
         let mut values = [0.0; crate::hooks::interpreter::N_ECO_PARAMS];
         for (id, slot) in values.iter_mut().enumerate() {
             *slot = self.params.eco_value(id, 0);
@@ -669,6 +735,8 @@ impl DiscreteGenerationSession {
         // Run a batch of discrete or WF ticks directly on the session-owned
         // state (control parameters only).  The lifecycle kernels read the
         // owned contracts at every stage boundary.
+        // Copy the mask into a Vec: the transient history store may outlive
+        // the borrow of the Python array.
         let mask_vec = match observation_mask {
             Some(mask) => Some(
                 mask.as_slice()
@@ -688,6 +756,9 @@ impl DiscreteGenerationSession {
             tick: self.state_tick,
             journal: Vec::new(),
         });
+        // ``bound`` means the Python adapter already owns the row store (with
+        // raw/observation mode configured); unbound calls get a transient
+        // store sized for either full raw rows or a projected slice.
         let bound = self.history_store.is_some();
         let shared = if let Some(shared) = self.history_store.as_ref().map(std::sync::Arc::clone) {
             shared
@@ -706,11 +777,19 @@ impl DiscreteGenerationSession {
             }
             shared
         };
+        // Record-then-step loop: the top of iteration ``step`` records the
+        // current tick, so a run of n_ticks emits boundaries for the starting
+        // tick through ``start + n_ticks`` (the pre-run state is always one of
+        // them), and a hook stop freezes the tick.  ``max(0)`` clamps a
+        // negative request to a no-op run.
         let mut current_tick = self.state_tick;
         let mut was_stopped = false;
         for step in 0..=n_ticks.max(0) {
             {
                 let mut store = shared.lock().unwrap();
+                // Bound mode flushes the previous tick's set_param journal into
+                // the shared log under the store lock; unbound mode keeps the
+                // rows in ``eco_journal`` and drains them after the run.
                 if bound {
                     if let Some(ctx) = eco_ctx.as_mut() {
                         let mut log = store.log.lock().unwrap();
@@ -731,8 +810,13 @@ impl DiscreteGenerationSession {
                         ctx.journal.clear();
                     }
                 }
+                // Record only while running and only on aligned ticks;
+                // ``record`` also dedups the exact continuation boundary.
                 if !was_stopped && record_interval > 0 && current_tick % record_interval == 0 {
                     let added = store.record(current_tick, &self.state_ind, &[], bound)?;
+                    // Bound raw runs checkpoint every recorded tick; unbound
+                    // runs checkpoint every ``checkpoint_every`` ticks (0
+                    // disables).  ``capture_checkpoint`` ignores repeats.
                     if added
                         && ((bound && store.raw)
                             || (!bound
@@ -749,6 +833,8 @@ impl DiscreteGenerationSession {
                         )
                         .map_err(map_lifecycle_error)?;
                     }
+                    // Restorable checkpoints must track the bounded history:
+                    // drop any whose row was evicted from the store.
                     if bound {
                         if let Some(row) = store.rows.front() {
                             self.checkpoints.retain(|cp| cp.tick >= row[0] as i64);
@@ -756,9 +842,14 @@ impl DiscreteGenerationSession {
                     }
                 }
             }
+            // The terminal iteration only records; a hook stop also leaves the
+            // state frozen at the stopping tick, already recorded above.
             if step == n_ticks.max(0) || was_stopped {
                 break;
             }
+            // ``wf`` selects the fused Wright-Fisher tick; otherwise the staged
+            // six-boundary discrete tick runs (same order as the
+            // age-structured engine, with an empty sperm slice).
             let result = if wf {
                 (|| -> Result<i32, String> {
                     let hook_result = self.hooks.execute_event(
@@ -776,6 +867,8 @@ impl DiscreteGenerationSession {
                         &mut eco_values,
                         &mut eco_ctx,
                     )?;
+                    // Re-stamp the context for this tick and commit the first
+                    // event's writes; the WF update reads the committed columns.
                     if let Some(ctx) = eco_ctx.as_mut() {
                         ctx.tick = current_tick;
                         ctx.commit(&eco_values)?;
@@ -786,6 +879,8 @@ impl DiscreteGenerationSession {
                         // The fused WF update reads the committed columns and
                         // candidate genetics through the live context.
                         let ctx = eco_ctx.as_ref().expect("wf tick lends an eco context");
+                        // Prefer a callback-staged genetics candidate over the
+                        // live table: it carries this event's validated edits.
                         let genetics = ctx.updated_genetics.as_ref().unwrap_or(ctx.genetics);
                         crate::kernels::discrete_generation::run_wf_tick(
                             &mut self.rng,
@@ -819,6 +914,8 @@ impl DiscreteGenerationSession {
                 }
                 map_lifecycle_error(err)
             })?;
+            // Publish the within-tick phase cursor so ``execution_state`` can
+            // describe a partial (stopped/failed) tick.
             if let Some(ctx) = eco_ctx.as_ref() {
                 self.phase = ctx.phase;
             }
@@ -828,6 +925,9 @@ impl DiscreteGenerationSession {
                 current_tick += 1;
             }
         }
+        // Publish the final tick (frozen at the stopping tick when stopped),
+        // drain the remaining journal for unbound callers, and adopt any
+        // leftover genetics candidate from the last event.
         self.state_tick = current_tick;
         if let Some(ctx) = eco_ctx.as_mut() {
             if !bound {
@@ -837,6 +937,8 @@ impl DiscreteGenerationSession {
                 self.genetics = genetics;
             }
         }
+        // Bound callers read rows from the shared store, so the legacy 2-D
+        // export is empty.
         if bound {
             return Ok((
                 current_tick,
@@ -844,6 +946,8 @@ impl DiscreteGenerationSession {
                 was_stopped,
             ));
         }
+        // Materialize the retained rows as a dense [n_rows, n_cols] array;
+        // ``checked_div`` yields 0 columns for an empty store.
         let (flat_history, n_rows) = shared.lock().unwrap().flat_rows();
         let n_cols = flat_history.len().checked_div(n_rows).unwrap_or(0);
         let history = PyArray2::<f64>::zeros(py, [n_rows, n_cols], false);

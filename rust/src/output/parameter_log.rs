@@ -26,6 +26,8 @@ pub struct LogEntry {
 impl LogEntry {
     /// Translate the execution phase cursor into its named hook event.
     pub fn from_phase(row: LogRow, phase: usize, deme: usize) -> Self {
+        // Journal phases are the within-tick stage cursor: 0/2/4/6 are the four
+        // lifecycle events, odd phases are commits made between stages.
         let event = match phase {
             0 => "first",
             2 => "early",
@@ -57,6 +59,8 @@ impl ParameterLog {
     }
     /// Append an actual successful parameter change.
     fn append(&self, row: LogRow) {
+        // Only actual transitions belong in the timeline; a no-op write is
+        // dropped so the log stays a record of changes.
         if row.2 != row.3 {
             self.rows.lock().unwrap().push(LogEntry {
                 row,
@@ -68,11 +72,13 @@ impl ParameterLog {
     }
     /// Mark a callback transaction without copying the accumulated log.
     fn mark(&self) -> usize {
+        // The current length is the cursor rollback() truncates back to.
         self.rows.lock().unwrap().len()
     }
     /// Roll back only the entries added after a callback transaction mark.
     fn rollback(&self, position: usize) -> PyResult<()> {
         let mut rows = self.rows.lock().unwrap();
+        // A mark past the current length cannot have come from this log.
         if position > rows.len() {
             return Err(PyValueError::new_err(
                 "Invalid parameter log transaction mark",
@@ -87,6 +93,9 @@ impl ParameterLog {
             .lock()
             .unwrap()
             .iter()
+            // Legacy four-column projection: a row stays only when both typed
+            // values have a scalar form, so tensor commits are excluded here
+            // and remain readable through details().
             .filter(|entry| {
                 entry.values.as_ref().is_none_or(|(old, new)| {
                     audit_scalar(old).is_some() && audit_scalar(new).is_some()
@@ -119,9 +128,13 @@ impl ParameterLog {
     ) -> PyResult<()> {
         let old = audit_value(old)?;
         let new = audit_value(new)?;
+        // Compare the normalized typed values first; equal writes are no-ops
+        // even if their float projections would differ.
         if old == new {
             return Ok(());
         }
+        // The four-column row keeps only the scalar projection; non-scalar
+        // values project to 0.0 here and stay readable through details().
         let row = (
             tick,
             name,
@@ -146,6 +159,9 @@ impl ParameterLog {
             .lock()
             .unwrap()
             .iter()
+            // Entries without typed values fall back to their stored scalar
+            // pair; typed entries are re-serialized through the shared
+            // custom-field writer, so callers receive independent copies.
             .map(|entry| {
                 let (old, new) = match &entry.values {
                     Some((old, new)) => (audit_to_python(py, old)?, audit_to_python(py, new)?),
@@ -176,6 +192,8 @@ fn audit_value(value: &Bound<'_, PyAny>) -> PyResult<Option<CustomSlot>> {
     if value.is_none() {
         return Ok(None);
     }
+    // PyBool is checked before PyInt: Python `bool` subclasses `int`, so the
+    // reverse order would collapse booleans into integers.
     let result = if value.is_instance_of::<PyBool>() {
         CustomSlot::Bool(value.extract()?)
     } else if value.is_instance_of::<PyInt>() {
@@ -183,6 +201,8 @@ fn audit_value(value: &Bound<'_, PyAny>) -> PyResult<Option<CustomSlot>> {
     } else if value.is_instance_of::<PyFloat>() {
         CustomSlot::Float(value.extract()?)
     } else {
+        // Anything else is read as an f64 array, shape and flat values copied
+        // so no Python buffer is retained.
         let array = value.extract::<numpy::PyReadonlyArrayDyn<'_, f64>>()?;
         CustomSlot::Array {
             shape: array.shape().to_vec(),
@@ -194,6 +214,8 @@ fn audit_value(value: &Bound<'_, PyAny>) -> PyResult<Option<CustomSlot>> {
 
 /// Preserve the historical scalar-only log projection without fabricating tensors.
 fn audit_scalar(value: &Option<CustomSlot>) -> Option<f64> {
+    // Scalar projection only; arrays and absent values return None so
+    // snapshot() can drop tensor rows without fabricating numbers.
     match value {
         Some(CustomSlot::Bool(value)) => Some(if *value { 1.0 } else { 0.0 }),
         Some(CustomSlot::Int(value)) => Some(*value as f64),
@@ -207,6 +229,8 @@ fn audit_to_python(py: Python<'_>, value: &Option<CustomSlot>) -> PyResult<Py<Py
     let Some(value) = value else {
         return Ok(py.None());
     };
+    // Wrap the slot in a one-key map to reuse the shared typed serializer
+    // instead of duplicating the Python conversion for audit reads.
     let values = std::collections::HashMap::from([("value".to_owned(), value.clone())]);
     let dictionary = crate::model::custom_fields::custom_slots_to_python(py, &values)?;
     Ok(dictionary

@@ -66,10 +66,15 @@ class HookRng:
 
     def _draw(self, kind: str, a: float, b: float, size: int | tuple[int, ...] | None) -> float | NDArray[np.float64]:
         """Sample requested dimensions after checking the callback lifetime."""
+        # Lifetime check first: a retained HookRng must not sample once its
+        # callback has returned (the Rust transaction flips `active` off).
         self._validate()
+        # size=None is one scalar draw; otherwise every element is drawn
+        # separately (never broadcast) and the flat results are reshaped.
         if size is None:
             return self._transaction.sample(kind, a, b)
         shape = (size,) if isinstance(size, int) else size
+        # Reject negative extents before the loop so a bad shape consumes no RNG.
         if any(d < 0 for d in shape):
             raise ValueError("negative sampling dimensions are not allowed")
         return np.array([self._transaction.sample(kind, a, b) for _ in range(int(np.prod(shape)))], dtype=np.float64).reshape(shape)
@@ -88,6 +93,8 @@ class HookRng:
 
     def integers(self, low: int, high: int | None = None, size: int | tuple[int, ...] | None = None, endpoint: bool = False) -> int | NDArray[np.int64]:
         """Sample integers with exclusive high unless endpoint is requested."""
+        # NumPy semantics: a lone argument is the exclusive high, and endpoint
+        # adds one so the Rust arm keeps its exclusive-high range.
         if high is None:
             low, high = 0, low
         upper = high + int(endpoint)
@@ -96,7 +103,10 @@ class HookRng:
 
     def binomial(self, n: int | NDArray[np.int64], p: float | NDArray[np.float64], size: int | tuple[int, ...] | None = None) -> int | NDArray[np.int64]:
         """Sample binomial counts using the Rust numerical sampler."""
+        # The array path below bypasses _draw, so check the lifetime here too.
         self._validate()
+        # Array path: broadcast n against p (and against size when given), then
+        # draw one binomial per pair in flattened row-major order.
         if isinstance(n, np.ndarray) or isinstance(p, np.ndarray):
             n_values, p_values = np.broadcast_arrays(n, p)
             if size is not None:

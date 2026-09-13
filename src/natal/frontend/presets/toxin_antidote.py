@@ -97,10 +97,13 @@ class ToxinAntidoteDrive(GeneticPreset):
             species: Optional species to bind at construction.
             use_paternal_deposition: Whether to enable paternal Cas9 deposition.
         """
+        # Store canonical allele names (Gene or str) so the preset can be built
+        # before a species is bound.
         self._str_drive_allele = self._resolve_allele_name(drive_allele)
         self._str_target_allele = self._resolve_allele_name(target_allele)
         self._str_disrupted_allele = self._resolve_allele_name(disrupted_allele)
 
+        # Normalize scalar/dict/tuple rate inputs to (female, male) tuples.
         self.conversion_rate = self._resolve_rates(conversion_rate)
         self.embryo_disruption_rate = self._resolve_rates(embryo_disruption_rate)
 
@@ -113,13 +116,17 @@ class ToxinAntidoteDrive(GeneticPreset):
         self.sexual_selection_mode: AlleleScalingMode = sexual_selection_mode
         self.zygote_viability_mode: AlleleScalingMode = zygote_viability_mode
 
+        # Deposition label is optional; None disables deposition tracking.
         self.cas9_deposition_glab = str(cas9_deposition_glab) if cas9_deposition_glab else None
         self.use_paternal_deposition = bool(use_paternal_deposition)
 
+        # Binds name/species/priority and initializes preset bookkeeping.
         super().__init__(name=name, species=species, priority=priority)
 
     def fitness_patch(self) -> PresetFitnessPatch:
         """Return declarative fitness patch for the disrupted allele."""
+        # The toxin cost is attached to the disrupted allele only; the drive allele
+        # carries the antidote and gets no explicit scaling here.
         return make_fitness_patch_given_allele_scaling(
             self._str_disrupted_allele,
             self.viability_scaling,
@@ -165,11 +172,16 @@ class ToxinAntidoteDrive(GeneticPreset):
         from natal.frontend.presets._types import carrier_pattern
 
         species = host.species
+        # Disruption is restricted to drive-carrier parents; the pattern matches any
+        # genotype carrying the drive (antidote) allele.
         carrier = carrier_pattern(species, self.drive_allele.name)
 
         rule_set = GameteConversionRuleSet(f"{self.name}_GermlineDisruption")
+        # Germline disruption: carriers convert target → disrupted in their gametes
+        # at the configured per-sex rate.
         for sex in (Sex.FEMALE, Sex.MALE):
             rate = ToxinAntidoteDrive._rate_at(self.conversion_rate, sex)
+            # A zero rate adds no rule, keeping the cascade minimal.
             if rate > 0:
                 rule_set.add_allele_convert(
                     from_allele=self.target_allele.name,
@@ -178,6 +190,9 @@ class ToxinAntidoteDrive(GeneticPreset):
                     filters={"parent_sex": ("female" if sex == Sex.FEMALE else "male"), "parent": carrier},
                 )
 
+            # Tag every gamete produced by a carrier with the Cas9 label at rate 1
+            # so the zygote modifier can detect maternal/paternal deposition;
+            # paternal tagging is opt-in.
             if self.cas9_deposition_glab and (sex == Sex.FEMALE or self.use_paternal_deposition):
                 rule_set.add_gtype_convert(
                     to=f"*@{self.cas9_deposition_glab}",
@@ -185,6 +200,7 @@ class ToxinAntidoteDrive(GeneticPreset):
                     filters={"parent_sex": ("female" if sex == Sex.FEMALE else "male"), "parent": carrier},
                 )
 
+        # No rules means no gamete-stage effect at all (None, not an empty modifier).
         return rule_set.to_gamete_modifier(host) if rule_set.rules else None  # type: ignore[return-type]  # structurally satisfies the GameteModifier protocol
 
     def zygote_modifier(self, host: "RecipeHost") -> Optional[ZygoteModifier]:
@@ -193,8 +209,12 @@ class ToxinAntidoteDrive(GeneticPreset):
 
         from natal.frontend.presets._types import carrier_pattern
 
+        # Fallback filter used when no deposition label is configured: edit only
+        # embryos that inherited the drive allele.
         zygote_has_drive = carrier_pattern(host.species, self.drive_allele.name)
 
+        # Embryo disruption runs per parental sex so maternal and paternal
+        # deposition can be distinguished.
         for sex in (Sex.FEMALE, Sex.MALE):
             rate = ToxinAntidoteDrive._rate_at(self.embryo_disruption_rate, sex)
             if rate > 0:
@@ -212,6 +232,8 @@ class ToxinAntidoteDrive(GeneticPreset):
                 if not m_glab and not p_glab:
                     filters["current"] = zygote_has_drive
 
+                # side defaults to "both": each embryonic copy converts
+                # independently, yielding the r^2 / 2r(1-r) outcome split.
                 rule_set.add_allele_convert(
                     from_allele=self.target_allele.name,
                     to_allele=self.disrupted_allele.name,

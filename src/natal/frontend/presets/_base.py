@@ -66,8 +66,11 @@ class GeneticPreset(ABC):
             priority: Execution order — lower values apply first.
                 Same priority uses registration order (stable sort).
         """
+        # Anonymous presets fall back to the class name for readable modifier ids.
         self.name = name or self.__class__.__name__
         self.priority = priority
+        # hook_id is unused until a caller sets it; _bound_species stays None until
+        # bind_species() so presets can be constructed before a species exists.
         self.hook_id: Optional[int] = None
         self._bound_species: Optional[Species] = species
         self._custom_fitness_patch: Optional[Callable[[], Optional[PresetFitnessPatch]]] = None
@@ -79,6 +82,7 @@ class GeneticPreset(ABC):
         without passing species, and binding happens automatically when the
         preset is applied to a population.
         """
+        # First bind wins; re-binding to the same species is a no-op.
         if self._bound_species is None:
             self._bound_species = species
             return
@@ -86,6 +90,8 @@ class GeneticPreset(ABC):
         if self._bound_species is species:
             return
 
+        # Allele names are species-scoped, so rebinding elsewhere is rejected
+        # rather than silently resolving to wrong genes.
         raise ValueError(
             f"Preset '{self.name}' is already bound to species "
             f"'{self._bound_species.name}' and cannot be applied to population species '{species.name}'."
@@ -102,6 +108,7 @@ class GeneticPreset(ABC):
 
     def _resolve_bound_gene(self, allele_name: str) -> Gene:
         """Resolve an allele name into a Gene using the currently bound species."""
+        # Resolved at call time so properties reflect the bound species.
         species = self._require_bound_species()
         gene = species.gene_index.get(allele_name)
         if gene is None:
@@ -154,6 +161,7 @@ class GeneticPreset(ABC):
             Fitness patch from custom function if set, otherwise None.
             Subclasses should override this method for built-in behavior.
         """
+        # A custom function fully overrides the subclass implementation.
         if self._custom_fitness_patch is not None:
             return self._custom_fitness_patch()
         return None
@@ -193,6 +201,7 @@ class GeneticPreset(ABC):
             To preserve subclass behavior while adding modifications,
             subclass and call super().fitness_patch() instead.
         """
+        # Fail at configuration time rather than at build/apply time.
         if not callable(patch_func):
             raise TypeError(f"patch_func must be callable, got {type(patch_func)}")
         self._custom_fitness_patch = patch_func
@@ -209,6 +218,7 @@ class GeneticPreset(ABC):
 
     def _resolve_allele_name(self, allele: _AlleleSpecifier) -> str:
         """Helper to resolve allele inputs to their string names."""
+        # Gene objects already carry their canonical name; strings pass through.
         if isinstance(allele, Gene):
             return allele.name
         return allele
@@ -217,10 +227,13 @@ class GeneticPreset(ABC):
         self, rate: _SexSpecificRates
     ) -> Tuple[float, float]:
         """Helper to resolve rate inputs into a tuple of (female_rate, male_rate)."""
+        # Scalar applies to both sexes; an explicit pair is used as (female, male).
         if isinstance(rate, (int, float)):
             return (rate, rate)
         if isinstance(rate, tuple):
             return rate
+        # Mapping accepts the Sex enum or f/F/m/M aliases; a missing key means no
+        # conversion for that sex (0.0).
         female_rate = rate.get(Sex.FEMALE) or rate.get("female") or rate.get("f") or rate.get("F") or 0.0
         male_rate = rate.get(Sex.MALE) or rate.get("male") or rate.get("m") or rate.get("M") or 0.0
         return (female_rate, male_rate)
@@ -245,11 +258,14 @@ class GeneticPreset(ABC):
         """
         from natal.frontend.fitness._patch import apply_preset_fitness_patch
 
+        # Delayed binding: the deprecated path binds from the target population.
         self.bind_species(population.species)
 
+        # The live population doubles as a RecipeHost (species/registry/config).
         gamete_mod = self.gamete_modifier(population)
         zygote_mod = self.zygote_modifier(population)
 
+        # Register without refreshing; a single refresh follows both registrations.
         if gamete_mod is not None:
             population.add_gamete_modifier(
                 gamete_mod,
@@ -264,9 +280,11 @@ class GeneticPreset(ABC):
                 refresh=False,
             )
 
+        # Rebuild modifier maps once after both registrations (refresh=False above).
         if gamete_mod is not None or zygote_mod is not None:
             population.refresh_modifier_maps()
 
+        # Fitness effects are composed last, after modifier registration.
         patch = self.fitness_patch()
         if patch:
             apply_preset_fitness_patch(population, patch)

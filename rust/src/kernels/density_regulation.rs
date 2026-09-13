@@ -30,6 +30,7 @@ pub type GrowthRate = f64;
 /// The survival factor.
 #[must_use]
 pub fn g_fixed(x: f64) -> f64 {
+    // Empty/zero juvenile pool: no competition, so no culling (also avoids 1/0).
     if x <= 0.0 {
         1.0
     } else {
@@ -104,6 +105,8 @@ pub fn check_curve_contract(g: &impl Fn(f64) -> f64) -> PyResult<()> {
         )));
     }
     // 2. Monotone non-increasing + 3. non-negative and bounded, sampled.
+    // Sample [0, 3] on a fixed grid; the +1e-12 tolerance absorbs rounding.
+    // The exact g(1) == 1 check above remains the authoritative fixed-point test.
     let mut prev = g(0.0);
     if !(prev.is_finite() && prev >= 0.0) {
         return Err(PyValueError::new_err(format!(
@@ -142,6 +145,7 @@ pub fn check_curve_contract(g: &impl Fn(f64) -> f64) -> PyResult<()> {
 /// ## Errors
 /// Returns ``PyValueError`` for unknown mode ids.
 pub fn scaling_factor(mode: i64, x: f64, r: f64) -> PyResult<f64> {
+    // Mode 0 is the identity (no regulation); modes 1-4 dispatch to the curves.
     Ok(match mode {
         1 => g_fixed(x),
         2 => g_linear(x, r),
@@ -197,11 +201,15 @@ pub fn regulation_scaling(
     match mode {
         0 => Ok(1.0),
         1 => Ok(if actual > 0.0 {
+            // Fixed mode divides equilibrium by the raw actual strength in a
+            // single rounding step, deliberately not via 1/(actual/equilibrium).
             (equilibrium / actual).min(1.0)
         } else {
             1.0
         }),
         2..=4 => {
+            // Curves carrying the equilibrium survival factor: evaluate g at the
+            // guarded competition ratio, then scale by s* afterwards.
             let ratio = competition_ratio(actual, equilibrium);
             Ok(scaling_factor(mode, ratio, r)? * survival_rate)
         }
@@ -221,6 +229,7 @@ pub fn regulation_scaling(
 /// ``actual / expected``, or 1.0 when the equilibrium is zero.
 #[must_use]
 pub fn competition_ratio(actual: f64, expected: f64) -> f64 {
+    // A zero expected strength has no meaningful ratio; treat it as equilibrium.
     if expected > 0.0 {
         actual / expected
     } else {
