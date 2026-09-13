@@ -54,7 +54,6 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         tick=session.tick,
         status=session.status,
         interval_ms=session.interval_ms,
-        backend=session.backend,
         dashboard_type=session.dashboard_type,
     )
     await websocket.send_json(hello)

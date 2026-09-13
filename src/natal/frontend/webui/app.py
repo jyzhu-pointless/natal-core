@@ -43,7 +43,6 @@ async def _get_meta(request: Request) -> dict[str, object]:  # object: heterogen
         "app": "natal-webui",
         "title": request.app.state.title,
         "dashboard_type": session.dashboard_type,
-        "backend": session.backend,
         "tick": session.tick,
         "status": session.status,
         "interval_ms": session.interval_ms,

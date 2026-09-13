@@ -59,13 +59,13 @@ def _make_client(name: str) -> tuple[TestClient, FastAPI]:
 # ---------------------------------------------------------------------------
 
 
-def test_meta_reports_dashboard_type_and_backend() -> None:
+def test_meta_reports_dashboard_type() -> None:
     client, _ = _make_client("meta")
     with client:
         payload = client.get("/api/meta").json()
     assert payload["app"] == "natal-webui"
     assert payload["dashboard_type"] == "population"
-    assert payload["backend"] in ("rust", "python")
+    assert "backend" not in payload
     assert payload["tick"] == 0
     assert payload["status"] == "ready"
 
@@ -384,6 +384,7 @@ def test_ws_hello_ping_and_error_frames() -> None:
             hello = _read_frame(pump, "hello")
             assert hello["tick"] == 0
             assert hello["dashboard_type"] == "population"
+            assert "backend" not in hello
             assert hello["status"] == "ready"
 
             ws.send_json({"type": "ping", "nonce": "abc"})

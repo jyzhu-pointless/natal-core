@@ -42,10 +42,9 @@ from .protocol import (
     StatusFrame,
     TickUpdateFrame,
 )
-from .types import DashboardPopulation, uses_rust_backend
+from .types import DashboardPopulation
 
 DashboardType = Literal["population", "spatial"]
-BackendKind = Literal["rust", "python"]
 
 _MAX_LOG_FRAMES = 1000
 _TURBO_WINDOW_S = 0.1
@@ -107,13 +106,6 @@ class SimulationSession:
         if isinstance(self._population, SpatialPopulation):
             return "spatial"
         return "population"
-
-    @property
-    def backend(self) -> BackendKind:
-        """Return which engine backend currently drives the lifecycle."""
-        if uses_rust_backend(self._population):
-            return "rust"
-        return "python"
 
     @property
     def tick(self) -> int:
