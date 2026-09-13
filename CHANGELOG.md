@@ -1,8 +1,21 @@
 # Changelog
 
-## Unreleased
+## v0.3.0b0 (2026-09-13)
 
 ### Breaking Changes
+
+- **Python 3.10 or later is required**. Release wheels cover CPython 3.10–3.13
+  on Linux x86_64/ARM64, macOS Intel/ARM64, and Windows x86_64.
+- **Conversion rules have one filter/target vocabulary**: use the gamete or
+  zygote allele-conversion and whole-type-conversion rule families. Whole-type
+  targets use `genotype@label`, with `*` preserving either component. Replace
+  the retired redirect rules and legacy filter fields with the documented
+  `filters` API. Legacy colon-separated genotype/label strings are rejected.
+- **Published model layouts are fixed**: compilation starts with the complete
+  species baseline, and publication projects all state and genetics arrays
+  onto one consistent runtime layout. Runtime updates that make a pruned type
+  newly reachable fail without partially committing the update. Declare the
+  required reachable states before publication or build a new population.
 
 - **The NiceGUI dashboards are removed**: `natal.frontend.ui` (Dashboard /
   PopulationDashboard / SpatialDashboard / launch), the `nt.ui.*` exports,
@@ -108,6 +121,20 @@
 
 ### Bug Fixes
 
+- **Sex-chromosome identity and validation**: preserve distinct XY/ZW chromosome
+  identities through genotype parsing, serialization, indexing, and inheritance.
+  Validate completed species structures before compiling a population.
+- **Conversion probabilities and sequencing**: apply whole-type conversion
+  rates, including label-only targets, and evaluate zygote `current` filters
+  against the state produced by preceding rules. Repeated modifier refreshes
+  compile from the species baseline rather than compounding previous changes.
+- **Compressed and spatial lifecycles**: keep shared reachable-state closure,
+  labeled sperm storage, fitness arrays, observation indices, and runtime
+  refreshes aligned with the published layout. Zero-rate targets can remain
+  pruned without breaking a later unchanged refresh.
+- **Sex-specific survival**: apply zygote and juvenile survival on the correct
+  sex axis, including stochastic Poisson thinning.
+
 - **Manual `trigger_event("finish")` semantics**: a manually fired finish
   event is a rehearsal — `is_finished` now reads false during and after
   the event (it used to flip true-then-false because the session never
@@ -136,6 +163,14 @@
   defective old streams (plan R1).
 
 ### Changed
+
+- **Shared local and remote checks**: `scripts/ci_full.py` runs the same stages
+  used by GitHub Actions. Release wheels are installed in isolated environments
+  and tested before their exact artifacts are uploaded. Manual release runs
+  default to a dry run, and release tags must match package versions.
+- **Complete compilation without a complete offspring tensor**: derive the
+  offspring tensor only for the final runtime axes. Frozen published registries
+  prevent later registration or recompression from invalidating runtime indices.
 
 - **Spatial update internals**: replace the private `_SpatialUpdate` facade and
   method-name batching table with typed Configurator dispatch and explicit

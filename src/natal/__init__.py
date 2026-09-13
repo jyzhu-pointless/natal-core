@@ -8,7 +8,7 @@ Core components for genetic simulation: structures, entities, and population mod
 import importlib
 from typing import Any, Dict
 
-__version__ = "0.2.0b"
+__version__ = "0.3.0b0"
 
 # Maps exported symbol names to the module that defines them.
 #
