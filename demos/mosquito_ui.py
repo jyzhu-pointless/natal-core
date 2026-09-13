@@ -95,7 +95,6 @@ pop = nt.AgeStructuredPopulation\
     .competition(
         juvenile_growth_mode="beverton_holt",
         old_juvenile_carrying_capacity=120,
-        expected_num_new_adult_females=210,
     ) \
     .presets(
         drive
