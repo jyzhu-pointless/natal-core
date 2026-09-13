@@ -429,6 +429,9 @@ def _cascade_row(
             branches[gidx] = float(prob)
 
     for step in compiled:
+        # A zero-rate event has no target branch; that state may be pruned.
+        if step.rule.rate == 0.0:
+            continue
         if not branches:
             break
         next_branches: Dict[int, float] = {}

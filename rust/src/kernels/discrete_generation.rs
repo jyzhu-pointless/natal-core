@@ -390,8 +390,18 @@ pub fn reproduction(
         &mut n_m,
     );
     for z in 0..g {
-        ind[idx(0, 0, z, g)] = n_f[z];
-        ind[idx(1, 0, z, g)] = n_m[z];
+        // Zygote viability precedes juvenile competition and ordinary survival.
+        // Use the same independent thinning as the age-structured lifecycle.
+        for (sex, count) in [(0, n_f[z]), (1, n_m[z])] {
+            let viability = genetics.zygote_viability_fitness[sex * g + z];
+            ind[idx(sex, 0, z, g)] = if !bp.stochastic {
+                count * viability
+            } else if bp.continuous_sampling {
+                continuous_binomial(rng, count, viability)
+            } else {
+                binomial(rng, count.round() as i64, viability)
+            };
+        }
     }
 }
 
@@ -831,8 +841,12 @@ pub fn run_wf_tick(
         }
     }
     for go in 0..g {
-        expected_f[go] *= viability_f[go];
-        expected_m[go] *= viability_m[go];
+        expected_f[go] *= genetics.zygote_viability_fitness[go]
+            * viability_f[go]
+            * eco.survival_rates[deme * 2 * a];
+        expected_m[go] *= genetics.zygote_viability_fitness[g + go]
+            * viability_m[go]
+            * eco.survival_rates[deme * 2 * a + a];
     }
     let juvenile_growth_mode = eco.growth_mode[deme];
     if juvenile_growth_mode > 0 {

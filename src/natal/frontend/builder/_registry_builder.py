@@ -80,6 +80,7 @@ def rebuild_config_maps(
     zygote_modifiers: ZygoteList,
     compress: bool = False,
     declared_zygote_types: set[str] | set[int] | None = None,
+    resolved_ztype_indices: set[int] | None = None,
     prepared: bool = False,
     host: RecipeHost | None = None,
 ) -> tuple[ModelDraft, bool]:
@@ -109,6 +110,8 @@ def rebuild_config_maps(
         declared_zygote_types: Genotypes the user declared (string
             selectors or raw indices) that must survive compression
             pruning even when unreachable from the initial state.
+        resolved_ztype_indices: Internal spatial union seeds already resolved
+            on the full ZType axis; these must not be expanded by slab again.
         host: Isolated recipe host supplied to modifiers that inspect configuration.
         prepared: Reuse already compiled modifier maps when finalizing a build;
             compression must not execute user recipes a second time.
@@ -202,6 +205,9 @@ def rebuild_config_maps(
                                 registry.slab_labels[s],
                             )
                         )
+
+        if resolved_ztype_indices is not None:
+            declared_ints = (declared_ints or set()) | resolved_ztype_indices
 
         _gt_mask, _, _zt_mask, _ = (
             build_compression_mask(

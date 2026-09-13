@@ -288,17 +288,25 @@ def _apply_zygote_viability_allele_scaling(
 # ── Slab-based fitness scaling (per_slab keys) ──────────────────────────
 
 
+def _slab_ztype_indices(deps: RecipeHost, slab_name: str) -> list[int]:
+    """Resolve only retained ZTypes; compression need not retain every genotype/slab pair."""
+    if slab_name not in deps.index_registry.slab_labels:
+        raise KeyError(f"Unknown somatic label {slab_name!r}")
+    return [
+        index for index, (_, slab) in enumerate(deps.index_registry.index_to_ztype)
+        if slab == slab_name
+    ]
+
+
 def _apply_viability_slab_scaling(
     deps: RecipeHost,
-    all_genotypes: List[Genotype],
     patch: PresetFitnessPatch,
 ) -> None:
     """Apply per-slab viability scaling by writing to the (G×S) flat array."""
     for slab_name, factor in patch['viability_per_slab'].items():
         default_age = int(deps.config.new_adult_age) - 1
         arr = deps.config.viability_fitness
-        for genotype in all_genotypes:
-            z = deps.index_registry.ztype_index(genotype, slab_name)
+        for z in _slab_ztype_indices(deps, slab_name):
             for sex in (0, 1):
                 current = float(arr[sex, default_age, z])
                 arr[sex, default_age, z] = current * float(factor)
@@ -306,14 +314,12 @@ def _apply_viability_slab_scaling(
 
 def _apply_fecundity_slab_scaling(
     deps: RecipeHost,
-    all_genotypes: List[Genotype],
     patch: PresetFitnessPatch,
 ) -> None:
     """Apply per-slab fecundity scaling."""
     for slab_name, factor in patch['fecundity_per_slab'].items():
         arr = deps.config.fecundity_fitness
-        for genotype in all_genotypes:
-            z = deps.index_registry.ztype_index(genotype, slab_name)
+        for z in _slab_ztype_indices(deps, slab_name):
             for sex in (0, 1):
                 current = float(arr[sex, z])
                 arr[sex, z] = current * float(factor)
@@ -321,7 +327,6 @@ def _apply_fecundity_slab_scaling(
 
 def _apply_sexual_selection_slab_scaling(
     deps: RecipeHost,
-    all_genotypes: List[Genotype],
     patch: PresetFitnessPatch,
 ) -> None:
     """Apply per-slab sexual selection to the (G×S, G×S) matrix.
@@ -332,8 +337,7 @@ def _apply_sexual_selection_slab_scaling(
     """
     for slab_name, factor in patch['sexual_selection_per_slab'].items():
         arr = deps.config.sexual_selection_fitness
-        for genotype in all_genotypes:
-            z = deps.index_registry.ztype_index(genotype, slab_name)
+        for z in _slab_ztype_indices(deps, slab_name):
             # Female side: all male ZTypes paired with this female ZType
             for mz in range(arr.shape[1]):
                 current = float(arr[z, mz])
@@ -342,14 +346,12 @@ def _apply_sexual_selection_slab_scaling(
 
 def _apply_zygote_slab_scaling(
     deps: RecipeHost,
-    all_genotypes: List[Genotype],
     patch: PresetFitnessPatch,
 ) -> None:
     """Apply per-slab zygote viability scaling."""
     for slab_name, factor in patch['zygote_per_slab'].items():
         arr = deps.config.zygote_viability_fitness
-        for genotype in all_genotypes:
-            z = deps.index_registry.ztype_index(genotype, slab_name)
+        for z in _slab_ztype_indices(deps, slab_name):
             for sex in (0, 1):
                 current = float(arr[sex, z])
                 arr[sex, z] = current * float(factor)
@@ -557,10 +559,10 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
 
     # 7) Slab-based fitness patches (per_slab keys — symmetric with per_allele)
     if patch.get('viability_per_slab'):
-        _apply_viability_slab_scaling(deps, all_genotypes, patch)
+        _apply_viability_slab_scaling(deps, patch)
     if patch.get('fecundity_per_slab'):
-        _apply_fecundity_slab_scaling(deps, all_genotypes, patch)
+        _apply_fecundity_slab_scaling(deps, patch)
     if patch.get('sexual_selection_per_slab'):
-        _apply_sexual_selection_slab_scaling(deps, all_genotypes, patch)
+        _apply_sexual_selection_slab_scaling(deps, patch)
     if patch.get('zygote_per_slab'):
-        _apply_zygote_slab_scaling(deps, all_genotypes, patch)
+        _apply_zygote_slab_scaling(deps, patch)

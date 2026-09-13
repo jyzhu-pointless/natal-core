@@ -2044,6 +2044,24 @@ class SpatialPopulationBuilder:
             species=self._species,
             pop_type=self._pop_type,
         )
+        if "individual_count" in value_map or "sperm_storage" in value_map:
+            from natal.frontend.builder._registry_builder import build_registry
+
+            # Initial-state declarations resolve on the full species catalog.
+            # The shared template may already use a pruned ZType registry.
+            full_registry = build_registry(self._species)
+            active = [
+                full_registry.ztype_index(genotype, slab)
+                for genotype, slab in base_template.index_registry.index_to_ztype
+            ]
+            if "individual_count" in value_map:
+                variant_config = variant_config._replace(
+                    initial_individual_count=variant_config.initial_individual_count[:, :, active],
+                )
+            if "sperm_storage" in value_map and self._pop_type == "age_structured":
+                variant_config = variant_config._replace(
+                    initial_sperm_storage=variant_config.initial_sperm_storage[:, active, :][:, :, active],
+                )
         deme = _clone_deme(
             base_template,
             config=variant_config,
@@ -2249,7 +2267,7 @@ class SpatialPopulationBuilder:
             if compress is not None:
                 template_cfg._compress = compress  # pyright: ignore[reportPrivateUsage]
             if extra_declared:
-                template_cfg._declared_zygote_types = set(extra_declared)  # pyright: ignore[reportPrivateUsage]
+                template_cfg._resolved_compression_ztypes = set(extra_declared)  # pyright: ignore[reportPrivateUsage]  # full ZType seeds, not public genotype selectors.
             result = template_cfg.build(name=f"{self._spatial_name}_group")
             # A cold compile creates products once; subsequent ecology groups
             # and the post-BFS build can reuse them under the same input key.
@@ -2261,6 +2279,7 @@ class SpatialPopulationBuilder:
         else:
             template_cfg = PopulationBuilder.for_discrete(self._species)
         template_cfg._spatial_template = True  # pyright: ignore[reportPrivateUsage]  # group template replays spatial hook declarations.
+        template_cfg._resolved_compression_ztypes = None if extra_declared is None else set(extra_declared)  # pyright: ignore[reportPrivateUsage]  # internal full ZType seeds bypass public selector expansion.
 
         for method_name, kwargs in self._declaration_log:
             method = getattr(template_cfg, method_name, None)
@@ -2277,13 +2296,6 @@ class SpatialPopulationBuilder:
                         resolved[key] = first
                 else:
                     resolved[key] = value
-
-            # Merge union seeds into the setup call's declared_zygote_types.
-            # extra_declared already includes user-declared types (resolved by
-            # _compress_once), hook refs, and BFS survivors — it is the complete
-            # seed set.  Replace the replay log's declared_zygote_types outright.
-            if extra_declared and method_name == "setup":
-                resolved["declared_zygote_types"] = list(extra_declared)
 
             # Override compress flag (used by _compress_once to build
             # without compression).

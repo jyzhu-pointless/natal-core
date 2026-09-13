@@ -497,6 +497,8 @@ class PopulationBuilder:
         self._compress: bool = False
         self._compression_applied: bool = False
         self._declared_zygote_types: set[str] | set[int] | None = None
+        # Spatial union seeds already address the slab-expanded ZType axis.
+        self._resolved_compression_ztypes: set[int] | None = None
 
         # Observation and History are independent build-time policies.
         self._observation_groups: Mapping[str, IndividualSelector] | None = None
@@ -1774,6 +1776,7 @@ class PopulationBuilder:
                 zygote_modifiers=self.zygote_modifiers,
                 compress=True,
                 declared_zygote_types=self._declared_zygote_types,
+                resolved_ztype_indices=self._resolved_compression_ztypes,
                 prepared=True,
             )
             if compression_applied:

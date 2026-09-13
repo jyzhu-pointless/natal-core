@@ -97,7 +97,7 @@ class SpeciesMappingMixin:
             diploid_genotypes=self.get_all_genotypes(unordered=self.unordered),
             n_glabs=len(self.gamete_labels or ["default"]),
             n_slabs=n_slabs,
-            unordered=True,
+            unordered=self.unordered,
             zygote_modifiers=zygote_modifiers,
         )
 

@@ -83,8 +83,8 @@ def test_xy_public_builder_offspring_sex_and_types_are_exact() -> None:
         except ValueError:
             return False
 
-    # Per-sex exact 1:2:1 autosomal split (125/250/125 of 500), aggregated
-    # over the canonical ztypes the fertilization map occupies.
+    # Per-sex exact 1:2:1 autosomal split, retaining the maternal/paternal
+    # ordering that this unordered=False species explicitly requests.
     per_sex: dict[tuple[int, str], float] = {}
     for genotype, slab in registry.index_to_ztype:
         idx = registry.ztype_index(genotype, slab)
@@ -96,7 +96,9 @@ def test_xy_public_builder_offspring_sex_and_types_are_exact() -> None:
         )
     for sex in (0, 1):
         assert per_sex[(sex, "A|A")] == 125.0
-        assert per_sex[(sex, "A|a")] == 250.0
+        assert per_sex[(sex, "A|a")] == 125.0
+        assert per_sex[(sex, "a|A")] == 125.0
+        assert per_sex[(sex, "A|a")] + per_sex[(sex, "a|A")] == 250.0
         assert per_sex[(sex, "a|a")] == 125.0
 
     female_only = pop.config.female_only_by_sex_chrom
@@ -175,8 +177,10 @@ def test_xy_slab_expanded_initial_state_and_masks() -> None:
 def test_xy_compressed_axis_conserves_and_masks() -> None:
     """Compression prunes the axis but sex masks and totals stay exact."""
     species = _xy_species("cr0_xy_compress")
-    female = species.get_genotype_from_str("A|a;X1|X2")
-    male = species.get_genotype_from_str("A|a;X1|Y1")
+    # Seed only A so that a-bearing genotypes are genuinely unreachable;
+    # both heterozygous parents would make the complete ordered axis reachable.
+    female = species.get_genotype_from_str("A|A;X1|X2")
+    male = species.get_genotype_from_str("A|A;X1|Y1")
     pop = _build_xy(species, female, male, compress=True)
     assert len(pop.registry.index_to_ztype) < len(species.get_all_genotypes(unordered=False)) * 1
     pop.run(1)
