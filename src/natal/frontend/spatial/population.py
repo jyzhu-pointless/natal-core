@@ -804,16 +804,32 @@ class SpatialPopulation:
                     "migration_kernel must be a 2D array with odd dimensions"
                 )
 
+        # Kernel mode never reads the dense adjacency at runtime; skip the
+        # O(D^2) allocation for large auto-derived grids.  This mirrors
+        # resolve_migration_mode() so the mode decision cannot disagree with
+        # the adjacency shape used by the later CSR fold.
+        has_heterogeneous_kernel = (
+            kernel_bank is not None and deme_kernel_ids is not None
+        )
+        selects_kernel_mode = migration_strategy == "kernel" or (
+            migration_strategy in ("auto", "hybrid")
+            and (migration_kernel is not None or has_heterogeneous_kernel)
+        )
+
         if adjacency is None:
             # Default adjacency:
             # - no topology: identity matrix (no migration unless diagonal used)
             # - with topology: topology-derived neighborhood matrix
-            if topology is None:
-                adjacency = np.eye(n_demes, dtype=np.float64)
+            if selects_kernel_mode:
+                adjacency_dense = np.zeros((1, 1), dtype=np.float64)
             else:
-                adjacency = build_adjacency_matrix(topology)
-
-        adjacency_dense = _coerce_adjacency_dense(adjacency, n_demes=n_demes)
+                if topology is None:
+                    adjacency = np.eye(n_demes, dtype=np.float64)
+                else:
+                    adjacency = build_adjacency_matrix(topology)
+                adjacency_dense = _coerce_adjacency_dense(adjacency, n_demes=n_demes)
+        else:
+            adjacency_dense = _coerce_adjacency_dense(adjacency, n_demes=n_demes)
 
         normalized_kernel_bank: tuple[NDArray[np.float64], ...] | None = None
         if kernel_bank is not None:

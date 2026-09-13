@@ -100,6 +100,11 @@ ignore = [
 "demos/repro_bug1_zygote.py" = ["E701", "I001"]  # exact copy from GitHub issue #34
 "demos/repro_bug3_gamete.py" = ["E701", "I001"]  # exact copy from GitHub issue #36
 
+[tool.ruff.lint.isort]
+# Explicitly mark the src-layout package as first-party so import sorting is
+# independent of whether the environment has an editable install.
+known-first-party = ["natal"]
+
 [tool.pyright]
 include = ["src"]
 ignore = [

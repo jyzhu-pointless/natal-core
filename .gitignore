@@ -54,3 +54,8 @@ demos/test*
 *.png
 *.html
 .coverage
+
+# GPU spatial demo generated artifacts
+demos/gpu_spatial/**/outputs/
+demos/gpu_spatial/**/*.npy
+demos/gpu_spatial/**/*_summary*.json
