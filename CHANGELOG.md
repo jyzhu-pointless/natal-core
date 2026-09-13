@@ -1,9 +1,61 @@
 # Changelog
 
-## Unreleased
+## v0.3.0b0 (2026-09-13)
+
+Release wheels bundle the Vue dashboard. Installation checks verify the actual
+HTML, linked assets, and API outside the source checkout; Node.js is only needed
+when building from source.
 
 ### Breaking Changes
 
+- **Python 3.10 or later is required**. Release wheels cover CPython 3.10–3.13
+  on Linux x86_64/ARM64, macOS Intel/ARM64, and Windows x86_64.
+- **Conversion rules have one filter/target vocabulary**: use the gamete or
+  zygote allele-conversion and whole-type-conversion rule families. Whole-type
+  targets use `genotype@label`, with `*` preserving either component. Replace
+  the retired redirect rules and legacy filter fields with the documented
+  `filters` API. Legacy colon-separated genotype/label strings are rejected.
+- **Published model layouts are fixed**: compilation starts with the complete
+  species baseline, and publication projects all state and genetics arrays
+  onto one consistent runtime layout. Runtime updates that make a pruned type
+  newly reachable fail without partially committing the update. Declare the
+  required reachable states before publication or build a new population.
+
+- **The NiceGUI dashboards are removed**: `natal.frontend.ui` (Dashboard /
+  PopulationDashboard / SpatialDashboard / launch), the `nt.ui.*` exports,
+  and the `nicegui[highcharts]` dependency are gone. `launch_vue` (Vue 3 +
+  FastAPI) is the interactive surface; the visualization helpers it still
+  uses live inside `natal.frontend.webui`.
+- **Migration-era package keys removed**: `natal.hooks`, `natal.data`, and
+  the other pre-Phase-0 short keys now raise `AttributeError`. Import from
+  the real paths (`natal.frontend.hooks`, ...) or the top-level lazy API.
+- **Configurator → PopulationBuilder / RuntimeUpdater**: the `Configurator`
+  chain is renamed back to `PopulationBuilder` (`from_species().setup()...`
+  `build()`), spatial construction moved to
+  `SpatialPopulation.builder(...)`, and runtime modification goes through
+  `pop.update()` / `deme.update()` returning one shared `RuntimeUpdater`.
+  The `natal.configurator` package is deleted.
+- **Runtime hook registration removed**: `register_hooks()` and the whole
+  post-registration machinery are gone. Hooks are declared on the build
+  chain (`.hooks(...)`) and packed once at build; per-population factories
+  and the `_pop_ref` / `_hook_context` internals no longer exist.
+- **Model layer split**: `NormalizedModel`, `CompiledModel`, `_ComputedMaps`,
+  and `RunProgram` are deleted. `natal.frontend.model` holds the frozen
+  `ModelDefinition` (declaration snapshot) and the build-time `ModelDraft`.
+- **Kernel Config snapshot layer removed**: the Rust kernels read the
+  Blueprint / Params / genetics tensors directly instead of a per-tick
+  rebuilt Config snapshot (`rust/src/kernels/config.rs` deleted).
+- **`extreme_speed_mode` is chain-only**: `setup(extreme_speed_mode=...)`
+  on the discrete-generation chain (modes: 3 deterministic, 1 multinomial,
+  2 Poisson); the age-structured entry rejects non-zero, and the
+  documented public low-level construction path is retired.
+- **`DemeSlice` aligned surface**: `spatial.deme(i)` returns an explicit
+  view of exactly the 15 `Population`-aligned members plus
+  `index` / `write_ecology` / `write_genetics`; dynamic proxies and
+  `_minimal_contract` are gone, and unlisted attributes raise
+  `AttributeError`.
+- **Undocumented exports removed without aliases**: the `_PUBLIC_EXPORTS`
+  list is the whole public top-level API.
 - **The Rust engine is the only execution backend**: the pure-Python
   reference package (`natal.backends.reference`) is deleted together with
   the `backend=` selector and the `disable_rust_backend` /
@@ -46,14 +98,56 @@
 
 ### New Features
 
+- **`launch_vue` — Vue 3 + FastAPI dashboard**: real-time curves,
+  per-genotype inspection, hooks / genetics-matrix panels, a spatial hex
+  landscape with click-to-inspect demes and a migration panel, and a debug
+  tab (event log, parameter audit, between-tick state diff, raw arrays).
+  The simulation runs server-side; closing the browser keeps the run going.
 - **Composable individual selectors**: add immutable `IndividualSelector`
   rules over ZType, sex, and age coordinates.
 - **Structured history storage**: add immutable schemas, bounded history,
   read-only result ownership, post-hoc observation, and lifecycle-safe state
   restoration.
+- **Op-level `event` / `priority` on every factory**: `scale`, `set_count`,
+  `add`, `subtract`, `kill`, `sample`, and the `stop_if_*` family accept
+  `event=` and `priority=` like `Op.set_param` / `Op.convert` already did.
+
+### Performance
+
+- **Spatial ticks without the kernel Config layer**: reading the contracts
+  directly cut spatial tick time by roughly 35% on the drive benchmarks.
+- **Light direct-write refreshes**: `deme(i).write_ecology(...)`, the
+  per-deme routing of `pop.params.tensor_write(...)`, and
+  `deme(i).write_genetics(...)` hand the engine a source carrying only the
+  named fields instead of a fully materialized contract (which copied
+  every genetics table per write). Numeric outputs are bit-identical
+  (pinned by the digest baselines).
 
 ### Bug Fixes
 
+- **Sex-chromosome identity and validation**: preserve distinct XY/ZW chromosome
+  identities through genotype parsing, serialization, indexing, and inheritance.
+  Validate completed species structures before compiling a population.
+- **Conversion probabilities and sequencing**: apply whole-type conversion
+  rates, including label-only targets, and evaluate zygote `current` filters
+  against the state produced by preceding rules. Repeated modifier refreshes
+  compile from the species baseline rather than compounding previous changes.
+- **Compressed and spatial lifecycles**: keep shared reachable-state closure,
+  labeled sperm storage, fitness arrays, observation indices, and runtime
+  refreshes aligned with the published layout. Zero-rate targets can remain
+  pruned without breaking a later unchanged refresh.
+- **Sex-specific survival**: apply zygote and juvenile survival on the correct
+  sex axis, including stochastic Poisson thinning.
+
+- **Manual `trigger_event("finish")` semantics**: a manually fired finish
+  event is a rehearsal — `is_finished` now reads false during and after
+  the event (it used to flip true-then-false because the session never
+  reached Stopped). The production finish paths (finish_simulation,
+  hook STOP, the spatial stop path) keep their true/true answers.
+- **Selector value edges**: NumPy integer sex and age values are accepted
+  like any `numbers.Integral`; booleans are rejected (``True`` used to
+  silently mean sex 1); an empty sex label raises with the same
+  "use None for a wildcard" guidance as an empty container.
 - **Spatial runtime updates**: validate complete per-deme updates before commit,
   preserve shared configuration identity, and propagate replacement configs to
   every affected deme without leaving partial state on failure.
@@ -73,6 +167,14 @@
   defective old streams (plan R1).
 
 ### Changed
+
+- **Shared local and remote checks**: `scripts/ci_full.py` runs the same stages
+  used by GitHub Actions. Release wheels are installed in isolated environments
+  and tested before their exact artifacts are uploaded. Manual release runs
+  default to a dry run, and release tags must match package versions.
+- **Complete compilation without a complete offspring tensor**: derive the
+  offspring tensor only for the final runtime axes. Frozen published registries
+  prevent later registration or recompression from invalidating runtime indices.
 
 - **Spatial update internals**: replace the private `_SpatialUpdate` facade and
   method-name batching table with typed Configurator dispatch and explicit
@@ -118,6 +220,16 @@
   `deme.state` returns an independent snapshot (the live write-through is
   retired — `deme.import_state(...)` is the write channel), and
   `SpatialPopulation.reset()` reseeds the RNG bank.
+- **Hook priority is op-level data with assignment resolution**: a call-level
+  `.hooks(..., priority=P)` assigns one shared priority to the op items of
+  that declaration (single ops included); without it the ops' own priorities
+  are used and must agree within a packed list (mixed declarations raise
+  `ValueError` at build time).  This fixes two silent drops: the call-level
+  priority never reached a bare op, and an op-level priority (e.g.
+  `Op.set_param(..., priority=5)`) was discarded when the op was packed into
+  a list.  `.hooks()` now records `priority=None` (no assignment) instead of
+  defaulting the declaration to `0`; decorated callbacks keep their decorator
+  priority and are not reachable by the call-level assignment.
 
 ## v0.2.0b (2026.7.14)
 

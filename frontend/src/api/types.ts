@@ -10,8 +10,6 @@
 
 export type DashboardType = "population" | "spatial";
 
-export type BackendKind = "rust" | "python";
-
 export type SimulationStatus = "ready" | "running" | "finished" | "error";
 
 export type LogLevel = "debug" | "info" | "warning" | "error";
@@ -21,7 +19,6 @@ export interface MetaInfo {
   app: string;
   title: string;
   dashboard_type: DashboardType;
-  backend: BackendKind;
   tick: number;
   status: SimulationStatus;
   interval_ms: number;
@@ -350,7 +347,6 @@ export interface HelloMessage {
   tick: number;
   status: SimulationStatus;
   interval_ms: number;
-  backend: BackendKind;
   dashboard_type: DashboardType;
 }
 

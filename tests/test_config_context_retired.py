@@ -415,8 +415,9 @@ class TestBuildPathFreeze:
         WT/Dr/R2):
 
           - female row (manual override, chained last): 0.3 / 0.7 / 0.0
-          - male row (TAD, the later preset, replaces the homing result):
-            0.1 / 0.5 / 0.4
+          - male row (TAD acts on the remaining WT after homing):
+            WT = 0.02425 * 0.2 = 0.00485, Dr = 0.975,
+            R2 = 0.00075 + 0.02425 * 0.8 = 0.02015
           - both-sex ``WT|R2`` control rows stay Mendelian 0.5 / 0.0 / 0.5
             (no drive allele -> no conversion rule applies)
 
@@ -447,7 +448,10 @@ class TestBuildPathFreeze:
             z2g[0, zt_het, [wt, dr, r2]], [0.3, 0.7, 0.0], atol=1e-15
         )
         np.testing.assert_allclose(
-            z2g[1, zt_het, [wt, dr, r2]], [0.1, 0.5, 0.4], atol=1e-15
+            z2g[1, zt_het, [wt, dr, r2]],
+            [0.5 * 0.05 * 0.97 * 0.2, 0.5 + 0.5 * 0.95,
+             0.5 * 0.05 * 0.03 + 0.5 * 0.05 * 0.97 * 0.8],
+            rtol=0, atol=1e-15
         )
         for sex in (0, 1):
             np.testing.assert_allclose(
@@ -681,15 +685,15 @@ class TestBuildPathFreeze:
         assert c.offspring_tensor.shape == (nzt, nzt, nzt)
 
         # Compression pruned: the 12-ztype full space shrank, and every
-        # retained name is unique with the genotype:slab spelling.
+        # retained name is unique with the genotype@slab spelling.
         assert nzt < 12
         assert len(set(c.ztype_names)) == nzt
         for name in c.ztype_names:
-            assert ":" in name, f"ztype name lost its slab suffix: {name!r}"
+            assert "@" in name, f"ztype name lost its slab suffix: {name!r}"
 
         # Symbolic lookups resolve to the index the names advertise.
         zt_het = _ztype_index(reg, slab_species, "WT|Dr", "normal")
-        assert c.ztype_names[zt_het] == "WT|Dr:normal"
+        assert c.ztype_names[zt_het] == "WT|Dr@normal"
         wt = _gtype_index(reg, slab_species, "WT", "default")
         dr = _gtype_index(reg, slab_species, "Dr", "default")
         r2 = _gtype_index(reg, slab_species, "R2", "default")
@@ -939,7 +943,7 @@ class TestErrorPaths:
         Invariant: when the registry has diploid genotypes but NO haploid
         genotypes, ``rebuild_config_maps`` short-circuits — it returns the
         input draft object unchanged (identity, not a copy) with
-        ``compression_applied is False``, even with ``compress=True``.
+        and returns the input draft object unchanged.
         Attack vector: the early return constructing a replaced draft (a
         caller comparing identity would miss state drift) or reporting
         compression as applied.
@@ -954,16 +958,14 @@ class TestErrorPaths:
         assert len(registry.index_to_genotype) == 6
 
         draft = PopulationBuilder.from_species(simple_species).config
-        new_draft, applied = rebuild_config_maps(
+        new_draft = rebuild_config_maps(
             simple_species,
             draft,
             registry,
             gamete_modifiers=[],
             zygote_modifiers=[],
-            compress=True,
         )
         assert new_draft is draft, "early return replaced the draft object"
-        assert applied is False
 
 
 # ══════════════════════════════════════════════════════════════════════════

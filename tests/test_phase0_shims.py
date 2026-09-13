@@ -14,10 +14,9 @@ classes:
    cycle is broken by PEP 562 deferral, so a clean interpreter must be able
    to import the involved modules in ANY order.
 3. Lazy-map completeness (axis combination): every name in the top-level
-   ``natal._lazy_map`` (210 names across 17 real owning modules) resolves
-   through ``getattr(natal, name)`` to the very object its owning module
-   exports, and legacy package keys (``natal.hooks`` etc.) resolve to the
-   relocated module object.
+   ``natal._lazy_map`` resolves through ``getattr(natal, name)`` to the very
+   object its owning module exports; the migration-era package keys
+   (``natal.hooks`` etc.) are gone and raise ``AttributeError``.
 4. Error paths: unknown names raise the documented exception types, and a
    failed lookup leaves the lazy machinery uncorrupted.
 5. Removed numba/codegen surface (negative contracts) unchanged.
@@ -37,36 +36,16 @@ import natal
 # Data tables: legacy paths that must NOT exist anymore.
 # =====================================================================
 
-# The relocated legacy packages: natal.<mod> used to be a forwarding shim
-# of natal.frontend.<mod>.  ``engine`` is covered by ENGINE_LEGACY_PATHS
-# below (its shim exported no ``__all__`` names).  ``configurator`` lost its
-# legacy key to the P5 ``builder`` rename and is covered by the P5 negative
-# contract at the end of this module; ``model`` joined with the P9 package
-# split (``natal.model`` resolves to ``natal.frontend.model``).
-_RELOCATED_PACKAGES: Tuple[str, ...] = (
-    "patterns",
-    "registry",
-    "genetics",
-    "fitness",
-    "presets",
-    "modifiers",
-    "output",
-    "data",
-    "model",
-    "builder",
-    "population",
-    "spatial",
-    "ui",
-    "webui",
-    "hooks",
-    "utils",
-)
-
 # Submodule paths the removed shims used to register via sys.modules
 # aliasing; each must now be strictly unimportable.
-_LEGACY_SUBMODULE_PATHS: Tuple[str, ...] = tuple(
-    list(_RELOCATED_PACKAGES)
-    + [
+_LEGACY_SUBMODULE_PATHS: Tuple[str, ...] = (
+    [
+        # The migration-era top-level package keys (natal.hooks,
+        # natal.data, ...) were removed after the Rust-only migration
+        # settled; like configurator and ui, they must stay unimportable.
+        "patterns", "registry", "genetics", "fitness", "presets",
+        "modifiers", "output", "data", "model", "builder", "population",
+        "spatial", "webui", "hooks", "utils",
         "configurator._base",
         "configurator._factory",
         "configurator._fitness",
@@ -74,6 +53,14 @@ _LEGACY_SUBMODULE_PATHS: Tuple[str, ...] = tuple(
         "configurator._registry_builder",
         "configurator._routes",
         "configurator._writers",
+        # The NiceGUI dashboard package was deleted outright; its
+        # surviving helpers moved to ``frontend.webui.visualization``.
+        "ui",
+        "ui.dashboard",
+        "ui.dashboard_helpers",
+        "ui.dashboard_population",
+        "ui.spatial_dashboard",
+        "ui.visualization",
         "data._builders",
         "data._config",
         "data._engine",
@@ -219,11 +206,16 @@ def test_no_legacy_packages_left_on_disk() -> None:
     tree (``frontend``, ``backends``, ``contracts``); no ``builder``,
     ``data``, ... ``utils`` directory remains.
     """
+    legacy_keys = (
+        "patterns", "registry", "genetics", "fitness", "presets",
+        "modifiers", "output", "data", "model", "builder", "population",
+        "spatial", "ui", "webui", "hooks", "utils",
+    )
     pkg_dir = Path(importlib.import_module("natal").__file__ or ".").resolve().parent
     leftovers = sorted(
         p.name
         for p in pkg_dir.iterdir()
-        if p.is_dir() and p.name in (set(_RELOCATED_PACKAGES) | {"engine", "utils"})
+        if p.is_dir() and p.name in (set(legacy_keys) | {"engine", "configurator"})
     )
     assert not leftovers, f"legacy shim dirs still on disk: {leftovers}"
 
@@ -336,7 +328,14 @@ def test_import_order_independence(order_name: str) -> None:
 # silently drops out of the index, so the size bound and the owner set are
 # both pinned.
 EXPECTED_LAZY_OWNERS = frozenset(
-    {f"frontend.{mod}" for mod in _RELOCATED_PACKAGES} | {"contracts"}
+    {
+        "contracts",
+        "frontend.builder", "frontend.data", "frontend.fitness",
+        "frontend.genetics", "frontend.hooks", "frontend.model",
+        "frontend.modifiers", "frontend.output", "frontend.patterns",
+        "frontend.population", "frontend.presets", "frontend.registry",
+        "frontend.spatial", "frontend.utils", "frontend.webui",
+    }
 )
 
 REQUIRED_LAZY_NAMES = frozenset(
@@ -376,7 +375,7 @@ def test_lazy_map_every_name_resolves_to_owner_export() -> None:
 
 
 def test_lazy_map_owner_axes_and_size() -> None:
-    """The lazy map is built from exactly the 17 expected owning modules.
+    """The lazy map is built from exactly the 16 expected owning modules.
 
     Invariant (axis combination): the owner set of the index must be the 16
     relocated frontend packages plus ``contracts`` — the legacy shims are
@@ -393,17 +392,22 @@ def test_lazy_map_owner_axes_and_size() -> None:
     )
 
 
-def test_legacy_package_keys_still_resolve_to_relocated_modules() -> None:
-    """The legacy package names keep resolving to the real modules.
+def test_legacy_package_keys_raise_attribute_error() -> None:
+    """The migration-era package keys are gone for good.
 
-    Invariant: ``getattr(natal, mod)`` for each relocated legacy key yields
-    the relocated module itself, so pre-migration code relying on
-    ``natal.hooks.X``-style access sees the same objects.
+    Invariant: ``getattr(natal, key)`` raises for every former short key
+    (the lazy index registers no package aliases anymore; only the real
+    ``contracts`` package keeps a lazy self-entry).  Import-level removal
+    is pinned separately by the unimportable-path parametrization.
     """
-    for mod in _RELOCATED_PACKAGES:
-        resolved = getattr(natal, mod)
-        relocated = importlib.import_module(f"natal.frontend.{mod}")
-        assert resolved is relocated, f"natal.{mod} is not the relocated module"
+    legacy_keys = (
+        "patterns", "registry", "genetics", "fitness", "presets",
+        "modifiers", "output", "data", "model", "builder", "population",
+        "spatial", "ui", "webui", "hooks", "utils",
+    )
+    for key in legacy_keys:
+        with pytest.raises(AttributeError):
+            getattr(natal, key)
 
 
 # =====================================================================
@@ -625,7 +629,7 @@ def test_p3_retired_exports_stay_removed() -> None:
     for name in ("NormalizedModel", "CompiledModel"):
         assert not hasattr(natal, name), f"retired export {name!r} is back"
 
-    compiler = importlib.import_module("natal.frontend.genetics.definition_compiler")
+    compiler = importlib.import_module("natal.frontend.model.definition_compiler")
     for name in ("NormalizedModel", "CompiledModel", "snapshot_inputs"):
         assert not hasattr(compiler, name), f"retired export {name!r} is back"
 

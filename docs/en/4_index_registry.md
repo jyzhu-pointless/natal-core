@@ -187,7 +187,7 @@ Keys passed to `initial_state()` must be exact genotype strings. Fuzzy patterns 
 
 ### Motivation
 
-The full combinatorial space `(Genotypes × slabs) × (Haplotypes × glabs)` can be large. Most genotypes and haplotypes are never reachable from the initial conditions — they have zero individuals and no genetic modifiers produce them. Index compression prunes these unreachable entries, reducing array sizes and computation.
+The full combinatorial space `(Genotypes × slabs) × (Haplotypes × glabs)` can be large. Compilation first uses this complete, stable layout for every genotype and label. Index compression is a later publication step that prunes unreachable entries, reducing runtime array sizes and computation.
 
 ### BFS Algorithm
 
@@ -295,15 +295,18 @@ Within the NATAL framework, `IndexRegistry` is used for:
 
 ### 3. Hook System
 
-- Hooks use precomputed indices (selectors are resolved at registration) for efficient engine-side operation.
+- Hooks use precomputed indices (build-time selectors are resolved after the final layout is selected) for efficient engine-side operation.
 - Avoids accessing dynamic registries at compile time.
 - Avoids hardcoded indices through the selector pattern.
 
 ### 4. Index Compression
 
-- `rebuild_config_maps()` (in `natal.frontend.builder._registry_builder`) runs the BFS.
-- The resulting masks are applied via `registry.compress(ztype_mask, gtype_mask)`.
-- After compression, all registry properties reflect only the surviving entries.
+- Initialization and genetic rules are resolved on the complete, unpublished ZType/GType catalog.
+- Publication selects the final layout and projects the registry, genetic maps, fitness, individual counts, and both stored-sperm axes together. With compression disabled, the projection is the identity.
+- The published registry rejects registration and compression. Runtime parameter values can still change; indices cannot be reassigned.
+- Spatial models combine all genetic groups' conversion relations and every deme's initial and stored-sperm types before selecting one shared layout.
+
+The Species blueprint and unpublished drafts do not construct a complete `offspring_tensor`; they use an empty `(0, 0, 0)` marker. Publication derives the tensor only on the final runtime axes. Genetic refresh compiles a new complete candidate, checks that its positive transitions stay within the existing runtime layout, and projects before committing. An update that introduces a pruned GType or ZType fails without changing the live model; retain the required types at build time or rebuild the population.
 
 ## Performance Optimization
 

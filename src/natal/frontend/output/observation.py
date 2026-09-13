@@ -585,6 +585,10 @@ class ObservationFilter:
 
         Numeric strings keep their legacy integer semantics; unknown sex
         labels are rejected by the :class:`IndividualSelector` constructor.
+        Like the age and genotype selectors, any
+        :class:`numbers.Integral` value is accepted (NumPy integers
+        included); booleans are rejected before the Integral narrowing so
+        ``True`` is not silently a sex index.
 
         Args:
             value: ``None``, a sex label/int/enum, or a nested iterable.
@@ -594,6 +598,8 @@ class ObservationFilter:
 
         Raises:
             TypeError: If an entry is not a supported sex selector.
+            ValueError: If the selector selects no sexes (an empty
+                container or an empty label) instead of a wildcard.
         """
         if value is None:
             return []
@@ -604,11 +610,17 @@ class ObservationFilter:
                     "sex selector selects no sexes (use None for a wildcard)"
                 )
         if isinstance(value, str):
+            if value == "":
+                raise ValueError(
+                    "empty sex label selects no sexes (use None for a wildcard)"
+                )
             try:
                 return [int(value)]
             except ValueError:
                 return [value]
-        if isinstance(value, (int, Sex)):
+        if isinstance(value, bool):
+            raise TypeError(f"Unsupported sex selector: {value!r} (not a sex index)")
+        if isinstance(value, (numbers.Integral, Sex)):
             return [int(value)]
         if isinstance(value, Iterable):
             values = cast("Iterable[object]", value)

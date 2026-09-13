@@ -45,7 +45,7 @@ Rust 原生扩展是唯一的执行引擎，所有路径共享同一套 hook 计
 - 声明式 hook 编译为 CSR 计划，在每条路径上按事件边界执行；
 - 回调 hook（`TickContext`）跨桥进入引擎会话执行；带外入口（`trigger_event`、finish 事件）直接调用；
 - deme 级 `priority` 只在 deme 内部生效，跨 deme 无全局顺序；
-- `@hook(..., deme=[0, 2])` 按 deme 选择器限定目标 deme（默认 `"*"` 全部）。
+- `.hooks(..., deme=[0, 2])` 按 deme 选择器限定目标 deme（默认 `"*"` 全部）。
 
 ## 用户 API
 

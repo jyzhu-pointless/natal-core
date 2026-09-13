@@ -207,13 +207,17 @@ class SpeciesConstructionMixin:
             HaploidGenome instance
         """
         self = cast(Species, self)
+        self.validate_structure()
         from natal.frontend.genetics.entities.haplotype import HaploidGenome, Haplotype
 
         gene_index = self.build_gene_index()
 
         hap_strs = [s.strip() for s in haploid_str.split(';') if s.strip()]
 
-        sex_chr_groups = getattr(self, 'sex_chromosome_groups', None)
+        # Use the resolver method, not a raw attribute: the attribute is
+        # only an optional explicit override, while the method also infers
+        # groups from chromosome sex types.
+        sex_chr_groups = self.get_sex_chromosome_groups()
         if sex_chr_groups:
             autosome_count = 0
             for chrom in self.chromosomes:
@@ -246,8 +250,21 @@ class SpeciesConstructionMixin:
             hap = Haplotype(chromosome=chrom, genes=genes)
             haplotypes.append(hap)
 
+        # Sort into the enumeration order (autosomes in species order,
+        # then one haplotype per sex-chromosome group in group order) so
+        # parsed haploid genomes are the same cached instances the
+        # enumerators build.
+        sex_chr_groups = self.get_sex_chromosome_groups() or {}
         chrom_order = {chrom: i for i, chrom in enumerate(self.chromosomes)}
-        haplotypes_sorted = sorted(haplotypes, key=lambda h: chrom_order[h.chromosome])
+        group_order = {
+            chrom: len(self.chromosomes) + gi
+            for gi, group_chroms in enumerate(sex_chr_groups.values())
+            for chrom in group_chroms
+        }
+        haplotypes_sorted = sorted(
+            haplotypes,
+            key=lambda h: group_order.get(h.chromosome, chrom_order[h.chromosome]),
+        )
 
         return HaploidGenome(species=self, haplotypes=haplotypes_sorted)
 
@@ -282,13 +299,17 @@ class SpeciesConstructionMixin:
             Genotype instance
         """
         self = cast(Species, self)
+        self.validate_structure()
         from natal.frontend.genetics.entities.genotype import Genotype
 
         genotype_str = genotype_str.strip()
 
         chrom_segments = [s.strip() for s in genotype_str.split(';') if s.strip()]
 
-        sex_chr_groups = getattr(self, 'sex_chromosome_groups', None)
+        # Use the resolver method, not a raw attribute: the attribute is
+        # only an optional explicit override, while the method also infers
+        # groups from chromosome sex types.
+        sex_chr_groups = self.get_sex_chromosome_groups()
         if sex_chr_groups:
             autosome_count = 0
             for chrom in self.chromosomes:

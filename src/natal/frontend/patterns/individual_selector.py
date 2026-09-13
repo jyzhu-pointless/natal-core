@@ -17,6 +17,7 @@ and returns a boolean mask ``(n_sexes, n_ages, n_ztypes)``.
 from __future__ import annotations
 
 import hashlib
+import numbers
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -79,13 +80,23 @@ def _to_tuple_age(value: AgeInput) -> Tuple[int, ...]:
         return ()
     if isinstance(value, range):
         return tuple(value)
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"Unsupported age selector: {value!r} (not an age index)")
+    # ``int`` first (pyright narrows the concrete class away below),
+    # ``numbers.Integral`` as the NumPy/other-scalar fallback.
     if isinstance(value, int):
         return (value,)
-    return tuple(sorted(frozenset(value)))
+    if isinstance(value, numbers.Integral):
+        return (int(value),)
+    return tuple(sorted(int(v) for v in value))
 
 
 def _to_tuple_sex(value: SexInput) -> Tuple[int, ...]:
     """Normalize a sex input to sorted unique integer values.
+
+    Any :class:`numbers.Integral` value is accepted (NumPy integers
+    included); booleans are rejected so ``True`` is not silently a sex
+    index.
 
     Args:
         value: Sex value, collection, or ``None`` wildcard.
@@ -94,13 +105,24 @@ def _to_tuple_sex(value: SexInput) -> Tuple[int, ...]:
         Normalized sex values, or an empty tuple for a wildcard.
 
     Raises:
+        TypeError: If a value is neither an integral index nor a label.
         ValueError: If a string is not a recognized sex label.
     """
     if value is None:
         return ()
-    if isinstance(value, (Sex, int)):
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"Unsupported sex selector: {value!r} (not a sex index)")
+    # ``int``/``Sex`` first (pyright narrows the concrete classes away
+    # below), ``numbers.Integral`` as the NumPy/other-scalar fallback.
+    if isinstance(value, (int, Sex)):
+        return (int(value),)
+    if isinstance(value, numbers.Integral):
         return (int(value),)
     if isinstance(value, str):
+        if value == "":
+            raise ValueError(
+                "empty sex label selects no sexes (use None for a wildcard)"
+            )
         s = value.lower()
         if s in ("male", "m"):
             return (int(Sex.MALE),)
@@ -110,7 +132,11 @@ def _to_tuple_sex(value: SexInput) -> Tuple[int, ...]:
     # Must be a collection at this point
     out: set[int] = set()
     for item in value:
-        if isinstance(item, (Sex, int)):
+        if isinstance(item, (bool, np.bool_)):
+            raise TypeError(f"Unsupported sex selector: {item!r} (not a sex index)")
+        if isinstance(item, (int, Sex)):
+            out.add(int(item))
+        elif isinstance(item, numbers.Integral):
             out.add(int(item))
         else:
             s = str(item).lower()

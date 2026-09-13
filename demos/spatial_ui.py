@@ -9,10 +9,10 @@ from __future__ import annotations
 import numpy as np
 
 import natal as nt
+from natal import launch_vue
 from natal.frontend.spatial.builder import batch_setting
 from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import SquareGrid
-from natal.frontend.ui import launch
 
 
 def _make_initial_count(wt: float, dr: float) -> dict[str, dict[str, list[float]]]:
@@ -93,7 +93,7 @@ def build_spatial_population() -> SpatialPopulation:
 def main() -> None:
     """Launch the spatial UI demo."""
     spatial = build_spatial_population()
-    launch(spatial, port=8080, title="Spatial UI Demo")
+    launch_vue(spatial, port=8000, title="Spatial UI Demo")
 
 
 if __name__ == "__main__":

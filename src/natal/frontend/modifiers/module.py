@@ -74,6 +74,11 @@ class GameteModifier(Protocol):
     ``sex_idx`` is an ``int``. ``genotype_idx`` may be an ``int``, a
     ``Genotype`` object, or a string produced by ``Genotype.to_string()``.
 
+    Key resolution is strict: an unresolvable source or target key, or a
+    resolved index outside the population's active (possibly compressed)
+    axis, raises ``ValueError`` at apply time.  An empty distribution is
+    legal and clears the row (an all-zero gamete output is a valid model).
+
     Examples:
         return {(0, 5): {3: 0.2, 4: 0.8}, (1, 5): {3: 1.0}}
 
@@ -116,6 +121,40 @@ class ZygoteModifier(Protocol):
 # ============================================================================
 # HELPER FUNCTIONS FOR MODIFIER CONSTRUCTION
 # ============================================================================
+
+class CompiledRuleModifier:
+    """Apply a compiled cascade to the entering construction tensor.
+
+    Direct calls evaluate the species baseline for inspection. During a
+    build, wrappers supply the current tensor so separate rule sets compose
+    in declaration order. Rebuilds still start from the species baseline.
+    """
+
+    def __init__(
+        self,
+        baseline: np.ndarray,
+        cascade: Callable[[np.ndarray, int, int], dict[int, float]],
+    ) -> None:
+        """Capture the projected baseline and compiled row transformation."""
+        self._baseline = baseline
+        self._cascade = cascade
+
+    def rows_for(self, tensor: np.ndarray) -> dict[tuple[int, int], dict[int, float]]:
+        """Transform each entering row, retaining the tensor's probability mass."""
+        if tensor.shape != self._baseline.shape:
+            raise ValueError("Conversion tensor shape differs from the compiled registry")
+        result: dict[tuple[int, int], dict[int, float]] = {}
+        for first in range(tensor.shape[0]):
+            for second in range(tensor.shape[1]):
+                branches = self._cascade(tensor[first, second], first, second)
+                if branches:
+                    result[first, second] = branches
+        return result
+
+    def __call__(self, *_args: object, **_kwargs: object) -> dict[tuple[int, int], dict[int, float]]:
+        """Return the standalone cascade evaluated from the Mendelian baseline."""
+        return self.rows_for(self._baseline)
+
 
 def _invoke_modifier(
     mod: Callable[..., object],
@@ -222,6 +261,8 @@ def _resolve_gtype_key(key: GtypeKey, registry: IndexRegistry) -> int:
     if pair is not None:
         hg_part, glab_part = pair
         if isinstance(hg_part, int):
+            if not 0 <= hg_part < len(registry.index_to_haplo):
+                raise IndexError(f"haploid index {hg_part} outside active axis")
             hg = registry.index_to_haplo[hg_part]
         elif isinstance(hg_part, HaploidGenotype):
             hg = hg_part
@@ -229,6 +270,8 @@ def _resolve_gtype_key(key: GtypeKey, registry: IndexRegistry) -> int:
             hg = _resolve_haplo_str(hg_part, registry)
         else:
             raise KeyError(f"Cannot resolve haploid part: {hg_part!r}")
+        if isinstance(glab_part, int) and not 0 <= glab_part < len(registry.glab_labels):
+            raise IndexError(f"gamete label index {glab_part} outside active axis")
         glab = registry.glab_labels[glab_part] if isinstance(glab_part, int) else str(glab_part)
         return registry.gtype_index(hg, glab)
     if isinstance(key, HaploidGenotype):
@@ -259,16 +302,25 @@ def _write_gamete_distribution(
     distribution: Mapping[GtypeKey, float],
     registry: IndexRegistry,
     n_gtypes: int,
+    context: str,
 ) -> None:
-    """Write ``{gtype_key: freq}`` into ``tensor[sex_idx, zidx, :]``."""
+    """Write ``{gtype_key: freq}`` into ``tensor[sex_idx, zidx, :]``.
+
+    Raises:
+        ValueError: If a target key cannot be resolved against the
+            registry, or the resolved index falls outside the active
+            compressed gtype axis.  Invalid declarations must fail the
+            apply instead of silently dropping targets.
+    """
     tensor[sex_idx, zidx, :] = 0.0
     for key, freq in distribution.items():
-        try:
-            gt = _resolve_gtype_key(key, registry)
-        except (KeyError, IndexError, ValueError):
-            continue
-        if 0 <= gt < n_gtypes:
-            tensor[sex_idx, zidx, gt] = float(freq)
+        gt = _resolve_gtype_key(key, registry)
+        if not 0 <= gt < n_gtypes:
+            raise ValueError(
+                f"{context}: target gamete index {gt} (key {key!r}) is "
+                f"outside the compressed gtype axis [0, {n_gtypes})"
+            )
+        tensor[sex_idx, zidx, gt] = float(freq)
 
 
 def _write_zygote_distribution(
@@ -360,25 +412,45 @@ def wrap_gamete_modifier(
     mod: GameteModifier,
     population: object | None,
     registry: IndexRegistry,
+    name: str | None = None,
 ) -> Callable[[np.ndarray], np.ndarray]:
     """Wrap a high-level GameteModifier into a tensor-level callable.
 
     The returned callable accepts a tensor of shape ``(n_sexes, n_ztypes, n_gtypes)``
     and returns a modified copy.  All key resolution is done via *registry*.
 
+    Key resolution is strict: a source or target key that cannot be
+    resolved against *registry*, or a resolved index outside the active
+    axis, raises ``ValueError`` instead of being silently dropped.  Legal
+    but empty distributions are kept (an all-zero gamete row is a valid
+    model), and writes land on a copy, so a raising modifier never leaves
+    a half-applied result behind.
+
     Args:
         mod: A GameteModifier callable.
         population: The population object (passed to mod if it takes an argument).
         registry: IndexRegistry for key resolution.
+        name: Optional modifier declaration name used in error messages.
 
     Returns:
         A callable (np.ndarray) -> np.ndarray.
+
+    Raises:
+        ValueError: When the modifier declares an invalid source or
+            target key, or an out-of-range index.
+        TypeError: When a replacement value is not a mapping (raised
+            directly, not wrapped into ``ValueError``).
     """
+    context = f"Gamete modifier {name!r}" if name else "Gamete modifier"
+
     def tensor_modifier(tensor: np.ndarray) -> np.ndarray:
         modified = tensor.copy()
         n_sexes, n_ztypes, n_gtypes = modified.shape
 
-        bulk_obj = _invoke_modifier(mod, population)
+        bulk_obj = (
+            mod.rows_for(tensor) if isinstance(mod, CompiledRuleModifier)
+            else _invoke_modifier(mod, population)
+        )
         if not isinstance(bulk_obj, Mapping):
             raise TypeError(
                 "Gamete modifier must return a mapping from keys to "
@@ -388,60 +460,106 @@ def wrap_gamete_modifier(
         bulk = cast(Mapping[Union[str, tuple[object, object]], Mapping[object, object]], bulk_obj)
 
         for key, val in bulk.items():
-            sex_idx = _resolve_sex_name(key) if isinstance(key, str) else None
-
-            if sex_idx is not None:
-                for ztype_key, distribution in val.items():
-                    try:
-                        indices = _resolve_ztype_key(cast(ZtypeKey, ztype_key), registry)
-                    except (KeyError, IndexError, ValueError):
-                        continue
-                    if not (0 <= sex_idx < n_sexes):
-                        continue
-                    if isinstance(distribution, Mapping):
-                        for zi in indices:
-                            if 0 <= zi < n_ztypes:
-                                _write_gamete_distribution(
-                                    modified, sex_idx, zi,
-                                    cast(Mapping[GtypeKey, float], distribution),
-                                    registry, n_gtypes,
-                                )
-                continue
-
-            key_tuple = _as_pair(key)
-            if key_tuple is not None and isinstance(key_tuple[0], int):
-                sex_idx = key_tuple[0]
-                ztype_key = key_tuple[1]
-                if not (0 <= sex_idx < n_sexes):
-                    continue
-                try:
-                    for zi in _resolve_ztype_key(cast(ZtypeKey, ztype_key), registry):
-                        if 0 <= zi < n_ztypes:
-                            _write_gamete_distribution(
-                                modified, sex_idx, zi,
-                                cast(Mapping[GtypeKey, float], val),
-                                registry, n_gtypes,
-                            )
-                except (KeyError, IndexError, ValueError):
-                    continue
-                continue
-
-            # Case C: key is ztype_key applied to all sexes
             try:
-                indices = _resolve_ztype_key(cast(ZtypeKey, key), registry)
-            except (KeyError, IndexError, ValueError):
-                continue
-            for sex_idx in range(n_sexes):
-                for zi in indices:
-                    if 0 <= zi < n_ztypes:
-                        _write_gamete_distribution(
-                            modified, sex_idx, zi,
-                            cast(Mapping[GtypeKey, float], val),
-                            registry, n_gtypes,
-                        )
+                _apply_gamete_replacement(
+                    modified, key, val, registry, n_sexes, n_ztypes, n_gtypes, context
+                )
+            except (KeyError, IndexError, ValueError) as exc:
+                raise ValueError(f"{context}: invalid source key {key!r}: {exc}") from exc
 
         return modified
     return tensor_modifier
+
+
+def _apply_gamete_replacement(
+    modified: np.ndarray,
+    key: Union[str, tuple[object, object]],
+    val: object,
+    registry: IndexRegistry,
+    n_sexes: int,
+    n_ztypes: int,
+    n_gtypes: int,
+    context: str,
+) -> None:
+    """Apply one gamete replacement entry onto *modified* (strict).
+
+    Raises:
+        KeyError: If a source key cannot be resolved against the registry.
+        IndexError: If an integer index is out of range.
+        ValueError: If a resolved index or distribution shape is invalid.
+        TypeError: If a replacement value is not a mapping.
+    """
+    sex_idx = _resolve_sex_name(key) if isinstance(key, str) else None
+
+    if sex_idx is not None:
+        if not 0 <= sex_idx < n_sexes:
+            raise IndexError(f"sex index {sex_idx} outside [0, {n_sexes})")
+        if not isinstance(val, Mapping):
+            raise TypeError(
+                f"replacement for sex key {key!r} must be a mapping from "
+                f"ztype keys to distributions, got {type(val).__name__}"
+            )
+        for ztype_key, distribution in cast(Mapping[object, object], val).items():
+            indices = _resolve_ztype_key(cast(ZtypeKey, ztype_key), registry)
+            _require_indices(indices, ztype_key, n_ztypes, context)
+            for zi in indices:
+                _write_gamete_distribution(
+                    modified, sex_idx, zi,
+                    cast(Mapping[GtypeKey, float], distribution),
+                    registry, n_gtypes, context,
+                )
+        return
+
+    key_tuple = _as_pair(key)
+    if key_tuple is not None and isinstance(key_tuple[0], int):
+        sex_idx = key_tuple[0]
+        ztype_key = key_tuple[1]
+        if not 0 <= sex_idx < n_sexes:
+            raise IndexError(f"sex index {sex_idx} outside [0, {n_sexes})")
+        indices = _resolve_ztype_key(cast(ZtypeKey, ztype_key), registry)
+        _require_indices(indices, ztype_key, n_ztypes, context)
+        for zi in indices:
+            _write_gamete_distribution(
+                modified, sex_idx, zi,
+                cast(Mapping[GtypeKey, float], val),
+                registry, n_gtypes, context,
+            )
+        return
+
+    # Case C: key is ztype_key applied to all sexes
+    indices = _resolve_ztype_key(cast(ZtypeKey, key), registry)
+    _require_indices(indices, key, n_ztypes, context)
+    for sex_idx in range(n_sexes):
+        for zi in indices:
+            _write_gamete_distribution(
+                modified, sex_idx, zi,
+                cast(Mapping[GtypeKey, float], val),
+                registry, n_gtypes, context,
+            )
+
+
+def _require_indices(
+    indices: list[int],
+    key: object,
+    n_ztypes: int,
+    context: str,
+) -> None:
+    """Reject a source key that resolves outside the active ztype axis.
+
+    A source genotype that exists in the species but not in this
+    population's (possibly compressed) axis can never match; declaring it
+    is a mismatch, not a silent no-op.
+    """
+    for zi in indices:
+        if not 0 <= zi < n_ztypes:
+            raise IndexError(
+                f"{context}: source ztype index {zi} (key {key!r}) is outside "
+                f"the compressed ztype axis [0, {n_ztypes})"
+            )
+    if not indices:
+        raise KeyError(
+            f"source ztype key {key!r} matches no ztype in this population"
+        )
 
 
 def wrap_zygote_modifier(
@@ -465,7 +583,10 @@ def wrap_zygote_modifier(
     def tensor_modifier(tensor: np.ndarray) -> np.ndarray:
         modified = tensor.copy()
 
-        bulk_obj = _invoke_modifier(mod, population)
+        bulk_obj = (
+            mod.rows_for(tensor) if isinstance(mod, CompiledRuleModifier)
+            else _invoke_modifier(mod, population)
+        )
         if not isinstance(bulk_obj, Mapping):
             raise TypeError(
                 "Zygote modifier must return a mapping from keys to replacements"
@@ -518,9 +639,9 @@ def build_modifier_wrappers(
             wrap_zygote_modifier(mod, population, registry)
         )
 
-    for _, _, mod in gamete_modifiers:
+    for _, mod_name, mod in gamete_modifiers:
         gamete_modifier_funcs.append(
-            wrap_gamete_modifier(mod, population, registry)
+            wrap_gamete_modifier(mod, population, registry, name=mod_name)
         )
 
     return gamete_modifier_funcs, zygote_modifier_funcs

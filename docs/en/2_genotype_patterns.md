@@ -131,22 +131,37 @@ for hg in sp.enumerate_haploid_genomes_matching_pattern("A1/B1; C1", max_count=1
 
 ### Parentheses: Internal Separation Within a Chromosome Pair
 
-Parentheses `(...)` allow further separation within a chromosome pair using `;`, particularly useful in complex scenarios mixing ordered and unordered matching:
+Parentheses `(...)` group per-locus diploid conditions on **one chromosome pair**. Semicolons inside the parentheses separate loci; semicolons outside separate chromosome pairs. Within the group, each `|` checks maternal/paternal order at that locus, while each `::` allows either order at that locus independently. This does not mean reversing the whole chromosome haplotype.
 
 ```python
-# Internal separation within a chromosome pair: locus A ordered matching, locus B unordered matching
-pattern1 = "(A1|A2);(B1::B2)"
-# Equivalent to: locus A must strictly follow maternal|paternal order, locus B can be swapped
+import natal as nt
 
-# Mixed ordered and unordered matching
-pattern2 = "(A1|A2);(B1::B2);(C1|C2)"
-# Loci A and C use ordered matching, locus B uses unordered matching
+single = nt.Species.from_dict(
+    name="PatternSingleChromosome",
+    structure={"chr1": {"A": ["A1", "A2"], "B": ["B1", "B2"]}},
+    unordered=False,
+)
+pattern1 = single.parse_genotype_pattern("(A1|A2;B1::B2)")
+assert pattern1(single.get_genotype_from_str("A1/B1|A2/B2"))
+assert pattern1(single.get_genotype_from_str("A1/B2|A2/B1"))
+assert not pattern1(single.get_genotype_from_str("A2/B1|A1/B2"))
 
-# Complex nested patterns
-pattern3 = "(A1/{B1,B2}|A2/{B1,B2});(C1::C2)"
+multiple = nt.Species.from_dict(
+    name="PatternTwoChromosomes",
+    structure={
+        "chr1": {"A": ["A1", "A2"], "B": ["B1", "B2"]},
+        "chr2": {"C": ["C1", "C2"]},
+    },
+    unordered=False,
+)
+# A and B are on chr1; C is on chr2.
+pattern2 = multiple.parse_genotype_pattern("(A1|A2;B1::B2);C1|C2")
+assert pattern2(multiple.get_genotype_from_str("A1/B2|A2/B1;C1|C2"))
+assert not pattern2(multiple.get_genotype_from_str("A1/B2|A2/B1;C2|C1"))
 ```
 
-Parentheses syntax is applicable to both haploid and diploid patterns and can significantly improve the readability and maintainability of complex patterns.
+For three loci on the same chromosome, write `(A1|A2;B1::B2;C1|C2)` instead. These per-locus diploid conditions do not apply to haploid patterns, which use `/` between loci.
+
 
 ## Common Errors and Corrections
 
@@ -193,30 +208,29 @@ groups = {
 
 ### Integrating with Presets
 
-It is recommended to encapsulate the pattern parsing logic within the Preset:
+Keep the pattern string in the preset and pass it through `filters`; the rule compiler performs parsing:
 
 ```python
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet
+
 class PatternDrivenPreset(GeneticPreset):
     def __init__(self, target_pattern: str, conversion_rate: float):
         super().__init__(name="PatternDrivenPreset")
         self.target_pattern = target_pattern
         self.conversion_rate = conversion_rate
 
-    def _build_filter(self, species):
-        return species.parse_genotype_pattern(self.target_pattern)
-
     def zygote_modifier(self, host):
         return None
 
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("pattern_rules")
-        pattern_filter = self._build_filter(host.species)
 
         ruleset.add_allele_convert(
             from_allele="W",
             to_allele="D",
             rate=self.conversion_rate,
-            genotype_filter=pattern_filter,
+            filters={"parent": self.target_pattern},
         )
         return ruleset.to_gamete_modifier(host)
 ```

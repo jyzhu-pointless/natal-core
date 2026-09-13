@@ -163,7 +163,7 @@ See the "Migration Paths" and "migration_rate and Boundary Effects" sections for
 | `migration` | `kernel` | NDArray |
 
 The following parameters do **not** accept `batch_setting`:
-- **hooks**: Per-deme selective execution is achieved via `@hook(deme=...)`.
+- **hooks**: Per-deme selective execution is achieved via `.hooks(..., deme=...)`.
 - **Spatial functions require topology**: `(row, col)` form requires the builder to have been given a `topology`. The `(flat_idx)` form does not depend on topology.
 
 ## batch_setting Heterogeneous Configuration
@@ -761,15 +761,7 @@ pop.run(10)
 
 ## WebUI Debugging
 
-Spatial models can be directly connected to `natal.frontend.ui.launch(...)`.
-
-```python
-from natal.frontend.ui import launch
-
-launch(spatial, port=8080, title="Spatial Debug Dashboard")
-```
-
-The Vue dashboard is also available (hexagonal landscape map, click-to-inspect demes, migration panel, Debug tab):
+Spatial models can be directly connected to the Vue dashboard (hexagonal landscape map, click-to-inspect demes, migration panel, Debug tab):
 
 ```python
 from natal import launch_vue

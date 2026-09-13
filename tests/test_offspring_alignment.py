@@ -43,11 +43,11 @@ from natal.backends.rust.rust_backend import (
     RustDiscreteLifecycleBackend,
     rust_backend_available,
 )
-from natal.frontend.model import ModelDraft
 from natal.frontend.data import DiscretePopulationState
-from natal.frontend.genetics.matrices import recompute_offspring_tensor
 from natal.frontend.genetics import Species
+from natal.frontend.genetics.matrices import recompute_offspring_tensor
 from natal.frontend.hooks.types import HookProgram
+from natal.frontend.model import ModelDraft
 from natal.frontend.population.discrete_generation import (
     DiscreteGenerationPopulation,
 )
@@ -141,8 +141,8 @@ def _wf_expected_from_maps(cfg: ModelDraft) -> NDArray[np.float64]:
 
     Replicates the fused Wright-Fisher tick (``extreme_speed_mode=3``):
     pair weights from fecundity / adult mating rates / sexual selection,
-    gamete-pool contraction through the fusion table, sex split, age-0
-    viability.  The new generation is placed directly at the adult age,
+    gamete-pool contraction through the fusion table, sex split, zygote
+    viability, and age-0 survival. The new generation is placed at the adult age,
     matching the kernel.  Never reads ``cfg.offspring_tensor``.
     """
     assert cfg.juvenile_growth_mode == 0, "oracle assumes no density regulation"
@@ -165,15 +165,21 @@ def _wf_expected_from_maps(cfg: ModelDraft) -> NDArray[np.float64]:
         )
     )
     out = np.zeros((2, 2, z), dtype=np.float64)
-    out[0, 1, :] = total * cfg.sex_ratio * cfg.viability_fitness[0, 0, :]
-    out[1, 1, :] = total * (1.0 - cfg.sex_ratio) * cfg.viability_fitness[1, 0, :]
+    out[0, 1, :] = (
+        total * cfg.sex_ratio * cfg.zygote_viability_fitness[0]
+        * cfg.viability_fitness[0, 0, :] * cfg.age_based_survival_rates[0, 0]
+    )
+    out[1, 1, :] = (
+        total * (1.0 - cfg.sex_ratio) * cfg.zygote_viability_fitness[1]
+        * cfg.viability_fitness[1, 0, :] * cfg.age_based_survival_rates[1, 0]
+    )
     return out
 
 
 def _ztype_index(cfg: ModelDraft, genotype: str) -> int:
     """Name-directory lookup: index of the first ztype with this genotype."""
     for idx, name in enumerate(cfg.ztype_names):
-        if name.split(":")[0] == genotype:
+        if name.split("@")[0] == genotype:
             return idx
     raise AssertionError(f"genotype {genotype!r} not in the name directory")
 

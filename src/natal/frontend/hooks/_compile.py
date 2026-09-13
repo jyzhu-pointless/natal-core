@@ -86,7 +86,7 @@ def compile_hook_call(
     layout: HookLayout,
     *items: object,
     event: Optional[str] = None,
-    priority: int = 0,
+    priority: Optional[int] = None,
     deme: DemeSelector = "*",
     name: Optional[str] = None,
     allowed_events: Sequence[str] = ("first", "early", "late", "finish"),
@@ -102,12 +102,21 @@ def compile_hook_call(
       (declarative / callback / selector callback);
     - a plain single-parameter callable → a Python callback.
 
+    Priority assignment for op items: priority is op-level data — the
+    call-level ``priority`` (when given) assigns one shared priority to
+    the ops of that item, mirroring what packing ops into one list
+    means. Without a call-level priority the ops' own values are used
+    and must agree within a list (one descriptor carries one priority;
+    a mixed declaration raises ``ValueError``). Decorated functions
+    keep their decorator priority; plain callables default to 0.
+
     Args:
         layout: Final layout the selectors resolve against.
         *items: Hook declarations (ops, op lists, decorated or plain
             single-parameter callables).
         event: Default event for items that do not carry one.
-        priority: Default priority for items that do not carry one.
+        priority: Priority assigned to the op items of this call
+            (``None`` = keep the ops' own values).
         deme: Default deme selector (``"*"`` = all demes).  Carried
             verbatim onto the compiled descriptors; panmictic callers
             normalize non-wildcard selectors at declaration time.
@@ -119,8 +128,9 @@ def compile_hook_call(
         by the caller when accumulating across calls).
 
     Raises:
-        ValueError: If an event name is unknown or no event can be
-            resolved for an item.
+        ValueError: If an event name is unknown, no event can be
+            resolved for an item, or a list mixes ops with differing
+            priorities and no call-level priority is given.
         TypeError: If an item has an unsupported shape (including the
             removed ``(state, config, deme_id)`` signature).
     """
@@ -131,7 +141,9 @@ def compile_hook_call(
     for item in items:
         if isinstance(item, HookOp):
             descriptors.append(
-                _compile_op_group([item], layout, event, item.priority, deme, name)
+                _compile_op_group(
+                    [item], layout, event, _resolve_group_priority([item], priority), deme, name
+                )
             )
         elif isinstance(item, (list, tuple)):
             raw: List[object] = list(cast("Sequence[object]", item))
@@ -140,12 +152,13 @@ def compile_hook_call(
                     "Op-list hook items must contain only HookOp "
                     "objects (build them with Op.scale / Op.add / ...)."
                 )
+            ops = [op for op in raw if isinstance(op, HookOp)]
             descriptors.append(
                 _compile_op_group(
-                    [op for op in raw if isinstance(op, HookOp)],
+                    ops,
                     layout,
                     event,
-                    priority,
+                    _resolve_group_priority(ops, priority),
                     deme,
                     name,
                 )
@@ -160,7 +173,46 @@ def compile_hook_call(
                 "Use HookOp objects (Op.*), @hook-decorated functions, "
                 "or single-parameter callables."
             )
+    for desc in descriptors:
+        # Item-level events (op.event or @hook meta) resolve here too, so
+        # the final descriptors are validated against the same catalog as
+        # the call-level event above.
+        if desc.event not in allowed_events:
+            raise ValueError(f"Event '{desc.event}' not in {list(allowed_events)}")
     return descriptors
+
+
+def _resolve_group_priority(ops: List[HookOp], call_priority: Optional[int]) -> int:
+    """Resolve the one priority of an op group (assignment semantics).
+
+    A call-level priority assigns one shared priority to the whole
+    group; without it the ops' own values must agree — one compiled
+    descriptor carries exactly one priority. An empty group has no
+    ops to disagree and keeps the historical no-op descriptor.
+
+    Args:
+        ops: Ops of the item being compiled (possibly empty).
+        call_priority: Priority given on the ``.hooks()`` call, if any.
+
+    Returns:
+        The group's priority.
+
+    Raises:
+        ValueError: If no call-level priority is given and the ops'
+            own priorities disagree.
+    """
+    if not ops:
+        return call_priority if call_priority is not None else 0
+    if call_priority is not None:
+        return call_priority
+    own = {op.priority for op in ops}
+    if len(own) == 1:
+        return own.pop()
+    raise ValueError(
+        f"Op list mixes priorities {sorted(own)}: one packed hook "
+        "carries one priority. Pass .hooks(..., priority=...) to "
+        "assign a shared value, or declare the ops separately."
+    )
 
 
 def _compile_op_group(
@@ -198,10 +250,15 @@ def _compile_callable_item(
     func: object,
     layout: HookLayout,
     event: Optional[str],
-    priority: int,
+    priority: Optional[int],
     deme: DemeSelector,
 ) -> CompiledHookDescriptor:
-    """Compile one callable, honoring ``@hook`` metadata when present."""
+    """Compile one callable, honoring ``@hook`` metadata when present.
+
+    Decorated functions keep their decorator priority (the call-level
+    priority is an op-group assignment and does not reach them); plain
+    callables fall back to 0 when the call gave none.
+    """
     meta = getattr(func, "meta", None)
     if meta is not None:
         register_fn = getattr(func, "register", None)
@@ -251,7 +308,7 @@ def _compile_callable_item(
     return _Desc(
         name=getattr(func, "__name__", "hook"),
         event=event,
-        priority=priority,
+        priority=priority if priority is not None else 0,
         deme_selector=deme,
         callback=cast("Callable[[object], Optional[int]]", func),
         source=func,

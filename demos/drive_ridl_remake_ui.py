@@ -11,7 +11,7 @@ Here we will remake the model using NATAL, and compare the results with the orig
 """
 
 import natal as nt
-from natal.frontend.ui import launch
+from natal import launch_vue
 
 # 1. Define the mosquito species
 sp_complete_drive = nt.Species.from_dict(
@@ -46,20 +46,7 @@ def make_drive_ridl(
         viability_mode="dominant"
     )
 
-# 3. Define a repeated release event
-@nt.hook(event="late", priority=1)
-def release_male_homozygotes():
-    return [
-        nt.Op.add(genotypes="Dr|Dr", ages=1, sex="male", delta=29234, when="tick >= 10")
-    ]
-
-@nt.hook(event="late", priority=0)
-def stop_simulation():
-    return [
-        nt.Op.stop_if_zero(sex="female")
-    ]
-
-# 4. Define the population
+# 3. Define the population
 pop = (nt.AgeStructuredPopulation.setup(
         species=sp_complete_drive,
         name="Drive-RIDL",
@@ -91,11 +78,18 @@ pop = (nt.AgeStructuredPopulation.setup(
             drive_conversion_rate=0.0,
             drive_homozygote_fitness=1.0
         )
+    # Repeated male release from week 10; the extinction guard runs first
+    # (priority 0 < 1).
     ).hooks(
-        release_male_homozygotes, stop_simulation
+        nt.Op.add(genotypes="Dr|Dr", ages=1, sex="male", delta=29234, when="tick >= 10"),
+        event="late",
+        priority=1,
+    ).hooks(
+        nt.Op.stop_if_zero(sex="female"),
+        event="late",
     ).build()
 )
 
 print(pop.config.zygote_viability_fitness)
 
-launch(pop)
+launch_vue(pop)

@@ -4,7 +4,7 @@
 
 [![GitHub](https://img.shields.io/github/v/release/jyzhu-pointless/natal-core?label=GitHub&color=purple)](https://github.com/jyzhu-pointless/natal-core/releases/latest)
 [![PyPI](https://img.shields.io/pypi/v/natal-core.svg?label=PyPI&color=yellow)](https://pypi.org/project/natal-core/)
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![NumPy](https://img.shields.io/badge/NumPy-2.0.0+-green.svg)](https://numpy.org/)
 [![Docs](https://img.shields.io/readthedocs/natal-core?label=docs)](https://natal-core.readthedocs.io/en/latest/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](https://github.com/jyzhu-pointless/natal-core/blob/main/LICENSE)
@@ -31,11 +31,11 @@ NATAL Core is part of the NATAL project. The full project also includes **NATAL 
 
 It is strongly recommended to use a virtual environment to manage dependencies.
 
-Choose one of the following commands. **Python 3.12** is recommended, but any Python version >= 3.9 should work.
+Choose one of the following commands. **Python 3.12** is recommended, but any Python version >= 3.10 should work.
 
 ```bash
 uv venv --python 3.12 .venv            # uv (recommended)
-python -m venv .venv                   # venv (please ensure Python >= 3.9 is used)
+python -m venv .venv                   # venv (please ensure Python >= 3.10 is used)
 conda create -n natal-env python=3.12  # conda
 ```
 
@@ -70,7 +70,7 @@ pip install natal-core
 
 ```python
 import natal as nt
-from natal.ui import launch
+from natal import launch_vue
 
 # 1. Define the genetics architecture of a species
 sp = nt.Species.from_dict(
@@ -99,14 +99,7 @@ drive = nt.HomingDrive(
     cas9_deposition_glab="cas9_deposited"
 )
 
-# 3. Define a release event using hooks
-@nt.hook(event="first", priority=0)
-def release_drive_carriers():
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
-    ]
-
-# 4. Build a panmictic population
+# 3. Build a panmictic population and declare the release event with an Op
 pop = (nt.DiscreteGenerationPopulation
     .setup(
         species=sp,
@@ -124,15 +117,39 @@ pop = (nt.DiscreteGenerationPopulation
     .competition(
         low_density_growth_rate=6.0,
         carrying_capacity=100000,
-        juvenile_growth_mode="concave"
+        juvenile_growth_mode="beverton_holt"
     )
-    .presets(drive).hooks(release_drive_carriers).build())
+    .presets(drive)
+    .hooks(
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
+        event="first",
+    )
+    .build())
 
-# 5. Launch interactive WebUI and run simulation
-launch(pop)
+# 4. Launch interactive WebUI and run simulation
+launch_vue(pop)
 ```
 
 For more ready-to-run examples, see the [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) directory in the GitHub repository.
+
+## Development Checks
+
+Use Python 3.10 or later, a Rust toolchain with rustfmt/clippy, Node.js 24 with Corepack, and a virtual environment:
+
+```bash
+python -m pip install -e ".[dev]"
+python scripts/ci_full.py
+```
+
+Local checks and GitHub Actions share this entry point. Use `--only lint types stubs`,
+`--only tests`, `--only baseline`, or `--only rust` to run selected stages.
+The default run also builds a fresh release wheel and installs it in a temporary,
+isolated environment to run the complex genetic, spatial, and runtime-update tests,
+and request the bundled dashboard HTML, assets, and API. End users installing a
+release wheel do not need Node.js; it is required only to build the dashboard.
+This requires access to the package index for dependencies. Passing locally verifies
+the current environment; GitHub checks Python 3.10–3.13 across the supported wheel platforms.
+See [development and release checks](docs/en/index.md#development-and-release-checks) for details.
 
 ## Documentation and Links
 

@@ -18,7 +18,7 @@ from typing import (
     cast,
 )
 
-from natal.frontend.genetics import Gene, Genotype
+from natal.frontend.genetics import Gene, Genotype, Species
 from natal.frontend.utils.types import Age, Sex
 
 # Temporary type alias
@@ -333,3 +333,59 @@ def _is_zygote_viability_scaling_config(value: object) -> TypeGuard[_ZygoteViabi
         return False
     config_map = cast(Mapping[object, object], value)
     return all(isinstance(sex_key, (Sex, int, str)) and _is_effect_scale(scale) for sex_key, scale in config_map.items())
+
+
+def carrier_pattern(species: "Species", *allele_names: str) -> str:
+    """Build a ztype pattern matching genotypes carrying the given alleles.
+
+    For every chromosome, the pattern constrains each required allele's
+    locus as an unordered pair (``*::<allele>`` — the allele may sit on
+    either zygotic copy) and leaves every other locus unconstrained
+    (``*|*``); unrelated chromosomes are wildcards.  This replaces the
+    removed callable genotype filters (CR-1) with the declarative pattern
+    language.
+
+    Args:
+        species: Species providing gene/locus structure.
+        *allele_names: Allele names the genotype must carry (at least one).
+
+    Returns:
+        A pattern string usable in conversion-rule ``filters``.
+
+    Raises:
+        ValueError: If an allele name is not registered in the species.
+    """
+    if not allele_names:
+        raise ValueError("carrier_pattern requires at least one allele name")
+    genes: List[Gene] = []
+    for name in allele_names:
+        gene = species.get_gene(name)
+        if gene is None:
+            raise ValueError(
+                f"carrier_pattern: allele {name!r} is not registered in "
+                f"species {species.name!r}"
+            )
+        genes.append(gene)
+
+    from natal.frontend.patterns._groups import chromosome_groups
+
+    segments: List[str] = []
+    for group in chromosome_groups(species):
+        required_genes = [g for g in genes if any(g.locus in chrom.loci for chrom in group)]
+        if not required_genes:
+            segments.append("*")
+            continue
+        # Named alleles bind their actual loci, including distinct members
+        # of a heteromorphic sex group; no homologous region is assumed.
+        required_chromosomes = [chrom for chrom in group if any(g.locus in chrom.loci for g in required_genes)]
+        locus_pairs: List[str] = []
+        for locus in (locus for chrom in required_chromosomes for locus in chrom.loci):
+            required = list(dict.fromkeys(g.name for g in required_genes if g.locus is locus))
+            if len(required) > 2:
+                raise ValueError("A diploid carrier cannot carry more than two alleles at one locus")
+            if len(required) == 2:
+                locus_pairs.append(f"{required[0]}::{required[1]}")
+            else:
+                locus_pairs.append(f"*::{required[0]}" if required else "*|*")
+        segments.append("(" + "; ".join(locus_pairs) + ")")
+    return "; ".join(segments)

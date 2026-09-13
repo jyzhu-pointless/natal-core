@@ -1,30 +1,29 @@
 [project]
 name = "natal-core"
-version = "0.2.0b"
+version = "0.3.0b0"
 description = "Numerical Aggregation Toolkit for Analysis of Lifecycles, a high-performance forward-time population genetics simulation engine especially designed for gene drive modeling."
 readme = "README.md"
 authors = [
     { name = "Jinyu Zhu", email = "jyzhu_2020@stu.pku.edu.cn" }
 ]
 license = { text = "MIT" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = ["population-genetics", "simulation", "bioinformatics", "evolutionary-biology"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
 dependencies = [
     "fastapi>=0.110.0",
     "matplotlib>=3.0.0",
-    "nicegui[highcharts]>=3.0.0",
     "numpy>=2.0.0",
     "pandas>=2.1.0",
     "plotly>=6.0.0",
@@ -54,8 +53,17 @@ filterwarnings = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7.0.0", "pytest-cov>=6.0"]
+test = [
+    # Locked and latest Starlette TestClient versions use different HTTP clients.
+    "httpx>=0.27,<0.29", "httpx2>=2.0",
+    "pytest>=7.0.0", "pytest-cov>=6.0", "packaging>=24.0", "pyyaml>=6.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
 dev = [
+    "httpx>=0.27,<0.29", "httpx2>=2.0",
+    "packaging>=24.0",
+    "pyyaml>=6.0",
+    "tomli>=2.0; python_version < '3.11'",
     "pytest>=7.0.0",
     "pytest-cov>=6.0",
     "ruff>=0.6",
@@ -116,3 +124,4 @@ manifest-path = "rust/Cargo.toml"
 module-name = "natal._engine_rs"
 python-source = "src"
 features = ["extension-module"]
+include = [{ path = "src/natal/frontend/webui/dist/**/*", format = "wheel" }]

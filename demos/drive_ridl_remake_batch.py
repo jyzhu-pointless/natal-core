@@ -95,16 +95,11 @@ def compute_release_size(release_ratio: float) -> int:
     return int(round(release_size))
 
 
-def make_release_hook(release_size: int):
-    """Create a late hook that repeatedly releases male homozygotes from week 10."""
-
-    @nt.hook(event="late", priority=1)
-    def release_male_homozygotes():
-        return [
-            nt.Op.add(genotypes="Dr|Dr", ages=1, sex="male", delta=release_size, when="tick >= 10")
-        ]
-
-    return release_male_homozygotes
+def make_release_op(release_size: int) -> nt.HookOp:
+    """Create a late-event op that repeatedly releases male homozygotes from week 10."""
+    return nt.Op.add(
+        genotypes="Dr|Dr", ages=1, sex="male", delta=release_size, when="tick >= 10"
+    )
 
 
 def sample_initial_state(rng: np.random.Generator) -> InitialDistribution:
@@ -124,13 +119,6 @@ def sample_initial_state(rng: np.random.Generator) -> InitialDistribution:
     }
 
 
-@nt.hook(event="late", priority=0)
-def stop_simulation():
-    return [
-        nt.Op.stop_if_zero(sex="female")
-    ]
-
-
 def build_population(
     drive_conversion_rate: float,
     release_ratio: float,
@@ -139,7 +127,7 @@ def build_population(
 ) -> nt.AgeStructuredPopulation | nt.DiscreteGenerationPopulation:
     """Build one population instance for a single simulation replicate."""
     release_size = compute_release_size(release_ratio)
-    release_hook = make_release_hook(release_size)
+    release_op = make_release_op(release_size)
 
     return (nt.AgeStructuredPopulation.setup(
         species=sp_complete_drive,
@@ -167,7 +155,9 @@ def build_population(
             drive_homozygote_fitness=drive_fitness
         )
     ).hooks(
-        release_hook, stop_simulation
+        release_op, event="late", priority=1
+    ).hooks(
+        nt.Op.stop_if_zero(sex="female"), event="late"
     ).build()
     )
 

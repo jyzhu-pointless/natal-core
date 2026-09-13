@@ -41,15 +41,11 @@ class DrivePreset(GeneticPreset):
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("drive_rules")
 
-        def is_wd_heterozygote(genotype) -> bool:
-            name = str(genotype)
-            return name in {"W|D", "D|W"}
-
         ruleset.add_allele_convert(
             from_allele="W",
             to_allele="D",
             rate=self.conversion_rate,
-            genotype_filter=is_wd_heterozygote,
+            filters={"parent": "W::D"},
         )
 
         return ruleset.to_gamete_modifier(host)
@@ -63,11 +59,14 @@ class DrivePreset(GeneticPreset):
 ```python
 import natal as nt
 
+species = nt.Species.from_dict(
+    name="DriveExample", structure={"chr1": {"loc": ["W", "D"]}}
+)
 pop = (
     nt.AgeStructuredPopulation
     .setup(species=species, name="DriveExperiment", stochastic=True)
     .age_structure(n_ages=8, new_adult_age=1)
-    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
+    .initial_state(individual_count={"female": {"W|W": 500}, "male": {"W|W": 500}})
     .presets(DrivePreset(conversion_rate=0.55))
     .build()
 )
@@ -80,7 +79,7 @@ This is the most recommended way to integrate a Preset as a configuration compon
 Before conducting large-scale experiments, at least complete the following checks:
 
 1. Mechanism check: are the conversion direction and target allele correct?
-2. Filter check: does the `genotype_filter` hit the expected scope?
+2. Filter check: does the `filters` hit the expected scope?
 3. Conservation check: is frequency normalization valid?
 4. Control check: is the trend reasonable compared to a baseline without the Preset?
 5. Stability check: are conclusions robust across repeated runs under the stochastic model (`stochastic=True`)? (There is no public random-seed API; see the RNG section of [the Simulation Engine Deep Dive](4_simulation_engine.md).)
@@ -112,12 +111,12 @@ class ComplexDrive(GeneticPreset):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # Stage 1: Drive conversion (WT → Drive)
-        ruleset.add_allele_convert("WT", "Drive", rate=0.95,
-                           genotype_filter=lambda gt: "Drive" in str(gt))
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Drive", rate=0.95,
+                           filters={"parent": "*::Drive"})
 
         # Stage 2: Resistance formation (remaining WT → Resistance)
-        ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
-                           genotype_filter=lambda gt: "Drive" in str(gt))
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Resistance", rate=0.05,
+                           filters={"parent": "*::Drive"})
 
         return ruleset.to_gamete_modifier(host)
 
@@ -129,7 +128,7 @@ class ComplexDrive(GeneticPreset):
             from_allele="WT",
             to_allele="Resistance",
             rate=0.02,
-            maternal_glab="cas9"  # requires maternal Cas9 deposition
+            filters={"maternal": "*@cas9"}  # requires maternal Cas9 deposition
         )
 
         return ruleset.to_zygote_modifier(host)
@@ -195,7 +194,7 @@ Before publishing a Preset, it is recommended to complete:
 Congratulations! You have completed the full "Designing Your Own Preset" series:
 
 1. Rule definition (Gamete and Zygote conversion)
-2. Fine-grained rule scope control (genotype_filter)
+2. Fine-grained rule scope control (filters)
 3. Preset engineering, validation, and publishing
 
 You now have a complete workflow for designing, implementing, validating, and publishing custom Presets from scratch.

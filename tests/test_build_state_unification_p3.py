@@ -1,7 +1,7 @@
 """Evaluator-strengthened contracts for the P3 build-state unification.
 
 Pins the validity bookkeeping the phase introduced (``compilation_key`` /
-``_compiled_key`` / ``_compression_applied``) against the plan's
+``_cached_compilation_key`` / ``registry.published``) against the plan's
 acceptance row: recipe counts, candidate isolation, cold rebuild, and
 spatial group reuse must be preserved (ARCHITECTURE_SIMPLIFICATION_PLAN,
 phase P3). Each test counts real recipe invocations, so a bookkeeping
@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 
 import natal as nt
-from natal.frontend.genetics.definition_compiler import compile_definition
+from natal.frontend.model.definition_compiler import compile_definition
 from natal.frontend.presets import GeneticPreset
 from natal.frontend.spatial.builder import SpatialPopulationBuilder
 
@@ -118,6 +118,9 @@ def test_runtime_fitness_edit_resyncs_without_recipes() -> None:
     assert definition is not None
     before = dict(calls)
     products = compile_definition(definition)
+    from natal.frontend.model.publication import publish_products
+
+    products = publish_products(products)
     assert calls["fitness"] == before["fitness"] + 1  # cold rebuild runs recipes once
     for field in PRODUCT_FIELDS:
         np.testing.assert_array_equal(
@@ -185,11 +188,9 @@ def test_spatial_multi_deme_build_runs_each_recipe_once_per_group() -> None:
 def test_compressed_declaration_rebuilds_its_own_products_exactly() -> None:
     """A compressed deme's declaration rebuilds exactly its own products.
 
-    Compression subslices the deme's active layout; the captured
-    declaration draft lives in that same compressed space, and a cold
-    compile of it must reproduce the stored product arrays bit-for-bit
-    (shapes and values) — the declaration/products consistency the
-    group-reuse bookkeeping maintains after CompiledModel's removal.
+    The declaration retains complete axes. Cold compilation followed by
+    publication into the existing runtime layout must reproduce all stored
+    products bit-for-bit without reinterpreting runtime indices as full ones.
     """
     from natal.frontend.spatial.builder import batch_setting
 
@@ -215,12 +216,16 @@ def test_compressed_declaration_rebuilds_its_own_products_exactly() -> None:
     assert definition is not None
     assert definition.draft is not None
     live_shape = deme.config.viability_fitness.shape
-    assert definition.draft.viability_fitness.shape == live_shape, (
-        "captured declaration layout disagrees with the compressed deme layout"
-    )
+    assert definition.draft.viability_fitness.shape == (2, 2, 3)
+    assert not definition.registry.published
     assert live_shape < (2, 2, 3), "fixture must actually prune a ztype"
     products = compile_definition(definition)
+    from natal.frontend.model.publication import IndexProjection, publish_products
+
+    products = publish_products(
+        products, projection=IndexProjection.from_registry(products.registry, deme.index_registry),
+    )
     for field in PRODUCT_FIELDS:
         np.testing.assert_array_equal(
-            getattr(products.config, field), getattr(definition.draft, field), err_msg=field
+            getattr(products.config, field), getattr(deme.config, field), err_msg=field
         )

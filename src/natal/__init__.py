@@ -8,7 +8,7 @@ Core components for genetic simulation: structures, entities, and population mod
 import importlib
 from typing import Any, Dict
 
-__version__ = "0.2.0b"
+__version__ = "0.3.0b0"
 
 # Maps exported symbol names to the module that defines them.
 #
@@ -35,11 +35,13 @@ def _scan_unit(module_name: str, names: list[str], allow_legacy_key: bool) -> No
     Args:
         module_name: Dotted module name of the unit (e.g. ``frontend.hooks``).
         names: The unit's exported names, from ``_PUBLIC_EXPORTS``.
-        allow_legacy_key: Whether the legacy short package key (e.g. ``hooks``)
-            is registered alongside the exported names.  ``contracts`` keeps its
-            own key because the package path did not change; ``frontend`` and
-            ``backends`` subpackages keep their pre-Phase-0 keys so that
-            ``natal.<legacy-key>`` attribute access keeps resolving.
+        allow_legacy_key: Whether the unit's short package key is registered
+            alongside the exported names.  Only ``contracts`` qualifies: it is
+            a real top-level package whose lazy attribute entry matches its
+            own name.  The relocated ``frontend.*`` units register no short
+            keys — the migration-era aliases (``natal.hooks``,
+            ``natal.data``, ...) were removed once the Rust-only migration
+            settled, and the phase-0 shim suite pins them unimportable.
     """
     if allow_legacy_key:
         short = module_name.rsplit(".", 1)[-1]
@@ -108,12 +110,10 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     "frontend.modifiers": [
         "build_modifier_wrappers", "evaluate_genotype_filter",
         "GameteAlleleConversionRule", "GameteConversionRuleSet",
-        "GameteGlabConversionRule", "GameteGtypeConversionRule",
-        "GameteHaploidGenomeConversionRule", "GameteModifier", "GenotypeFilter",
+        "GameteGtypeConversionRule", "GameteModifier", "GenotypeFilter",
         "GlabSelector", "wrap_gamete_modifier", "wrap_zygote_modifier",
         "ZygoteAlleleConversionRule", "ZygoteConversionRuleSet",
-        "ZygoteGenotypeConversionRule", "ZygoteGlabRedirectRule", "ZygoteModifier",
-        "ZygoteZtypeConversionRule",
+        "ZygoteModifier", "ZygoteZtypeConversionRule",
     ],
     "frontend.output": [
         "History", "HistorySchema", "Observation", "ObservationMetadata",
@@ -143,22 +143,14 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     "frontend.presets": [
         "GeneticPreset", "HomingDrive", "ToxinAntidoteDrive", "CytoplasmicPreset",
         "Wolbachia", "TransgenicBackground", "apply_preset_fitness_patch",
-        "PresetFitnessPatch", "count_allele_copies", "GameteAlleleConversionRule",
-        "GameteConversionRuleSet", "GameteGlabConversionRule",
-        "GameteGtypeConversionRule", "GameteHaploidGenomeConversionRule",
-        "ZygoteAlleleConversionRule", "ZygoteConversionRuleSet",
-        "ZygoteGenotypeConversionRule", "ZygoteGlabRedirectRule",
-        "ZygoteZtypeConversionRule",
+        "PresetFitnessPatch", "count_allele_copies",
+        "GameteConversionRuleSet", "ZygoteConversionRuleSet",
     ],
     "frontend.registry": ["IndexRegistry"],
     "frontend.spatial": [
         "BatchSetting", "GridTopology", "HexGrid", "MigrationCSR",
         "SpatialPopulationBuilder", "SpatialPopulation", "SquareGrid", "batch_setting",
         "build_adjacency_matrix", "build_gaussian_kernel",
-    ],
-    "frontend.ui": [
-        "Dashboard", "PopulationDashboard", "SpatialDashboard", "get_allele_color",
-        "launch", "launch_population", "launch_spatial", "render_cell_svg",
     ],
     "frontend.utils": [
         "Sex", "Age", "GameteLabel", "resolve_sex_label", "validate_name",
@@ -172,7 +164,7 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
 # Build the lazy index from the explicit list (deterministic first-wins
 # semantics on repeated names; units are listed alphabetically).
 for _unit, _names in _PUBLIC_EXPORTS.items():
-    _scan_unit(_unit, _names, allow_legacy_key=True)
+    _scan_unit(_unit, _names, allow_legacy_key=_unit == "contracts")
 
 # Public export list.
 #

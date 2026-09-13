@@ -27,6 +27,7 @@ from numpy.typing import NDArray
 from natal.frontend.data import PopulationState
 from natal.frontend.genetics import Genotype, Species
 from natal.frontend.model import ModelDraft
+from natal.frontend.model.initial_state import resolve_genotype_key_ztype_index
 from natal.frontend.population.base import BasePopulation
 from natal.frontend.registry.index import IndexRegistry
 from natal.frontend.utils.types import Sex
@@ -273,22 +274,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 raise ValueError(f"Sex must be 'female' or 'male', got '{sex_key}'")
 
             for genotype_key, age_data in genotype_dist.items():
-                from natal.frontend.patterns import (
-                    GenotypePatternParser,
-                    ZygoteTypePattern,
+                z_idx = resolve_genotype_key_ztype_index(
+                    genotype_key, self.species, self.registry
                 )
-
-                if isinstance(genotype_key, str):
-                    pattern = ZygoteTypePattern.from_slab_key(
-                        genotype_key, self.species
-                    )
-                else:
-                    parser = GenotypePatternParser(self.species)
-                    pattern = ZygoteTypePattern(
-                        parser.parse(str(genotype_key)), slab=None
-                    )
-
-                z_idx = self.registry.resolve_default_ztype_index(pattern)
 
                 if isinstance(age_data, list):
                     for age, raw_count in enumerate(cast(List[object], age_data)):
@@ -354,37 +342,20 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             ValueError: If sperm counts or ages are out of range.
         """
         self._live_state().sperm_storage.fill(0.0)
-        from natal.frontend.patterns import GenotypePatternParser, ZygoteTypePattern
 
         for female_key, male_dict in sperm_storage_dist.items():
             assert isinstance(female_key, (str, Genotype)), (
                 f"Female genotype key must be Genotype or str, got {type(female_key)}"
             )
 
-            if isinstance(female_key, str):
-                female_pattern = ZygoteTypePattern.from_slab_key(female_key, species)
-            else:
-                parser = GenotypePatternParser(species)
-                female_pattern = ZygoteTypePattern(
-                    parser.parse(str(female_key)), slab=None
-                )
-
-            f_z = self.registry.resolve_default_ztype_index(female_pattern)
+            f_z = resolve_genotype_key_ztype_index(female_key, species, self.registry)
 
             for male_key, age_data in male_dict.items():
                 assert isinstance(male_key, (str, Genotype)), (
                     f"Male genotype key must be Genotype or str, got {type(male_key)}"
                 )
 
-                if isinstance(male_key, str):
-                    male_pattern = ZygoteTypePattern.from_slab_key(male_key, species)
-                else:
-                    parser = GenotypePatternParser(species)
-                    male_pattern = ZygoteTypePattern(
-                        parser.parse(str(male_key)), slab=None
-                    )
-
-                m_z = self.registry.resolve_default_ztype_index(male_pattern)
+                m_z = resolve_genotype_key_ztype_index(male_key, species, self.registry)
 
                 assert isinstance(age_data, (dict, list, tuple, int, float)), (
                     f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}"
@@ -924,7 +895,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         # Bound native HistoryStore receives records during the session run.
 
         if was_stopped:
-            self.trigger_event("finish", deme_id=self._deme_id)
+            self._lifecycle_finish_firing = True
+            try:
+                self.trigger_event("finish", deme_id=self._deme_id)
+            finally:
+                self._lifecycle_finish_firing = False
         elif finish:
             self.finish_simulation()
 

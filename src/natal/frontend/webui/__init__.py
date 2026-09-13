@@ -1,4 +1,4 @@
-"""Vue-based web dashboard server (NiceGUI replacement, in migration)."""
+"""Vue-based web dashboard server."""
 
 from .server import launch_vue
 

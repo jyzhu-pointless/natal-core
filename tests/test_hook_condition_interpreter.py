@@ -114,3 +114,47 @@ class TestParseCondition:
     def test_invalid_expression_raises(self, expression: str) -> None:
         with pytest.raises(ValueError):
             parse_condition(expression)
+
+
+class TestZeroModuloDivisor:
+    """A zero modulo divisor is an illegal condition, rejected at parse time.
+
+    Regression target (CR-5): ``tick % 0 == 0`` used to compile into a
+    ``COND_TICK_MOD`` token with parameter 0, which the native interpreter
+    then masked into an always-false predicate — silently disabling the
+    declaring hook instead of surfacing the malformed condition.
+    """
+
+    def test_parse_atomic_condition_rejects_zero(self) -> None:
+        with pytest.raises(ValueError, match="positive integer"):
+            _parse_atomic_condition("tick % 0 == 0")
+
+    def test_parse_condition_rejects_zero(self) -> None:
+        with pytest.raises(ValueError, match="positive integer"):
+            parse_condition("tick % 0 == 0")
+
+    def test_compound_expression_rejects_zero(self) -> None:
+        with pytest.raises(ValueError, match="positive integer"):
+            parse_condition("tick >= 1 and tick % 0 == 0")
+
+    def test_op_declaration_rejects_zero_at_build(self) -> None:
+        """The declaring build chain fails; nothing is registered."""
+        import natal as nt
+
+        op = nt.Op.scale(ages=[0], factor=0.5, when="tick % 0 == 0")
+        species = nt.Species.from_dict(
+            name="zmod_species", structure={"chr1": {"loc": ["WT", "Dr"]}}
+        )
+        builder = (
+            nt.DiscreteGenerationPopulation.setup(
+                species=species, name="zmod", stochastic=False
+            )
+            .initial_state(
+                individual_count={"female": {"WT|WT": 50.0}, "male": {"WT|WT": 50.0}}
+            )
+            .reproduction(eggs_per_female=0.0, sex_ratio=0.5)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .hooks(op, event="early")
+        )
+        with pytest.raises(ValueError, match="positive integer"):
+            builder.build()

@@ -134,22 +134,37 @@ for hg in sp.enumerate_haploid_genomes_matching_pattern("A1/B1; C1", max_count=1
 
 ### 小括号语法：同一对染色体内部分隔
 
-小括号 `(...)` 允许在同一对染色体内使用 `;` 进行进一步分隔，特别适用于混合有序和无序匹配的复杂场景：
+小括号 `(...)` 将**同一对染色体**上的逐位点二倍体条件分为一组。括号内的分号分隔位点，括号外的分号分隔染色体对。组内每个 `|` 检查对应位点的母源／父源顺序，每个 `::` 则在对应位点独立允许两种顺序，并非将整条染色体的单倍型一起翻转。
 
 ```python
-# 同一对染色体内部分隔：位点A有序匹配，位点B无序匹配
-pattern1 = "(A1|A2);(B1::B2)"
-# 等价于：A位点必须严格按母本|父本顺序，B位点可以交换
+import natal as nt
 
-# 混合有序和无序匹配
-pattern2 = "(A1|A2);(B1::B2);(C1|C2)"
-# A和C位点有序匹配，B位点无序匹配
+single = nt.Species.from_dict(
+    name="PatternSingleChromosome",
+    structure={"chr1": {"A": ["A1", "A2"], "B": ["B1", "B2"]}},
+    unordered=False,
+)
+pattern1 = single.parse_genotype_pattern("(A1|A2;B1::B2)")
+assert pattern1(single.get_genotype_from_str("A1/B1|A2/B2"))
+assert pattern1(single.get_genotype_from_str("A1/B2|A2/B1"))
+assert not pattern1(single.get_genotype_from_str("A2/B1|A1/B2"))
 
-# 复杂嵌套模式
-pattern3 = "(A1/{B1,B2}|A2/{B1,B2});(C1::C2)"
+multiple = nt.Species.from_dict(
+    name="PatternTwoChromosomes",
+    structure={
+        "chr1": {"A": ["A1", "A2"], "B": ["B1", "B2"]},
+        "chr2": {"C": ["C1", "C2"]},
+    },
+    unordered=False,
+)
+# A and B are on chr1; C is on chr2.
+pattern2 = multiple.parse_genotype_pattern("(A1|A2;B1::B2);C1|C2")
+assert pattern2(multiple.get_genotype_from_str("A1/B2|A2/B1;C1|C2"))
+assert not pattern2(multiple.get_genotype_from_str("A1/B2|A2/B1;C2|C1"))
 ```
 
-小括号语法在单倍体和二倍体模式中都适用，能够显著提升复杂模式的可读性和可维护性。
+如果三个位点都在同一条染色体上，应写成 `(A1|A2;B1::B2;C1|C2)`。这些逐位点二倍体条件不适用于单倍体模式；单倍体模式使用 `/` 分隔位点。
+
 
 ## 常见错误与修正
 
@@ -196,30 +211,29 @@ groups = {
 
 ### 与 Preset 结合
 
-推荐将模式解析逻辑封装在 Preset 内部：
+在 Preset 中保存模式字符串并通过 `filters` 传入，由规则编译器负责解析：
 
 ```python
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet
+
 class PatternDrivenPreset(GeneticPreset):
     def __init__(self, target_pattern: str, conversion_rate: float):
         super().__init__(name="PatternDrivenPreset")
         self.target_pattern = target_pattern
         self.conversion_rate = conversion_rate
 
-    def _build_filter(self, species):
-        return species.parse_genotype_pattern(self.target_pattern)
-
     def zygote_modifier(self, host):
         return None
 
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("pattern_rules")
-        pattern_filter = self._build_filter(host.species)
 
         ruleset.add_allele_convert(
             from_allele="W",
             to_allele="D",
             rate=self.conversion_rate,
-            genotype_filter=pattern_filter,
+            filters={"parent": self.target_pattern},
         )
         return ruleset.to_gamete_modifier(host)
 ```

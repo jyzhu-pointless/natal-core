@@ -27,6 +27,7 @@ import re
 import select
 import shutil
 import subprocess
+import sys
 import sysconfig
 import time
 from pathlib import Path
@@ -58,11 +59,14 @@ def _cargo_env() -> dict[str, str]:
     """Build a Cargo environment using the shared ignored target directory."""
     env = os.environ.copy()
     env["CARGO_TARGET_DIR"] = str(_cargo_target_dir())
+    # Link against the interpreter whose sysconfig supplies the runtime paths.
+    # PATH may point to a different Python even when this script runs in a venv.
+    env["PYO3_PYTHON"] = sys.executable
     return env
 
 
-def _expand_vscode_variable(value: str, workspace: Path) -> str:
-    """Expand the variables supported by the rust-analyzer VS Code extension."""
+def _expand_vscode_variable(value: object, workspace: Path) -> object:
+    """Expand strings from VS Code JSON, preserving non-string JSON values."""
     if not isinstance(value, str):
         return value
 
@@ -133,6 +137,7 @@ class _LspClient:
     """Minimal LSP client used to collect publishDiagnostics notifications."""
 
     def __init__(self, rust_analyzer: Path, env: dict[str, str]) -> None:
+        """Start the analyzer with separate pipes for LSP input and output."""
         self.process = subprocess.Popen(
             [str(rust_analyzer)],
             stdin=subprocess.PIPE,
@@ -143,6 +148,7 @@ class _LspClient:
         self.buffer = b""
 
     def close(self) -> None:
+        """Stop the analyzer, killing it if graceful termination times out."""
         if self.process.poll() is None:
             self.process.terminate()
             try:
@@ -151,6 +157,7 @@ class _LspClient:
                 self.process.kill()
 
     def send(self, message: dict[str, Any]) -> None:
+        """Write one JSON-RPC message with an LSP content-length header."""
         payload = json.dumps(message).encode("utf-8")
         header = f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii")
         stdin = self.process.stdin
@@ -159,15 +166,18 @@ class _LspClient:
         stdin.flush()
 
     def read(self, timeout: float) -> dict[str, Any] | None:
+        """Read one complete LSP message, or return None on timeout or EOF."""
+        stdout = self.process.stdout
+        assert stdout is not None
         deadline = time.monotonic() + timeout
         while b"\r\n\r\n" not in self.buffer:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
-            ready, _, _ = select.select([self.process.stdout], [], [], remaining)
+            ready, _, _ = select.select([stdout], [], [], remaining)
             if not ready:
                 return None
-            chunk = os.read(self.process.stdout.fileno(), 65536)
+            chunk = os.read(stdout.fileno(), 65536)
             if not chunk:
                 return None
             self.buffer += chunk
@@ -181,10 +191,10 @@ class _LspClient:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
-            ready, _, _ = select.select([self.process.stdout], [], [], remaining)
+            ready, _, _ = select.select([stdout], [], [], remaining)
             if not ready:
                 return None
-            chunk = os.read(self.process.stdout.fileno(), 65536)
+            chunk = os.read(stdout.fileno(), 65536)
             if not chunk:
                 return None
             rest += chunk
@@ -195,7 +205,8 @@ class _LspClient:
 def _rust_analyzer_gate(rust_analyzer: Path) -> int:
     """Return 0 when no error-level diagnostic is published for rust/src."""
     config = _load_rust_analyzer_config()
-    server_extra_env = config.pop("server.extraEnv", {}) or {}
+    # Values come from JSON; only strings undergo VS Code variable expansion.
+    server_extra_env: dict[str, object] = config.pop("server.extraEnv", {}) or {}
     env = os.environ.copy()
     for key, value in server_extra_env.items():
         env[key] = str(_expand_vscode_variable(value, ROOT_DIR))
@@ -278,8 +289,8 @@ def _rust_analyzer_gate(rust_analyzer: Path) -> int:
 
 def main() -> int:
     if not (RUST_DIR / "Cargo.toml").exists():
-        print(f"Rust crate not found at {RUST_DIR}; skipping Rust gates.")
-        return 0
+        print(f"Rust crate not found at {RUST_DIR}; Rust gates failed.")
+        return 1
 
     cargo = shutil.which("cargo")
     if cargo is None:

@@ -173,7 +173,7 @@ class ModelDefinition:
         """
         from copy import deepcopy
 
-        from natal.frontend.genetics.definition_compiler import (
+        from natal.frontend.model.definition_compiler import (
             copy_registry,
             detach_draft,
         )
@@ -208,14 +208,14 @@ class ModelDefinition:
     @property
     def draft(self) -> ModelDraft | None:
         """Return a detached declared draft (ecology, switches, initial state)."""
-        from natal.frontend.genetics.definition_compiler import detach_draft
+        from natal.frontend.model.definition_compiler import detach_draft
 
         return None if self._draft is None else detach_draft(self._draft)
 
     @property
     def registry(self) -> IndexRegistry | None:
         """Return a detached copy of the declared active type layout."""
-        from natal.frontend.genetics.definition_compiler import copy_registry
+        from natal.frontend.model.definition_compiler import copy_registry
 
         return None if self._registry is None else copy_registry(self._registry)
 

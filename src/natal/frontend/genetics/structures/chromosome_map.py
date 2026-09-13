@@ -226,9 +226,9 @@ class RecombinationMap:
                 or if a pair of specifiers does not represent adjacent loci.
 
         Note:
-            Modifying recombination rates after `Genotype.produce_gametes()`
-            has been called will **not** invalidate the gamete cache. You must
-            manually clear the cache: `genotype._gamete_cache = None`.
+            `Genotype.produce_gametes()` recomputes on every call, so rate
+            changes take effect on the next call with no manual cache
+            invalidation.
         """
         arr_val = np.asarray(value, dtype=self._rates.dtype)
 

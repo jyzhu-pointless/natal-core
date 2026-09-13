@@ -60,7 +60,7 @@ const statusType = computed(() => {
             depth="3"
           >
             {{ sim.meta.population_name }} ·
-            {{ sim.meta.dashboard_type }} · backend: {{ sim.meta.backend }}
+            {{ sim.meta.dashboard_type }}
           </NText>
         </NSpace>
         <NSpace align="center">

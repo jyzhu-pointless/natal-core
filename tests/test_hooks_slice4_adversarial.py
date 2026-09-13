@@ -41,7 +41,8 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.hooks import Op
+import natal.frontend.hooks
+from natal.frontend.hooks import CompiledHookDescriptor, Op
 from natal.frontend.hooks.tick_context import TickContext
 
 # ---------------------------------------------------------------------------
@@ -377,18 +378,18 @@ def test_metrics_mixture_exact_frequencies() -> None:
     # Counts project through the name catalog (slab-qualified keys).
     counts = ctx.metrics.genotype_counts
     assert set(counts) == set(catalog)
-    assert counts["A|A:default"] == 600.0
-    assert counts["A|B:default"] == 400.0
-    assert counts["B|B:default"] == 0.0
+    assert counts["A|A@default"] == 600.0
+    assert counts["A|B@default"] == 400.0
+    assert counts["B|B@default"] == 0.0
 
     # Aggregates.
     assert ctx.metrics.total == 1000.0
     np.testing.assert_allclose(ctx.metrics.by_sex, [600.0, 400.0])
     np.testing.assert_allclose(ctx.metrics.by_age, [1000.0, 0.0])
     assert ctx.metrics.genotype_frequencies == {
-        "A|A:default": 0.6,
-        "A|B:default": 0.4,
-        "B|B:default": 0.0,
+        "A|A@default": 0.6,
+        "A|B@default": 0.4,
+        "B|B@default": 0.0,
     }
 
     # Allele frequencies: two gene copies per diploid individual.
@@ -506,7 +507,7 @@ def test_removed_hook_surface_inaccessible() -> None:
     assert desc.plan is None
 
     # Codegen module and template directory removed from the package.
-    hooks_dir = Path(nt.hooks.__file__).parent
+    hooks_dir = Path(natal.frontend.hooks.__file__).parent
     assert not (hooks_dir / "templates").exists()
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("natal.frontend.hooks.compile.codegen")
@@ -813,12 +814,14 @@ def test_op_group_dedup_by_tuple_identity() -> None:
     assert len(pop.get_compiled_hooks("first")) == 1
 
 
-def test_trigger_event_unknown_event_is_noop() -> None:
-    """An unknown event name returns CONTINUE and leaves state alone."""
+def test_trigger_event_unknown_event_raises() -> None:
+    """An unknown event name is rejected before any session side effect."""
     pop = _build("s4x_trigger_bogus")
     before = pop.state.individual_count.copy()
 
-    assert pop.trigger_event("no-such-event") == 0
+    with pytest.raises(ValueError, match="no-such-event") as excinfo:
+        pop.trigger_event("no-such-event")
+    assert "first" in str(excinfo.value)
     np.testing.assert_array_equal(pop.state.individual_count, before)
 
 
@@ -861,11 +864,11 @@ def test_deme_selector_serialization_and_panmictic_filter() -> None:
         return cb
 
     selectors: list[object] = [2, range(0, 2), [1, 3]]
-    descriptors: list["nt.hooks.CompiledHookDescriptor"] = []
+    descriptors: list[CompiledHookDescriptor] = []
     for idx, sel in enumerate(selectors):
         cb = make_cb(f"t{idx}")
         descriptors.append(
-            nt.hooks.CompiledHookDescriptor(
+            CompiledHookDescriptor(
                 name=f"sel_{idx}",
                 event="first",
                 deme_selector=sel,  # type: ignore[arg-type]
@@ -906,8 +909,8 @@ def test_deme_selector_serialization_and_panmictic_filter() -> None:
     np.testing.assert_array_equal(pop.state.individual_count, expected)
 
 
-def test_runner_skips_non_tick_event_descriptors() -> None:
-    """A hook on 'initialization' never enters the in-tick runner."""
+def test_initialization_event_registration_is_rejected() -> None:
+    """'initialization' is outside the event catalog: registration rejects it."""
     fired: list[int] = []
 
     @nt.hook(event="initialization")
@@ -915,14 +918,16 @@ def test_runner_skips_non_tick_event_descriptors() -> None:
         fired.append(pop.tick)
         return 0
 
-    pop = _build("s4x_init_event", hooks=[init_hook])
-    pop.run(n_steps=1)
+    with pytest.raises(ValueError, match="initialization"):
+        _build("s4x_init_event", hooks=[init_hook])
 
-    assert fired == []  # 'initialization' has no in-tick event id
-    assert pop.tick == 1
+    assert fired == []
 
-    runner = pop._ensure_hook_runner()
-    assert runner.has_callbacks() is False  # the runner never indexed it
+    # Manual triggering is rejected by the same catalog, on the built
+    # population itself.
+    pop = _build("s4x_init_trigger")
+    with pytest.raises(ValueError, match="initialization"):
+        pop.trigger_event("initialization")
 
 
 # ---------------------------------------------------------------------------

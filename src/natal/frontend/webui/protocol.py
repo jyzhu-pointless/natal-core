@@ -121,7 +121,6 @@ class HelloFrame(TypedDict):
     tick: int
     status: SimulationStatus
     interval_ms: int
-    backend: str
     dashboard_type: str
 
 

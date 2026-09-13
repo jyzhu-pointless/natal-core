@@ -223,6 +223,7 @@ class SpeciesEnumerationMixin:
             HaploidGenome instances
         """
         self = cast(Species, self)
+        self.validate_structure()
         from natal.frontend.genetics.entities.haplotype import HaploidGenome, Haplotype
 
         sex_chr_groups = self.get_sex_chromosome_groups()
@@ -286,6 +287,7 @@ class SpeciesEnumerationMixin:
             HaploidGenome instances.
         """
         self = cast(Species, self)
+        self.validate_structure()
         from natal.frontend.genetics.entities.haplotype import HaploidGenome, Haplotype
 
         sex_chr_groups = self.get_sex_chromosome_groups()
@@ -377,6 +379,7 @@ class SpeciesEnumerationMixin:
             Genotype instances.
         """
         self = cast(Species, self)
+        self.validate_structure()
         from natal.frontend.genetics.entities.genotype import Genotype
 
         sex_chr_groups = self.get_sex_chromosome_groups()
@@ -434,6 +437,7 @@ class SpeciesEnumerationMixin:
             List of all HaploidGenome instances.
         """
         self = cast(Species, self)
+        self.validate_structure()
         return list(self.iter_haploid_genotypes())
 
     def get_maternal_haploid_genotypes(self) -> List[HaploidGenome]:
@@ -501,4 +505,60 @@ class SpeciesEnumerationMixin:
             List of all Genotype instances.
         """
         self = cast(Species, self)
+        self.validate_structure()
         return list(self.iter_genotypes(unordered=unordered))
+
+    def classify_genotype_sex(self, genotype: Genotype) -> Optional[str]:
+        """Classify a genotype's sex-chromosome pairing.
+
+        Returns ``"female"`` or ``"male"`` when the genotype's (maternal,
+        paternal) sex-chromosome pair carries a fixed sex under the
+        declared system — XX or WZ female, XY or ZZ male — and ``None``
+        when the species has no sex chromosomes or the pair carries no
+        constraint.  Drives the structure-derived sex masks used by the
+        engines; it never infers sex from gamete row sums.
+
+        Args:
+            genotype: The diploid genotype to classify.
+
+        Returns:
+            ``"female"``, ``"male"``, or ``None``.
+        """
+        self = cast(Species, self)
+        groups = self.get_sex_chromosome_groups()
+        if not groups:
+            return None
+        from ._types import SexChromosomeType
+
+        def _group_chromosome(haploid: HaploidGenome) -> Optional[Chromosome]:
+            """Return the one group chromosome the haploid carries."""
+            found: Optional[Chromosome] = None
+            for group_chroms in groups.values():
+                for chrom in group_chroms:
+                    try:
+                        haploid.get_haplotype_for_chromosome(chrom)
+                    except ValueError:
+                        continue
+                    if found is not None and found is not chrom:
+                        raise ValueError(
+                            "Haploid genotype contains multiple chromosomes "
+                            "from the same sex group."
+                        )
+                    found = chrom
+            return found
+
+        maternal_chrom = _group_chromosome(genotype.maternal)
+        paternal_chrom = _group_chromosome(genotype.paternal)
+        if maternal_chrom is None or paternal_chrom is None:
+            return None
+        maternal_type = maternal_chrom.sex_type
+        paternal_type = paternal_chrom.sex_type
+        if SexChromosomeType.Y in (maternal_type, paternal_type):
+            return "male"
+        if SexChromosomeType.W in (maternal_type, paternal_type):
+            return "female"
+        if maternal_type == SexChromosomeType.X and paternal_type == SexChromosomeType.X:
+            return "female"
+        if maternal_type == SexChromosomeType.Z and paternal_type == SexChromosomeType.Z:
+            return "male"
+        return None

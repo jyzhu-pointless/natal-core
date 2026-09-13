@@ -146,5 +146,4 @@ nav:
     - spatial: api/spatial.md
     - fitness: api/fitness.md
     - registry: api/registry.md
-    - ui: api/ui.md
     - utils: api/utils.md

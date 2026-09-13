@@ -1,10 +1,33 @@
 import numpy as np
+import pytest
 
 import natal as nt
-from natal.frontend.model import NO_COMPETITION, build_discrete_engine_config
+from natal.contracts.materialize import (
+    gtype_names_from_registry,
+    ztype_names_from_registry,
+)
+from natal.frontend.builder._registry_builder import build_registry
 from natal.frontend.genetics import initialize_gamete_map, initialize_zygote_map
-
+from natal.frontend.model import (
+    NO_COMPETITION,
+    ModelDraft,
+    build_discrete_engine_config,
+)
+from natal.frontend.model.definition_compiler import CompiledProducts
+from natal.frontend.model.publication import publish_products
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
+
+
+def _published_config(species: nt.Species, config: ModelDraft) -> ModelDraft:
+    """Explicitly finalize the low-level test draft before native materialization."""
+    registry = build_registry(species)
+    config = config._replace(
+        ztype_names=ztype_names_from_registry(registry.index_to_ztype),
+        gtype_names=gtype_names_from_registry(registry.index_to_gtype),
+    )
+    return publish_products(CompiledProducts(config, registry, [], [])).config
+
+
 
 
 def _has_chromosome(haploid: object, chromosome: object) -> bool:
@@ -117,7 +140,7 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
         # builder chain.
     pop = DiscreteGenerationPopulation(
         species=species,
-        population_config=config,
+        population_config=_published_config(species, config),
         initial_individual_count={
             "female": {female_parent: parent_count},
             "male": {male_parent: parent_count},
@@ -288,7 +311,7 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
         # builder chain.
     pop = DiscreteGenerationPopulation(
         species=species,
-        population_config=config,
+        population_config=_published_config(species, config),
         initial_individual_count={
             "female": {female_parent: 1000.0},
             "male": {male_parent: 1000.0},
@@ -334,7 +357,16 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
     np.testing.assert_allclose(male_by_maternal_x["X2"], 250.0)
 
 
-def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:
+def test_locusless_y_chromosome_is_rejected_before_computation() -> None:
+    """A Y chromosome with no loci is rejected at the computation gate.
+
+    Contract change (CR-9, user-confirmed): chromosomes without at least
+    one locus are not supported genetic-computation inputs.  The former
+    "empty Y still runs" behavior this test locked in is replaced by an
+    explicit ``ValueError`` from the structure validation that gates
+    genotype enumeration (and therefore every downstream matrix and
+    baseline acquisition).
+    """
     species = nt.Species.from_dict(
         name="DiscreteYWithoutLocus",
         structure={
@@ -345,60 +377,7 @@ def test_discrete_generation_runs_when_y_chromosome_has_no_locus() -> None:
         unordered=False,
     )
 
-    diploid_genotypes = species.get_all_genotypes()
-    female_parent = diploid_genotypes[0]
-    male_parent = diploid_genotypes[0]
-
-    haploid_genotypes = species.get_all_haploid_genotypes()
-
-    gamete_map = initialize_gamete_map(
-        haploid_genotypes=haploid_genotypes,
-        diploid_genotypes=diploid_genotypes,
-        n_glabs=1,
-    )
-    zygote_map = initialize_zygote_map(
-        haploid_genotypes=haploid_genotypes,
-        diploid_genotypes=diploid_genotypes,
-        n_glabs=1,
-    )
-
-    config = build_discrete_engine_config(
-        n_genotypes=len(diploid_genotypes),
-        n_gtypes=len(haploid_genotypes),
-        n_glabs=1,
-        stochastic=False,
-        continuous_sampling=False,
-        viability_fitness=np.ones((2, 2, len(diploid_genotypes)), dtype=np.float64),
-        fecundity_fitness=np.ones((2, len(diploid_genotypes)), dtype=np.float64),
-        sexual_selection_fitness=np.ones((len(diploid_genotypes), len(diploid_genotypes)), dtype=np.float64),
-        age_based_relative_competition_strength=np.array([1.0, 1.0], dtype=np.float64),
-        eggs_per_female=1.0,
-        fixed_egg_count=True,
-        carrying_capacity=1.0e12,
-        sex_ratio=0.5,
-        low_density_growth_rate=1.0,
-        juvenile_growth_mode=NO_COMPETITION,
-        has_sex_chromosomes=True,
-        zygotes_to_gametes_map=gamete_map,
-        gametes_to_zygotes_map=zygote_map,
-    )
-
-        # Internal materialization path (shared by build/clone/restore),
-        # deliberately exercised; the public construction entry is the
-        # builder chain.
-    pop = DiscreteGenerationPopulation(
-        species=species,
-        population_config=config,
-        initial_individual_count={
-            "female": {female_parent: 1000.0},
-            "male": {male_parent: 1000.0},
-        },
-    )
-    pop._initialize_session(seed=0)
-
-    pop.run(1)
-    state = pop.state.individual_count
-    age1_total = float(state[:, 1, :].sum())
-
-    assert np.isfinite(age1_total)
-    assert age1_total >= 0.0
+    with pytest.raises(ValueError, match="chrY.*no loci"):
+        species.validate_structure()
+    with pytest.raises(ValueError, match="chrY.*no loci"):
+        species.get_all_genotypes()

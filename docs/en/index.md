@@ -4,7 +4,7 @@
 
 [![GitHub](https://img.shields.io/github/v/release/jyzhu-pointless/natal-core?label=GitHub&color=purple)](https://github.com/jyzhu-pointless/natal-core/releases/latest)
 [![PyPI](https://img.shields.io/pypi/v/natal-core.svg?label=PyPI&color=yellow)](https://pypi.org/project/natal-core/)
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![NumPy](https://img.shields.io/badge/NumPy-2.0.0+-green.svg)](https://numpy.org/)
 [![Rust](https://img.shields.io/badge/engine-Rust-red.svg)](https://www.rust-lang.org/)
 [![Docs](https://img.shields.io/readthedocs/natal-core?label=docs)](https://natal-core.readthedocs.io/en/latest/)
@@ -32,11 +32,11 @@ NATAL Core is part of the NATAL project. The full project also includes **NATAL 
 
 It is strongly recommended to use a virtual environment to manage dependencies.
 
-Please choose one of the following commands. **Python 3.12 is recommended**, but any Python version >= 3.9 should work.
+Please choose one of the following commands. **Python 3.12 is recommended**, but any Python version >= 3.10 should work.
 
 ```bash
 uv venv --python 3.12 .venv            # uv (recommended)
-python -m venv .venv                   # venv (please ensure Python >= 3.9)
+python -m venv .venv                   # venv (please ensure Python >= 3.10)
 conda create -n natal-env python=3.12  # conda
 ```
 
@@ -70,7 +70,7 @@ pip install natal-core
 
 ```python
 import natal as nt
-from natal.frontend.ui import launch
+from natal import launch_vue
 
 # 1. Define the species' genetic architecture
 sp = nt.Species.from_dict(
@@ -99,14 +99,7 @@ drive = nt.HomingDrive(
     cas9_deposition_glab="cas9_deposited"
 )
 
-# 3. Define a release event using hooks
-@nt.hook(event="first", priority=0)
-def release_drive_carriers():
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
-    ]
-
-# 4. Build a random-mating population
+# 3. Build a random-mating population and declare the release event with an Op
 pop = (nt.DiscreteGenerationPopulation
     .setup(
         species=sp,
@@ -126,10 +119,15 @@ pop = (nt.DiscreteGenerationPopulation
         carrying_capacity=100000,
         juvenile_growth_mode="beverton_holt"
     )
-    .presets(drive).hooks(release_drive_carriers).build())
+    .presets(drive)
+    .hooks(
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
+        event="first",
+    )
+    .build())
 
-# 5. Launch the interactive WebUI and run the simulation
-launch(pop)
+# 4. Launch the interactive WebUI and run the simulation
+launch_vue(pop)
 ```
 
 For more ready-to-run examples, see the [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) directory in the GitHub repository.
@@ -179,6 +177,76 @@ It is recommended to start with Part 1 to get up to speed, then use Part 2 as a 
 ## API Documentation
 
 - [Complete API Index](api/index.md)
+
+## Development and Release Checks
+
+Run checks from the repository root in a development virtual environment with
+Python 3.10 or later and Rust (including rustfmt and clippy):
+
+```bash
+python -m pip install -e ".[dev]"
+python scripts/ci_full.py
+```
+
+The default run checks Ruff, Pyright, the generated public stub, Python tests,
+numerical baselines, Rust checks/tests, and a freshly built wheel. Select stages with:
+
+```bash
+python scripts/ci_full.py --only lint types stubs
+python scripts/ci_full.py --only tests
+python scripts/ci_full.py --only baseline
+python scripts/ci_full.py --only rust
+python scripts/ci_full.py --only wheel
+```
+
+Unknown stages and combinations of `--only` with the older `--skip-*` options
+are errors. A failed required stage stops execution with a nonzero exit code.
+Stub checking never rewrites the file; use `python scripts/generate_init_pyi.py`
+to regenerate it after an intentional export change.
+
+Wheel builds require Node.js 24 and Corepack. `python scripts/build_frontend.py`
+installs locked frontend dependencies, runs lint and tests, and builds the dashboard
+into `src/natal/frontend/webui/dist`. The wheel builder calls this automatically;
+CI builds it once and shares the assets across the wheel matrix. Installed wheels
+include these assets, so end users do not need Node.js.
+
+Each local wheel build uses the current interpreter and a new output directory
+under `rust/target/wheels`. `python scripts/build_rust_wheel.py --out PATH`
+requires a directory that does not yet exist. Both local builds and CI use
+`python scripts/verify_wheel.py --wheel-dir PATH` to verify exactly one wheel:
+its package name, version, interpreter/platform compatibility, metadata, and native
+extension must match. Verification installs that exact wheel in a fresh temporary
+virtual environment outside the checkout, checks import locations and versions,
+and runs the existing complex genetics, spatial population, and runtime-update
+E2E tests. It also verifies dashboard HTML, linked JavaScript/CSS, and the API through
+HTTP requests against the installed application. It needs package-index access to install dependencies; it does not reuse
+an editable installation or the repository's pytest path settings.
+
+GitHub Actions calls the same check stages. Full Python tests run on Linux with
+Python 3.10, 3.11, 3.12, and 3.13. The baseline job uses Python 3.13 on Ubuntu 24.04
+and dependencies from `uv.lock`; it checks existing digests without updating them.
+To reproduce that dependency environment, use `uv sync --locked --python 3.13`
+in a separate checkout/environment, then
+`uv run --no-sync --python 3.13 python scripts/ci_full.py --only baseline`.
+Local baseline checks use the current environment, so record its versions when
+investigating a digest difference. Updating a digest requires explaining the
+scientific change; it is not a way to bypass a failed check.
+
+The reusable wheel workflow builds and tests all 20 combinations of Python
+3.10–3.13 and Linux x86_64/ARM64, macOS Intel/ARM64, and Windows x86_64.
+The `ci-success` job succeeds only when all required jobs succeed, including wheel
+checks. Configure it as a required status check on `main` after the new workflow
+has run on GitHub; editing the YAML does not configure branch protection.
+
+The `wheels` release workflow reuses the complete CI workflow for the selected
+commit and uploads those same verified wheel artifacts. It does not rebuild at
+publication time. A `v*` tag must match both `pyproject.toml` and
+`natal.__version__` (with standard version normalization). Manual runs default to
+`dry_run: true`, including when a tag is selected. Publication requires a version
+tag and either a tag push or an explicit manual run with `dry_run: false`.
+A branch run never publishes. PyPI trusted publishing must be configured for the
+`wheels.yml` workflow and its `pypi` environment. A local pass does not verify
+GitHub-hosted runners or PyPI permissions.
 
 ## Links
 

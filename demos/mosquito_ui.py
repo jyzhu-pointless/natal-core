@@ -1,7 +1,7 @@
 """Interactive mosquito population simulation with NATAL UI dashboard.
 
 Demonstrates the same age-structured mosquito model as ``mosquito.py``
-but launches the interactive NiceGUI-based dashboard for real-time
+but launches the interactive Vue dashboard for real-time
 simulation control and visualization.
 """
 
@@ -29,12 +29,6 @@ sp = nt.Species.from_dict(
     },
     gamete_labels=["default", "cas9_deposited"]
 )
-
-@nt.hook(event="first", priority=0)
-def release_drive_carriers_overl():
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=2, sex="male", delta=60, when="tick == 10")
-    ]
 
 drive = nt.HomingDrive(
     name="TestHoming",
@@ -105,6 +99,9 @@ pop = nt.AgeStructuredPopulation\
     ) \
     .presets(
         drive
-    ).hooks(release_drive_carriers_overl).build()
+    ).hooks(
+        nt.Op.add(genotypes="WT|Dr", ages=2, sex="male", delta=60, when="tick == 10"),
+        event="first",
+    ).build()
 
-nt.ui.launch(pop)
+nt.launch_vue(pop)

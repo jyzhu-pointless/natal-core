@@ -163,7 +163,7 @@ pop = (
 | `migration` | `kernel` | NDArray |
 
 以下参数**不接受** `batch_setting`：
-- **hooks**：通过 `@hook(deme=...)` 实现 per-deme 选择性执行。
+- **hooks**：通过 `.hooks(..., deme=...)` 实现 per-deme 选择性执行。
 - **空间函数需要 topology**：`(row, col)` 形式要求 builder 传入了 `topology`。`(flat_idx)` 形式不依赖 topology。
 
 ## batch_setting 异构配置
@@ -757,15 +757,7 @@ pop.run(10)
 
 ## WebUI 调试
 
-Spatial 模型可以直接接到 `natal.frontend.ui.launch(...)`。
-
-```python
-from natal.frontend.ui import launch
-
-launch(spatial, port=8080, title="Spatial Debug Dashboard")
-```
-
-也可以使用 Vue 面板（六边形景观图、deme 点选检视、迁移面板、Debug 标签页）：
+Spatial 模型可以直接接到 Vue 面板（六边形景观图、deme 点选检视、迁移面板、Debug 标签页）：
 
 ```python
 from natal import launch_vue

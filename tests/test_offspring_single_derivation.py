@@ -238,7 +238,7 @@ class TestCompressedRegistryMultiLabel:
         assert int(pop.config.n_gtypes) == 2
         assert int(pop.config.n_gtypes) == meiosis.shape[2]
         assert int(pop.config.n_ztypes) == meiosis.shape[1]
-        assert pop.config.gtype_names == ("B:default", "C:default")
+        assert pop.config.gtype_names == ("B@default", "C@default")
 
 
 class TestUncompressedBuildMultiLabel:
@@ -300,8 +300,14 @@ class TestSpeciesBlueprintMultiLabelSlab:
         # 2 haplotypes × 2 glabs = 4 gtypes.
         assert z2g.shape == (2, 6, 4)
         assert g2z.shape == (4, 4, 6)
-        assert offspring.shape == (6, 6, 6)
-        np.testing.assert_array_equal(offspring, _einsum_reference(z2g, g2z))
+        assert offspring.shape == (0, 0, 0)
+        from natal.frontend.builder import PopulationBuilder
+        from natal.frontend.model.publication import publish_products
+
+        published = publish_products(PopulationBuilder.from_species(species)._compile_products())
+        np.testing.assert_array_equal(
+            published.config.offspring_tensor, _einsum_reference(z2g, g2z),
+        )
         # Metadata written next to the arrays matches the shapes the
         # derivation actually used.
         assert blueprint["n_ztypes"] == z2g.shape[1]
@@ -324,6 +330,7 @@ class TestSpeciesBlueprintMultiLabelSlab:
         second = species.get_config_blueprint()
         assert first is second
         assert first["offspring_tensor"] is second["offspring_tensor"]
+        assert first["offspring_tensor"].shape == (0, 0, 0)
 
 
 # ── Channel agreement: refresh vs tensor_write on a multi-label species ───────

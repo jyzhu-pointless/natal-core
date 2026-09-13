@@ -8,7 +8,7 @@ builder consume these as plain functions.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, Tuple, TypeAlias, Union, cast
+from typing import Any, Dict, Optional, Tuple, TypeAlias, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -105,39 +105,76 @@ def _resolve_age_counts_age_structured(
     return dict.fromkeys(range(new_adult_age, n_ages), fcount)
 
 
-def _parse_genotype_key(
+def resolve_genotype_key_ztype_index(
     genotype_key: Any,
     species: Species,
-) -> Any:
-    """Parse a user genotype key into a :class:`ZygoteTypePattern`.
+    registry: IndexRegistry,
+) -> int:
+    """Resolve one exact initial-state genotype key to a ztype index.
 
-    Accepts a ``(genotype, slab)`` tuple, a slab-qualified string such as
-    ``"WT|WT@default"``, a plain string genotype name, or a
-    :class:`Genotype` instance.
+    Genotype-bearing keys (a :class:`Genotype` instance or a
+    ``(genotype, slab)`` tuple) resolve through the registry's identity
+    maps — no string round trip, so a sex-chromosome genotype can never
+    land on a same-autosome opposite-sex ztype.  Exact strings are
+    canonicalized via :meth:`Species.get_genotype_from_str` and then
+    resolved the same way.  A bare Genotype keeps the historical
+    first-slab placement.
+
+    Args:
+        genotype_key: Genotype, str, or ``(genotype, slab)`` tuple.
+        species: The bound Species object.
+        registry: The registry whose ztype axis the index refers to.
+
+    Returns:
+        The ztype index in *registry*.
 
     Raises:
         TypeError: If the key is not one of the accepted forms.
+        KeyError: If the resolved genotype is not in the registry.
+        ValueError: If an exact string cannot be parsed.
     """
-    from natal.frontend.patterns import GenotypePatternParser, ZygoteTypePattern
-
     if isinstance(genotype_key, tuple):
         _key, _slab = cast("tuple[object, str]", genotype_key)
         if isinstance(_key, Genotype):
-            return ZygoteTypePattern.from_pair(_key, _slab, species)
+            return registry.ztype_index(_key, _slab)
         if isinstance(_key, str):
-            _gt = species.get_genotype_from_str(_key)
-            return ZygoteTypePattern.parse(f"{str(_gt)}@{_slab}", species)
+            gt = species.get_genotype_from_str(_key)
+            return registry.ztype_index(gt, _slab)
         raise TypeError(
             f"Tuple first element must be Genotype or str, got {type(_key)}"
         )
-    if isinstance(genotype_key, str):
-        return ZygoteTypePattern.from_slab_key(genotype_key, species)
     if isinstance(genotype_key, Genotype):
-        parser = GenotypePatternParser(species)
-        return ZygoteTypePattern(parser.parse(str(genotype_key)), slab=None)
-    raise TypeError(
-        f"genotype_key must be Genotype, str, or tuple, got {type(genotype_key)}"
-    )
+        gt = genotype_key
+    elif isinstance(genotype_key, str):
+        # An optional "@slab" suffix pins the somatic label, mirroring
+        # ZygoteTypePattern.from_slab_key's key syntax.
+        slab_name: Optional[str] = None
+        if "@" in genotype_key:
+            base, suffix = genotype_key.rsplit("@", 1)
+            gt_str = base
+            if suffix:
+                slab_name = suffix
+        else:
+            gt_str = genotype_key
+        gt = species.get_genotype_from_str(gt_str)
+        indices = registry.ztype_indices_for(gt)
+        if not indices:
+            raise KeyError(
+                f"Genotype {gt.to_string()!r} is not in the active ztype catalog"
+            )
+        if slab_name is not None:
+            return registry.ztype_index(gt, slab_name)
+        return indices[0]
+    else:
+        raise TypeError(
+            f"genotype_key must be Genotype, str, or tuple, got {type(genotype_key)}"
+        )
+    indices = registry.ztype_indices_for(gt)
+    if not indices:
+        raise KeyError(
+            f"Genotype {gt.to_string()!r} is not in the active ztype catalog"
+        )
+    return indices[0]
 
 
 def _fresh_species_registry(species: Species) -> IndexRegistry:
@@ -174,8 +211,7 @@ def resolve_age_structured_initial_individual_count(
     for sex_key, genotype_dist in distribution.items():
         sex_idx = _resolve_sex_index(sex_key)
         for genotype_key, age_data in genotype_dist.items():
-            pattern = _parse_genotype_key(genotype_key, species)
-            z_idx = registry.resolve_default_ztype_index(pattern)
+            z_idx = resolve_genotype_key_ztype_index(genotype_key, species, registry)
             age_counts = _resolve_age_counts_age_structured(
                 age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
             )
@@ -208,12 +244,10 @@ def resolve_age_structured_initial_sperm_storage(
     out = np.zeros((n_ages, registry.n_ztypes, registry.n_ztypes), dtype=np.float64)
 
     for female_key, male_dict in sperm_storage.items():
-        female_pattern = _parse_genotype_key(female_key, species)
-        f_z = registry.resolve_default_ztype_index(female_pattern)
+        f_z = resolve_genotype_key_ztype_index(female_key, species, registry)
 
         for male_key, age_data in male_dict.items():
-            male_pattern = _parse_genotype_key(male_key, species)
-            m_z = registry.resolve_default_ztype_index(male_pattern)
+            m_z = resolve_genotype_key_ztype_index(male_key, species, registry)
 
             age_counts = _resolve_age_counts_age_structured(
                 age_data=age_data, n_ages=n_ages, new_adult_age=new_adult_age
@@ -294,8 +328,7 @@ def resolve_discrete_initial_individual_count(
     for sex_key, genotype_dist in distribution.items():
         sex_idx = _resolve_sex_index(sex_key)
         for genotype_key, age_data in genotype_dist.items():
-            pattern = _parse_genotype_key(genotype_key, species)
-            z_idx = registry.resolve_default_ztype_index(pattern)
+            z_idx = resolve_genotype_key_ztype_index(genotype_key, species, registry)
             age0, age1 = _resolve_discrete_age_distribution(age_data)
             out[sex_idx, 0, z_idx] += age0
             out[sex_idx, 1, z_idx] += age1

@@ -1,5 +1,61 @@
 # 设计自己的 Preset（1）：从等位基因转换规则开始
 
+## 四类转换规则
+
+所有规则构造函数均使用关键字参数。`rate` 必填，必须有限且在 `[0, 1]` 内；`filters=None` 表示不限制，`name=None` 是可选展示名称。
+
+| 规则 | 必填字段 | 可选字段 |
+|---|---|---|
+| `GameteGtypeConversionRule` | `to`、`rate` | `filters`、`name` |
+| `ZygoteZtypeConversionRule` | `to`、`rate` | `filters`、`name` |
+| `GameteAlleleConversionRule` | `from_allele`、`to_allele`、`rate` | `filters`、`name` |
+| `ZygoteAlleleConversionRule` | `from_allele`、`to_allele`、`rate` | `filters`、`name`、`side="both"` |
+
+整体转换的 `to` 字符串格式为 `[genotype 或 *]@[label 或 *]`，配子侧为单倍体基因型。两部分必须显式给出。整部分 `*` 保留对应输入，其余目标部分必须精确，不支持内部局部通配符、集合或无序目标候选。
+
+| 合子目标 | 动作 |
+|---|---|
+| `A\|B@I` | 联合替换 genotype 和 slab |
+| `*@I` | 只替换 slab，保留 genotype |
+| `A\|B@*` | 只替换 genotype，保留 slab |
+| `*@*` | 恒等转换 |
+
+整体规则表示一次概率事件：以 0.4 概率将 `A@S` 变为 `B@I`，得到 60% `A@S` 和 40% `B@I`，并非两部分分别独立转换。独立变化应声明两条规则，筛选条件需覆盖相关分支。
+
+Allele 规则的源和目标均为 gene 名字符串。Gene 名在物种内唯一，因此不需要 `locus` 参数；目标必须属于源所在的位点。Allele 规则保留标签。合子 `side` 可为 `maternal`、`paternal` 或 `both`，每个适用副本独立以 `rate` 转换。`side="both"`、rate 为 0.4 时，有序 `A|A` 输入产生 36% `A|A`、24% `B|A`、24% `A|B` 和 16% `B|B`。
+
+RuleSet 按声明顺序执行，前序规则产生的分支继续进入后续规则，不设数字优先级，也不在首次匹配后停止。合法状态没有源等位基因时保持原样；未知等位基因、跨位点目标和非法目标均报错。五个作用域键参见[filters](genotype_filter.md)。
+
+同一配子或合子修饰器管线注册多个 RuleSet 时，各规则集按注册顺序接收前一步结果。重新构建或刷新模型时，整条管线从未修饰的物种基线重新开始，不在上一次编译结果上重复叠加规则。
+
+以下声明可独立运行；编译需要物种具有对应等位基因和标签。
+
+```python
+from natal import (
+    GameteGtypeConversionRule, ZygoteZtypeConversionRule,
+    GameteAlleleConversionRule, ZygoteAlleleConversionRule,
+)
+
+whole_gamete = GameteGtypeConversionRule(
+    filters={"current": "A@default"}, to="B@I", rate=0.4,
+)
+whole_zygote = ZygoteZtypeConversionRule(
+    filters={"maternal": "*@I"}, to="*@I", rate=0.9,
+)
+gamete_allele = GameteAlleleConversionRule(
+    from_allele="A", to_allele="B", rate=0.4,
+    filters={"parent_sex": "female"},
+)
+zygote_allele = ZygoteAlleleConversionRule(
+    from_allele="A", to_allele="B", rate=0.4, side="both",
+    filters={"current": "*@I"},
+)
+```
+
+通过 `add_rule(rule)` 追加声明。`GameteConversionRuleSet.add_gtype_convert()`、`ZygoteConversionRuleSet.add_ztype_convert()` 和两阶段各自的 `add_allele_convert()` 完整暴露对应构造字段。
+
+新 API 明确不兼容旧接口。原标签专用类和规则别名已移除，改用上述整体规则表达标签转换。不支持旧规则参数、对象／callable 输入和冒号标签格式。标签使用 `@`，既有无序筛选语法 `::` 保持原义。尤其是原来成功后联合改变标签的等位基因转换，应迁移为整体联合转换，不能拆成两个独立事件。
+
 `GeneticPreset` 的设计过程始于遗传机制的清晰表达。对多数驱动系统而言，这一步通常体现在**等位基因转换规则**的制定。
 
 ## 定义机制目标
@@ -54,21 +110,19 @@ ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
 
 ### 使用 ZygoteConversionRuleSet
 
+以下两个片段假定已有种群 `pop`，其物种在同一位点声明 W 和 D。
+
 ```python
 from natal.frontend.modifiers import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
-# 在受精卵中，只要A位点含有D等位基因，就转换W->D
-def has_d_at_a(genotype) -> bool:
-    # 伪代码，实际取决于你的Genotype结构
-    return "D" in str(genotype)
-
+# 在受精卵中，仅对已携带 D 等位基因的合子转换 W->D
 ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.9,
-    genotype_filter=has_d_at_a,
+    filters={"current": "*::D"},  # 仅对已携带 D 的合子生效
 )
 
 zygote_mod = ruleset.to_zygote_modifier(pop)
@@ -82,14 +136,13 @@ pop.add_zygote_modifier(zygote_mod, name="zygote_repair")
 ```python
 # 配子阶段：W -> D（偏向）
 gamete_ruleset = GameteConversionRuleSet("gamete_drive")
-gamete_ruleset.add_allele_convert("W", "D", rate=0.99)
+gamete_ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.99)
 
 # 受精卵阶段：实现复制（确保纯和）
 zygote_ruleset = ZygoteConversionRuleSet("zygote_copy")
 zygote_ruleset.add_allele_convert(
-    "W", "D",
-    rate=0.95,
-    genotype_filter=lambda g: "D" in str(g)
+    from_allele="W", to_allele="D", rate=0.95,
+    filters={"current": "*::D"},
 )
 
 pop.add_gamete_modifier(gamete_ruleset.to_gamete_modifier(pop))
@@ -160,7 +213,7 @@ class PointMutation(GeneticPreset):
 
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("PointMutation")
-        ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Mutant", rate=self.mutation_rate)
         return ruleset.to_gamete_modifier(host)
 
     def zygote_modifier(self, host):
@@ -189,9 +242,9 @@ class BidirectionalMutation(GeneticPreset):
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 
         # A → B (正向突变)
-        ruleset.add_allele_convert("A", "B", rate=self.forward_rate)
+        ruleset.add_allele_convert(from_allele="A", to_allele="B", rate=self.forward_rate)
         # B → A (回复突变)
-        ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
+        ruleset.add_allele_convert(from_allele="B", to_allele="A", rate=self.backward_rate)
 
         return ruleset.to_gamete_modifier(host)
 

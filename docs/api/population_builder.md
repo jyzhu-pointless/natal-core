@@ -229,7 +229,7 @@ Write fitness values to config arrays. Flat dicts apply to both sexes;
 nested `{"female": {...}, "male": {...}}` for sex-specific values.
 `mode="replace"` overwrites, `mode="multiply"` scales existing values.
 
-### `hooks(*hook_items, event=None, priority=0, deme="*", name=None)`
+### `hooks(*hook_items, event=None, priority=None, deme="*", name=None)`
 ```python
 cfg.hooks(my_hook)
 ```

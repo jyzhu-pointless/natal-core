@@ -65,6 +65,8 @@ class Op:
         sex: Literal["female", "male", "both"] = "both",
         factor: float = 1.0,
         when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
     ) -> HookOp:
         """Create a scaling operation that multiplies counts by a factor.
 
@@ -74,11 +76,16 @@ class Op:
             sex: Sex selector ("female", "male", or "both")
             factor: Scaling factor (e.g., 0.5 halves the count, 2.0 doubles it)
             when: Optional condition expression (e.g., "tick >= 100")
+            event: Event boundary at which the op fires (op-level value
+                wins over the registration call's when both are given).
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation
         """
-        return HookOp(OpType.SCALE, genotypes, ages, sex, factor, when)
+        return HookOp(OpType.SCALE, genotypes, ages, sex, factor, when, event, priority)
 
     @staticmethod
     def set_count(
@@ -87,6 +94,8 @@ class Op:
         sex: Literal["female", "male", "both"] = "both",
         value: float = 0.0,
         when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
     ) -> HookOp:
         """Create an operation that sets counts to a specific value.
 
@@ -96,11 +105,16 @@ class Op:
             sex: Sex selector
             value: Target count value (individuals will be added/removed to match)
             when: Optional condition expression
+            event: Event boundary at which the op fires (op-level value
+                wins over the registration call's when both are given).
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation
         """
-        return HookOp(OpType.SET, genotypes, ages, sex, value, when)
+        return HookOp(OpType.SET, genotypes, ages, sex, value, when, event, priority)
 
     @staticmethod
     def add(
@@ -109,6 +123,8 @@ class Op:
         sex: Literal["female", "male", "both"] = "both",
         delta: float = 0.0,
         when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
     ) -> HookOp:
         """Create an operation that adds a fixed number of individuals.
 
@@ -118,11 +134,16 @@ class Op:
             sex: Sex selector
             delta: Number of individuals to add (can be negative to remove)
             when: Optional condition expression
+            event: Event boundary at which the op fires (op-level value
+                wins over the registration call's when both are given).
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation
         """
-        return HookOp(OpType.ADD, genotypes, ages, sex, delta, when)
+        return HookOp(OpType.ADD, genotypes, ages, sex, delta, when, event, priority)
 
     @staticmethod
     def subtract(
@@ -131,6 +152,8 @@ class Op:
         sex: Literal["female", "male", "both"] = "both",
         delta: float = 0.0,
         when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
     ) -> HookOp:
         """Create an operation that subtracts a fixed number of individuals.
 
@@ -140,11 +163,16 @@ class Op:
             sex: Sex selector
             delta: Number of individuals to subtract
             when: Optional condition expression
+            event: Event boundary at which the op fires (op-level value
+                wins over the registration call's when both are given).
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation
         """
-        return HookOp(OpType.SUBTRACT, genotypes, ages, sex, delta, when)
+        return HookOp(OpType.SUBTRACT, genotypes, ages, sex, delta, when, event, priority)
 
     @staticmethod
     def kill(
@@ -153,6 +181,8 @@ class Op:
         sex: Literal["female", "male", "both"] = "both",
         prob: float = 0.0,
         when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
     ) -> HookOp:
         """Create a probabilistic killing operation.
 
@@ -162,6 +192,11 @@ class Op:
             sex: Sex selector
             prob: Probability of killing each selected individual (0.0 to 1.0)
             when: Optional condition expression
+            event: Event boundary at which the op fires (op-level value
+                wins over the registration call's when both are given).
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation
@@ -171,7 +206,7 @@ class Op:
         """
         if not 0.0 <= prob <= 1.0:
             raise ValueError(f"prob must be in [0, 1], got {prob}")
-        return HookOp(OpType.KILL, genotypes, ages, sex, prob, when)
+        return HookOp(OpType.KILL, genotypes, ages, sex, prob, when, event, priority)
 
     @staticmethod
     def sample(
@@ -180,6 +215,8 @@ class Op:
         sex: Literal["female", "male", "both"] = "both",
         size: int = 0,
         when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
     ) -> HookOp:
         """Create a sampling operation that selects individuals without replacement.
 
@@ -189,11 +226,16 @@ class Op:
             sex: Sex selector
             size: Number of individuals to sample
             when: Optional condition expression
+            event: Event boundary at which the op fires (op-level value
+                wins over the registration call's when both are given).
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation
         """
-        return HookOp(OpType.SAMPLE, genotypes, ages, sex, float(size), when)
+        return HookOp(OpType.SAMPLE, genotypes, ages, sex, float(size), when, event, priority)
 
     @staticmethod
     def stop_if_zero(
@@ -201,6 +243,8 @@ class Op:
         ages: Union[int, List[int], range, Literal["*"]] = "*",
         sex: Literal["female", "male", "both"] = "both",
         when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
     ) -> HookOp:
         """Create an operation that stops the simulation if selected count reaches zero.
 
@@ -209,11 +253,16 @@ class Op:
             ages: Age selector
             sex: Sex selector
             when: Optional condition expression
+            event: Event boundary at which the op fires (op-level value
+                wins over the registration call's when both are given).
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation
         """
-        return HookOp(OpType.STOP_IF_ZERO, genotypes, ages, sex, 0.0, when)
+        return HookOp(OpType.STOP_IF_ZERO, genotypes, ages, sex, 0.0, when, event, priority)
 
     @staticmethod
     def stop_if_below(
@@ -222,6 +271,8 @@ class Op:
         sex: Literal["female", "male", "both"] = "both",
         threshold: float = 1.0,
         when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
     ) -> HookOp:
         """Create an operation that stops the simulation if count falls below threshold.
 
@@ -231,11 +282,16 @@ class Op:
             sex: Sex selector
             threshold: Minimum count threshold
             when: Optional condition expression
+            event: Event boundary at which the op fires (op-level value
+                wins over the registration call's when both are given).
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation
         """
-        return HookOp(OpType.STOP_IF_BELOW, genotypes, ages, sex, float(threshold), when)
+        return HookOp(OpType.STOP_IF_BELOW, genotypes, ages, sex, float(threshold), when, event, priority)
 
     @staticmethod
     def stop_if_above(
@@ -244,6 +300,8 @@ class Op:
         sex: Literal["female", "male", "both"] = "both",
         threshold: float = 1_000_000.0,
         when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
     ) -> HookOp:
         """Create an operation that stops the simulation if count exceeds threshold.
 
@@ -253,23 +311,37 @@ class Op:
             sex: Sex selector
             threshold: Maximum count threshold
             when: Optional condition expression
+            event: Event boundary at which the op fires (op-level value
+                wins over the registration call's when both are given).
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation
         """
-        return HookOp(OpType.STOP_IF_ABOVE, genotypes, ages, sex, float(threshold), when)
+        return HookOp(OpType.STOP_IF_ABOVE, genotypes, ages, sex, float(threshold), when, event, priority)
 
     @staticmethod
-    def stop_if_extinction(when: Optional[str] = None) -> HookOp:
+    def stop_if_extinction(
+        when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
+    ) -> HookOp:
         """Create an operation that stops the simulation if total population goes extinct.
 
         Args:
             when: Optional condition expression
+            event: Event boundary at which the op fires (op-level value
+                wins over the registration call's when both are given).
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation
         """
-        return HookOp(OpType.STOP_IF_EXTINCTION, "*", "*", "both", 0.0, when)
+        return HookOp(OpType.STOP_IF_EXTINCTION, "*", "*", "both", 0.0, when, event, priority)
 
     @staticmethod
     def set_param(
@@ -325,7 +397,9 @@ class Op:
             start: First tick the schedule is active (>= 0).
             when: Optional extra condition expression.
             event: Event boundary at which the op fires (default early).
-            priority: Hook priority when registered standalone.
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation.
@@ -396,7 +470,9 @@ class Op:
             probability: Per-individual conversion probability in [0, 1].
             when: Optional condition expression.
             event: Event boundary at which the op fires (default early).
-            priority: Hook priority when registered standalone.
+            priority: Priority used when the registration call does not
+                assign one (a call-level ``priority`` sets it for the
+                whole declared group).
 
         Returns:
             HookOp: Operation descriptor for compilation.
@@ -531,7 +607,15 @@ def _parse_atomic_condition(atom: str) -> Tuple[int, int]:
 
     match = re.fullmatch(r"tick\s*%\s*(\d+)\s*==\s*0", atom)
     if match:
-        return (COND_TICK_MOD, int(match.group(1)))
+        divisor = int(match.group(1))
+        if divisor == 0:
+            # A zero divisor is an illegal condition, not an always-false
+            # predicate: reject it at parse time instead of letting the
+            # interpreter mask it.
+            raise ValueError(
+                f"Modulo divisor must be a positive integer, got 0: {atom!r}"
+            )
+        return (COND_TICK_MOD, divisor)
 
     match = re.fullmatch(r"tick\s*==\s*(\d+)", atom)
     if match:
@@ -1070,7 +1154,7 @@ def compile_declarative_hook(
         age_offsets.append(len(age_data_list))  # Record end offset for this operation
 
         # 4) Sex mask + numeric parameter
-        # Convert sex selector to boolean mask [male_selected, female_selected]
+        # Convert sex selector to boolean mask [female_selected, male_selected]
         sex_masks_list.append(_resolve_sex(op.sex))
         params_list.append(float(op.param))  # Convert parameter to float
 
@@ -1155,7 +1239,7 @@ def compile_declarative_hook(
         age_data=np.array(age_data_list, dtype=np.int32) if age_data_list else np.array([], dtype=np.int32),
 
         # Sex selection masks - 2D boolean array [n_ops x 2]
-        # Each row: [male_selected, female_selected]
+        # Each row: [female_selected, male_selected]
         sex_masks=np.vstack(sex_masks_list) if sex_masks_list else np.zeros((0, 2), dtype=np.bool_),
 
         # Operation parameters - numeric values for each operation

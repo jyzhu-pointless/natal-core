@@ -61,6 +61,24 @@ class IndexRegistry:
         # ---- Label metadata (ordered lists, replaces old label dicts) ----
         self.slab_labels: List[str] = []
         self.glab_labels: List[str] = []
+        self._published = False
+
+    @property
+    def published(self) -> bool:
+        """Whether this registry is sealed for runtime publication."""
+        return self._published
+
+    def mark_published(self) -> None:
+        """Seal this registry after all runtime indices have been assigned."""
+        self._published = True
+
+    def _require_unpublished(self) -> None:
+        if self._published:
+            raise RuntimeError("published registry is immutable")
+
+    def require_unpublished(self) -> None:
+        """Validate that callers may still extend or compress this registry."""
+        self._require_unpublished()
 
     # ==================================================================
     # Computed properties — derived from the flat index lists above
@@ -168,6 +186,7 @@ class IndexRegistry:
         Returns:
             int: The assigned ZType index.  Stable until compression.
         """
+        self._require_unpublished()
         key = (genotype, slab_label)
         if key in self._ztype_to_index:
             return self._ztype_to_index[key]
@@ -191,6 +210,7 @@ class IndexRegistry:
         Returns:
             int: The assigned GType index.  Stable until compression.
         """
+        self._require_unpublished()
         key = (haplo, glab_label)
         if key in self._gtype_to_index:
             return self._gtype_to_index[key]
@@ -213,6 +233,7 @@ class IndexRegistry:
         Returns:
             list[int]: ZType indices for this genotype (one per slab label).
         """
+        self._require_unpublished()
         if not self.slab_labels:
             self.slab_labels = ["default"]
         indices: list[int] = []
@@ -233,6 +254,7 @@ class IndexRegistry:
         Returns:
             list[int]: GType indices for this haplotype (one per glab label).
         """
+        self._require_unpublished()
         if not self.glab_labels:
             self.glab_labels = ["default"]
         indices: list[int] = []
@@ -252,6 +274,7 @@ class IndexRegistry:
         Returns:
             int: Assigned integer index for the gamete label.
         """
+        self._require_unpublished()
         if gamete_label not in self.glab_labels:
             self.glab_labels.append(gamete_label)
         return self.glab_labels.index(gamete_label)
@@ -267,6 +290,7 @@ class IndexRegistry:
         Returns:
             int: Assigned integer index for the somatic label.
         """
+        self._require_unpublished()
         if somatic_label not in self.slab_labels:
             self.slab_labels.append(somatic_label)
         return self.slab_labels.index(somatic_label)
@@ -393,6 +417,7 @@ class IndexRegistry:
             gtype_mask: ``(old_n_gtypes,)`` int32 array — GType-level
                 compression mask (-1 = pruned).
         """
+        self._require_unpublished()
         self._compress_ztypes(ztype_mask)
         self._compress_gtypes(gtype_mask)
 
@@ -426,7 +451,6 @@ class IndexRegistry:
         self._index_to_gtype = new_index_to_gtype
         self._gtype_to_index = {gt: i for i, gt in enumerate(new_index_to_gtype)}
 
-# compress_hg_glab / decompress_hg_glab have been moved to
-# natal.frontend.population_config as _compress_hl / _decompress_hl.
+# compress_hl / decompress_hl live in natal.frontend.genetics.matrices.
 # They are only needed during species blueprint construction
 # (before IndexRegistry exists).  For runtime use gtype_index().

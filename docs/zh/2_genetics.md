@@ -259,6 +259,10 @@ chr1.remove_locus("A")
 
 删除后，该位点将从染色体上移除，但该 `Locus` 实例将保持存在。该位点两侧的位点成为新的相邻位点，其重组率自动设置为原位点两侧的重组率之和。
 
+#### 结构完整性校验
+
+用于遗传计算的结构要求：每条染色体（常染色体与性染色体同样适用）至少有一个位点，每个位点至少有一个等位基因。构建和编辑过程允许暂时不完整（例如先声明位点、稍后补充等位基因），但在完整基因型枚举、基因型字符串解析、遗传矩阵生成和物种基线获取等计算入口会先经 `Species.validate_structure()` 校验，不完整时抛出 `ValueError`，并在错误信息中定位 Species、染色体与位点。单态染色体可以显式声明只有一个等位基因的位点，系统不会自动补充占位位点或等位基因。
+
 #### 关于 `position` 参数
 
 `position` 参数用于定义位点在染色体上的相对位置，**仅作为排序标签使用**，其绝对大小与重组率大小无关。
@@ -292,6 +296,12 @@ gene_drive = sp.get_gene("Drive")
 一般无需手动获取 `Haplotype` 实例。
 
 ```python
+import natal as nt
+
+sp = nt.Species.from_dict(
+    name="HaplotypeExample",
+    structure={"chr1": {"A": ["A1", "A2"], "B": ["B1", "B2"]}},
+)
 # 获取染色体上所有可能的单倍型：逐个单倍体基因型取该染色体的单倍型，再去重
 chr1 = sp.get_chromosome("chr1")  # 获取染色体对象
 all_haplotypes = list(dict.fromkeys(
@@ -413,6 +423,10 @@ gt2 = sp.get_genotype_from_str("A/B/C|a/b/c; WT/R1|Drive/R2")
 gt3 = sp.get_genotype_from_str("abc|ABC; Drive/R2|WT/R1")
 print(gt1 is gt2, gt1 is gt3)  # 输出: True True
 ```
+
+#### 性染色体的字符串格式
+
+声明了性染色体系统（如 XY、ZW）的物种，基因型字符串在常染色体段之后包含**每个性染色体组一个段**，写法与常染色体段相同。例如 XY 雄性为 `"A|a;X1|Y1"`（母本 X、父本 Y），XY 雌性为 `"A|a;X1|X2"`；ZW 雌性为 `"A|a;W1|Z1"`，ZW 雄性为 `"A|a;Z1|Z1"`。字符串化与解析都按性染色体组处理并保留母本/父本相位，因此任意枚举基因型的字符串都能经 `get_genotype_from_str` 回解析为同一对象。
 
 #### 缓存机制
 

@@ -4,7 +4,7 @@
 
 [![GitHub](https://img.shields.io/github/v/release/jyzhu-pointless/natal-core?label=GitHub&color=purple)](https://github.com/jyzhu-pointless/natal-core/releases/latest)
 [![PyPI](https://img.shields.io/pypi/v/natal-core.svg?label=PyPI&color=yellow)](https://pypi.org/project/natal-core/)
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![NumPy](https://img.shields.io/badge/NumPy-2.0.0+-green.svg)](https://numpy.org/)
 [![Rust](https://img.shields.io/badge/engine-Rust-red.svg)](https://www.rust-lang.org/)
 [![Docs](https://img.shields.io/readthedocs/natal-core?label=docs)](https://natal-core.readthedocs.io/en/latest/)
@@ -32,11 +32,11 @@ NATAL Core 是 NATAL 项目的一部分。完整项目还包括 **NATAL Inferenc
 
 强烈建议使用虚拟环境来管理依赖项。
 
-请选择以下命令之一。**推荐使用 Python 3.12**，但任何 Python 版本 >= 3.9 应该都可以工作。
+请选择以下命令之一。**推荐使用 Python 3.12**，但任何 Python 版本 >= 3.10 应该都可以工作。
 
 ```bash
 uv venv --python 3.12 .venv            # uv（推荐）
-python -m venv .venv                   # venv（请确保使用 Python >= 3.9）
+python -m venv .venv                   # venv（请确保使用 Python >= 3.10）
 conda create -n natal-env python=3.12  # conda
 ```
 
@@ -70,7 +70,7 @@ pip install natal-core
 
 ```python
 import natal as nt
-from natal.frontend.ui import launch
+from natal import launch_vue
 
 # 1. 定义物种的遗传架构
 sp = nt.Species.from_dict(
@@ -99,14 +99,7 @@ drive = nt.HomingDrive(
     cas9_deposition_glab="cas9_deposited"
 )
 
-# 3. 使用 hook 定义释放事件
-@nt.hook(event="first", priority=0)
-def release_drive_carriers():
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
-    ]
-
-# 4. 构建一个随机交配种群
+# 3. 构建一个随机交配种群，并用 Op 声明释放事件
 pop = (nt.DiscreteGenerationPopulation
     .setup(
         species=sp,
@@ -126,10 +119,15 @@ pop = (nt.DiscreteGenerationPopulation
         carrying_capacity=100000,
         juvenile_growth_mode="beverton_holt"
     )
-    .presets(drive).hooks(release_drive_carriers).build())
+    .presets(drive)
+    .hooks(
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
+        event="first",
+    )
+    .build())
 
-# 5. 启动交互式 WebUI 并运行模拟
-launch(pop)
+# 4. 启动交互式 WebUI 并运行模拟
+launch_vue(pop)
 ```
 
 更多可即时使用的示例，请参阅 GitHub 仓库中的 [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) 目录。
@@ -180,6 +178,70 @@ launch(pop)
 ## API 文档
 
 - [完整 API 索引](api/index.md)
+
+## 开发与发布检查
+
+在仓库根目录的开发虚拟环境中运行检查，需要 Python 3.10 或更高版本，以及
+Rust 工具链（包括 rustfmt 和 clippy）：
+
+```bash
+python -m pip install -e ".[dev]"
+python scripts/ci_full.py
+```
+
+默认检查 Ruff、Pyright、生成的公开 stub、Python 测试、数值基线、Rust 检查与测试，
+以及本次新构建的 wheel。可以选择检查阶段：
+
+```bash
+python scripts/ci_full.py --only lint types stubs
+python scripts/ci_full.py --only tests
+python scripts/ci_full.py --only baseline
+python scripts/ci_full.py --only rust
+python scripts/ci_full.py --only wheel
+```
+
+未知阶段，以及 `--only` 与旧 `--skip-*` 选项混用，都会显式报错。
+任一必需阶段失败都会停止执行，并返回非零退出码。
+stub 检查不会改写文件；有意变更导出后，使用
+`python scripts/generate_init_pyi.py` 重新生成。
+
+构建 wheel 需要 Node.js 24 和 Corepack。`python scripts/build_frontend.py`
+会安装锁定的前端依赖、运行 lint 和测试，并将面板构建到
+`src/natal/frontend/webui/dist`。wheel 构建脚本会自动调用它；CI 只构建一次，
+供全部 wheel 任务共用。发布的 wheel 内含这些资源，最终用户不需要 Node.js。
+
+本地每次 wheel 构建都使用当前解释器，并在 `rust/target/wheels` 下创建独立输出目录。
+`python scripts/build_rust_wheel.py --out PATH` 要求指定目录尚不存在。
+本地构建和 CI 都使用 `python scripts/verify_wheel.py --wheel-dir PATH` 验证唯一的 wheel：
+包名、版本、解释器与平台兼容性、元数据和原生扩展必须匹配。
+验证器会在仓库之外的新临时虚拟环境中安装这个确切的 wheel，检查导入路径和版本，
+还会运行已有的复杂遗传、空间种群和运行时更新端到端测试，并通过 HTTP 请求
+验证已安装应用的面板 HTML、引用的 JavaScript/CSS 和 API。
+安装依赖需要访问包索引；验证不会复用可编辑安装，也不会读取仓库的 pytest 路径配置。
+
+GitHub Actions 调用相同的检查阶段。完整 Python 测试在 Linux 上分别使用
+Python 3.10、3.11、3.12、3.13 运行。
+数值基线 job 使用 Ubuntu 24.04、Python 3.13 和 `uv.lock` 中的依赖，
+只核对现有摘要，不更新基线。要复现其依赖环境，可在独立检出目录或环境中执行
+`uv sync --locked --python 3.13`，然后执行
+`uv run --no-sync --python 3.13 python scripts/ci_full.py --only baseline`。
+本地基线检查使用当前环境，因此调查摘要差异时需要记录环境版本。
+更新摘要必须说明科学计算变化的原因，不能用于绕过失败检查。
+
+可复用的 wheel 工作流构建并验证 Python 3.10–3.13 与 Linux x86_64/ARM64、
+macOS Intel/ARM64、Windows x86_64 的全部 20 种组合。
+只有所有必需 job（包括 wheel 检查）成功，`ci-success` 汇总检查才成功。
+新工作流在 GitHub 上运行后，应将它设为 `main` 的必需状态检查；
+修改 YAML 本身不会配置分支保护。
+
+`wheels` 发布工作流复用完整 CI，对所选提交执行检查，然后上传同一批已经验证的
+wheel 产物，上传时不会重新构建。
+`v*` tag 必须与 `pyproject.toml` 和 `natal.__version__` 的版本一致
+（按标准版本规范化后比较）。手动运行默认 `dry_run: true`，选择 tag 时也一样。
+只有版本 tag 的 push，或显式设置 `dry_run: false` 的手动 tag 运行，才会发布；
+分支运行始终不会发布。
+PyPI 的可信发布需要配置为使用 `wheels.yml` 工作流及其 `pypi` 环境。
+本地通过不代表已验证 GitHub 托管 runner 或 PyPI 权限。
 
 ## 链接
 

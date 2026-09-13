@@ -542,10 +542,10 @@ def test_axis_combination_shapes_and_values(
     assert bp.male_only_by_sex_chrom.shape == (n_z,)
     assert len(bp.ztype_names) == n_z
     assert len(bp.gtype_names) == n_g
-    # Name directory: canonical "<genotype>:<slab>" strings, aligned
-    # with the draft directory.
+    # Name directory: canonical "<genotype>@<slab>" strings, aligned
+    # with the draft directory (CR-12: '@' separator).
     assert bp.ztype_names == tuple(cfg.ztype_names)
-    assert "A|A:default" in bp.ztype_names
+    assert "A|A@default" in bp.ztype_names
 
     # -- Params shapes --
     assert p.survival_rates.shape == (2, n_ages)
@@ -684,39 +684,41 @@ def test_discrete_population_rejects_two_age_overlapping_draft() -> None:
 
 
 def test_format_type_name_separator_and_roundtrip() -> None:
-    # Exact canonical form.
-    assert format_type_name("A|a", "wolb") == "A|a:wolb"
-    # The first ':' is an unambiguous separator for pattern-syntax
-    # genotypes (which never contain ':'), so both parts are recoverable.
-    genotype_part, sep, label_part = "A|a:wolb".rpartition(":")
-    assert (genotype_part, sep, label_part) == ("A|a", ":", "wolb")
+    # Exact canonical form (contract change, CR-12: the directory uses
+    # the pattern layer's own label qualifier '@' — the legacy
+    # "genotype:label" colon format has no compatible parsing).
+    assert format_type_name("A|a", "wolb") == "A|a@wolb"
+    # The LAST '@' is an unambiguous separator for pattern-syntax
+    # genotypes (which never contain '@'), so both parts are recoverable.
+    genotype_part, sep, label_part = "A|a@wolb".rpartition("@")
+    assert (genotype_part, sep, label_part) == ("A|a", "@", "wolb")
     # Works for real genotype entities (rendered via str).
     sp = _species("contracts_slice1_fmt")
     gt = sp.get_genotype_from_str("A|B")
-    assert format_type_name(gt, "wolb") == "A|B:wolb"
+    assert format_type_name(gt, "wolb") == "A|B@wolb"
 
 
 def test_format_type_name_is_injective_without_colons() -> None:
     # Distinct (genotype, label) pairs never collide — the separator
-    # cannot be confused with pattern characters (| and @).
+    # cannot be confused with pattern characters (| and ;).
     entries: Sequence[tuple[str, str]] = [
         ("A|A", "wt"), ("A|a", "wt"), ("A|a", "wolb"), ("a|a", "wt|extra"),
     ]
     names = [format_type_name(g, lab) for g, lab in entries]
     assert len(set(names)) == len(names)
     for (genotype, label), name in zip(entries, names):
-        assert name == f"{genotype}:{label}"
+        assert name == f"{genotype}@{label}"
 
 
 def test_name_directory_helpers_render_exact_strings() -> None:
     # Exact canonical rendering (index order preserved).
     assert ztype_names_from_registry([("A|A", "wt"), ("A|a", "wolb")]) == (
-        "A|A:wt",
-        "A|a:wolb",
+        "A|A@wt",
+        "A|a@wolb",
     )
     assert gtype_names_from_registry([("A", "wt"), ("a", "wolb")]) == (
-        "A:wt",
-        "a:wolb",
+        "A@wt",
+        "a@wolb",
     )
     # Empty registries produce empty directories.
     assert ztype_names_from_registry([]) == ()
@@ -783,8 +785,8 @@ def test_build_time_compression_aligns_both_directories() -> None:
     ).config
     assert cfg.n_ztypes == len(cfg.ztype_names) == 1
     assert cfg.n_gtypes == len(cfg.gtype_names) == 1
-    assert cfg.ztype_names == ("A|A:default",)
-    assert cfg.gtype_names == ("A:default",)
+    assert cfg.ztype_names == ("A|A@default",)
+    assert cfg.gtype_names == ("A@default",)
     mat = materialize(cfg)
     assert len(mat.blueprint.ztype_names) == mat.blueprint.n_ztypes == 1
     assert len(mat.blueprint.gtype_names) == mat.blueprint.n_gtypes == 1

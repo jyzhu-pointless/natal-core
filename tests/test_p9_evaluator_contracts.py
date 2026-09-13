@@ -164,31 +164,6 @@ def test_genotype_object_entries_keep_legacy_acceptance() -> None:
     np.testing.assert_array_equal(by_object, by_pattern)
 
 
-def test_dashboard_inverted_age_window_does_not_select_every_age() -> None:
-    """An inverted panel age window must not silently become "all ages".
-
-    ``ObservationPanel._selector_from_panel_state`` builds
-    ``range(start, end + 1)``; for ``start > end`` the range is empty and
-    ``IndividualSelector`` treats an empty age tuple as a wildcard, so the
-    group silently counts the whole population.  Pre-P9 the same panel
-    state produced an empty group; the unified boundary raises for the
-    equivalent dict spelling.  Either raising or selecting nothing is
-    acceptable; compiling to the full-population mask is not.
-    """
-    from natal.frontend.ui.dashboard_helpers import ObservationPanel
-
-    registry = _registry("p9_eval_dashboard_inverted")
-    panel = object.__new__(ObservationPanel)
-    with pytest.raises(ValueError):
-        selector = panel._selector_from_panel_state(  # pyright: ignore[reportPrivateUsage]  # migrated UI seam under review
-            {"genotype": None, "sex": "both", "age_start": 2, "age_end": 1}
-        )
-        ObservationFilter(registry).build_mask_from_selectors(
-            n_sexes=2, n_ages=3, n_ztypes=registry.n_ztypes,
-            selectors=(selector,), collapse_age=False,
-        )
-
-
 # ═════════════════════════════════════════════════════════════════════════════
 # Negative contracts: interfaces retired by P9
 # ═════════════════════════════════════════════════════════════════════════════
@@ -423,128 +398,6 @@ def test_observation_without_selectors_cannot_rebuild_mask() -> None:
         detached.build_mask(2, 3, registry.n_ztypes)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Dashboard migration: panel state → unified selectors
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-class _FakeUI:
-    """Minimal stand-in for ``nicegui.ui`` and its element containers."""
-
-    def __init__(self) -> None:
-        self.labels: list[str] = []
-        self.cleared = 0
-
-    def __getattr__(self, _name: str) -> _FakeUI:
-        return self
-
-    def __call__(self, *args: object, **kwargs: object) -> _FakeUI:
-        if args and isinstance(args[0], str):
-            self.labels.append(args[0])
-        return self
-
-    def __enter__(self) -> _FakeUI:
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        return None
-
-    def clear(self) -> None:
-        self.cleared += 1
-
-
-def test_dashboard_panel_patterns_or_combine_like_the_legacy_dict() -> None:
-    """Two panel genotype patterns with one sex/age window ≡ legacy dict.
-
-    The panel builds one selector per pattern and unions them; the result
-    must equal the legacy ``{"genotype": [p1, p2], "sex": ..., "age": (a, b)}``
-    spelling compiled through the boundary, so dashboard results are
-    unchanged for valid panel state.
-    """
-    from natal.frontend.ui.dashboard_helpers import ObservationPanel
-
-    registry = _registry("p9_eval_dashboard_merge")
-    panel = object.__new__(ObservationPanel)
-    selector = panel._selector_from_panel_state(  # pyright: ignore[reportPrivateUsage]  # migrated UI seam under review
-        {"genotype": ["WT|WT", "A|A"], "sex": "female", "age_start": 1, "age_end": 2}
-    )
-    assert selector.n_atoms == 2
-    panel_mask = ObservationFilter(registry).build_mask_from_selectors(
-        n_sexes=2, n_ages=3, n_ztypes=registry.n_ztypes,
-        selectors=(selector,), collapse_age=False,
-    )
-    legacy_mask = _mask(
-        registry,
-        {"g": {"genotype": ["WT|WT", "A|A"], "sex": "female", "age": (1, 2)}},
-    )
-    np.testing.assert_array_equal(panel_mask, legacy_mask)
-    assert panel_mask[0, int(Sex.FEMALE), 1:3].sum() == 2 * 2
-    assert not panel_mask[0, int(Sex.MALE)].any()
-
-
-def test_dashboard_apply_compiles_panel_groups_into_an_observation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``ObservationPanel._apply`` stores a selector-compiled observation.
-
-    The migrated apply path must produce ``group_{i}`` labels and a mask
-    identical to the legacy dict spelling for the same panel state, and
-    must render an error label (not raise) when a group matches nothing.
-    """
-    from natal.frontend.ui import dashboard_helpers
-
-    registry = _registry("p9_eval_dashboard_apply")
-    fake_ui = _FakeUI()
-    rendered: list[tuple[Observation, object]] = []
-    monkeypatch.setattr(dashboard_helpers, "ui", fake_ui)
-
-    def _record_render(obs: Observation, state: object) -> None:
-        # The real renderer projects the state, which compiles the lazily
-        # built mask; mirror that so compile-time errors surface in _apply.
-        obs.build_mask(2, 3, registry.n_ztypes)
-        rendered.append((obs, state))
-
-    monkeypatch.setattr(dashboard_helpers, "render_observation_results", _record_render)
-
-    panel = object.__new__(dashboard_helpers.ObservationPanel)
-    panel._results_container = fake_ui  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]  # test double for the NiceGUI column
-    panel._collapse_age = None  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    panel._get_registry = lambda: registry  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    panel._get_state = lambda: "state-token"  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    panel._observation = None  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    panel._group_specs = [  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-        {"genotype": ["A|A"], "sex": "male"},
-        {"genotype": None, "sex": "both", "age_start": 0, "age_end": 1},
-    ]
-
-    panel._apply()  # pyright: ignore[reportPrivateUsage]
-
-    observation = panel._observation  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    assert observation is not None
-    assert observation.labels == ("group_0", "group_1")
-    assert rendered and rendered[0][0] is observation and rendered[0][1] == "state-token"
-    legacy = ObservationFilter(registry).build_filter(
-        groups={
-            "group_0": {"genotype": ["A|A"], "sex": "male"},
-            "group_1": {"age": (0, 1)},
-        },
-        n_sexes=2, n_ages=3, n_ztypes=registry.n_ztypes,
-    )
-    np.testing.assert_array_equal(
-        observation.build_mask(2, 3, registry.n_ztypes),
-        legacy.build_mask(2, 3, registry.n_ztypes),
-    )
-
-    # A no-match group is reported as an error label, never as an exception.
-    panel._group_specs = [{"genotype": ["A|A|A"], "sex": "both"}]  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    panel._apply()  # pyright: ignore[reportPrivateUsage]
-    assert any(label.startswith("Error:") for label in fake_ui.labels)
-
-    panel._group_specs = []  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    panel._apply()  # pyright: ignore[reportPrivateUsage]
-    assert "No observation groups defined." in fake_ui.labels
-
-
 def test_blueprint_view_stays_read_only() -> None:
     """The dataclass conversion keeps ``BlueprintView`` immutable.
 
@@ -616,46 +469,6 @@ def test_bare_genotype_index_zero_selects_genotype_zero(zero: Any) -> None:
     assert sorted(int(z) for z in np.nonzero(bare[0, 0, 0, :])[0]) == [0]
 
 
-def test_dashboard_apply_reports_inverted_window_as_error_label(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An inverted panel window must surface through the panel's error label.
-
-    ``_selector_from_panel_state`` now raises ``ValueError`` for
-    ``age_start > age_end`` (round-1 repair), but ``_apply`` builds the
-    selector mapping *before* its ``try`` block, so the exception escapes
-    the NiceGUI event handler instead of rendering ``"Error: …"`` like every
-    other group failure.
-    """
-    from natal.frontend.ui import dashboard_helpers
-
-    registry = _registry("p9_eval_r2_dashboard")
-    fake_ui = _FakeUI()
-    monkeypatch.setattr(dashboard_helpers, "ui", fake_ui)
-    monkeypatch.setattr(
-        dashboard_helpers,
-        "render_observation_results",
-        lambda obs, state: obs.build_mask(2, 3, registry.n_ztypes),
-    )
-    panel = object.__new__(dashboard_helpers.ObservationPanel)
-    panel._results_container = fake_ui  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]  # test double for the NiceGUI column
-    panel._collapse_age = None  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    panel._get_registry = lambda: registry  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    panel._get_state = lambda: None  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    panel._observation = None  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-    panel._group_specs = [  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-        {"genotype": None, "sex": "both", "age_start": 2, "age_end": 1},
-    ]
-
-    panel._apply()  # pyright: ignore[reportPrivateUsage]  # must not raise
-
-    assert any(
-        label.startswith("Error:") and "selects no ages" in label
-        for label in fake_ui.labels
-    ), fake_ui.labels
-    assert panel._observation is None  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
-
-
 def test_webui_malformed_pattern_is_a_client_error() -> None:
     """A syntactically invalid genotype pattern is a 422, not a 500.
 
@@ -724,33 +537,3 @@ def test_bool_inside_age_pair_is_rejected_before_integral_narrowing() -> None:
             )
     numeric = _mask(registry, {"g": {"age": (np.int64(1), np.int64(2))}})
     assert sorted(int(a) for a in np.nonzero(numeric[0, 0, :, 0])[0]) == [1, 2]
-
-
-def test_dashboard_wildcard_alternative_short_circuits_to_every_ztype() -> None:
-    """Adopted decision #3: a ``"*"`` alternative widens to every ZType.
-
-    Restores the legacy compiler's short-circuit for a mixed panel list
-    such as ``["WT|WT", "*"]`` instead of silently dropping the ``"*"``
-    and narrowing to the remaining pattern.
-    """
-    from natal.frontend.ui.dashboard_helpers import ObservationPanel
-
-    registry = _registry("p9_eval_r2_dashboard_star")
-    panel = object.__new__(ObservationPanel)
-    mixed = panel._selector_from_panel_state(  # pyright: ignore[reportPrivateUsage]  # migrated UI seam under review
-        {"genotype": ["WT|WT", "*"], "sex": "female"}
-    )
-    mask = ObservationFilter(registry).build_mask_from_selectors(
-        n_sexes=2, n_ages=3, n_ztypes=registry.n_ztypes,
-        selectors=(mixed,), collapse_age=False,
-    )
-    assert mask[0, int(Sex.FEMALE)].all()
-    assert not mask[0, int(Sex.MALE)].any()
-    only = panel._selector_from_panel_state(  # pyright: ignore[reportPrivateUsage]
-        {"genotype": ["WT|WT"], "sex": "female"}
-    )
-    narrow = ObservationFilter(registry).build_mask_from_selectors(
-        n_sexes=2, n_ages=3, n_ztypes=registry.n_ztypes,
-        selectors=(only,), collapse_age=False,
-    )
-    assert narrow[0, int(Sex.FEMALE)].sum() < mask[0, int(Sex.FEMALE)].sum()

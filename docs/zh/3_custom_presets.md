@@ -2,6 +2,62 @@
 
 本部分将指导你从零开始设计、实现、验证和发布自定义遗传预设（Genetic Preset）。
 
+## 四类转换规则
+
+所有规则构造函数均使用关键字参数。`rate` 必填，必须有限且在 `[0, 1]` 内；`filters=None` 表示不限制，`name=None` 是可选展示名称。
+
+| 规则 | 必填字段 | 可选字段 |
+|---|---|---|
+| `GameteGtypeConversionRule` | `to`、`rate` | `filters`、`name` |
+| `ZygoteZtypeConversionRule` | `to`、`rate` | `filters`、`name` |
+| `GameteAlleleConversionRule` | `from_allele`、`to_allele`、`rate` | `filters`、`name` |
+| `ZygoteAlleleConversionRule` | `from_allele`、`to_allele`、`rate` | `filters`、`name`、`side="both"` |
+
+整体转换的 `to` 字符串格式为 `[genotype 或 *]@[label 或 *]`，配子侧为单倍体基因型。两部分必须显式给出。整部分 `*` 保留对应输入，其余目标部分必须精确，不支持内部局部通配符、集合或无序目标候选。
+
+| 合子目标 | 动作 |
+|---|---|
+| `A\|B@I` | 联合替换 genotype 和 slab |
+| `*@I` | 只替换 slab，保留 genotype |
+| `A\|B@*` | 只替换 genotype，保留 slab |
+| `*@*` | 恒等转换 |
+
+整体规则表示一次概率事件：以 0.4 概率将 `A@S` 变为 `B@I`，得到 60% `A@S` 和 40% `B@I`，并非两部分分别独立转换。独立变化应声明两条规则，筛选条件需覆盖相关分支。
+
+Allele 规则的源和目标均为 gene 名字符串。Gene 名在物种内唯一，因此不需要 `locus` 参数；目标必须属于源所在的位点。Allele 规则保留标签。合子 `side` 可为 `maternal`、`paternal` 或 `both`，每个适用副本独立以 `rate` 转换。`side="both"`、rate 为 0.4 时，有序 `A|A` 输入产生 36% `A|A`、24% `B|A`、24% `A|B` 和 16% `B|B`。
+
+RuleSet 按声明顺序执行，前序规则产生的分支继续进入后续规则，不设数字优先级，也不在首次匹配后停止。合法状态没有源等位基因时保持原样；未知等位基因、跨位点目标和非法目标均报错。五个作用域键参见[filters](genotype_filter.md)。
+
+同一配子或合子修饰器管线注册多个 RuleSet 时，各规则集按注册顺序接收前一步结果。重新构建或刷新模型时，整条管线从未修饰的物种基线重新开始，不在上一次编译结果上重复叠加规则。
+
+以下声明可独立运行；编译需要物种具有对应等位基因和标签。
+
+```python
+from natal import (
+    GameteGtypeConversionRule, ZygoteZtypeConversionRule,
+    GameteAlleleConversionRule, ZygoteAlleleConversionRule,
+)
+
+whole_gamete = GameteGtypeConversionRule(
+    filters={"current": "A@default"}, to="B@I", rate=0.4,
+)
+whole_zygote = ZygoteZtypeConversionRule(
+    filters={"maternal": "*@I"}, to="*@I", rate=0.9,
+)
+gamete_allele = GameteAlleleConversionRule(
+    from_allele="A", to_allele="B", rate=0.4,
+    filters={"parent_sex": "female"},
+)
+zygote_allele = ZygoteAlleleConversionRule(
+    from_allele="A", to_allele="B", rate=0.4, side="both",
+    filters={"current": "*@I"},
+)
+```
+
+通过 `add_rule(rule)` 追加声明。`GameteConversionRuleSet.add_gtype_convert()`、`ZygoteConversionRuleSet.add_ztype_convert()` 和两阶段各自的 `add_allele_convert()` 完整暴露对应构造字段。
+
+新 API 明确不兼容旧接口。原标签专用类和规则别名已移除，改用上述整体规则表达标签转换。不支持旧规则参数、对象／callable 输入和冒号标签格式。标签使用 `@`，既有无序筛选语法 `::` 保持原义。尤其是原来成功后联合改变标签的等位基因转换，应迁移为整体联合转换，不能拆成两个独立事件。
+
 ## 1. 从等位基因转换规则开始
 
 `GeneticPreset` 的设计过程始于遗传机制的清晰表达。对多数驱动系统而言，这一步通常体现在**等位基因转换规则**的制定。
@@ -58,21 +114,19 @@ ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
 
 #### 使用 ZygoteConversionRuleSet
 
+以下两个片段假定已有种群 `pop`，其物种在同一位点声明 W 和 D。
+
 ```python
 from natal.frontend.modifiers import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
 # 在受精卵中，只要A位点含有D等位基因，就转换W->D
-def has_d_at_a(genotype) -> bool:
-    # 伪代码，实际取决于你的Genotype结构
-    return "D" in str(genotype)
-
 ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.9,
-    genotype_filter=has_d_at_a,
+    filters={"current": "*::D"},
 )
 
 zygote_mod = ruleset.to_zygote_modifier(pop)
@@ -86,14 +140,12 @@ pop.add_zygote_modifier(zygote_mod, name="zygote_repair")
 ```python
 # 配子阶段：W -> D（偏向）
 gamete_ruleset = GameteConversionRuleSet("gamete_drive")
-gamete_ruleset.add_allele_convert("W", "D", rate=0.99)
+gamete_ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.99)
 
 # 受精卵阶段：等位基因转换（确保纯和）
 zygote_ruleset = ZygoteConversionRuleSet("zygote_copy")
-zygote_ruleset.add_allele_convert(
-    "W", "D",
-    rate=0.95,
-    genotype_filter=lambda g: "D" in str(g)
+zygote_ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.95,
+    filters={"current": "*::D"}
 )
 
 pop.add_gamete_modifier(gamete_ruleset.to_gamete_modifier(pop))
@@ -164,7 +216,7 @@ class PointMutation(GeneticPreset):
 
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("PointMutation")
-        ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Mutant", rate=self.mutation_rate)
         return ruleset.to_gamete_modifier(host)
 
     def zygote_modifier(self, host):
@@ -193,9 +245,9 @@ class BidirectionalMutation(GeneticPreset):
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 
         # A → B (正向突变)
-        ruleset.add_allele_convert("A", "B", rate=self.forward_rate)
+        ruleset.add_allele_convert(from_allele="A", to_allele="B", rate=self.forward_rate)
         # B → A (回复突变)
-        ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
+        ruleset.add_allele_convert(from_allele="B", to_allele="A", rate=self.backward_rate)
 
         return ruleset.to_gamete_modifier(host)
 
@@ -203,90 +255,85 @@ class BidirectionalMutation(GeneticPreset):
         return None
 ```
 
-## 2. 用 genotype_filter 控制规则生效范围
+## 2. 用 filters 控制规则生效范围
 
-在完成转换规则定义后，`genotype_filter` 用于解决一个关键问题：**同一条转换规则通常不应对所有基因型都生效**。
+`filters` 是作用域名称到既有类型模式字符串的映射，不接受函数或已解析的 Pattern 对象。直接传入原始模式字符串，由规则编译器结合宿主的物种和 registry 解析。
 
-`genotype_filter` 将模式匹配的结果应用到规则作用范围中，实现规则的精准控制。
+### 支持的键
 
-### 理解 genotype_filter
+两种配子规则共用一组键，两种合子规则共用另一组。
 
-`genotype_filter` 是一个函数，接受 `Genotype` 作为输入，返回 `True` 或 `False`：
+| 键 | 配子规则 | 合子规则 |
+|---|---|---|
+| `current` | 进入当前规则的配子 gtype | 进入当前规则的合子分支 ztype |
+| `parent` | 产生配子的亲本 ztype | 不支持 |
+| `parent_sex` | `female`、`male` 或 `both` | 不支持 |
+| `maternal` | 不支持 | 参与受精的母源配子 gtype |
+| `paternal` | 不支持 | 参与受精的父源配子 gtype |
 
-- 返回 `True`：规则对该基因型生效
-- 返回 `False`：规则对该基因型不生效
+gtype 是 `haploid_genotype@glab`，ztype 是 `genotype@slab`。多个键取 AND。省略某个键、`filters=None` 或空映射表示没有相应限制。未知键、阶段不支持的键、非法模式和未知标签均报错，不会静默解释为未匹配。
 
-```python
-def my_filter(genotype):
-    return True  # 或 False
-```
+每条规则的 `current` 都检查前序规则处理后的分支状态。亲本和参与受精的配子信息在对应阶段中保持固定。不另设 `when` 参数，也不引入新的条件表达式语言。
 
-### 核心示例：只在 W::D 杂合子中发生 W->D
+### 亲本与当前状态条件
+
+以下声明可独立运行。编译时需要物种在同一位点声明 W 和 D。
 
 ```python
 from natal.frontend.modifiers import GameteConversionRuleSet
-
-
-def is_wd_heterozygote(genotype) -> bool:
-    name = str(genotype)
-    return name in {"W|D", "D|W"}
-
 
 ruleset = GameteConversionRuleSet("homing_drive")
 ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.5,
-    genotype_filter=is_wd_heterozygote,
+    filters={"parent": "W::D", "parent_sex": "female"},
 )
 ```
 
-这样就把机制作用范围明确地定义出来了。
+`W::D` 选择任一相位的杂合亲本。在这个单个位点的例子中，`*::D` 则选择任意携带 D 的亲本。多位点模型应提供适用的完整模式，不要在基因型名称上做子串包含判断。
 
-### 常见过滤模式
-
-- **携带某等位基因**：适合"只要携带 drive 就触发"的场景。
-- **指定杂合/纯合**：适合"仅在杂合子切割"或"仅在纯合子生效"的场景。
-- **组合逻辑**：可把多个过滤器组合成与/或/非逻辑，保持规则可读。
-
-### 与模式匹配语法联动
-
-当规则条件复杂时，建议直接复用模式匹配语法（见 [基因型模式匹配](2_genotype_patterns.md)），而不是手写字符串包含判断。
+合子阶段若要检查后代自身，应使用 `current`：
 
 ```python
-def build_filter_from_pattern(species, pattern: str):
-    return species.parse_genotype_pattern(pattern)
+from natal.frontend.modifiers import ZygoteConversionRuleSet
 
-
-ruleset.add_allele_convert(
+zygote_rules = ZygoteConversionRuleSet("zygote_copy")
+zygote_rules.add_allele_convert(
     from_allele="W",
     to_allele="D",
-    rate=0.5,
-    genotype_filter=build_filter_from_pattern(
-        population.species,
-        "A1/B1|A2/B2; C1/D1|C2/D2",
-    ),
+    rate=0.9,
+    filters={"current": "*::D"},
 )
 ```
 
-这样做的好处：
+### 标签与固定来源
 
-1. 语义统一：和 Observation 章节中的 pattern 展开规则一致
-2. 可维护：pattern 可直接放进实验配置文件
-3. 可测试：可以独立验证 pattern 命中集合
+裸遗传组成模式不限制标签。`*@infected` 只限制标签，`@default` 明确指定默认标签。输出目录与模式均使用 `@`，不支持旧冒号标签格式。既有无序配对分隔符 `::` 保持原义。
 
-### 设计过滤器的实践建议
-
-1. 过滤器应当"单一职责"
-2. 先写最简单可读版本，再做性能优化
-3. 对复杂过滤器做单元测试，避免误筛选
-4. 在实验日志里记录过滤器名称和语义
-
-### 与模式匹配结合（推荐做法）
-
-当规则作用范围复杂时，建议使用物种提供的模式解析能力生成 `genotype_filter`，避免使用脆弱的字符串判断。
+以下声明保留后代基因型：当母源配子带 infected 标签时，默认标签的后代以 0.9 概率获得 infected slab。宿主需要在配子和体细胞标签目录中分别声明相应标签。
 
 ```python
+from natal.frontend.modifiers import ZygoteConversionRuleSet
+
+infection = ZygoteConversionRuleSet("maternal_transmission")
+infection.add_ztype_convert(
+    filters={"current": "*@default", "maternal": "*@infected"},
+    to="*@infected",
+    rate=0.9,
+)
+```
+
+`maternal` 和 `paternal` 指配子，不是亲本的二倍体基因型或体细胞标签。
+
+### 在预设中复用模式
+
+在配置中保存字符串并直接传入。以下类定义可运行；使用时要求物种在同一位点具有 WT 和 Drive，并提供适用于该物种的亲本模式。
+
+```python
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet
+
 class PatternBasedPreset(GeneticPreset):
     def __init__(self, pattern: str, conversion_rate: float = 0.95):
         super().__init__(name="PatternBasedPreset")
@@ -294,16 +341,12 @@ class PatternBasedPreset(GeneticPreset):
         self.conversion_rate = conversion_rate
 
     def gamete_modifier(self, host):
-        from natal.frontend.modifiers import GameteConversionRuleSet
-
         ruleset = GameteConversionRuleSet("PatternBased")
-        pattern_filter = host.species.parse_genotype_pattern(self.pattern)
-
         ruleset.add_allele_convert(
             from_allele="WT",
             to_allele="Drive",
             rate=self.conversion_rate,
-            genotype_filter=pattern_filter,
+            filters={"parent": self.pattern},
         )
         return ruleset.to_gamete_modifier(host)
 
@@ -311,59 +354,9 @@ class PatternBasedPreset(GeneticPreset):
         return None
 ```
 
-实践建议：
+表达依赖遗传背景的突变时，将背景要求写入亲本模式，将源等位基因写入 `from_allele`。若统计范围相同，可在观察分组中复用同一个类型模式。亲本条件与当前后代条件检查的是不同对象，即使字符串相同也不能混淆。
 
-1. 在配置文件中维护 pattern 字符串
-2. Preset 内部负责编译 pattern
-3. Observation 分组也使用同一 pattern 或由同一 pattern 展开，确保统计口径与规则口径一致
-
-### 条件突变（基因型依赖）
-
-```python
-class ConditionalMutation(GeneticPreset):
-    """条件突变 - 只在特定基因型背景下发生"""
-
-    def __init__(self, target_allele: str = "B", required_background: str = "A"):
-        super().__init__(name="ConditionalMutation")
-        self.target_allele = target_allele
-        self.required_background = required_background
-
-    def gamete_modifier(self, host):
-        from natal.frontend.modifiers import GameteConversionRuleSet
-
-        ruleset = GameteConversionRuleSet("ConditionalMutation")
-
-        # 只在携带背景等位基因时才发生突变
-        ruleset.add_allele_convert(
-            from_allele=self.target_allele,
-            to_allele=f"{self.target_allele}_mutant",
-            rate=1e-4,
-            genotype_filter=lambda gt: self.required_background in str(gt)
-        )
-
-        return ruleset.to_gamete_modifier(host)
-
-    def zygote_modifier(self, host):
-        return None
-```
-
-### 与 Observation 保持统计口径一致
-
-推荐把同一个 pattern 同时用于：
-
-1. Preset 的 `genotype_filter`（决定谁会被规则影响）
-2. Observation 的 `groups["genotype"]`（决定统计谁）
-
-若两边使用不同定义，常见症状是"规则看起来生效了，但观测指标不动"或"观测变化与机制预期不一致"。
-
-### 调试方法
-
-当过滤器效果不符合预期时，可以：
-
-1. 打印过滤器命中结果
-2. 检查 pattern 编译是否正确
-3. 验证基因型字符串表示
-4. 对比预期和实际的基因型集合
+目标与概率语义参见[转换规则](allele_conversion_rules.md)；完整构建示例参见[预设验证](preset_encapsulation_and_validation.md)。
 
 ## 3. 封装、验证与发布前检查
 
@@ -408,15 +401,11 @@ class DrivePreset(GeneticPreset):
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("drive_rules")
 
-        def is_wd_heterozygote(genotype) -> bool:
-            name = str(genotype)
-            return name in {"W|D", "D|W"}
-
         ruleset.add_allele_convert(
             from_allele="W",
             to_allele="D",
             rate=self.conversion_rate,
-            genotype_filter=is_wd_heterozygote,
+            filters={"parent": "W::D"},
         )
 
         return ruleset.to_gamete_modifier(host)
@@ -450,7 +439,7 @@ pop = (
 在做大规模实验前，至少完成以下检查：
 
 1. 机制检查：转换方向和目标等位基因是否正确
-2. 过滤检查：`genotype_filter` 命中范围是否符合预期
+2. 过滤检查：`filters` 命中范围是否符合预期
 3. 质量守恒检查：频率归一化是否成立
 4. 对照检查：与无 Preset 的 baseline 对比趋势是否合理
 5. 稳定性检查：随机性模型（`stochastic=True`）下重复运行，结论是否稳健（当前没有公开的随机种子 API）
@@ -482,12 +471,12 @@ class ComplexDrive(GeneticPreset):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # 阶段1: 驱动转换 (WT → Drive)
-        ruleset.add_allele_convert("WT", "Drive", rate=0.95,
-                           genotype_filter=lambda gt: "Drive" in str(gt))
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Drive", rate=0.95,
+                           filters={"parent": "*::Drive"})
 
         # 阶段2: 抗性形成 (剩余WT → Resistance)
-        ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
-                           genotype_filter=lambda gt: "Drive" in str(gt))
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Resistance", rate=0.05,
+                           filters={"parent": "*::Drive"})
 
         return ruleset.to_gamete_modifier(host)
 
@@ -499,7 +488,7 @@ class ComplexDrive(GeneticPreset):
             from_allele="WT",
             to_allele="Resistance",
             rate=0.02,
-            maternal_glab="cas9"  # 需要母源Cas9沉积
+            filters={"maternal": "*@cas9"}  # 需要母源Cas9沉积
         )
 
         return ruleset.to_zygote_modifier(host)
@@ -561,7 +550,7 @@ class DebugPreset(GeneticPreset):
 🎉 恭喜！你已经完成了"设计自己的 Preset"的完整主线：
 
 1. 规则定义（Gamete 与 Zygote 转换
-2. 规则生效范围精细化（genotype_filter）
+2. 规则生效范围精细化（filters）
 3. Preset 工程化、验证与发布
 
 现在你已经掌握了从零开始设计、实现、验证和发布自定义 Preset 的完整流程。

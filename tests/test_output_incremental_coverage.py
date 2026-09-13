@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 
 import natal as nt
-import natal.frontend.ui.spatial_dashboard as spatial_dashboard_module
 from natal.frontend.output import (
     population_observation_history_to_readable_dict,
     spatial_population_history_to_readable_dict,
@@ -18,7 +17,6 @@ from natal.frontend.output import (
 )
 from natal.frontend.output.observation import ObservationFilter
 from natal.frontend.patterns import IndividualSelector
-from natal.frontend.ui.spatial_dashboard import SpatialDashboard
 
 
 def _species(name: str) -> nt.Species:
@@ -558,59 +556,3 @@ def test_spatial_runtime_batch_updates_assign_exact_per_deme_values() -> None:
     # The ecology column mirrors the per-deme values.
     assert population.params.carrying_capacity.tolist() == [111.0, 222.0]
 
-class _FakeUI:
-    """Capture spatial dashboard downloads without starting NiceGUI."""
-
-    def __init__(self) -> None:
-        """Initialize empty download and notification logs."""
-        self.downloads: list[bytes] = []
-        self.notifications: list[str] = []
-
-    def download(self, payload: bytes, *, filename: str, media_type: str) -> None:
-        """Capture one exact JSON download.
-
-        Args:
-            payload: Encoded JSON bytes.
-            filename: Requested download filename.
-            media_type: Requested MIME type.
-        """
-        assert filename.endswith(".json")
-        assert media_type == "application/json"
-        self.downloads.append(payload)
-
-    def notify(self, message: str, **_kwargs: str) -> None:
-        """Capture an unexpected UI notification.
-
-        Args:
-            message: Notification text.
-            **_kwargs: NiceGUI notification options.
-        """
-        self.notifications.append(message)
-
-
-def test_spatial_dashboard_history_export_uses_public_translation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Dashboard history export emits the exact typed spatial snapshot.
-
-    Args:
-        monkeypatch: Fixture replacing the NiceGUI boundary.
-    """
-    population = _build_spatial("spatial_dashboard_export", history_mode="raw")
-    population.record_snapshot()
-    dashboard = object.__new__(SpatialDashboard)
-    dashboard.pop = population
-    fake_ui = _FakeUI()
-    monkeypatch.setattr(spatial_dashboard_module, "ui", fake_ui)
-
-    dashboard._do_export_logic(  # type: ignore[reportPrivateUsage]  # UI action seam
-        include_config=False,
-        include_history=True,
-        include_hooks=False,
-    )
-
-    payload = json.loads(fake_ui.downloads[0].decode("utf-8"))
-    assert fake_ui.notifications == []
-    assert payload["population_name"] == population.name
-    assert payload["history"]["n_snapshots"] == 1
-    assert payload["history"]["snapshots"][0]["tick"] == 0

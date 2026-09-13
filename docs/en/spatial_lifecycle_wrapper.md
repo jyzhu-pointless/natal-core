@@ -64,7 +64,7 @@ CSR (`indptr` / `dest_idx` / `weights` / `stay_after_send`); at runtime it is ju
   session; out-of-band surfaces (`trigger_event`, finish events) invoke them
   directly;
 - Per-deme `priority` only applies within a deme; no global order across demes;
-- `@hook(..., deme=[0, 2])` pins a hook to specific demes (default `"*"`).
+- `.hooks(..., deme=[0, 2])` pins a hook to specific demes (default `"*"`).
 
 ## User API
 

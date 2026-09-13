@@ -524,7 +524,7 @@ class TestGenotypeProduceGametes:
         assert sum(gametes.values()) == pytest.approx(1.0)
 
     def test_gamete_cache(self):
-        """Caching: same object on second call, new object after cache clear."""
+        """No result cache: each call returns a fresh, equal mapping."""
         sp = nt.Species.from_dict(
             name="PG_cache",
             structure={"chr1": {"loc": ["WT", "Dr"]}},
@@ -540,10 +540,8 @@ class TestGenotypeProduceGametes:
         gt = Genotype(species=sp, maternal=wt_hg, paternal=dr_hg)
         first = gt.produce_gametes()
         second = gt.produce_gametes()
-        assert first is second
-        gt._gamete_cache = None
-        third = gt.produce_gametes()
-        assert first is not third
+        assert first is not second  # no shared mutable cache object
+        assert first == second  # identical Mendelian content
 
     def test_frequencies_sum_to_one(self):
         """All gamete frequency dicts sum to 1.0."""
@@ -608,10 +606,9 @@ class TestGenotypeProduceGametes:
         assert gametes[pat_hg] == 0.5
         assert sum(gametes.values()) == pytest.approx(1.0)
 
-    def test_returned_mapping_is_cache_and_probability_complete(self):
-        """Ownership: produce_gametes() returns the live cache dict itself
-        (documented design, no copy), and the sum-to-1 invariant holds on
-        that exact object, so every caller sees probability-complete data."""
+    def test_returned_mapping_is_probability_complete(self):
+        """The sum-to-1 invariant holds on every returned mapping, and
+        each call gets its own dict (no shared mutable cache object)."""
         sp = nt.Species.from_dict(
             name="PG_ownership_cache",
             structure={"chr1": {"locA": ["A1", "A2"], "locB": ["B1", "B2"]}},
@@ -631,16 +628,15 @@ class TestGenotypeProduceGametes:
         gt = Genotype(species=sp, maternal=mat_hg, paternal=pat_hg)
 
         gametes = gt.produce_gametes()
-        # The returned mapping IS the documented internal cache object.
-        assert gt._gamete_cache is gametes
-        # Probability completeness holds on that exact object.
         assert sum(gametes.values()) == pytest.approx(1.0)
-        assert gt.produce_gametes() is gametes
+        again = gt.produce_gametes()
+        assert again is not gametes
+        assert again == gametes
 
-    def test_rate_change_requires_manual_cache_clear(self):
+    def test_rate_change_is_visible_without_manual_invalidation(self):
         """State transition: recombination rates set AFTER the first
-        produce_gametes() call are ignored until ``_gamete_cache = None``
-        (documented Note), after which the new rate is honored exactly."""
+        produce_gametes() call are honored on the next call with no
+        manual cache clearing (the per-genotype cache was removed)."""
         sp = nt.Species.from_dict(
             name="PG_cache_staleness",
             structure={"chr1": {"locA": ["A1", "A2"], "locB": ["B1", "B2"]}},
@@ -661,20 +657,15 @@ class TestGenotypeProduceGametes:
         rec_1 = HaploidGenotype(species=sp, haplotypes=[rec_1_hap])
         gt = Genotype(species=sp, maternal=mat_hg, paternal=pat_hg)
 
-        # Step 1: cache computed at r=0.1 → recombinant at r/2 = 0.05.
+        # Step 1: computed at r=0.1 → recombinant at r/2 = 0.05.
         first = gt.produce_gametes()
         assert first[rec_1] == pytest.approx(0.05)
 
-        # Step 2: mutate the rate; documented behavior returns the stale cache.
+        # Step 2: mutate the rate; the next call reflects r=0.5 directly
+        # (quarter split), with no manual invalidation step.
         chrom.set_recombination(loc_a, loc_b, 0.5)
-        stale = gt.produce_gametes()
-        assert stale is first
-        assert stale[rec_1] == pytest.approx(0.05)
-
-        # Step 3: manual clear → fresh computation reflects r=0.5 (quarter split).
-        gt._gamete_cache = None
         fresh = gt.produce_gametes()
-        assert fresh is not stale
+        assert fresh is not first
         assert fresh[rec_1] == pytest.approx(0.25)
         assert sum(fresh.values()) == pytest.approx(1.0)
 

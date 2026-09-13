@@ -419,10 +419,18 @@ def test_record_history_observation_mode_matches_direct_observe() -> None:
     observation taken at the same tick, and the stored array must be
     read-only (mutation of the return value must not corrupt history).
     """
-    pop = _fixed_point_builder("FrozenObsHistory").with_observation(
+    pop = _fixed_point_builder("FrozenObsHistory").initial_state(
+        individual_count={
+            "female": {"WT|WT": 2, "WT|Dr": 3, "Dr|Dr": 5},
+            "male": {"WT|WT": 2, "WT|Dr": 3, "Dr|Dr": 5},
+        },
+    ).with_observation(
         groups={
             "wild": nt.IndividualSelector(ztype="WT|WT"),
-            "drive_carriers": nt.IndividualSelector(ztype="WT|Dr, Dr|Dr"),
+            "drive_carriers": (
+                nt.IndividualSelector(ztype="WT|Dr")
+                | nt.IndividualSelector(ztype="Dr|Dr")
+            ),
         },
         collapse_age=True,
     ).record_history(mode="observation").build()
@@ -432,6 +440,8 @@ def test_record_history_observation_mode_matches_direct_observe() -> None:
     assert pop.history.ticks == (0, 1, 2)
     values = pop.history.values
     assert values.shape == (3, 2, 2)
+    # Both heterozygotes (3) and drive homozygotes (5) contribute to the union.
+    np.testing.assert_array_equal(values[0], [[2.0, 2.0], [8.0, 8.0]])
     # Partition: wild + drive carriers equal the whole census per sex.
     np.testing.assert_allclose(values[-1].sum(axis=0), 10.0)
     # The recorded row at tick 2 equals a direct observation at tick 2.

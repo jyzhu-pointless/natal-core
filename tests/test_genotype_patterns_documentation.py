@@ -7,6 +7,7 @@
 import pytest
 import natal as nt
 from natal import GeneticPreset, GameteConversionRuleSet
+from natal.frontend.patterns.elements._base import PatternParseError
 
 
 class TestGenotypePatternsDocumentation:
@@ -74,60 +75,37 @@ class TestGenotypePatternsDocumentation:
         assert results[0] == hg1
 
     def test_parenthesis_syntax(self):
-        """测试小括号语法"""
-        # 小括号语法用于同一对染色体内部分隔
-        # 例如：(A1|A2);(B1::B2) 表示同一对染色体上A位点有序匹配，B位点无序匹配
-
-        # 测试单染色体物种的小括号语法
+        """Parentheses group loci; outer semicolons separate chromosome groups."""
         simple_sp = nt.Species.from_dict(
             name="SingleChromSpecies",
-            structure={
-                "chr1": {
-                    "A": ["A1", "A2"],
-                    "B": ["B1", "B2"]
-                }
-            }
+            structure={"chr1": {"A": ["A1", "A2"], "B": ["B1", "B2"]}},
+            unordered=False,
         )
+        parsed = simple_sp.parse_genotype_pattern("(A1|A2; B1::B2)")
+        assert parsed(simple_sp.get_genotype_from_str("A1/B1|A2/B2"))
+        assert parsed(simple_sp.get_genotype_from_str("A1/B2|A2/B1"))
+        assert not parsed(simple_sp.get_genotype_from_str("A2/B1|A1/B2"))
+        with pytest.raises(PatternParseError, match="more chromosome groups"):
+            simple_sp.parse_genotype_pattern("(A1|A2);(B1::B2)")
 
-        # 测试基本小括号语法 - 同一对染色体上的分隔
-        # 正确的小括号语法：同一对染色体上的不同位点分隔
-        pattern1 = "(A1|A2);(B1::B2)"
-        parsed1 = simple_sp.parse_genotype_pattern(pattern1)
-        assert parsed1 is not None
+        parsed_multi = self.sp.parse_genotype_pattern(
+            "(A1|A2; B1::B2); (C1|C2; D1::D2)"
+        )
+        genotype = self.sp.get_genotype_from_str("A1/B1|A2/B2; C1/D1|C2/D2")
+        assert parsed_multi(genotype)
+        with pytest.raises(PatternParseError, match="more chromosome groups"):
+            self.sp.parse_genotype_pattern("(A1|A2);(B1::B2);(C1|C2);(D1::D2)")
 
-        # 验证模式匹配功能
-        # 小括号语法表示同一对染色体上的分隔，所以应该匹配对应的基因型
-        gt1 = simple_sp.get_genotype_from_str("A1/B1|A2/B2")
+        # Sets remain supported inside a locus pair, with chromosome groups explicit.
+        complex_pattern = self.sp.parse_genotype_pattern(
+            "(A1|A2; {B1,B2}|{B1,B2}); (C1::C2; D1|D2)"
+        )
+        assert complex_pattern(genotype)
 
-        # 由于小括号语法可能有问题，我们先测试模式是否能正确解析
-        # 如果模式解析失败，说明小括号语法可能有问题
-
-        # 测试多染色体物种的小括号语法
-        # 每个小括号对应一个染色体
-        pattern2 = "(A1|A2);(B1::B2);(C1|C2);(D1::D2)"
-        parsed2 = self.sp.parse_genotype_pattern(pattern2)
-        assert parsed2 is not None
-
-        # 验证多染色体模式匹配
-        gt3 = self.sp.get_genotype_from_str("A1/B1|A2/B2; C1/D1|C2/D2")
-
-        # 测试复杂嵌套模式
-        pattern3 = "(A1/{B1,B2}|A2/{B1,B2});(C1::C2)"
-        parsed3 = self.sp.parse_genotype_pattern(pattern3)
-        assert parsed3 is not None
-
-        # 验证复杂模式匹配
-        # 由于小括号语法可能有问题，我们只测试模式解析，不测试具体匹配
-
-        # 测试简单的小括号语法 - 创建一个更简单的测试
-        # 测试小括号语法在单倍体模式中的使用
-        simple_hg_pattern = "(A1;B1)"
-        simple_hg_parsed = simple_sp.parse_haploid_genome_pattern(simple_hg_pattern)
-        assert simple_hg_parsed is not None
-
-        # 验证单倍体模式匹配
-        hg1 = simple_sp.get_haploid_genotype_from_str("A1/B1")
-        assert simple_hg_parsed(hg1) is True
+        # Preserve the original haploid parenthesis assertion.
+        haploid_pattern = simple_sp.parse_haploid_genome_pattern("(A1;B1)")
+        assert haploid_pattern is not None
+        assert haploid_pattern(simple_sp.get_haploid_genotype_from_str("A1/B1"))
 
     def test_observation_integration(self):
         """测试与 Observation 的集成"""

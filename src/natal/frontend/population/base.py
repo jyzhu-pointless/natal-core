@@ -152,9 +152,10 @@ class BasePopulation(ABC, Generic[T_State]):
             underlying tuple via identity.
     """
 
-    # Allowed hook events (subclasses may extend this list).
+    # Allowed hook events (subclasses may extend this list).  The catalog
+    # is shared by hook registration and manual triggers; unknown names are
+    # rejected instead of being silently ignored.
     ALLOWED_EVENTS = [
-        "initialization",
         "first",
         "early",
         "late",
@@ -263,7 +264,6 @@ class BasePopulation(ABC, Generic[T_State]):
         """
         self._species = species
         self._name = name
-        self._tick = 0
         # Deme index this population executes as: 0 for panmictic models,
         # the live deme index when a SpatialPopulation manages this object
         # as one of its demes.  Hooks read it via pop.deme_id, so the Rust
@@ -326,6 +326,13 @@ class BasePopulation(ABC, Generic[T_State]):
 
         # Re-entrancy guard flag.
         self._running = False
+
+        # Transient context: a ``finish`` event fired on an already-stopped
+        # lifecycle boundary (finish_simulation, a stopped run, the spatial
+        # container's stop path).  Only then does the event-scope fallback
+        # in ``is_finished`` answer true; a manually triggered ``finish``
+        # event is a rehearsal that leaves the population runnable.
+        self._lifecycle_finish_firing = False
 
         # Observation-based history recording.
         self._observation: Optional[Observation] = None
@@ -1729,7 +1736,16 @@ class BasePopulation(ABC, Generic[T_State]):
         Returns:
             int: ``RESULT_CONTINUE`` (0) to continue, ``RESULT_STOP`` (1)
             to stop.
+
+        Raises:
+            ValueError: If *event_name* is not in :attr:`ALLOWED_EVENTS`.
+                Validated before any session side effect.
         """
+        if event_name not in self.ALLOWED_EVENTS:
+            raise ValueError(
+                f"Unknown event '{event_name}'; allowed events: "
+                f"{self.ALLOWED_EVENTS}"
+            )
         native = getattr(self, "_runtime_parameter_writer", None)
         if native is None:
             native = getattr(self, "_rust_lifecycle_backend", None)
@@ -1875,14 +1891,19 @@ class BasePopulation(ABC, Generic[T_State]):
         holds its borrow), so the answer comes from the event scope: the
         ``finish`` event executes while the population is being locked,
         and finish hooks observe the finished population like they did
-        before the status moved into the session.
+        before the status moved into the session.  The event scope only
+        answers true when the ``finish`` event fires on an already-stopped
+        lifecycle boundary (``finish_simulation``, a stopped run, the
+        spatial container's stop path); a manually triggered ``finish``
+        event is a rehearsal that leaves the population runnable and
+        answers false, matching its post-event answer.
         """
         state = self._native_lifecycle_state()
         if state is not None:
             return state[0] == "Stopped"
         event = self._active_event
         if event is not None:
-            return event.event == "finish"
+            return event.event == "finish" and self._lifecycle_finish_firing
         return False
 
     @property
@@ -1937,7 +1958,11 @@ class BasePopulation(ABC, Generic[T_State]):
             backend = getattr(self, "_rust_lifecycle_backend", None)
         if backend is not None:
             backend.stop()
-        self.trigger_event("finish", deme_id=self._deme_id)
+        self._lifecycle_finish_firing = True
+        try:
+            self.trigger_event("finish", deme_id=self._deme_id)
+        finally:
+            self._lifecycle_finish_firing = False
 
     # ========================================================================
     # Allele frequency computation

@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import unittest
 import uuid
+from types import SimpleNamespace
 
 import numpy as np
 
 import natal as nt
+from natal.frontend.builder._registry_builder import build_registry
 from natal.frontend.genetics import Species
 from natal.frontend.presets import ToxinAntidoteDrive
+
+
+def _compile_host(population: nt.DiscreteGenerationPopulation) -> SimpleNamespace:
+    """Recipes consume complete unpublished axes, never a published population."""
+    registry = build_registry(population.species)
+    return SimpleNamespace(species=population.species, registry=registry, index_registry=registry, config=population.export_config())
 
 
 class TestToxinAntidoteDriveFitnessPatch(unittest.TestCase):
@@ -167,7 +175,7 @@ class TestToxinAntidoteDriveConversion(unittest.TestCase):
         )
         preset.bind_species(self.species)
 
-        modifier = preset.gamete_modifier(self.population)
+        modifier = preset.gamete_modifier(_compile_host(self.population))
         self.assertIsNotNone(modifier)
         if modifier is None:
             self.fail("Expected non-empty gamete modifier")
@@ -202,7 +210,7 @@ class TestToxinAntidoteDriveConversion(unittest.TestCase):
         )
         preset.bind_species(self.species)
 
-        modifier = preset.zygote_modifier(self.population)
+        modifier = preset.zygote_modifier(_compile_host(self.population))
         self.assertIsNotNone(modifier)
         if modifier is None:
             self.fail("Expected non-empty zygote modifier")
@@ -279,7 +287,7 @@ class TestToxinAntidoteDriveCrossLocusConversion(unittest.TestCase):
         )
         preset.bind_species(self.species)
 
-        modifier = preset.gamete_modifier(self.population)
+        modifier = preset.gamete_modifier(_compile_host(self.population))
         self.assertIsNotNone(modifier)
         if modifier is None:
             self.fail("Expected non-empty gamete modifier")
@@ -315,7 +323,7 @@ class TestToxinAntidoteDriveCrossLocusConversion(unittest.TestCase):
         )
         preset.bind_species(self.species)
 
-        modifier = preset.zygote_modifier(self.population)
+        modifier = preset.zygote_modifier(_compile_host(self.population))
         self.assertIsNotNone(modifier)
         if modifier is None:
             self.fail("Expected non-empty zygote modifier")
@@ -369,7 +377,7 @@ class TestToxinAntidoteDriveCrossChromosomeConversion(unittest.TestCase):
         )
         preset.bind_species(self.species)
 
-        modifier = preset.gamete_modifier(self.population)
+        modifier = preset.gamete_modifier(_compile_host(self.population))
         self.assertIsNotNone(modifier)
         if modifier is None:
             self.fail("Expected non-empty gamete modifier")
@@ -404,7 +412,7 @@ class TestToxinAntidoteDriveCrossChromosomeConversion(unittest.TestCase):
         )
         preset.bind_species(self.species)
 
-        modifier = preset.zygote_modifier(self.population)
+        modifier = preset.zygote_modifier(_compile_host(self.population))
         self.assertIsNotNone(modifier)
         if modifier is None:
             self.fail("Expected non-empty zygote modifier")

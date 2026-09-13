@@ -428,15 +428,15 @@ def test_name_directory_from_registry() -> None:
     gnames = gtype_names_from_registry(registry.index_to_gtype)
     assert len(names) == registry.n_ztypes > 0
     assert len(gnames) == registry.n_gtypes > 0
-    # Canonical rendering: "<genotype>:<slab>" with the genotype first.
-    assert names[0] == f"{registry.index_to_genotype[0]}:default"
+    # Canonical rendering: "<genotype>@<slab>" with the genotype first.
+    assert names[0] == f"{registry.index_to_genotype[0]}@default"
 
 
 def test_name_directory_exposes_canonical_strings() -> None:
     cfg = _age_config()
     bp = materialize(cfg).blueprint
     # "A|A" (wild-type genotype, default slab) must appear in the directory.
-    assert any(n.startswith("A|A:") for n in bp.ztype_names)
+    assert any(n.startswith("A|A@") for n in bp.ztype_names)
 
 
 def test_custom_slots_accept_the_documented_value_kinds() -> None:

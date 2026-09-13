@@ -355,19 +355,16 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `*hook_items` | `Callable` 或 `HookMap` | 钩子函数或钩子注册映射。 | 空 | 事件点（first / early / late / finish 等） | 直接传入函数（带有 `@hook` 修饰器）。 |
+| `*hook_items` | `HookOp` / `Op` 列表 / `Callable` | 声明式 Op（或其列表）、`@hook` 装饰的函数或单参数回调。 | 空 | 事件点（first / early / late / finish 等） | 声明式 Op 直接传入；事件由 `.hooks(..., event=...)` 或 Op 自带字段决定。 |
 
 **示例**：
 
 ```python
-@nt.hook(event="first", priority=0)
-def release_drive_carriers():
-    return [
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10")
-    ]
-
 # ...
-.hooks(release_drive_carriers)
+.hooks(
+    nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
+    event="first",
+)
 ```
 
 常见错误：
@@ -398,7 +395,7 @@ def release_drive_carriers():
 
 ### `setup(...)`
 
-参数与年龄结构模型一致：`name`、`stochastic`、`continuous_sampling`、`fixed_egg_count`、`species`，并新增 `backend`（`"auto"` / `"rust"` / `"python"`，默认 `"auto"`）。其中 `species` 是必填参数，用于定义种群的遗传结构。
+参数与年龄结构模型一致：`name`、`stochastic`、`continuous_sampling`、`fixed_egg_count`、`species`。其中 `species` 是必填参数，用于定义种群的遗传结构。
 
 ### `initial_state(...)`
 

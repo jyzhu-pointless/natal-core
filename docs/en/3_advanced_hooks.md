@@ -174,10 +174,8 @@ A single event may mix declarative and callback shapes. Within one event, both k
 from natal.frontend.hooks import hook, Op
 
 
-# declarative hook: periodic release
-@hook(event="first", priority=10)
-def release_hook():
-    return [Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 10 == 0")]
+# declarative hook: periodic release (the call assigns this Op its priority)
+release_op = Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 10 == 0")
 
 
 # selector-based hook
@@ -199,7 +197,8 @@ def custom_process_hook(pop):
 
 pop = (
     nt.AgeStructuredPopulation.setup(species=sp)
-    .hooks(release_hook, check_drive_threshold, custom_process_hook)
+    .hooks(release_op, check_drive_threshold, custom_process_hook,
+           event="first", priority=10)
     .build()
 )
 ```

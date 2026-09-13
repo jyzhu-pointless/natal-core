@@ -15,24 +15,18 @@ Hook timing includes:
 
 Among these, `finish` is a one-time event, while `first`, `early`, and `late` can be executed repeatedly across multiple ticks as needed.
 
+Hook registration and manual triggers (`pop.trigger_event(...)`) share this event catalog: unknown or misspelled event names raise a `ValueError` (the message includes the passed name and the allowed names) instead of being silently ignored. `initialization` is not a supported event; express initialization logic in the first tick of the `first` event (`when="tick == 1"`) or in the `finish` event.
+
 When selecting an event, it is recommended to first clarify at which specific time point the intervention occurs, as this can significantly impact the interpretation of results.
 
 ## Declarative Hooks
 
-For most users, it is recommended to use `@nt.hook` with `nt.Op.*`, registering in a chain on the population object:
+For most users, the recommended style is to pass `nt.Op.*` objects directly to `.hooks()` in the population build chain:
 
 ```python
 import natal as nt
 
 sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
-
-@nt.hook(event="first", priority=10)
-def periodic_release():
-    return [
-        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0"),
-        nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98),
-    ]
-
 
 pop = (
     nt.AgeStructuredPopulation
@@ -51,24 +45,29 @@ pop = (
         low_density_growth_rate=6.0,
         age_1_carrying_capacity=10000
     )
-    .hooks(periodic_release)
+    .hooks(
+        [
+            nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0"),
+            nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98),
+        ],
+        event="first",
+        priority=10,
+    )
     .build()
 )
 
 pop.run(n_steps=200, record_every=10)
 ```
 
-This approach is highly readable, easy to maintain, and makes it easier for teams to review the model logic.
+The `Op` objects themselves are the declaration: they are compiled into a CSR plan and injected at `build()` — no wrapper function needed. This approach is highly readable, easy to maintain, and makes it easier for teams to review the model logic.
 
-## Three Hook Authoring Shapes
+## Hook Authoring Shapes
 
-`@nt.hook` detects the shape from the function signature (at build-time compilation):
+- **Declarative**: pass `Op` objects (or a list of them) to `.hooks()`; compiled into a CSR plan at build time. This is the recommended style.
+- **Callback**: single parameter `def hook(pop: TickContext) -> int`, decorated with `@nt.hook` (a plain function also works, with the event given by `.hooks(..., event=...)`).
+- **Selector callback**: `@nt.hook(..., selectors={...})`; selector values are resolved at build time and injected on each call.
 
-| Shape | Signature | Notes |
-|-------|-----------|-------|
-| Declarative | No parameters, returns `List[HookOp]` | Called once at build time; the return value is compiled into a CSR plan |
-| Callback | Single parameter `def hook(pop: TickContext) -> int` | Called once per tick; reads and writes state and parameters through `TickContext` |
-| Selector callback | Single parameter + `selectors={...}` keyword args | Selector values are resolved at build time and injected on each call |
+The `@nt.hook` decorator detects the latter two shapes from the function signature (at build-time compilation). A zero-parameter function returning `List[HookOp]` is also recognized as declarative — it is called once at build time and its Op list enters the same compilation pipeline. When the ops' own event / priority are the defaults this behaves exactly like passing the ops directly; the decorator `priority` has the final say over the group.
 
 The legacy `(state, config, deme_id)` three-parameter signature is explicitly rejected (`TypeError` -- it is a leftover of the njit era with no migration channel). Callbacks return `0` (or `RESULT_CONTINUE`) to continue; a non-zero value (or `RESULT_STOP`) stops the simulation.
 
@@ -94,7 +93,7 @@ Common operations include:
 - `Op.set_param`: Schedule one ecology parameter on a tick plan (see below).
 - `Op.convert`: One-to-one probabilistic zygote-type conversion (see below).
 
-Think of them as "declarative transformations over the state tensor".
+Think of them as "declarative transformations over the state tensor". Every `Op` factory accepts `event` and `priority` keyword arguments: `event` is the op-level event (it wins over the call level), `priority` is the op-level priority (a call-level `priority` assignment overrides it).
 
 ### `Op.set_param`: code-free parameter scheduling
 
@@ -166,13 +165,13 @@ The advantage of declarative hooks: write the rule once with the same Op syntax,
 `when` controls when an operation is active. Common forms:
 
 - `tick == N`
-- `tick % N == 0`
+- `tick % N == 0` (`N` must be a positive integer literal; `N = 0` raises a `ValueError` at parse time)
 - `tick >= N`
 - `tick > N`
 - `tick <= N`
 - `tick < N`
 
-`and`, `or`, `not` and parentheses are supported.
+`N` supports only non-negative integer literals — no variable references or other expressions. `and`, `or`, `not` and parentheses are supported.
 
 Examples:
 
@@ -183,22 +182,16 @@ when="tick % 7 == 0 and not (tick == 14)"
 
 ## Registering Multiple Hooks
 
-`.hooks()` accepts multiple hook functions:
+`.hooks()` may be called several times in the chain, and each call accepts multiple items (ops, op lists, and callbacks can be mixed).
+
+`priority` is op-level data: the call-level `priority` assigns one shared priority to the ops of that
+declaration; packing ops into a list is itself the declaration that the group shares one priority (without a
+call-level value, the ops' own priorities must agree, otherwise `ValueError` at build time). Decorated functions are not reachable by the call-level `priority` and keep the decorator value.
+`event` resolves the other way around: an op-level `event` (e.g. `Op.set_param(..., event="late")`)
+wins over the call level, which wins over the decorator value.
 
 ```python
 import natal as nt
-
-@nt.hook(event="first", priority=10)
-def release_hook():
-    return [nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
-
-@nt.hook(event="late", priority=5)
-def culling_hook():
-    return [nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.95, when="tick > 50")]
-
-@nt.hook(event="late", priority=0)
-def stop_hook():
-    return [nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000)]
 
 pop = (
     nt.AgeStructuredPopulation
@@ -208,7 +201,18 @@ pop = (
         "female": {"WT|WT": 1000},
         "male": {"WT|WT": 1000}
     })
-    .hooks(release_hook, culling_hook, stop_hook)
+    .hooks(
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0"),
+        event="first", priority=10,
+    )
+    .hooks(
+        nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.95, when="tick > 50"),
+        event="late", priority=5,
+    )
+    .hooks(
+        nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000),
+        event="late",
+    )
     .build()
 )
 
@@ -225,7 +229,7 @@ The native Rust engine is the only execution backend, so hooks have a single exe
 - Single-parameter callbacks (`TickContext`) cross the Python<->Rust boundary at event boundaries; each invocation gets its own context wrapper, and its writes join that invocation's event transaction — committed on success, discarded on failure.
 - Within one event, declarative ops and Python callbacks interleave in one cross-type `priority` order (lower values first; ties keep declaration order). The two kinds share a single comparable scale: whichever hook — callback or declarative — has the smaller `priority` always runs first, and later hooks see earlier writes.
 
-Hooks are "Op is a hook": `Op` objects constitute the hook program, and a declarative `@hook` function is just the compiler entry point returning the Op list. There is no `initialize` event -- express initialization logic with the first tick of the `first` event (`when="tick == 1"`) or with the `finish` event.
+Hooks are "Op is a hook": `Op` objects constitute the hook program, and passing them to `.hooks()` is the declaration (a zero-parameter `@hook`-decorated function returning the Op list remains an equivalent factory entry point). There is no `initialize` event -- express initialization logic with the first tick of the `first` event (`when="tick == 1"`) or with the `finish` event.
 
 In `SpatialPopulation`, local-hook `priority` only applies within a deme; no global order is defined across demes. See [Spatial Simulation](3_spatial_simulation.md).
 
@@ -246,14 +250,6 @@ import natal as nt
 
 sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
 
-@nt.hook(event="first", priority=0)
-def release():
-    return [nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0")]
-
-@nt.hook(event="late", priority=5)
-def stop_if_no_female():
-    return [nt.Op.stop_if_zero(sex="female")]
-
 pop = (
     nt.AgeStructuredPopulation
     .setup(species=sp, stochastic=True)
@@ -262,7 +258,14 @@ pop = (
         "female": {"WT|WT": 1000},
         "male": {"WT|WT": 1000}
     })
-    .hooks(release, stop_if_no_female)
+    .hooks(
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0"),
+        event="first",
+    )
+    .hooks(
+        nt.Op.stop_if_zero(sex="female"),
+        event="late", priority=5,
+    )
     .build()
 )
 
