@@ -191,7 +191,7 @@ Op.add(genotypes="Drive|WT@infected", delta=500)
 
 ### BFS 算法
 
-压缩使用不动点 BFS（在 `natal.frontend.genetics.structures._helpers` 的 `build_compression_mask` 中实现）。该算法对 GType 和 ZType 层次是对称的：
+完整布局会先为所有基因型和标签建立稳定索引，再在发布阶段使用不动点 BFS（在 `natal.frontend.genetics.structures._helpers` 的 `build_compression_mask` 中实现）裁剪不可达条目。该算法对 GType 和 ZType 层次是对称的：
 
 ```
 1. 种子：收集可达基因型
@@ -294,15 +294,18 @@ indices = list(pop.index_registry.resolve_ztype_indices(pattern))  # 匹配的�
 
 ### 3. Hook 系统
 
-- Hook 使用预计算的索引（选择器在注册时解析）在引擎侧高效操作。
+- Hook 使用预计算的索引（构建时的选择器在最终布局确定后解析）在引擎侧高效操作。
 - 避免在编译时访问动态注册表。
 - 通过选择器模式避免硬编码索引。
 
 ### 4. 索引压缩
 
-- `rebuild_config_maps()`（在 `natal.frontend.builder._registry_builder` 中）运行 BFS。
-- 生成的掩码通过 `registry.compress(ztype_mask, gtype_mask)` 应用。
-- 压缩后，所有注册表属性只反映幸存的条目。
+- 初始化和遗传规则在完整、尚未发布的 ZType/GType 目录上解析。
+- 发布时确定最终布局，统一投影注册表、遗传矩阵、适合度、个体数量和储精矩阵的两条轴。关闭压缩时使用恒等映射。
+- 已发布的注册表拒绝注册和压缩操作。运行时仍可修改参数数值，但不能重新编号。
+- 空间模型先汇总所有遗传组的转换关系，以及各 deme 的初始个体和储精类型，再确定共同布局。
+
+Species 蓝图和未发布草稿不构造完整的 `offspring_tensor`，只保留形状为 `(0, 0, 0)` 的空占位。发布时仅按最终运行时轴生成该张量。遗传刷新会完整编译一个新候选，检查正概率转换是否仍处于现有运行时布局内，再投影并提交。若更新会引入已裁剪的 GType 或 ZType，则显式报错并保持现有模型不变；需要在构建时提前保留相关类型，或重新构建种群。
 
 ## 性能优化
 

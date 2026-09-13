@@ -691,7 +691,7 @@ def build_runtime_definition(
     registry: IndexRegistry,
     declaration: RuntimeDeclaration,
 ) -> ModelDefinition:
-    """Capture a runtime declaration against explicit inputs.
+    """Lift runtime inputs into a complete-axis compilation declaration.
 
     Runtime updates declare no journal, hooks, observation, or recording
     policies — those belong to the build; the captured definition carries
@@ -699,16 +699,82 @@ def build_runtime_definition(
 
     Args:
         species: The genetic architecture.
-        draft: The working draft to capture (detached on capture).
-        registry: The active index registry (copied on capture).
+        draft: Current runtime values; type-dependent arrays are expanded.
+        registry: Fixed runtime catalog used to place values on complete axes.
         declaration: The recipe metadata to carry.
 
     Returns:
-        The frozen declaration handed to the compiler or published as
-        ``_current_definition``.
-    """
-    from natal.frontend.model.definition import ModelDefinition
+        The complete-axis declaration handed to the compiler and retained
+        as ``_current_definition``. Live arrays and the layout are not mutated.
 
+    Raises:
+        ValueError: If runtime keys or fitness baselines cannot be placed
+            on the complete species catalog.
+    """
+    from natal.contracts.materialize import (
+        gtype_names_from_registry,
+        ztype_names_from_registry,
+    )
+    from natal.frontend.builder._registry_builder import build_registry
+    from natal.frontend.model import build_population_config
+    from natal.frontend.model.definition import ModelDefinition
+    from natal.frontend.model.publication import IndexProjection
+
+    full_registry = build_registry(species)
+    projection = IndexProjection.from_registry(full_registry, registry)
+    z = np.asarray(projection.ztype_indices, dtype=np.intp)
+    blueprint = species.get_config_blueprint()
+    baseline = build_population_config(
+        n_genotypes=blueprint["n_genotypes"], n_gtypes=blueprint["n_gtypes"],
+        n_glabs=blueprint["n_glabs"], n_slabs=blueprint["n_slabs"],
+        gamete_labels=species.gamete_labels, somatic_labels=species.somatic_labels,
+        zygotes_to_gametes_map=blueprint["zygotes_to_gametes_map"],
+        gametes_to_zygotes_map=blueprint["gametes_to_zygotes_map"],
+        n_ages=draft.n_ages, new_adult_age=draft.new_adult_age,
+        has_sex_chromosomes=draft.has_sex_chromosomes,
+        female_only_by_sex_chrom=blueprint["female_only_by_sex_chrom"],
+        male_only_by_sex_chrom=blueprint["male_only_by_sex_chrom"],
+    )
+    # This is an explicit runtime-to-compile translation. Ecology retains
+    # current values; type-dependent inputs are placed on complete axes.
+    counts = np.zeros_like(baseline.initial_individual_count)
+    counts[:, :, z] = draft.initial_individual_count
+    sperm = np.zeros_like(baseline.initial_sperm_storage)
+    if draft.initial_sperm_storage.size:
+        sperm[np.ix_(np.arange(sperm.shape[0], dtype=np.intp), z, z)] = draft.initial_sperm_storage
+    genetic_fields = (
+        "n_ztypes", "n_gtypes", "n_glabs", "n_slabs",
+        "zygotes_to_gametes_map", "gametes_to_zygotes_map", "offspring_tensor",
+        "female_ztype_compatibility", "male_ztype_compatibility",
+        "female_only_by_sex_chrom", "male_only_by_sex_chrom", *FITNESS_FIELDS,
+    )
+    full_draft = draft._replace(
+        **{name: getattr(baseline, name) for name in genetic_fields},
+        initial_individual_count=counts, initial_sperm_storage=sperm,
+        ztype_names=ztype_names_from_registry(full_registry.index_to_ztype),
+        gtype_names=gtype_names_from_registry(full_registry.index_to_gtype),
+    )
+    for name in FITNESS_FIELDS:
+        live = getattr(draft, name)
+        expanded = getattr(full_draft, name)
+        if name == "sexual_selection_fitness":
+            expanded[np.ix_(z, z)] = live
+        else:
+            expanded[..., z] = live
+    full_fitness: list[NDArray[np.float64]] = []
+    for name, values in zip(FITNESS_FIELDS, declaration.fitness_base, strict=True):
+        shape = getattr(baseline, name).shape
+        if values.shape == shape:
+            full_fitness.append(values.copy())
+            continue
+        if values.shape != getattr(draft, name).shape:
+            raise ValueError(f"Fitness baseline {name!r} has incompatible axes")
+        expanded = np.ones(shape, dtype=np.float64)
+        if name == "sexual_selection_fitness":
+            expanded[np.ix_(z, z)] = values
+        else:
+            expanded[..., z] = values
+        full_fitness.append(expanded)
     return ModelDefinition(
         species,
         bool(draft.discrete_generation),
@@ -718,9 +784,9 @@ def build_runtime_definition(
         manual_gamete=tuple(declaration.manual_gamete),
         manual_zygote=tuple(declaration.manual_zygote),
         compilation_key=declaration.compilation_key,
-        draft=draft,
-        registry=registry,
-        fitness_base=tuple(declaration.fitness_base),
+        draft=full_draft,
+        registry=full_registry,
+        fitness_base=tuple(full_fitness),
         fitness_steps=tuple(declaration.fitness_steps),
     )
 
@@ -735,10 +801,9 @@ def compile_runtime_candidate(
 ) -> CompiledProducts:
     """Compile one isolated genetic candidate from runtime declarations.
 
-    The recipes expand against the declaration's own detached copies of
-    *draft* and *registry* (``ModelDefinition`` captures detached state),
-    so a failed compile publishes nothing and the caller's arrays are
-    never touched.
+    Recipes expand on complete unpublished axes. Positive inheritance edges
+    must stay within the existing runtime layout before the result is
+    projected and published. A failed compile never changes live arrays.
 
     Args:
         species: The genetic architecture the candidate compiles against.
@@ -762,10 +827,20 @@ def compile_runtime_candidate(
     result = compile_definition(
         build_runtime_definition(species, draft, registry, declaration)
     )
-    config = result.config._replace(**fitness) if preserve_fitness else result.config
-    return CompiledProducts(
-        config, result.registry, result.gamete_modifiers, result.zygote_modifiers,
+    from natal.frontend.model.publication import (
+        IndexProjection,
+        ensure_layout_closed,
+        publish_products,
     )
+
+    projection = IndexProjection.from_registry(result.registry, registry)
+    ensure_layout_closed(result, projection)
+    published = publish_products(result, projection=projection)
+    config = published.config._replace(**fitness) if preserve_fitness else published.config
+    return CompiledProducts(
+        config, published.registry, published.gamete_modifiers, published.zygote_modifiers,
+    )
+
 
 
 def commit_genetic_update(
@@ -992,13 +1067,28 @@ def recompile_modifier_maps(target: _UpdateTarget) -> None:
     gamete = list(pop._gamete_modifiers)  # pyright: ignore[reportPrivateUsage]  # the derived lists are the refresh input
     zygote = list(pop._zygote_modifiers)  # pyright: ignore[reportPrivateUsage]
     old = target.live_draft()
-    host = _CompileHost(target.species, target.registry, old)
-    new, _applied = rebuild_config_maps(
-        target.species, old, target.registry,
-        gamete_modifiers=gamete, zygote_modifiers=zygote,
-        compress=False, host=host,
+    definition = build_runtime_definition(target.species, old, target.registry, declaration)
+    full_draft = definition.draft
+    full_registry = definition.registry
+    assert full_draft is not None and full_registry is not None
+    host = _CompileHost(target.species, full_registry, full_draft)
+    new = rebuild_config_maps(
+        target.species, full_draft, full_registry,
+        gamete_modifiers=gamete, zygote_modifiers=zygote, host=host,
     )
+    from natal.frontend.model.publication import (
+        IndexProjection,
+        ensure_layout_closed,
+        publish_products,
+    )
+
+    products = CompiledProducts(new, full_registry, gamete, zygote)
+    projection = IndexProjection.from_registry(full_registry, target.registry)
+    ensure_layout_closed(products, projection)
+    published = publish_products(products, projection=projection)
+    new = published.config._replace(**{name: getattr(old, name).copy() for name in FITNESS_FIELDS})
     commit_genetic_update(target, old, new, declaration, gamete, zygote)
+
 
 
 def reset_preset_fitness(target: _UpdateTarget) -> None:

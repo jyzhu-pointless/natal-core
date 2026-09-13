@@ -60,7 +60,7 @@ from natal.contracts.materialize import (
 )
 from natal.frontend.builder._registry_builder import (
     build_registry,
-    rebuild_config_maps,
+    resolve_declared_ztypes,
 )
 from natal.frontend.builder._routes import (
     dispatch,
@@ -93,6 +93,8 @@ if TYPE_CHECKING:
 
     from natal.frontend.hooks import CompiledHookDescriptor
     from natal.frontend.model.definition import ModelDefinition
+    from natal.frontend.model.definition_compiler import CompiledProducts
+    from natal.frontend.model.publication import IndexProjection
     from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
     from natal.frontend.patterns import IndividualSelector
     from natal.frontend.population.age_structured import AgeStructuredPopulation
@@ -342,6 +344,8 @@ def _declared(
         # the rest.  Variadic parameters are normalized so the journal
         # stays a flat kwargs dict: *args lands under the reserved
         # "__args__" key, **kwargs are expanded back into their keys.
+        if self._registry is not None:  # pyright: ignore[reportPrivateUsage]  # decorator enforces its owning builder's phase.
+            self._registry.require_unpublished()  # pyright: ignore[reportPrivateUsage]
         declared: dict[str, object]
         if not args:
             # Fluent calls normally use keywords, which already have the
@@ -495,10 +499,8 @@ class PopulationBuilder:
         # GType and ZType compression always run together — one BFS produces
         # both masks and they must be applied in tandem.
         self._compress: bool = False
-        self._compression_applied: bool = False
         self._declared_zygote_types: set[str] | set[int] | None = None
         # Spatial union seeds already address the slab-expanded ZType axis.
-        self._resolved_compression_ztypes: set[int] | None = None
 
         # Observation and History are independent build-time policies.
         self._observation_groups: Mapping[str, IndividualSelector] | None = None
@@ -897,6 +899,11 @@ class PopulationBuilder:
             fixed_egg_count=bool(old.fixed_egg_count),
             has_sex_chromosomes=old.has_sex_chromosomes,
         )
+        from natal.frontend.model.definition_compiler import FITNESS_FIELDS
+
+        self._fitness_base = tuple(getattr(self._config, name).copy() for name in FITNESS_FIELDS)
+        self._compiled_draft = None
+        self._cached_compilation_key = None
         # Rebuild registry for the new n_ages (affects genotype lookup dims).
         if self._species is not None:
             from natal.frontend.builder._base import build_registry
@@ -1538,8 +1545,8 @@ class PopulationBuilder:
     ) -> None:
         """Accept one completed candidate compile as this builder's own state.
 
-        Single publication point for compile products: draft, registry,
-        and modifier products land together, marked valid for the current
+        Draft, registry, and modifier products are adopted together while
+        still unpublished, marked valid for the current
         compilation key. Callers pass freshly compiled or candidate-owned
         products — never arrays that another live builder will write
         later.
@@ -1565,7 +1572,7 @@ class PopulationBuilder:
         self._accept_products(config, result.registry, result.gamete_modifiers, result.zygote_modifiers)
 
     def _adopt_compilation(self, candidate: PopulationBuilder) -> None:
-        """Publish an already validated build candidate without rerunning recipes."""
+        """Adopt an unpublished build candidate without rerunning recipes."""
         self._accept_products(
             candidate._config, candidate._registry,  # pyright: ignore[reportPrivateUsage]  # the candidate is a controlled copy owned by this builder.
             candidate.gamete_modifiers, candidate.zygote_modifiers,
@@ -1693,96 +1700,99 @@ class PopulationBuilder:
             depending on whether *self._config* carries the
             discrete-generation flag.
         """
+        if hook_items:
+            self.hooks(*hook_items)
+        return self._publish_and_build(self._compile_products(), name=name)
+
+    def _compile_products(self) -> CompiledProducts:
+        """Compile complete unpublished axes without constructing a native model.
+
+        Cached recipe products are reused only for the same declaration.
+        The builder stays unpublished and can supply multiple isolated builds.
+
+        Returns:
+            Complete genetic maps, fitness, and initialization inputs.
+        """
         from natal.frontend.model.definition_compiler import (
             GENETIC_PRODUCT_FIELDS,
+            CompiledProducts,
             compile_definition,
         )
 
-        if hook_items:
-            # Inline registrations have the same defaults and declaration
-            # ownership as the fluent hooks() spelling.
-            self.hooks(*hook_items)
-        if self._species is not None:
-            definition = self._definition_for_compile()
-            # Layout, hooks, and recording policies consume the same
-            # normalized declaration as genetic compilation; no raw journal
-            # replay is needed.
-            self._hook_calls = list(definition.hook_calls)
-            self._observation_groups = definition.observation_groups
-            self._observation_collapse_age = definition.observation_collapse_age
-            self._record_history_mode = definition.history_mode
-            self._record_history_max_rows = definition.history_max_rows
-            self._compress = definition.compress
-            self._declared_zygote_types = None if definition.declared_zygote_types is None else cast("set[str] | set[int]", set(definition.declared_zygote_types))  # homogeneous selector kind is retained by freezing.
-            if self._cached_compilation_key is self._compilation_key and self._compiled_draft is not None:
-                # Finalization only: this exact declaration identity already
-                # ran its recipes, so re-materialize the stored products
-                # privately instead of executing them again.
-                self._config = self._config._replace(
-                    **{name: getattr(self._compiled_draft, name).copy() for name in GENETIC_PRODUCT_FIELDS}
-                )
-                self._compiled_draft = self._config
-            else:
-                result = compile_definition(definition)
-                self._accept_products(result.config, result.registry, result.gamete_modifiers, result.zygote_modifiers)
-            # Compilation owns its products now. Drop the temporary input
-            # snapshots before materializing another complete native contract.
-            del definition
-        # Sync equilibrium metrics and apply index compression (if enabled).
-        self.apply()
-
-        # Inject the symbolic name directory from the registry (building the
-        # registry lazily when presets/fitness never forced it).  Happens
-        # before compression so compress_config subslices real names.
-        if self._species is None:
-            raise RuntimeError(
-                "Cannot build Population: no Species set. "
-                "Use PopulationBuilder.from_species() to create this instance."
+        self.registry.require_unpublished()
+        if self._cached_compilation_key is self._compilation_key and self._compiled_draft is not None:
+            self._config = self._config._replace(
+                **{field: getattr(self._compiled_draft, field).copy() for field in GENETIC_PRODUCT_FIELDS}
             )
-        if self._registry is None:
-            self._registry = build_registry(self._species)
+        else:
+            result = compile_definition(self._definition_for_compile())
+            self._accept_products(*result)
+        self.apply()
         self._config = self._config._replace(
-            ztype_names=ztype_names_from_registry(self._registry.index_to_ztype),
-            gtype_names=gtype_names_from_registry(self._registry.index_to_gtype),
+            ztype_names=ztype_names_from_registry(self.registry.index_to_ztype),
+            gtype_names=gtype_names_from_registry(self.registry.index_to_gtype),
+        )
+        self._compiled_draft = self._config
+        return CompiledProducts(
+            self._config, self.registry, list(self.gamete_modifiers), list(self.zygote_modifiers),
         )
 
-        # Compression replaces self._config with the compressed copy; the
-        # registry is compressed in place so name lookups stay aligned.
-        # Population receives the compressed config.  All user writes
-        # (fitness, initial_state) already happened on the full-size
-        # config; compression subslices the arrays naturally.
-        final_config = self._config
-        if self._compress and not self._compression_applied:
-            # Auto-collect genotype refs from hooks so genotypes introduced
-            # only via hooks survive BFS pruning.
-            if self._hook_calls:
-                hook_refs = collect_hook_genotype_refs(self._hook_calls)
-                if hook_refs:
-                    existing = self._declared_zygote_types
-                    self._declared_zygote_types = cast(
-                        "set[str] | set[int]",
-                        (existing | hook_refs) if existing is not None else hook_refs,
-                    )
+    def _publish_and_build(
+        self,
+        products: CompiledProducts,
+        *,
+        name: str | None = None,
+        projection: IndexProjection | None = None,
+        genetic_template: CompiledProducts | None = None,
+    ) -> DiscreteGenerationPopulation | AgeStructuredPopulation:
+        """Publish one complete candidate, then create hooks and the native model.
 
-            # Build-time compression runs the candidate compile with the
-            # compression flag: the unified compiler rebuilds the maps,
-            # reachable-index pruning subslices them, and the registry is
-            # compressed in place so name lookups stay aligned.
-            self._config, compression_applied = rebuild_config_maps(
-                self._species,
-                self._config,
-                self._registry,
-                gamete_modifiers=self.gamete_modifiers,
-                zygote_modifiers=self.zygote_modifiers,
-                compress=True,
-                declared_zygote_types=self._declared_zygote_types,
-                resolved_ztype_indices=self._resolved_compression_ztypes,
-                prepared=True,
-            )
-            if compression_applied:
-                self._compression_applied = True
-            final_config = self._config  # compressed copy
+        Args:
+            products: Complete unpublished products on the species catalog.
+            name: Optional population name.
+            projection: Shared spatial layout, or None for local planning.
+            genetic_template: Published genetics shared by an ecological variant.
 
+        Returns:
+            A population with a fixed published layout.
+        """
+        from natal.frontend.model.publication import publish_products
+
+        products.registry.require_unpublished()
+        declared = resolve_declared_ztypes(
+            self.species, products.registry, self._declared_zygote_types,
+        )
+        declared.update(resolve_declared_ztypes(
+            self.species, products.registry, collect_hook_genotype_refs(self._hook_calls),
+        ))
+        # Only this detached finalizer sees the published coordinates. The
+        # source builder and its captured declaration retain complete axes.
+        definition = self._definition_for_compile(build_name=name)
+        published = publish_products(
+            products, compress=self._compress, full_ztype_indices=declared,
+            projection=projection, genetic_template=genetic_template,
+        )
+        finalizer = copy(self)
+        finalizer._config = published.config
+        finalizer._registry = published.registry
+        finalizer.gamete_modifiers = list(published.gamete_modifiers)
+        finalizer.zygote_modifiers = list(published.zygote_modifiers)
+        return finalizer._build_published(published.config, definition, name=name)
+
+    def _build_published(
+        self, final_config: ModelDraft, definition: ModelDefinition, *, name: str | None,
+    ) -> DiscreteGenerationPopulation | AgeStructuredPopulation:
+        """Construct execution and recording from an already published layout.
+
+        Args:
+            final_config: Consistent final arrays and names.
+            definition: Complete-axis declaration retained for rebuilds.
+            name: Optional population name.
+
+        Returns:
+            Initialized native population.
+        """
+        assert self._species is not None
         # Custom kwargs (accumulated by .custom()) applied to final config.
         if self._custom_kwargs:
             from natal.frontend.model import build_custom_slots
@@ -1832,7 +1842,7 @@ class PopulationBuilder:
         # Freeze the declaration snapshot onto the population: the
         # ordered journal plus the declared identity.  The
         # snapshot is frozen — runtime updates never rewrite it.
-        pop._definition = self._definition_for_compile(build_name=name)  # pyright: ignore[reportPrivateUsage]  # one owned frozen declaration; avoid snapshotting it three times.
+        pop._definition = definition  # pyright: ignore[reportPrivateUsage]  # one owned frozen declaration; avoid snapshotting it three times.
         pop._current_definition = pop._definition  # pyright: ignore[reportPrivateUsage]  # initial normalized declaration is the runtime compiler source.
 
         # PopulationBuilder applies modifiers before Population construction.  Carry

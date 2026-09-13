@@ -43,7 +43,6 @@ from numpy.typing import NDArray
 from natal.frontend.builder import PopulationBuilder
 from natal.frontend.builder._base import normalize_observation_groups
 from natal.frontend.genetics import Species
-from natal.frontend.genetics.structures._helpers import build_compression_mask
 from natal.frontend.hooks.types import DemeSelector
 from natal.frontend.model import ModelDraft
 from natal.frontend.model.initial_state import (
@@ -56,7 +55,6 @@ from natal.frontend.model.initial_state import (
 from natal.frontend.patterns import IndividualSelector
 from natal.frontend.population.age_structured import AgeStructuredPopulation
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
-from natal.frontend.registry.index import IndexRegistry
 from natal.frontend.spatial.migration import RateDeclaration
 from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import GridTopology
@@ -64,6 +62,8 @@ from natal.frontend.spatial.topology import GridTopology
 if TYPE_CHECKING:
     from natal.frontend.genetics.compile import GameteList, ZygoteList
     from natal.frontend.model.definition import ModelDefinition
+    from natal.frontend.model.definition_compiler import CompiledProducts
+    from natal.frontend.model.publication import IndexProjection
     from natal.frontend.presets import GeneticPreset
 
 __all__ = [
@@ -618,285 +618,6 @@ class SpatialPopulationBuilder:
         self._compress: bool = False
         self._declared_zygote_types: set[str] | set[int] | None = None
 
-    def _compress_once(self, expanded: Dict[str, List[Any]]) -> set[int]:
-        """Compute the union of ztype indices reachable anywhere in the system.
-
-        Builds the first group's template to obtain a resolved
-        ``initial_individual_count`` array, then collects reachable ztype
-        seeds from all groups' initial states, hook genotype refs, and
-        user-declared types.  Runs a single BFS on combined modifier maps
-        and returns ztype indices that must be protected from compression
-        pruning across ALL groups.
-
-        Returns:
-            ``set[int]`` of ztype indices (pre-compression) to protect.
-        """
-        seeds: set[int] = set()
-
-        # ── Step 1: Build first group template (no compress) ──────────
-        # Must happen BEFORE seed collection because the resolved
-        # initial_individual_count array provides correct ztype indices
-        # — raw dict keys in `expanded` may be unresolved patterns,
-        # Genotype objects, or tuples.
-        batch_param_names = sorted(expanded.keys())
-        first_sig: Dict[str, Any] = {
-            name: expanded[name][0] for name in batch_param_names
-        }
-        full_template = self._build_template_for_group(
-            first_sig,
-            compress=False,
-        )
-        full_config = full_template.export_config()
-        full_registry = full_template.index_registry
-
-        # ── Step 2: Seeds from initial_individual_count ────────────────
-        # Non-zero positions in the resolved array are ztype indices.
-        if "individual_count" in expanded:
-            n_demes = len(expanded["individual_count"])
-            seen: set[tuple[tuple[str, Any], ...]] = set()
-
-            n_ages = int(full_config.n_ages)
-            new_adult_age = int(full_config.new_adult_age)
-
-            for i in range(n_demes):
-                sig_key = tuple(
-                    (name, _make_hashable(expanded[name][i]))
-                    for name in batch_param_names
-                )
-                if sig_key in seen:
-                    continue
-                seen.add(sig_key)
-
-                ind_cnt = expanded["individual_count"][i]
-                if not isinstance(ind_cnt, dict):
-                    continue
-
-                dist = cast(InitialIndividualCountInput, ind_cnt)
-
-                if self._pop_type == "age_structured":
-                    array = resolve_age_structured_initial_individual_count(
-                        species=self._species,
-                        distribution=dist,
-                        n_ages=n_ages,
-                        new_adult_age=new_adult_age,
-                    )
-                else:
-                    array = resolve_discrete_initial_individual_count(
-                        species=self._species,
-                        distribution=dist,
-                    )
-                if array.size > 0:
-                    nz = np.nonzero(
-                        array.sum(axis=(0, 1)) if array.ndim == 3 else array
-                    )
-                    seeds.update(int(z) for z in nz[0])
-
-        # ── Step 3: Seeds from hook genotype refs ──────────────────────
-        from natal.frontend.builder._base import collect_hook_genotype_refs
-
-        hook_strs: set[str] = set()
-        for method_name, kwargs in self._declaration_log:
-            if method_name == "hooks":
-                hook_items = kwargs.get("hook_items", ())
-                if hook_items:
-                    hook_strs.update(
-                        collect_hook_genotype_refs([(tuple(hook_items), {})])
-                    )
-        resolved = self._resolve_declared_to_ints(
-            hook_strs,
-            full_registry,
-            full_config.n_slabs,
-        )
-        if resolved:
-            seeds.update(resolved)
-
-        # ── Step 4: Seeds from user-declared zygote types ──────────────
-        user_decl = self._declared_zygote_types
-        if user_decl is not None:
-            str_decl: set[str] = set()
-            for item in user_decl:
-                if isinstance(item, str):
-                    str_decl.add(item)
-                else:
-                    seeds.add(item)  # int — already a ztype index
-            if str_decl:
-                resolved_decl = self._resolve_declared_to_ints(
-                    str_decl,
-                    full_registry,
-                    full_config.n_slabs,
-                )
-                if resolved_decl:
-                    seeds.update(resolved_decl)
-
-        # ── Step 5: Build combined modifier maps & BFS ─────────────────
-        if not _genetics_batch_names(batch_param_names):
-            # Ecology variation cannot add genetic edges. The already compiled
-            # uncompressed template supplies the complete reachability graph.
-            combined_z2g = full_config.zygotes_to_gametes_map
-            combined_g2z = full_config.gametes_to_zygotes_map
-        else:
-            combined_z2g, combined_g2z = self._build_combined_modifier_maps(expanded, full_config)
-        _, _, ztype_mask, _ = build_compression_mask(
-            combined_z2g,
-            combined_g2z,
-            full_config.initial_individual_count,
-            declared_zygote_types=seeds if seeds else None,
-        )
-
-        # ── Step 6: Add BFS survivors to seeds ─────────────────────────
-        for old_idx in range(len(ztype_mask)):
-            if ztype_mask[old_idx] >= 0:
-                seeds.add(old_idx)
-
-        return seeds
-
-    @staticmethod
-    def _resolve_declared_to_ints(
-        declared: set[str],
-        registry: IndexRegistry,
-        n_slabs: np.integer | int,
-    ) -> set[int] | None:
-        """Convert declared genotype strings to slab-expanded ZType indices."""
-        if not declared:
-            return None
-        result: set[int] = set()
-        dips = registry.index_to_genotype
-        n_slabs_int = int(n_slabs)
-        for dg in declared:
-            for gt in dips:
-                if str(gt) == dg:
-                    for s in range(n_slabs_int):
-                        result.add(registry.ztype_index(gt, registry.slab_labels[s]))
-        return result
-
-    def _build_combined_modifier_maps(
-        self,
-        expanded: Dict[str, List[Any]],
-        full_config: ModelDraft,
-    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-        """Sum modifier-applied gamete/zygote maps across all config groups.
-
-        Each group's modifiers are applied independently to the Mendelian
-        baseline, and the resulting probability tensors are summed.  The
-        combined map's non-zero entries represent all gamete/zygote
-        productions possible anywhere in the spatial system — this is the
-        adjacency matrix for the unified BFS.
-        """
-        batch_param_names = sorted(expanded.keys())
-        n_demes = len(expanded[batch_param_names[0]])
-
-        # Collect unique group signatures.
-        seen: set[tuple[tuple[str, Any], ...]] = set()
-        sigs: list[Dict[str, Any]] = []
-        for i in range(n_demes):
-            sig_key = tuple(
-                (name, _make_hashable(expanded[name][i])) for name in batch_param_names
-            )
-            if sig_key not in seen:
-                seen.add(sig_key)
-                sigs.append({name: expanded[name][i] for name in batch_param_names})
-
-        # Mendelian baseline from species cache.
-        bp = self._species.get_config_blueprint()
-        baseline_z2g = bp["zygotes_to_gametes_map"]
-        baseline_g2z = bp["gametes_to_zygotes_map"]
-
-        combined_z2g: NDArray[np.float64] = np.zeros_like(baseline_z2g)
-        combined_g2z: NDArray[np.float64] = np.zeros_like(baseline_g2z)
-
-        from natal.frontend.builder._registry_builder import build_registry
-
-        registry = build_registry(self._species)
-
-        for sig in sigs:
-            # Replay presets/modifiers to get modifier lists for this group.
-            gamete_mods: list[tuple[int, str | None, Any]] = []
-            zygote_mods: list[tuple[int, str | None, Any]] = []
-
-            # Do a lightweight replay — only need modifiers.
-            cfg = PopulationBuilder.for_age_structured(self._species)
-            for method_name, kwargs in self._declaration_log:
-                if method_name in (
-                    "hooks",
-                    "initial_state",
-                    "setup",
-                    "reproduction",
-                    "competition",
-                    "age_structure",
-                    "survival",
-                    "fitness",
-                    "custom",
-                    "with_observation",
-                    "migration",
-                ):
-                    continue  # irrelevant for modifier collection
-
-                # Substitute batch values.
-                resolved: Dict[str, Any] = {}
-                for key, value in kwargs.items():
-                    if key in sig:
-                        resolved[key] = sig[key]
-                    elif isinstance(value, BatchSetting):
-                        first: Any = (
-                            cast(BatchSetting[Any], value).first_value()
-                        )  # Any: BatchSetting value type is unknown until expansion
-                        if first is not None:
-                            resolved[key] = first
-                    else:
-                        resolved[key] = value
-
-                # Apply to temporary builder.
-                method = getattr(cfg, method_name, None)
-                if method is None:
-                    continue
-
-                if method_name == "presets":
-                    raw_list = _object_sequence(
-                        resolved.pop("preset_list", ()), name="preset_list"
-                    )
-                    expanded_presets: list[object] = []
-                    for i_p, item in enumerate(raw_list):
-                        key = f"_preset_{i_p}"
-                        val = sig.get(key)
-                        if val is not None:
-                            expanded_presets.append(val)
-                        elif isinstance(item, BatchSetting):
-                            first = cast(BatchSetting[Any], item).first_value()
-                            if first is not None:
-                                expanded_presets.append(first)
-                        else:
-                            expanded_presets.append(item)
-                    filtered = {k: v for k, v in resolved.items() if v is not None}
-                    method(*expanded_presets, **filtered)
-                elif method_name == "modifiers":
-                    filtered = {k: v for k, v in resolved.items() if v is not None}
-                    method(**filtered)
-                else:
-                    filtered = {k: v for k, v in resolved.items() if v is not None}
-                    method(**filtered)
-
-            gamete_mods = cfg.gamete_modifiers
-            zygote_mods = cfg.zygote_modifiers
-
-            # Apply the group's recipes through the unified compiler; the
-            # derived offspring tensor is not needed for BFS seeding, but
-            # routing here keeps exactly one application spelling.
-            from natal.frontend.genetics.compile import compile_modifier_maps
-
-            z2g_copy, g2z_copy, _unused_tensor = compile_modifier_maps(
-                baseline_z2g,
-                baseline_g2z,
-                gamete_modifiers=list(gamete_mods),
-                zygote_modifiers=list(zygote_mods),
-                registry=registry,
-                population=None,
-            )
-
-            combined_z2g += z2g_copy
-            combined_g2z += g2z_copy
-
-        return combined_z2g, combined_g2z
-
     # ------------------------------------------------------------------
     # Internal: batch detection and delegation
     # ------------------------------------------------------------------
@@ -940,7 +661,7 @@ class SpatialPopulationBuilder:
             Each chainable call does two things simultaneously:
 
             1. **Record** the raw kwargs (including BatchSetting objects) in
-               ``_declaration_log`` — used later by ``_build_template_for_group``
+               ``_declaration_log`` — used later by ``_builder_for_group``
                to replay the full builder pipeline for each config group.
             2. **Delegate** a sanitized version to the template builder —
                ``BatchSetting`` values are replaced with their first element
@@ -980,7 +701,7 @@ class SpatialPopulationBuilder:
         filtered = {k: v for k, v in concrete.items() if v is not None}
         self._call_template(method_name, **filtered)
         # Record the original call with BatchSetting objects preserved,
-        # for full replay in _build_template_for_group.
+        # for full replay in _builder_for_group.
         self._declaration_log.append((method_name, dict(kwargs)))
         return self
 
@@ -1867,8 +1588,9 @@ class SpatialPopulationBuilder:
     def _build_homogeneous_demes(self) -> List[PopulationInstance]:
         """Build one template deme and clone it N-1 times."""
         template = self._template.build(name=self._spatial_name)
-        tpl_config = template.export_config()
+        tpl_config = template._config  # pyright: ignore[reportPrivateUsage]  # share immutable published genetic products.
 
+        assert tpl_config is not None
         demes: List[PopulationInstance] = [template]
         for i in range(1, self._n_demes):
             clone = _clone_deme(
@@ -1880,214 +1602,141 @@ class SpatialPopulationBuilder:
         return demes
 
     def _build_heterogeneous_demes(self) -> List[PopulationInstance]:
-        """Group demes by *genetics* signature, build one template per
-        group, then derive per-deme ecology via ``_replace`` shells.
+        """Compile complete group candidates before choosing one spatial layout.
 
-        **Grouping algorithm**::
-
-            1. Expand every ``BatchSetting`` → per-deme value list.
-            2. For each deme, build a hashable signature from its
-               *genetics-section* batch values (fitness rows, presets,
-               modifiers — see ``_genetics_batch_names``).
-            3. Demes with identical genetics signatures share one group
-               template.  Ecology batch values are excluded from the
-               signature: a K gradient across 2601 demes produces ONE
-               group, not 2601.
-
-            4. Within a group, non-first demes receive their own ecology
-               through ``_build_variant_config`` (``_replace`` shallow
-               copies sharing all heavy arrays) or a full builder replay
-               when a value cannot be applied by ``_replace``.
+        Genetics recipes run once per genetics signature. Every initial-state
+        declaration is resolved on unpublished full axes, including ecology-only
+        variants. Reachability then sees every group's edges and every deme's
+        seeds before any population or native session is constructed.
         """
-        # 1. Expand every BatchSetting → concrete per-deme list.
-        #    e.g. K=batch_setting([10000,5000,5000,8000]) → [10000, 5000, 5000, 8000]
-        expanded: Dict[str, List[Any]] = {}
-        for param_name, batch in self._batch_settings.items():
-            expanded[param_name] = batch.expand(self._n_demes, self._topology)
+        from copy import copy
 
-        # 1a. If compression is enabled, compute union declared ztype indices.
-        union_declared: set[int] | None = None
-        if self._compress:
-            union_declared = self._compress_once(expanded)
-
-        # 2. Hash each deme's values into two signatures: a *genetics*
-        #    signature deciding group membership (ndarray values → bytes;
-        #    dict values → sorted kv tuples) and the full-value signature
-        #    deciding whether a member can plain-clone its group template.
-        all_param_names = sorted(expanded.keys())
-        genetics_param_names = _genetics_batch_names(all_param_names)
-        genetics_signatures: List[tuple[tuple[str, Any], ...]] = []
-        full_signatures: List[tuple[tuple[str, Any], ...]] = []
-        for i in range(self._n_demes):
-            genetics_signatures.append(
-                tuple(
-                    (name, _make_hashable(expanded[name][i]))
-                    for name in genetics_param_names
-                )
-            )
-            full_signatures.append(
-                tuple(
-                    (name, _make_hashable(expanded[name][i]))
-                    for name in all_param_names
-                )
-            )
-
-        # 3. Group deme indices by genetics signature.
-        #    [1,1,1,...,2,...,1] → 2 groups, not n_demes groups.
-        groups: defaultdict[tuple[tuple[str, Any], ...], List[int]] = defaultdict(list)
-        for idx, sig in enumerate(genetics_signatures):
-            groups[sig].append(idx)
-
-        # 4. Build one template per genetics group.  The first group always
-        #    runs the full builder pipeline.  Every deme whose full value
-        #    map differs derives its ecology through a ``_replace`` shell
-        #    (heavy ndarrays stay shared) or a full replay fallback.
-        demes: List[PopulationInstance] = [None] * self._n_demes  # type: ignore[list-item]  # None placeholder; each slot filled before return
-        base_config: ModelDraft | None = None
-        base_template: Optional[PopulationInstance] = (
-            None  # template deme from first group — cloned via _clone_deme
+        from natal.frontend.model.definition_compiler import (
+            GENETIC_PRODUCT_FIELDS,
         )
 
-        for _sig, indices in groups.items():
-            first_idx = indices[0]
-            sig_map: Dict[str, Any] = {
-                name: expanded[name][first_idx] for name in all_param_names
-            }
+        expanded = {
+            name: batch.expand(self._n_demes, self._topology)
+            for name, batch in self._batch_settings.items()
+        }
+        names = sorted(expanded)
+        genetic_names = _genetics_batch_names(names)
+        groups: defaultdict[tuple[tuple[str, Any], ...], List[int]] = defaultdict(list)
+        values = [{name: expanded[name][i] for name in names} for i in range(self._n_demes)]
+        for i, value in enumerate(values):
+            signature = tuple((name, _make_hashable(value[name])) for name in genetic_names)
+            groups[signature].append(i)
 
-            if base_config is None:
-                group_template = self._build_template_for_group(
-                    sig_map,
-                    extra_declared=union_declared,
-                )
-                base_config = group_template.export_config()
-                base_template = group_template
-            elif self._can_use_replace(sig_map, base_config):
-                # Fast path: only scalar / known-array fields differ from
-                # the first group's template.
-                assert base_template is not None  # set in first-group branch above
-                group_template = self._deme_from_replace(
-                    sig_map,
-                    base_config,
-                    base_template,
-                    first_idx,
-                )
-            else:
-                # Fallback: parameter not recognized by _can_use_replace
-                # (e.g. fitness dict, custom modifier). Full builder replay —
-                # all arrays freshly allocated, no sharing with base_config.
-                group_template = self._build_template_for_group(
-                    sig_map,
-                    extra_declared=union_declared,
-                )
-
-            demes[first_idx] = group_template
-
-            # Remaining demes of this genetics group share its genetics;
-            # each derives its own ecology (K gradients, initial states, …)
-            # without inflating the number of full template builds.
-            # base_config was assigned in the first-group branch above, so
-            # every member of a later group can derive from it.
-            group_config = group_template.export_config()
-            for idx in indices[1:]:
-                if full_signatures[idx] == full_signatures[first_idx]:
-                    # Identical values: plain clone sharing the group's
-                    # config by reference (only state arrays are copies).
-                    demes[idx] = _clone_deme(
-                        group_template,
-                        config=group_config,
-                        name=f"{self._spatial_name}_deme_{idx}",
+        candidates: dict[int, tuple[PopulationBuilder, CompiledProducts]] = {}
+        group_products: list[CompiledProducts] = []
+        for indices in groups.values():
+            first = indices[0]
+            # The template already consumed the first batch values during
+            # declaration; preserve its cached recipes rather than replaying.
+            builder = copy(self._template) if first == 0 else self._builder_for_group(values[first])
+            if first == 0:
+                ecology = {key: value for key, value in values[first].items() if key not in genetic_names}
+                # Normalized controls can differ from template placeholders.
+                # Apply them through their declaring methods so derived and
+                # custom fields retain the ordinary builder semantics.
+                journal = self._resolved_group_journal(values[first])
+                builder._declaration_log = list(builder._declaration_log)  # pyright: ignore[reportPrivateUsage]  # detach before fluent methods append.
+                for method_name, arguments in journal:
+                    if ecology.keys() & arguments.keys():
+                        getattr(builder, method_name)(**{
+                            key: value for key, value in arguments.items() if value is not None
+                        })
+                builder._declaration_log = journal  # pyright: ignore[reportPrivateUsage]  # retain each declaration once.
+            products = builder._compile_products()  # pyright: ignore[reportPrivateUsage]  # unpublished spatial candidate.
+            group_products.append(products)
+            candidates[first] = (builder, products)
+            variants = {tuple((name, _make_hashable(values[first][name])) for name in names): candidates[first]}
+            for i in indices[1:]:
+                signature = tuple((name, _make_hashable(values[i][name])) for name in names)
+                if signature in variants:
+                    candidates[i] = variants[signature]
+                    continue
+                # Genetics fields are not re-applied by an ecology variant.
+                ecology = {key: value for key, value in values[i].items() if key not in genetic_names}
+                if self._can_use_replace(ecology, products.config):
+                    variant_builder = copy(builder)
+                    variant = self._build_variant_config(
+                        ecology, products.config, species=self._species, pop_type=self._pop_type,
                     )
-                elif self._can_use_replace(
-                    {name: expanded[name][idx] for name in all_param_names},
-                    base_config,
-                ):
-                    demes[idx] = self._deme_from_replace(
-                        {name: expanded[name][idx] for name in all_param_names},
-                        base_config,
-                        cast(PopulationInstance, base_template),
-                        idx,
+                    variant_builder._config = variant  # pyright: ignore[reportPrivateUsage]  # complete unpublished axes.
+                    variant_builder._declaration_log = self._resolved_group_journal(values[i])  # pyright: ignore[reportPrivateUsage]
+                else:
+                    variant_builder = self._builder_for_group(values[i])
+                    variant = variant_builder.config._replace(
+                        **{field: getattr(products.config, field) for field in GENETIC_PRODUCT_FIELDS}
+                    )
+                    variant_builder._config = variant  # pyright: ignore[reportPrivateUsage]
+                candidates[i] = (variant_builder, products._replace(config=variant))
+                variants[signature] = candidates[i]
+
+        projection = self._spatial_projection(group_products, list(candidates.values()))
+        demes: List[PopulationInstance] = [None] * self._n_demes  # type: ignore[list-item]  # filled before return.
+        for indices in groups.values():
+            published: dict[tuple[tuple[str, Any], ...], PopulationInstance] = {}
+            genetic_template: CompiledProducts | None = None
+            for i in indices:
+                signature = tuple((name, _make_hashable(values[i][name])) for name in names)
+                if signature in published:
+                    template = published[signature]
+                    config = template._config  # pyright: ignore[reportPrivateUsage]  # published template shell.
+                    assert config is not None
+                    demes[i] = _clone_deme(
+                        template, config=config, name=f"{self._spatial_name}_deme_{i}",
                     )
                 else:
-                    demes[idx] = self._build_template_for_group(
-                        {name: expanded[name][idx] for name in all_param_names},
-                        extra_declared=union_declared,
+                    builder, products = candidates[i]
+                    deme = builder._publish_and_build(  # pyright: ignore[reportPrivateUsage]  # sole complete-to-published boundary.
+                        products, name=f"{self._spatial_name}_deme_{i}", projection=projection,
+                        genetic_template=genetic_template,
                     )
-
+                    if genetic_template is None:
+                        config = deme._config  # pyright: ignore[reportPrivateUsage]  # share published products, not an exported copy.
+                        assert config is not None
+                        genetic_template = products._replace(config=config, registry=deme.index_registry)
+                    published[signature] = deme
+                    demes[i] = deme
         return demes
 
-    def _deme_from_replace(
+    def _spatial_projection(
         self,
-        value_map: Dict[str, Any],
-        base_config: ModelDraft,
-        base_template: PopulationInstance,
-        deme_idx: int,
-    ) -> PopulationInstance:
-        """Derive one deme from the base template via a ``_replace`` shell.
+        groups: list[CompiledProducts],
+        candidates: list[tuple[PopulationBuilder, CompiledProducts]],
+    ) -> IndexProjection:
+        """Plan the common layout using all unpublished maps and initial states."""
+        from natal.frontend.builder._base import collect_hook_genotype_refs
+        from natal.frontend.builder._registry_builder import resolve_declared_ztypes
+        from natal.frontend.model.publication import IndexProjection, plan_projection
 
-        The shell shares every unmodified ndarray with *base_config*;
-        only the deme-specific values (initial state, ecology scalars)
-        are new.  State arrays and the reset snapshot carry the deme's
-        own initial values.
-
-        Args:
-            value_map: The deme's concrete batch values.
-            base_config: The first group's template config.
-            base_template: The first group's template deme.
-            deme_idx: Deme index used for the deme name.
-
-        Returns:
-            A new deme population instance.
-        """
-        variant_config = self._build_variant_config(
-            value_map,
-            base_config,
-            species=self._species,
-            pop_type=self._pop_type,
-        )
-        if "individual_count" in value_map or "sperm_storage" in value_map:
-            from natal.frontend.builder._registry_builder import build_registry
-
-            # Initial-state declarations resolve on the full species catalog.
-            # The shared template may already use a pruned ZType registry.
-            full_registry = build_registry(self._species)
-            active = [
-                full_registry.ztype_index(genotype, slab)
-                for genotype, slab in base_template.index_registry.index_to_ztype
-            ]
-            if "individual_count" in value_map:
-                variant_config = variant_config._replace(
-                    initial_individual_count=variant_config.initial_individual_count[:, :, active],
-                )
-            if "sperm_storage" in value_map and self._pop_type == "age_structured":
-                variant_config = variant_config._replace(
-                    initial_sperm_storage=variant_config.initial_sperm_storage[:, active, :][:, :, active],
-                )
-        deme = _clone_deme(
-            base_template,
-            config=variant_config,
-            name=f"{self._spatial_name}_deme_{deme_idx}",
-        )
-        # _clone_deme copies state arrays from base_template; overwrite
-        # them with the deme's own initial values.
-        state = deme._live_state()  # pyright: ignore[reportPrivateUsage]  # live container: overwrite reaches the engine
-        if "individual_count" in value_map:
-            state.individual_count[:] = variant_config.initial_individual_count
-        if "sperm_storage" in value_map:
-            ss = getattr(state, "sperm_storage", None)
-            if ss is not None:
-                ss[:] = variant_config.initial_sperm_storage
-        # Update snapshot so reset() restores this deme's initial state.
-        ss_snap = getattr(state, "sperm_storage", None)
-        object.__setattr__(
-            deme,
-            "_initial_population_snapshot",
-            (
-                state.individual_count.copy(),
-                ss_snap.copy() if ss_snap is not None else None,
-                None,
-            ),
-        )
-        return deme
+        first = groups[0]
+        if not self._compress:
+            return IndexProjection.identity(first.registry)
+        seeds: set[int] = set()
+        for builder, products in candidates:
+            config = products.config
+            seeds.update(int(i) for i in np.flatnonzero(np.any(config.initial_individual_count > 0, axis=(0, 1))))
+            sperm = config.initial_sperm_storage
+            if sperm.size:
+                seeds.update(int(i) for i in np.flatnonzero(np.any(sperm > 0, axis=(0, 2))))
+                seeds.update(int(i) for i in np.flatnonzero(np.any(sperm > 0, axis=(0, 1))))
+            seeds.update(resolve_declared_ztypes(self._species, products.registry, self._declared_zygote_types))
+            seeds.update(resolve_declared_ztypes(
+                self._species, products.registry,
+                collect_hook_genotype_refs(builder._hook_calls),  # pyright: ignore[reportPrivateUsage]  # declarations share the full catalog.
+            ))
+        z2g = np.zeros_like(first.config.zygotes_to_gametes_map)
+        g2z = np.zeros_like(first.config.gametes_to_zygotes_map)
+        for products in groups:
+            np.maximum(z2g, products.config.zygotes_to_gametes_map, out=z2g)
+            np.maximum(g2z, products.config.gametes_to_zygotes_map, out=g2z)
+        combined = first._replace(config=first.config._replace(
+            zygotes_to_gametes_map=z2g, gametes_to_zygotes_map=g2z,
+        ))
+        return plan_projection(combined, full_ztype_indices=seeds)
 
     @staticmethod
     def _can_use_replace(sig_map: Dict[str, object], base_config: ModelDraft) -> bool:
@@ -2105,7 +1754,7 @@ class SpatialPopulationBuilder:
         ``ModelDraft``.
         """
         for name in sig_map:
-            if name in _ARRAY_KWARGS:
+            if name in _ARRAY_KWARGS or name in _DISCRETE_VECTOR_CELLS:
                 continue
             if name in _KWARG_RENAMES:
                 continue
@@ -2199,7 +1848,7 @@ class SpatialPopulationBuilder:
             # --- 1b. discrete scalars: one cell of a copied unified vector ---
             if kwarg in _DISCRETE_VECTOR_CELLS:
                 field_name, cell = _DISCRETE_VECTOR_CELLS[kwarg]
-                arr = np.array(getattr(base_config, field_name), dtype=np.float64)
+                arr = np.array(replace_kwargs.get(field_name, getattr(base_config, field_name)), dtype=np.float64)
                 # sig_map values are pre-validated scalars (see _can_use_replace).
                 arr[cell] = float(val)  # type: ignore[reportArgumentType]  # BatchSetting already expanded upstream
                 replace_kwargs[field_name] = arr
@@ -2233,53 +1882,13 @@ class SpatialPopulationBuilder:
             result.append((method, resolved))
         return result
 
-    def _build_template_for_group(
-        self,
-        sig_map: Dict[str, object],
-        *,
-        extra_declared: set[int] | None = None,
-        compress: bool | None = None,
-    ) -> PopulationInstance:
-        """Build a single template deme for one config-signature group.
-
-        Creates a fresh panmictic builder and replays every method call
-        recorded in ``_declaration_log``, substituting ``BatchSetting`` values
-        with the group-specific concrete values from *sig_map*.
-
-        Args:
-            sig_map: Mapping from batch parameter name to the group's
-                concrete value.
-            extra_declared: Additional ztype indices to protect from
-                compression pruning (union seeds across all demes).
-        """
-        # Ecology-only variants reuse the template's compiled genetics,
-        # including the uncompressed pass used to collect global BFS seeds.
-        # Cloning the builder preserves opaque recipe identities without
-        # repeating their effects; build snapshots every owned array itself.
-        if not _genetics_batch_names(list(sig_map)) and self._can_use_replace(sig_map, self._template.config):
-            from copy import copy
-
-            template_cfg = copy(self._template)
-            template_cfg._declaration_log = self._resolved_group_journal(sig_map)  # pyright: ignore[reportPrivateUsage]  # cached products still retain the concrete group declaration.
-            template_cfg._config = self._build_variant_config(  # pyright: ignore[reportPrivateUsage]  # isolated group candidate.
-                sig_map, self._template.config, species=self._species, pop_type=self._pop_type,
-            )
-            if compress is not None:
-                template_cfg._compress = compress  # pyright: ignore[reportPrivateUsage]
-            if extra_declared:
-                template_cfg._resolved_compression_ztypes = set(extra_declared)  # pyright: ignore[reportPrivateUsage]  # full ZType seeds, not public genotype selectors.
-            result = template_cfg.build(name=f"{self._spatial_name}_group")
-            # A cold compile creates products once; subsequent ecology groups
-            # and the post-BFS build can reuse them under the same input key.
-            self._template._compiled_draft = template_cfg._compiled_draft  # pyright: ignore[reportPrivateUsage]
-            self._template._cached_compilation_key = template_cfg._cached_compilation_key  # pyright: ignore[reportPrivateUsage]
-            return result
+    def _builder_for_group(self, sig_map: Dict[str, object]) -> PopulationBuilder:
+        """Replay one group into a complete-axis unpublished builder."""
         if self._pop_type == "age_structured":
             template_cfg = PopulationBuilder.for_age_structured(self._species)
         else:
             template_cfg = PopulationBuilder.for_discrete(self._species)
-        template_cfg._spatial_template = True  # pyright: ignore[reportPrivateUsage]  # group template replays spatial hook declarations.
-        template_cfg._resolved_compression_ztypes = None if extra_declared is None else set(extra_declared)  # pyright: ignore[reportPrivateUsage]  # internal full ZType seeds bypass public selector expansion.
+        template_cfg._spatial_template = True  # pyright: ignore[reportPrivateUsage]  # spatial hook selectors are retained.
 
         for method_name, kwargs in self._declaration_log:
             method = getattr(template_cfg, method_name, None)
@@ -2297,10 +1906,6 @@ class SpatialPopulationBuilder:
                 else:
                     resolved[key] = value
 
-            # Override compress flag (used by _compress_once to build
-            # without compression).
-            if compress is not None and method_name == "setup":
-                resolved["compress"] = compress
 
             # Handle positional args (presets, hooks).
             if method_name == "presets":
@@ -2338,7 +1943,7 @@ class SpatialPopulationBuilder:
                 filtered = {k: v for k, v in resolved.items() if v is not None}
                 method(**filtered)
 
-        return template_cfg.build(name=f"{self._spatial_name}_group")
+        return template_cfg
 
     def _compile_recording_plan(self, spatial: SpatialPopulation) -> None:
         """Compile and freeze the :class:`RecordingPlan` on the spatial population."""

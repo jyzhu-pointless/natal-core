@@ -155,16 +155,16 @@ class TestGameteCompileErrors:
         with pytest.raises(ValueError, match="at most one @ separator"):
             rs.to_gamete_modifier(host)
 
-    def test_target_outside_compressed_axis_raises_on_apply(
+    def test_target_outside_published_axis_rejects_runtime_update(
         self, species
     ) -> None:
-        """A target pruned from the compressed axis fails loudly, not silently."""
+        """Full compilation succeeds, but runtime publication may not expand axes."""
         pop = _compressed_population(species)
         rs = GameteConversionRuleSet()
         rs.add_gtype_convert(to="Dr@*", rate=1.0)
         modifier = rs.to_gamete_modifier(pop)
-        with pytest.raises(ValueError, match="outside the active axis"):
-            modifier()
+        with pytest.raises(ValueError, match="closed|external|inheritance"):
+            pop.add_gamete_modifier(modifier, refresh=True)
 
 
 class TestZygoteCompileErrors:
@@ -216,15 +216,15 @@ class TestZygoteCompileErrors:
         with pytest.raises(ValueError, match="same locus"):
             rs.to_zygote_modifier(host)
 
-    def test_target_outside_compressed_axis_raises_on_apply(
+    def test_target_outside_published_axis_rejects_runtime_update(
         self, species
     ) -> None:
         pop = _compressed_population(species)
         rs = ZygoteConversionRuleSet()
         rs.add_ztype_convert(to="Dr|Dr@*", rate=1.0)
         modifier = rs.to_zygote_modifier(pop)
-        with pytest.raises(ValueError, match="outside the active axis"):
-            modifier()
+        with pytest.raises(ValueError, match="closed|external|inheritance"):
+            pop.add_zygote_modifier(modifier, refresh=True)
 
     def test_allele_rule_leaves_unselected_copy_untouched(self) -> None:
         """A copy without the source allele stays; the other converts."""
@@ -358,16 +358,16 @@ class TestRemainingCompileBranches:
         with pytest.raises(ValueError, match="invalid label pattern"):
             rs.to_zygote_modifier(host)
 
-    def test_zygote_allele_conversion_outside_compressed_axis_raises(
+    def test_zygote_allele_conversion_outside_axis_rejects_runtime_update(
         self, species
     ) -> None:
-        """Allele-converted genotypes pruned from the axis fail loudly."""
+        """An allele event cannot open a new type in the runtime layout."""
         pop = _compressed_population(species)
         rs = ZygoteConversionRuleSet()
         rs.add_allele_convert(from_allele="WT", to_allele="Dr", rate=1.0)
         modifier = rs.to_zygote_modifier(pop)
-        with pytest.raises(ValueError, match="outside the active axis"):
-            modifier()
+        with pytest.raises(ValueError, match="closed|external|inheritance"):
+            pop.add_zygote_modifier(modifier, refresh=True)
 
 
 class TestDeclarationBranchCompletion:

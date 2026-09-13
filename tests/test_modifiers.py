@@ -22,15 +22,14 @@ from natal.frontend.modifiers.conversion_rules import (
     ZygoteZtypeConversionRule,
 )
 from natal.frontend.modifiers.gamete_conversion import GameteConversionRuleSet
-from natal.frontend.modifiers.zygote_conversion import ZygoteConversionRuleSet
-from natal.frontend.registry.index import IndexRegistry
-
 from natal.frontend.modifiers.module import (  # noqa: F401  (used by kept helper tests)
     _normalize_zygote_val_to_distribution,
     _resolve_gtype_key,
     _write_zygote_distribution,
     evaluate_genotype_filter,
 )
+from natal.frontend.modifiers.zygote_conversion import ZygoteConversionRuleSet
+from natal.frontend.registry.index import IndexRegistry
 
 
 @pytest.fixture
@@ -376,7 +375,6 @@ class TestGameteCascade:
         reg = host.registry
         z_wt = reg.ztype_index(sp.get_genotype_from_str("WT|WT"), "default")
         dr_hg = sp.get_haploid_genotype_from_str("Dr")
-        wt_hg = sp.get_haploid_genotype_from_str("WT")
         row = rows[(0, z_wt)]
         # Rule 1 converts all WT->Dr (rate 1.0); rule 2 then tags every
         # Dr branch (current=Dr) at 1.0, so the whole row ends tagged.
@@ -601,7 +599,7 @@ class TestBuildModifierWrappers:
         pop = _build_glab_pop()
         rs = GameteConversionRuleSet()
         rs.add_gtype_convert(to="*@tagged", rate=0.5, filters={"current": "*@default"})
-        modifier = rs.to_gamete_modifier(pop)
+        modifier = rs.to_gamete_modifier(_host_for(pop.species))
         assert modifier is not None
         pop.add_gamete_modifier(modifier, name="test", refresh=True)
         assert len(pop._gamete_modifiers) > 0
@@ -613,7 +611,7 @@ class TestBuildModifierWrappers:
         rs = ZygoteConversionRuleSet("test_zyg")
         gt = pop.species.get_genotype_from_str("WT|WT")
         rs.add_ztype_convert(to=f"{gt.to_string()}@*", rate=0.1)
-        modifier = rs.to_zygote_modifier(pop)
+        modifier = rs.to_zygote_modifier(_host_for(pop.species))
         assert modifier is not None
         pop.add_zygote_modifier(modifier, name="test", refresh=True)
         assert len(pop._zygote_modifiers) > 0
@@ -626,7 +624,7 @@ class TestBuildModifierWrappers:
         rs = GameteConversionRuleSet()
         rs.add_gtype_convert(to="*@tagged", rate=0.4, filters={"current": "*@default"})
         rs.add_gtype_convert(to="*@tagged", rate=1.0, filters={"current": "*@tagged"})
-        modifier = rs.to_gamete_modifier(pop)
+        modifier = rs.to_gamete_modifier(_host_for(pop.species))
         pop.add_gamete_modifier(modifier, name="test", refresh=True)
         z2g = pop.config.zygotes_to_gametes_map
         for sex in range(z2g.shape[0]):
@@ -658,7 +656,7 @@ class TestGameteModifierEmptyFreqs:
         # Add a modifier that converts default→tagged at 100% (CR-1 API)
         rs = GameteConversionRuleSet()
         rs.add_gtype_convert(to="*@tagged", rate=1.0, filters={"current": "*@default"})
-        modifier = rs.to_gamete_modifier(pop)
+        modifier = rs.to_gamete_modifier(_host_for(pop.species))
         assert modifier is not None
         pop.add_gamete_modifier(modifier, name="test", refresh=True)
         # Operation succeeded — the continue at line 656 was hit for

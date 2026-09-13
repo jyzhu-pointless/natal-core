@@ -173,6 +173,12 @@ def test_normalized_definition_recompiles_same_genetic_products(compressed: bool
     definition.fitness_base[0].fill(77.0)
     definition.registry.index_to_ztype.clear()
     compiled = compile_definition(definition)
+    assert compiled.config.offspring_tensor.shape == (0, 0, 0)
+    from natal.frontend.model.publication import IndexProjection, publish_products
+
+    compiled = publish_products(
+        compiled, projection=IndexProjection.from_registry(compiled.registry, pop.index_registry),
+    )
     for field in (
         "viability_fitness", "fecundity_fitness", "offspring_tensor",
         "zygotes_to_gametes_map", "gametes_to_zygotes_map",

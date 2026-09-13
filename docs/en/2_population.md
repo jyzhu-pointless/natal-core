@@ -304,5 +304,5 @@ pop = nt.DiscreteGenerationPopulation.setup(
 ### Effect
 
 - GType: single-locus with only A|A initially → HL from 2 to 1
-- ZType: only A|A reachable → G from 4 to 1, offspring_tensor from 64 to 1 elements
+- ZType: only A|A reachable → G from 4 to 1. The offspring tensor is derived during publication on the resulting runtime axes.
 - Combined: >98% reduction possible

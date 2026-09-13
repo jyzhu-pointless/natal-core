@@ -756,11 +756,10 @@ class TestMeiosisDerivedRecompute:
         assert pop._rust_needs_rebuild == rebuild_before
 
     def test_draft_writer_meiosis_write_recomputes_on_build_path(self):
-        """DraftWriter (no session) recomputes the derived tensor.
+        """Draft writes defer derivation; publication consumes the modified maps.
 
-        Attack: the recompute wired only into CoreConfigWriter would
-        leave build-path writes stale — the einsum identity must hold
-        without any session push.
+        The final tensor must satisfy the independent einsum identity without
+        materializing a complete offspring tensor during a draft write.
         """
         from natal.frontend.model import build_population_config
 
@@ -784,14 +783,23 @@ class TestMeiosisDerivedRecompute:
         biased[:, 0, :] = [0.0, 1.0]
         writer.tensor_write("meiosis_map", biased)
 
-        derived = np.asarray(writer.draft.offspring_tensor)
-        reference = np.einsum(
-            "ia,jb,abk->ijk",
-            np.asarray(writer.draft.zygotes_to_gametes_map)[0],
-            np.asarray(writer.draft.zygotes_to_gametes_map)[1],
-            np.asarray(writer.draft.gametes_to_zygotes_map),
+        # Build-time map writes update only the maps; offspring is derived
+        # when the complete candidate is published.
+        assert np.asarray(writer.draft.offspring_tensor).shape == (0, 0, 0)
+        from natal.contracts.materialize import gtype_names_from_registry, ztype_names_from_registry
+        from natal.frontend.builder._registry_builder import build_registry
+        from natal.frontend.model.definition_compiler import CompiledProducts
+        from natal.frontend.model.publication import publish_products
+
+        species = nt.Species.from_dict("draft_write_publication", {"chr": {"locus": ["A", "B"]}})
+        registry = build_registry(species)
+        prepared = writer.draft._replace(
+            ztype_names=ztype_names_from_registry(registry.index_to_ztype),
+            gtype_names=gtype_names_from_registry(registry.index_to_gtype),
         )
-        np.testing.assert_allclose(reference, derived, rtol=1e-13, atol=1e-15)
+        published = publish_products(CompiledProducts(prepared, registry, [], []))
+        reference = np.einsum("ia,jb,abk->ijk", biased[0], biased[1], fusion)
+        np.testing.assert_allclose(reference, published.config.offspring_tensor, rtol=1e-13, atol=1e-15)
 
         # Rejection on the build path is equally atomic.
         draft2 = draft._replace(zygotes_to_gametes_map=mendelian.copy())

@@ -943,7 +943,7 @@ class TestErrorPaths:
         Invariant: when the registry has diploid genotypes but NO haploid
         genotypes, ``rebuild_config_maps`` short-circuits — it returns the
         input draft object unchanged (identity, not a copy) with
-        ``compression_applied is False``, even with ``compress=True``.
+        and returns the input draft object unchanged.
         Attack vector: the early return constructing a replaced draft (a
         caller comparing identity would miss state drift) or reporting
         compression as applied.
@@ -958,16 +958,14 @@ class TestErrorPaths:
         assert len(registry.index_to_genotype) == 6
 
         draft = PopulationBuilder.from_species(simple_species).config
-        new_draft, applied = rebuild_config_maps(
+        new_draft = rebuild_config_maps(
             simple_species,
             draft,
             registry,
             gamete_modifiers=[],
             zygote_modifiers=[],
-            compress=True,
         )
         assert new_draft is draft, "early return replaced the draft object"
-        assert applied is False
 
 
 # ══════════════════════════════════════════════════════════════════════════

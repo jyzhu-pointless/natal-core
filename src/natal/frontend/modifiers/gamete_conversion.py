@@ -201,6 +201,12 @@ class GameteConversionRuleSet:
         """
         species: Species = host.species
         registry: IndexRegistry = host.registry
+        if registry.published:
+            # A population can supply species context, but rule compilation
+            # always uses complete coordinates. Runtime updates project later.
+            from natal.frontend.builder._registry_builder import build_registry
+
+            registry = build_registry(species)
         compiled = self._compile(species, registry)
 
         from natal.frontend.genetics.compile import project_mendelian_maps

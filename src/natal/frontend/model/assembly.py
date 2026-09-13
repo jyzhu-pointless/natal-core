@@ -74,9 +74,9 @@ def build_config_maps(
 ) -> ModelDraft:
     """Shared computation engine for config building.
 
-    Validates inputs, fills defaults, expands slabs, computes the
-    offspring probability tensor, and assembles one complete
-    :class:`ModelDraft`.  Both ``build_population_config`` (age-structured,
+    Validates inputs, fills defaults, expands slabs, and assembles one
+    complete-axis draft without deriving an offspring tensor. Publication
+    derives offspring only on the final runtime axes. Both ``build_population_config`` (age-structured,
     with generation-time derivation) and ``build_discrete_engine_config``
     (discrete normalization) consume it; their granularity-specific
     differences are expressed through the arguments, not by post-hoc
@@ -266,12 +266,10 @@ def build_config_maps(
                     female_only_by_sex_chrom[g_off] = f_ok and not m_ok
                     male_only_by_sex_chrom[g_off] = m_ok and not f_ok
 
-    # Offspring probability tensor — via the single shared derivation
-    # (counts resolve from the table shapes, which are already the
-    # compressed/effective axes at this point).
-    from natal.frontend.genetics.matrices import recompute_offspring_tensor
-
-    offspring_tensor = recompute_offspring_tensor(z2g_expanded, g2z)
+    # Publication derives this tensor once, after the complete model has
+    # been projected onto its final runtime axes.  Keeping an empty marker
+    # here prevents a transient full-axis offspring allocation during build.
+    offspring_tensor = np.empty((0, 0, 0), dtype=np.float64)
 
     resolved_ztype_names = (
         ztype_names

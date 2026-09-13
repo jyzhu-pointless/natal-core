@@ -4,7 +4,25 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.model import build_discrete_engine_config
+from natal.contracts.materialize import (
+    gtype_names_from_registry,
+    ztype_names_from_registry,
+)
+from natal.frontend.builder._registry_builder import build_registry
+from natal.frontend.model import ModelDraft, build_discrete_engine_config
+from natal.frontend.model.definition_compiler import CompiledProducts
+from natal.frontend.model.publication import publish_products
+
+
+def _published_config(species: nt.Species, config: ModelDraft) -> ModelDraft:
+    """Explicitly finalize the low-level test draft before native materialization."""
+    registry = build_registry(species)
+    config = config._replace(
+        ztype_names=ztype_names_from_registry(registry.index_to_ztype),
+        gtype_names=gtype_names_from_registry(registry.index_to_gtype),
+    )
+    return publish_products(CompiledProducts(config, registry, [], [])).config
+
 
 
 @pytest.mark.parametrize("compatibility", [1.0, 0.0])
@@ -36,7 +54,7 @@ def test_wf_unconstrained_sex_branch_conserves_offspring(compatibility: float) -
         male_ztype_compatibility=np.full(1, compatibility),
     )
     pop = nt.DiscreteGenerationPopulation(
-        species=species, population_config=config,
+        species=species, population_config=_published_config(species, config),
         initial_individual_count={"female": {"A|A": 100}, "male": {"A|A": 100}},
     )
     pop.run(1)

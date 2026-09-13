@@ -2,7 +2,8 @@
 
 One spelling of "apply the accumulated modifier recipes to a Mendelian
 baseline": :func:`compile_modifier_maps` chains the wrapper callables
-over the baseline tables and derives the offspring tensor.  Both
+over complete baseline tables. Publication derives the offspring tensor
+only after the runtime axes have been selected.  Both
 historical rebuild paths — the population-side refresh and the
 build-side ``rebuild_config_maps`` — funnel through here, so the two
 entry points cannot drift apart (the parity safety net in
@@ -15,8 +16,6 @@ from typing import TYPE_CHECKING, Optional, Protocol, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
-
-from natal.frontend.genetics.matrices import recompute_offspring_tensor
 
 if TYPE_CHECKING:
     from natal.frontend.genetics.structures.species import Species
@@ -58,26 +57,31 @@ class RecipeHost(Protocol):
 def project_mendelian_maps(
     species: Species, registry: IndexRegistry,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Project Mendelian tables onto the candidate's exact active axes.
+    """Acquire isolated Mendelian tables for a complete unpublished catalog.
 
     Args:
         species: Registered genetic structure providing the full baseline.
-        registry: Ordered active zygote and gamete types, possibly sparse.
+        registry: Complete zygote and gamete catalog in species order.
 
     Returns:
         Isolated meiosis and fertilization arrays aligned to the registry.
+
+    Raises:
+        ValueError: If the registry is published, incomplete, or reordered.
     """
     from natal.frontend.builder._registry_builder import build_registry
 
+    if registry.published:
+        raise ValueError("Mendelian projection requires an unpublished full registry.")
     full = build_registry(species)
-    zindices = {key: index for index, key in enumerate(full.index_to_ztype)}
-    gindices = {key: index for index, key in enumerate(full.index_to_gtype)}
-    zactive = [zindices[key] for key in registry.index_to_ztype]
-    gactive = [gindices[key] for key in registry.index_to_gtype]
+    if (registry.index_to_ztype != full.index_to_ztype
+            or registry.index_to_gtype != full.index_to_gtype):
+        raise ValueError("Mendelian projection requires the complete species registry.")
     baseline = species.get_config_blueprint()
-    meiosis = baseline["zygotes_to_gametes_map"][:, zactive, :][:, :, gactive]
-    fertilization = baseline["gametes_to_zygotes_map"][gactive, :, :][:, gactive, :][:, :, zactive]
-    return meiosis, fertilization
+    return (
+        np.array(baseline["zygotes_to_gametes_map"], dtype=np.float64, copy=True),
+        np.array(baseline["gametes_to_zygotes_map"], dtype=np.float64, copy=True),
+    )
 
 
 def next_modifier_id(
@@ -103,15 +107,12 @@ def compile_modifier_maps(
     zygote_modifiers: ZygoteList,
     registry: IndexRegistry,
     population: Optional[RecipeHost],
-) -> tuple[
-    NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]
-]:
-    """Apply modifier recipes to a baseline and derive the offspring tensor.
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Apply modifier recipes to a baseline.
 
-    Single owner of the modifier-application order (gamete wrappers in
-    list order, then zygote wrappers in list order) and of the offspring
-    derivation — both rebuild entry points call this, so the compile
-    semantics exist exactly once.
+    The compiler owns modifier application order (gamete wrappers in list
+    order, then zygote wrappers in list order). Offspring derivation belongs
+    to the runtime consumer and is deliberately absent here.
 
     Args:
         baseline_z2g: Mendelian (or override) meiosis table of shape
@@ -123,13 +124,12 @@ def compile_modifier_maps(
             first then manual, as accumulated by the caller.
         zygote_modifiers: The zygote-side twin of *gamete_modifiers*.
         registry: The registry whose active axes the tables address.
-        population: Optional host (live population or build-side
-            candidate) handed to recipe factories; wrappers built from
+        population: Optional unpublished compilation host handed to
+            recipe factories; wrappers built from
             pre-compiled callables receive it unchanged.
 
     Returns:
-        ``(z2g, g2z, offspring_tensor)`` — fresh contiguous tables with
-        the modifier recipes applied and the derived tensor recomputed.
+        ``(z2g, g2z)`` — fresh contiguous tables with modifier recipes applied.
     """
     from natal.frontend.modifiers.module import build_modifier_wrappers
 
@@ -148,5 +148,4 @@ def compile_modifier_maps(
         g2z = fn(g2z)
     z2g = np.ascontiguousarray(z2g)
     g2z = np.ascontiguousarray(g2z)
-    offspring = recompute_offspring_tensor(z2g, g2z)
-    return z2g, g2z, offspring
+    return z2g, g2z

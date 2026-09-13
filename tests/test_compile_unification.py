@@ -246,3 +246,17 @@ class TestSingleCompilerSpelling:
         assert offenders == [], (
             f"modifier application re-spelled outside the compiler: {offenders}"
         )
+
+    def test_species_blueprint_defers_offspring_derivation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Blueprint acquisition carries an empty tensor until publication."""
+        species = _species("__blueprint_deferred_offspring__")
+
+        def fail_if_called(*args: object, **kwargs: object) -> object:
+            raise AssertionError("offspring derivation must be deferred")
+
+        monkeypatch.setattr(
+            "natal.frontend.genetics.matrices.recompute_offspring_tensor",
+            fail_if_called,
+        )
+        blueprint = species.get_config_blueprint()
+        assert blueprint["offspring_tensor"].shape == (0, 0, 0)

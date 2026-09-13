@@ -880,7 +880,7 @@ def test_build_time_multi_preset_failure_rolls_back_and_retries_exactly(
     original_presets = list(builder._presets)  # pyright: ignore[reportPrivateUsage]  # build-time registration has no public metadata view.
     original_gamete = list(builder.gamete_modifiers)
     original_zygote = list(builder.zygote_modifiers)
-    original_compression = builder._compression_applied  # pyright: ignore[reportPrivateUsage]  # rollback covers all PopulationBuilder transaction state.
+    original_published = None if builder._registry is None else builder._registry.published  # pyright: ignore[reportPrivateUsage]  # rollback covers registry lifecycle state.
     original_arrays = _copy_config_arrays(builder.config)
     attempted = (successful, failing) if scenario == "same-call" else (failing,)
     expected_message = (
@@ -897,7 +897,7 @@ def test_build_time_multi_preset_failure_rolls_back_and_retries_exactly(
     assert builder._presets == original_presets  # pyright: ignore[reportPrivateUsage]  # no failed recipe may remain registered.
     assert builder.gamete_modifiers == original_gamete
     assert builder.zygote_modifiers == original_zygote
-    assert builder._compression_applied is original_compression  # pyright: ignore[reportPrivateUsage]  # compression state cannot leak from a failed attempt.
+    assert (None if builder._registry is None else builder._registry.published) is original_published  # pyright: ignore[reportPrivateUsage]  # publication state cannot leak from a failed attempt.
     _assert_config_arrays_equal(builder.config, original_arrays)
     expected_successful_binding = species if scenario == "append" else None
     assert successful._bound_species is expected_successful_binding  # pyright: ignore[reportPrivateUsage]  # same-call rollback releases earlier inputs; append preserves prior success.

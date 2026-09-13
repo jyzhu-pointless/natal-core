@@ -32,11 +32,11 @@ GENETIC_PRODUCT_FIELDS = (
 
 
 class CompiledProducts(NamedTuple):
-    """One completed candidate compile, returned to its accepting builder.
+    """Bundle a draft, its registry, and the modifiers compiled for those axes.
 
-    A transient return package, not long-lived state: the builder that
-    accepts it publishes ``config``/``registry``/modifier products as its
-    own build state in one internal operation.
+    Compilation returns unpublished products. The publication module returns
+    a detached bundle with a fixed registry and a derived offspring tensor;
+    ``published`` reads the registry's single lifecycle marker.
     """
 
     config: ModelDraft
@@ -44,18 +44,27 @@ class CompiledProducts(NamedTuple):
     gamete_modifiers: GameteList
     zygote_modifiers: ZygoteList
 
+    @property
+    def published(self) -> bool:
+        """Whether the bundled registry and arrays use a fixed runtime layout."""
+        return self.registry.published
+
 
 def copy_registry(registry: IndexRegistry) -> IndexRegistry:
     """Copy active index containers while preserving interned genetic identities."""
     from natal.frontend.registry.index import IndexRegistry
 
     result = IndexRegistry()
+    # Publication is lifecycle state, not an index entry; preserve it on
+    # detached declaration copies so compiled candidates cannot bypass it.
     result.slab_labels = list(registry.slab_labels)
     result.glab_labels = list(registry.glab_labels)
     for genotype, label in registry.index_to_ztype:
         result.register_ztype(genotype, label)
     for haplotype, label in registry.index_to_gtype:
         result.register_gtype(haplotype, label)
+    if registry.published:
+        result.mark_published()
     return result
 
 
@@ -156,6 +165,13 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
     registry = definition.registry
     if draft is None or registry is None:
         raise ValueError("Compilation requires normalized model declarations.")
+    if registry.published:
+        raise ValueError("Compilation requires an unpublished registry.")
+    from natal.frontend.builder._registry_builder import build_registry
+    complete = build_registry(definition.species)
+    if (registry.index_to_ztype != complete.index_to_ztype
+            or registry.index_to_gtype != complete.index_to_gtype):
+        raise ValueError("Compilation requires the complete species registry.")
     species = definition.species
     host = _CompileHost(species, registry, draft)
     for name, base in zip(FITNESS_FIELDS, definition.fitness_base):
@@ -189,10 +205,10 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
         zygotes.extend(cast("ZygoteList", list(definition.manual_zygote)))
         from natal.frontend.builder._registry_builder import rebuild_config_maps
 
-        host.draft, _applied = rebuild_config_maps(
+        host.draft = rebuild_config_maps(
             species, host.draft, registry,
             gamete_modifiers=gametes, zygote_modifiers=zygotes,
-            compress=False, host=host,
+            host=host,
         )  # apply every collected modifier exactly once.
     except BaseException:
         for preset, binding in bindings:

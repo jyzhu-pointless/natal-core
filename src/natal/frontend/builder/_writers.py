@@ -427,6 +427,10 @@ class _DraftWriterBase:
 
     def _recompute_offspring_tensor(self) -> None:
         """Recompute the derived offspring tensor from the live tables."""
+        # Unpublished drafts carry only inheritance maps. Publication derives
+        # the offspring tensor after the final runtime axes are selected.
+        if self._draft.offspring_tensor.size == 0:
+            return
         offspring = recompute_offspring_tensor(
             self._draft.zygotes_to_gametes_map,
             self._draft.gametes_to_zygotes_map,

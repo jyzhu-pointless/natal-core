@@ -121,7 +121,7 @@ class SpeciesMappingMixin:
             Dict with keys ``n_ztypes`` (int), ``n_gtypes``
             (int), ``n_glabs`` (int), ``zygotes_to_gametes_map``
             (ndarray), ``gametes_to_zygotes_map`` (ndarray),
-            ``offspring_tensor`` (ndarray), and compatibility arrays
+            ``offspring_tensor`` (empty deferred marker), and compatibility arrays
             (ndarray).
         """
         self = cast(Species, self)
@@ -144,8 +144,6 @@ class SpeciesMappingMixin:
         self.blueprint_snapshot = None
         self.blueprint_content_snapshot = None
 
-        from natal.frontend.genetics.matrices import recompute_offspring_tensor
-
         genotypes = self.get_all_genotypes(unordered=self.unordered)
         haplotypes = self.get_all_haploid_genotypes()
         n_glabs = len(self.gamete_labels or ["default"])
@@ -162,7 +160,9 @@ class SpeciesMappingMixin:
         n_ztypes = n_g * n_slabs
         n_gtypes = n_hg * n_glabs
 
-        offspring = recompute_offspring_tensor(z2g, g2z)
+        # The complete offspring tensor is derived only by assembly/runtime;
+        # blueprint acquisition must remain cheap and side-effect free.
+        offspring = np.empty((0, 0, 0), dtype=np.float64)
 
         f_compat = meiosis_f.sum(axis=1)
         m_compat = meiosis_m.sum(axis=1)
@@ -281,6 +281,8 @@ class SpeciesMappingMixin:
             # The TypedDict unions scalar catalog fields in; every key in
             # `expected` maps to an ndarray field.
             arr = np.asarray(cast(NDArray[np.float64], blueprint[key]))
+            if key == "offspring_tensor" and arr.shape == (0, 0, 0):
+                continue
             if arr.shape != shape:
                 raise RuntimeError(
                     f"Species baseline field '{key}' has shape {arr.shape}, "

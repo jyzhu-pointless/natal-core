@@ -307,5 +307,5 @@ pop = nt.DiscreteGenerationPopulation.setup(
 ### 效果
 
 - **GType 压缩**：初始仅含 A|A 的单 locus 种群，HL 从 2 压缩到 1
-- **ZType 压缩**：仅 A|A 可达时，G 从 4 压缩到 1，offspring_tensor 从 64 元素降至 1
+- **ZType 压缩**：仅 A|A 可达时，G 从 4 压缩到 1；offspring_tensor 仅在发布时按最终运行时轴生成
 - **双轴同时**：综合减少可达 98% 以上

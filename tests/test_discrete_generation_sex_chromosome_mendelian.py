@@ -2,10 +2,32 @@ import numpy as np
 import pytest
 
 import natal as nt
-from natal.frontend.model import NO_COMPETITION, build_discrete_engine_config
+from natal.contracts.materialize import (
+    gtype_names_from_registry,
+    ztype_names_from_registry,
+)
+from natal.frontend.builder._registry_builder import build_registry
 from natal.frontend.genetics import initialize_gamete_map, initialize_zygote_map
-
+from natal.frontend.model import (
+    NO_COMPETITION,
+    ModelDraft,
+    build_discrete_engine_config,
+)
+from natal.frontend.model.definition_compiler import CompiledProducts
+from natal.frontend.model.publication import publish_products
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
+
+
+def _published_config(species: nt.Species, config: ModelDraft) -> ModelDraft:
+    """Explicitly finalize the low-level test draft before native materialization."""
+    registry = build_registry(species)
+    config = config._replace(
+        ztype_names=ztype_names_from_registry(registry.index_to_ztype),
+        gtype_names=gtype_names_from_registry(registry.index_to_gtype),
+    )
+    return publish_products(CompiledProducts(config, registry, [], [])).config
+
+
 
 
 def _has_chromosome(haploid: object, chromosome: object) -> bool:
@@ -118,7 +140,7 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
         # builder chain.
     pop = DiscreteGenerationPopulation(
         species=species,
-        population_config=config,
+        population_config=_published_config(species, config),
         initial_individual_count={
             "female": {female_parent: parent_count},
             "male": {male_parent: parent_count},
@@ -289,7 +311,7 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
         # builder chain.
     pop = DiscreteGenerationPopulation(
         species=species,
-        population_config=config,
+        population_config=_published_config(species, config),
         initial_individual_count={
             "female": {female_parent: 1000.0},
             "male": {male_parent: 1000.0},
