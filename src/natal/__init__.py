@@ -110,12 +110,10 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     "frontend.modifiers": [
         "build_modifier_wrappers", "evaluate_genotype_filter",
         "GameteAlleleConversionRule", "GameteConversionRuleSet",
-        "GameteGlabConversionRule", "GameteGtypeConversionRule",
-        "GameteHaploidGenomeConversionRule", "GameteModifier", "GenotypeFilter",
+        "GameteGtypeConversionRule", "GameteModifier", "GenotypeFilter",
         "GlabSelector", "wrap_gamete_modifier", "wrap_zygote_modifier",
         "ZygoteAlleleConversionRule", "ZygoteConversionRuleSet",
-        "ZygoteGenotypeConversionRule", "ZygoteGlabRedirectRule", "ZygoteModifier",
-        "ZygoteZtypeConversionRule",
+        "ZygoteModifier", "ZygoteZtypeConversionRule",
     ],
     "frontend.output": [
         "History", "HistorySchema", "Observation", "ObservationMetadata",
@@ -145,12 +143,8 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     "frontend.presets": [
         "GeneticPreset", "HomingDrive", "ToxinAntidoteDrive", "CytoplasmicPreset",
         "Wolbachia", "TransgenicBackground", "apply_preset_fitness_patch",
-        "PresetFitnessPatch", "count_allele_copies", "GameteAlleleConversionRule",
-        "GameteConversionRuleSet", "GameteGlabConversionRule",
-        "GameteGtypeConversionRule", "GameteHaploidGenomeConversionRule",
-        "ZygoteAlleleConversionRule", "ZygoteConversionRuleSet",
-        "ZygoteGenotypeConversionRule", "ZygoteGlabRedirectRule",
-        "ZygoteZtypeConversionRule",
+        "PresetFitnessPatch", "count_allele_copies",
+        "GameteConversionRuleSet", "ZygoteConversionRuleSet",
     ],
     "frontend.registry": ["IndexRegistry"],
     "frontend.spatial": [

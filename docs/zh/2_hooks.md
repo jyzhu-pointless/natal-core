@@ -15,6 +15,8 @@ Hook 的作用时机包括：
 
 其中 `finish` 是一次性的事件，而 `first`、`early`、`late` 可以根据需要在多个 tick 中重复执行。
 
+Hook 注册和手动触发（`pop.trigger_event(...)`）共用这一事件目录：未知或拼错的事件名会直接抛出 `ValueError`（错误信息包含传入名称与合法名称），不会被静默忽略。`initialization` 不是受支持的事件；初始化逻辑应写在 `first` 事件的首个 tick（`when="tick == 1"`）或 `finish` 事件中。
+
 选择事件时，建议先明确干预发生在哪个具体的时机，这会显著影响结果解释。
 
 ## 声明式 Hook
@@ -162,13 +164,13 @@ Declarative Hook 中的 `Op` 操作会根据种群创建（链式 API 中）时 
 `when` 用于控制操作在何时生效，常见写法：
 
 - `tick == N`
-- `tick % N == 0`
+- `tick % N == 0`（`N` 必须是正整数字面量；`N = 0` 在解析期报 `ValueError`）
 - `tick >= N`
 - `tick > N`
 - `tick <= N`
 - `tick < N`
 
-并支持 `and`、`or`、`not` 与括号组合。
+`N` 只支持非负整数字面量，不支持变量引用或其他表达式。并支持 `and`、`or`、`not` 与括号组合。
 
 示例：
 

@@ -55,13 +55,29 @@ def config_snapshot_from_session(session: _ConfigReadSession, draft: ModelDraft)
         current: object = getattr(draft, target)
         if name == "equilibrium_distribution":
             values = session.get_tensor(name)
-            fields[target] = values.reshape(2, int(draft.n_ages)) if values.size else None
+            if not values.size:
+                fields[target] = None
+            else:
+                expected = 2 * int(draft.n_ages)
+                if values.size != expected:
+                    raise RuntimeError(
+                        f"Configuration snapshot inconsistency for tensor field "
+                        f"'{name}': expected {expected} elements, got {values.size}"
+                    )
+                fields[target] = values.reshape(2, int(draft.n_ages))
         elif isinstance(current, np.ndarray):
             values = session.get_tensor(name)
-            if values.size == current.size:
-                fields[target] = values.reshape(
-                    cast(NDArray[np.float64], current).shape
+            if values.size != current.size:
+                # A size mismatch means the native session and the draft
+                # declaration disagree; mixing old draft values with fresh
+                # native reads would produce a silently corrupt snapshot.
+                raise RuntimeError(
+                    f"Configuration snapshot inconsistency for tensor field "
+                    f"'{name}': expected {current.size} elements, got {values.size}"
                 )
+            fields[target] = values.reshape(
+                cast(NDArray[np.float64], current).shape
+            )
         else:
             value = session.get_scalar(name)
             fields[target] = None if name == "external_expected_eggs" and value < 0 else value

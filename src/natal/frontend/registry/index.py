@@ -426,7 +426,6 @@ class IndexRegistry:
         self._index_to_gtype = new_index_to_gtype
         self._gtype_to_index = {gt: i for i, gt in enumerate(new_index_to_gtype)}
 
-# compress_hg_glab / decompress_hg_glab have been moved to
-# natal.frontend.population_config as _compress_hl / _decompress_hl.
+# compress_hl / decompress_hl live in natal.frontend.genetics.matrices.
 # They are only needed during species blueprint construction
 # (before IndexRegistry exists).  For runtime use gtype_index().

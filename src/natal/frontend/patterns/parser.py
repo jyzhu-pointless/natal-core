@@ -5,22 +5,25 @@ Genotype pattern parser — parses pattern strings into pattern objects.
 from __future__ import annotations
 
 from typing import (
-    TYPE_CHECKING,
     Dict,
     List,
     Literal,
     Optional,
-    Set,
     Tuple,
     Union,
 )
 
-if TYPE_CHECKING:
-    import natal as nt
 from natal.frontend.genetics import Species
 
+from ._groups import chromosome_groups
 from .elements._base import PatternElement, PatternParseError
-from .elements.atom import AllelePattern, LabPattern, SetPattern, WildcardPattern
+from .elements.atom import (
+    AllelePattern,
+    LabPattern,
+    LocusPattern,
+    SetPattern,
+    WildcardPattern,
+)
 from .elements.chromosome import ChromosomePairPattern, HaplotypePath
 from .elements.diploid import GenotypePattern
 from .elements.haploid import GameteTypePattern, HaploidGenomePattern
@@ -54,6 +57,8 @@ class GenotypePatternParser:
         (wildcard — matches any label) if no ``@`` suffix was present.
         The suffix supports ``!`` negation and ``{...}`` set syntax.
         """
+        if pattern_str.count("@") > 1:
+            raise PatternParseError("Only one @lab suffix is allowed")
         if "@" in pattern_str:
             idx = pattern_str.rindex("@")
             base = pattern_str[:idx].strip()
@@ -106,26 +111,15 @@ class GenotypePatternParser:
                 chr_pattern = self._parse_chromosome_pair(chr_str)
                 chromosome_patterns.append(chr_pattern)
 
-            # Handle wildcard chromosome markers and fill remaining chromosomes
-            final_patterns: List[Optional[ChromosomePairPattern]] = []
-            for i, pattern in enumerate(chromosome_patterns):
-                if pattern == "WILDCARD_CHROMOSOME":
-                    # Create a fully wildcard pattern for this chromosome
-                    if i < len(self.species.chromosomes):
-                        chromosome = self.species.chromosomes[i]
-                        num_loci = len(chromosome.loci)
-                        wildcard_patterns = [WildcardPattern() for _ in range(num_loci)]
-                        maternal_path = HaplotypePath(wildcard_patterns)
-                        paternal_path = HaplotypePath(wildcard_patterns.copy())
-                        final_patterns.append(ChromosomePairPattern(maternal_path, paternal_path))
-                    else:
-                        final_patterns.append(None)
-                else:
-                    final_patterns.append(pattern)
-
-            # Fill remaining chromosomes with None
-            while len(final_patterns) < len(self.species.chromosomes):
-                final_patterns.append(None)
+            n_groups = len(chromosome_groups(self.species))
+            if len(chromosome_patterns) > n_groups:
+                raise PatternParseError("Pattern has more chromosome groups than the species")
+            # A whole-group wildcard also covers X/Y or Z/W with different loci.
+            final_patterns: List[Optional[ChromosomePairPattern]] = [
+                None if pattern == "WILDCARD_CHROMOSOME" else pattern
+                for pattern in chromosome_patterns
+            ]
+            final_patterns.extend([None] * (n_groups - len(final_patterns)))
 
             result = GenotypePattern(final_patterns, lab=lab)
             self._pattern_cache[cache_key] = result
@@ -155,19 +149,24 @@ class GenotypePatternParser:
                 current.append(char)
             elif char == ')':
                 depth -= 1
+                if depth < 0:
+                    raise PatternParseError("Unbalanced parentheses")
                 current.append(char)
             elif char == ';' and depth == 0:
                 segment = ''.join(current).strip()
-                if segment:
-                    result.append(segment)
+                if not segment:
+                    raise PatternParseError("Empty chromosome pattern")
+                result.append(segment)
                 current = []
             else:
                 current.append(char)
 
-        if current:
-            segment = ''.join(current).strip()
-            if segment:
-                result.append(segment)
+        if depth:
+            raise PatternParseError("Unbalanced parentheses")
+        segment = ''.join(current).strip()
+        if not segment:
+            raise PatternParseError("Empty chromosome pattern")
+        result.append(segment)
 
         return result
 
@@ -256,11 +255,12 @@ class GenotypePatternParser:
         Raises:
             PatternParseError: If the pattern is invalid.
         """
-        locus_pair_strs = [s.strip() for s in inner.split(";") if s.strip()]
+        locus_pair_strs = [s.strip() for s in inner.split(";")]
 
         maternal_locus_patterns: List[PatternElement] = []
         paternal_locus_patterns: List[PatternElement] = []
         has_unordered = False
+        locus_patterns: List[LocusPattern] = []
 
         for locus_pair_str in locus_pair_strs:
             # Each locus_pair_str is like "A1::A2" or "B1|B1"
@@ -286,6 +286,7 @@ class GenotypePatternParser:
             else:
                 raise PatternParseError(f"Locus pair must contain '|' or '::': {locus_pair_str}")
 
+            locus_patterns.append(LocusPattern(mat_pattern, pat_pattern, unordered="::" in locus_pair_str))
             maternal_locus_patterns.append(mat_pattern)
             paternal_locus_patterns.append(pat_pattern)
 
@@ -296,31 +297,27 @@ class GenotypePatternParser:
             maternal_haplotype_path,
             paternal_haplotype_path,
             unordered=has_unordered,
-            explicit_grouping=True
+            explicit_grouping=True,
+            locus_patterns=locus_patterns
         )
 
-    def _parse_haplotype_path(self, haplotype_str: str, species: Optional[nt.Species] = None) -> HaplotypePath:
+    def _parse_haplotype_path(self, haplotype_str: str) -> HaplotypePath:
         """Parse a haplotype pattern string into HaplotypePath.
 
         Args:
             haplotype_str: Pattern string like ``"A1/B1"`` or ``"A1/*"`` or
                 ``"A1/B1@cas9_deposited"`` for gamete-label filtering.
-            species: Optional species to check if all genes are single characters.
 
         Returns:
             HaplotypePath object.
         """
         haplotype_str, _ = self._strip_lab(haplotype_str)  # lab stripped; stored on parent pattern
 
-        # If the string contains /, split by / to get individual loci
+        # A "/" separates individual loci; without one the whole string is
+        # a single locus-level pattern.
         if "/" in haplotype_str:
             locus_strs = haplotype_str.split("/")
-        elif species:
-            # Use flexible parsing similar to Species._parse_haplotype_segment_str
-            # Since gene names are restricted to [A-Za-z0-9_], we can safely parse
-            locus_strs = self._parse_flexible_loci(haplotype_str)
         else:
-            # If species is not provided, treat the entire string as a single locus
             locus_strs = [haplotype_str]
 
         locus_patterns: List[PatternElement] = []
@@ -329,100 +326,6 @@ class GenotypePatternParser:
             locus_patterns.append(pattern_elem)
 
         return HaplotypePath(locus_patterns)
-
-    def _parse_flexible_loci(self, haplotype_str: str) -> List[str]:
-        """Parse a haplotype string without ``/`` separators.
-
-        Handles single-character gene names, wildcards, set patterns,
-        and negation patterns without explicit ``/`` delimiters.
-
-        Args:
-            haplotype_str: Haplotype string without ``/`` separators.
-
-        Returns:
-            List of locus-level pattern substrings.
-        """
-        locus_strs: List[str] = []
-        i = 0
-        while i < len(haplotype_str):
-            # Look for the next allele pattern
-            # This could be a single character, or a pattern like *, {A,B}, !A, etc.
-            if haplotype_str[i] == "*":
-                # Wildcard
-                locus_strs.append("*")
-                i += 1
-            elif haplotype_str[i] == "{":
-                # Set pattern
-                end = haplotype_str.find("}", i)
-                if end == -1:
-                    raise PatternParseError(f"Unclosed set pattern in: {haplotype_str}")
-                locus_strs.append(haplotype_str[i:end+1])
-                i = end + 1
-            elif haplotype_str[i] == "!":
-                # Negation pattern
-                # Look for the next pattern element after !
-                if i+1 < len(haplotype_str):
-                    if haplotype_str[i+1] == "{":
-                        # Negated set
-                        end = haplotype_str.find("}", i+1)
-                        if end == -1:
-                            raise PatternParseError(f"Unclosed negated set pattern in: {haplotype_str}")
-                        locus_strs.append(haplotype_str[i:end+1])
-                        i = end + 1
-                    else:
-                        # Single allele negation
-                        locus_strs.append(haplotype_str[i:i+2])
-                        i += 2
-                else:
-                    raise PatternParseError(f"Incomplete negation pattern in: {haplotype_str}")
-            else:
-                # Regular gene name - find the complete gene name
-                # Gene names are restricted to [A-Za-z0-9_], so we can safely parse
-                j = i
-                while j < len(haplotype_str) and self._is_valid_gene_char(haplotype_str[j]):
-                    j += 1
-                if j > i:
-                    locus_strs.append(haplotype_str[i:j])
-                    i = j
-                else:
-                    # Should not happen, but for safety
-                    locus_strs.append(haplotype_str[i])
-                    i += 1
-
-        return locus_strs
-
-    def _is_valid_gene_char(self, char: str) -> bool:
-        """Check if a character is valid for a gene name.
-
-        Gene names are restricted to [A-Za-z0-9_].
-
-        Args:
-            char: Single character to check
-
-        Returns:
-            True if character is valid for gene names
-        """
-        return char.isalnum() or char == '_'
-
-    def _are_all_genes_single_characters(self, species: nt.Species) -> bool:
-        """Check if all genes in the species are single characters.
-
-        Args:
-            species: The species to check
-
-        Returns:
-            True if all gene names are single characters, False otherwise
-        """
-        # Get all gene names from the species
-        gene_names: Set[str] = set()
-        for chromosome in species.chromosomes:
-            for locus in chromosome.loci:
-                # The locus name is the gene name
-                gene_name = locus.name
-                gene_names.add(gene_name)
-
-        # Check if all gene names are single characters
-        return all(len(gene_name) == 1 for gene_name in gene_names)
 
     def _parse_bracketed_haplotype_path(self, inner: str) -> HaplotypePath:
         """Parse haplotype pattern inside parentheses (for haploid genomes only).
@@ -438,7 +341,7 @@ class GenotypePatternParser:
         Returns:
             HaplotypePath representing all loci in this haplotype.
         """
-        locus_strs = [s.strip() for s in inner.split(";") if s.strip()]
+        locus_strs = [s.strip() for s in inner.split(";")]
 
         locus_patterns: List[PatternElement] = []
         for locus_str in locus_strs:
@@ -520,24 +423,14 @@ class GenotypePatternParser:
                     haplotype_path = self._parse_haplotype_path(chr_str)
                     haplotype_patterns.append(haplotype_path)
 
-            # Handle wildcard markers and expand
-            final_haplotype_patterns: List[Optional[HaplotypePath]] = []
-            for i, pattern in enumerate(haplotype_patterns):
-                if pattern == "WILDCARD_CHROMOSOME":
-                    # Create wildcard pattern for this chromosome
-                    if i < len(self.species.chromosomes):
-                        chromosome = self.species.chromosomes[i]
-                        num_loci = len(chromosome.loci)
-                        wildcard_patterns = [WildcardPattern() for _ in range(num_loci)]
-                        final_haplotype_patterns.append(HaplotypePath(wildcard_patterns))
-                    else:
-                        final_haplotype_patterns.append(None)
-                else:
-                    final_haplotype_patterns.append(pattern)
-
-            # Fill remaining chromosomes with None
-            while len(final_haplotype_patterns) < len(self.species.chromosomes):
-                final_haplotype_patterns.append(None)
+            n_groups = len(chromosome_groups(self.species))
+            if len(haplotype_patterns) > n_groups:
+                raise PatternParseError("Pattern has more chromosome groups than the species")
+            final_haplotype_patterns: List[Optional[HaplotypePath]] = [
+                None if pattern == "WILDCARD_CHROMOSOME" else pattern
+                for pattern in haplotype_patterns
+            ]
+            final_haplotype_patterns.extend([None] * (n_groups - len(final_haplotype_patterns)))
 
             return HaploidGenomePattern(final_haplotype_patterns)
 
@@ -564,39 +457,18 @@ class GenotypePatternParser:
         if allele_str == "*":
             return WildcardPattern()
 
-        # Negation
-        if allele_str.startswith("!"):
-            base_str = allele_str[1:].strip()
+        from natal.frontend.utils.helpers import validate_name
 
-            if base_str.startswith("{") and base_str.endswith("}"):
-                # Negated set
-                alleles_str = base_str[1:-1]
-                alleles = {a.strip() for a in alleles_str.split(",")}
-                return SetPattern(alleles, negate=True)
-            elif "," in base_str:
-                # Negated set without braces
-                alleles = {a.strip() for a in base_str.split(",")}
-                return SetPattern(alleles, negate=True)
-            elif base_str == "*":
-                raise PatternParseError("Cannot negate wildcard (*)")
-            else:
-                # Negated single allele
-                return SetPattern({base_str}, negate=True)
-
-        # Set
-        if allele_str.startswith("{") and allele_str.endswith("}"):
-            alleles_str = allele_str[1:-1]
-            if not alleles_str.strip():
-                raise PatternParseError("Empty allele set {}")
-            alleles = {a.strip() for a in alleles_str.split(",")}
-            return SetPattern(alleles)
-        elif "," in allele_str:
-            # Set without braces
-            alleles = {a.strip() for a in allele_str.split(",")}
-            return SetPattern(alleles)
-
-        # Single allele
-        return AllelePattern(allele_str)
+        negate = allele_str.startswith("!")
+        body = allele_str[1:].strip() if negate else allele_str
+        if body.startswith("{") and body.endswith("}"):
+            body = body[1:-1]
+        names = {name.strip() for name in body.split(",")}
+        if not all(validate_name(name) for name in names):
+            raise PatternParseError(f"Invalid allele pattern {allele_str!r}")
+        if negate or len(names) > 1 or allele_str.startswith("{"):
+            return SetPattern(names, negate=negate)
+        return AllelePattern(next(iter(names)))
 
     def get_allowed_alleles(self, pattern_element: PatternElement) -> List[str]:
         """Get all allowed allele names for a pattern element.

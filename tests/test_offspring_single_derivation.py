@@ -238,7 +238,7 @@ class TestCompressedRegistryMultiLabel:
         assert int(pop.config.n_gtypes) == 2
         assert int(pop.config.n_gtypes) == meiosis.shape[2]
         assert int(pop.config.n_ztypes) == meiosis.shape[1]
-        assert pop.config.gtype_names == ("B:default", "C:default")
+        assert pop.config.gtype_names == ("B@default", "C@default")
 
 
 class TestUncompressedBuildMultiLabel:

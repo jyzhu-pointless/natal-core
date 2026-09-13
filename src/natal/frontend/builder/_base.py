@@ -597,7 +597,12 @@ class PopulationBuilder:
         n_sl = bp.get("n_slabs", 1)
         z2g = bp["zygotes_to_gametes_map"]
         g2z = bp["gametes_to_zygotes_map"]
-        has_sc = getattr(species, "has_sex_chromosomes", False)
+        # Derived from the genetic structure itself (any sex-chromosome
+        # group declared via chromosome sex types), never from a stale
+        # optional attribute.
+        has_sc = bool(species.get_sex_chromosome_groups())
+        female_only = bp["female_only_by_sex_chrom"]
+        male_only = bp["male_only_by_sex_chrom"]
 
         if discrete:
             from natal.frontend.model import build_discrete_engine_config
@@ -612,6 +617,8 @@ class PopulationBuilder:
                 zygotes_to_gametes_map=z2g,
                 gametes_to_zygotes_map=g2z,
                 has_sex_chromosomes=has_sc,
+                female_only_by_sex_chrom=female_only,
+                male_only_by_sex_chrom=male_only,
             )
             result = PopulationBuilder(config, species=species)
             object.__setattr__(result, "_name", "DiscreteGenerationPop")
@@ -631,6 +638,8 @@ class PopulationBuilder:
                 new_adult_age=1,
                 carrying_capacity=1000.0,
                 has_sex_chromosomes=has_sc,
+                female_only_by_sex_chrom=female_only,
+                male_only_by_sex_chrom=male_only,
             )
             result = PopulationBuilder(config, species=species)
             object.__setattr__(result, "_name", "AgeStructuredPop")

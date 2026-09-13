@@ -133,14 +133,16 @@ class Blueprint(NamedTuple):
 
 
 def format_type_name(genotype: object, label: str) -> str:
-    """Render the canonical ``"<genotype>:<label>"`` index name.
+    """Render the canonical ``"<genotype>@<label>"`` index name.
 
     Args:
         genotype: A genotype or haploid-genotype entity (rendered via
-            ``str``; pattern syntax never uses ``:``).
-        label: The somatic (slab) or gamete (glab) label.
+            ``str``; pattern syntax treats the ``@`` suffix as the label
+            qualifier).
+        label: The somatic (slab) or gamete (glab) label, including the
+            explicit ``"default"`` entry.
 
     Returns:
         The canonical directory string.
     """
-    return f"{genotype}:{label}"
+    return f"{genotype}@{label}"

@@ -117,7 +117,7 @@ def test_hook_reads_params_and_metrics() -> None:
         seen["total"] = pop.metrics.total
         seen["females"] = float(pop.metrics.by_sex[0])
         for name, count in pop.metrics.genotype_counts.items():
-            base = name.split(":")[0]
+            base = name.split("@")[0]
             if base in ("WT|WT", "Dr|Dr"):
                 seen[base] = count
         return 0

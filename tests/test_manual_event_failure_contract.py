@@ -158,3 +158,22 @@ def test_spatial_manual_event_failure_is_uniform(event: str) -> None:
 
     spat.reset()
     spat.run(1, record_every=0)  # the hook now behaves; runnable again
+
+
+def test_unknown_manual_event_rejected_on_both_entries() -> None:
+    """Unknown event names raise on panmictic and spatial trigger entries.
+
+    The spatial container validates the name before touching any deme, so
+    rejection does not depend on the deme index being in range.
+    """
+    spat = _spatial("RejectUnknownEvent", "finish")
+
+    with pytest.raises(ValueError, match="no-such-event") as excinfo:
+        spat.trigger_event("no-such-event", deme_id=0)
+    assert "first" in str(excinfo.value)
+    with pytest.raises(ValueError, match="no-such-event"):
+        spat.trigger_event("no-such-event", deme_id=99)
+
+    pop = _discrete("RejectUnknownPan", "finish")
+    with pytest.raises(ValueError, match="no-such-event"):
+        pop.trigger_event("no-such-event")

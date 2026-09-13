@@ -15,6 +15,8 @@ Hook timing includes:
 
 Among these, `finish` is a one-time event, while `first`, `early`, and `late` can be executed repeatedly across multiple ticks as needed.
 
+Hook registration and manual triggers (`pop.trigger_event(...)`) share this event catalog: unknown or misspelled event names raise a `ValueError` (the message includes the passed name and the allowed names) instead of being silently ignored. `initialization` is not a supported event; express initialization logic in the first tick of the `first` event (`when="tick == 1"`) or in the `finish` event.
+
 When selecting an event, it is recommended to first clarify at which specific time point the intervention occurs, as this can significantly impact the interpretation of results.
 
 ## Declarative Hooks
@@ -163,13 +165,13 @@ The advantage of declarative hooks: write the rule once with the same Op syntax,
 `when` controls when an operation is active. Common forms:
 
 - `tick == N`
-- `tick % N == 0`
+- `tick % N == 0` (`N` must be a positive integer literal; `N = 0` raises a `ValueError` at parse time)
 - `tick >= N`
 - `tick > N`
 - `tick <= N`
 - `tick < N`
 
-`and`, `or`, `not` and parentheses are supported.
+`N` supports only non-negative integer literals — no variable references or other expressions. `and`, `or`, `not` and parentheses are supported.
 
 Examples:
 

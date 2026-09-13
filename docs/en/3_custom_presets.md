@@ -2,6 +2,62 @@
 
 This section will guide you through designing, implementing, validating, and publishing custom Genetic Presets from scratch.
 
+## Four conversion rules
+
+All rule constructors use keyword arguments. `rate` is required, finite, and in `[0, 1]`; `filters=None` means unrestricted, and `name=None` is an optional display name.
+
+| Rule | Required fields | Optional fields |
+|---|---|---|
+| `GameteGtypeConversionRule` | `to`, `rate` | `filters`, `name` |
+| `ZygoteZtypeConversionRule` | `to`, `rate` | `filters`, `name` |
+| `GameteAlleleConversionRule` | `from_allele`, `to_allele`, `rate` | `filters`, `name` |
+| `ZygoteAlleleConversionRule` | `from_allele`, `to_allele`, `rate` | `filters`, `name`, `side="both"` |
+
+Whole-state `to` strings have the form `[genotype or *]@[label or *]`; the gamete genotype is haploid. Both parts must be explicit. A whole-part `*` preserves that input component. Other target components must be exact: partial wildcards, sets, and unordered target alternatives are not supported.
+
+| Zygote target | Action |
+|---|---|
+| `A\|B@I` | Jointly replace genotype and slab |
+| `*@I` | Replace slab, preserve genotype |
+| `A\|B@*` | Replace genotype, preserve slab |
+| `*@*` | Identity conversion |
+
+A whole-state rule is one probabilistic event: at rate 0.4, `A@S` to `B@I` produces 60% `A@S` and 40% `B@I`. It does not independently convert the two components. To model independent changes, declare two rules whose filters cover the relevant branches.
+
+Allele rules accept source and target gene names as strings. Gene names are unique across the species, so no `locus` argument is needed; the target must belong to the source's locus. Allele rules preserve labels. For zygotes, `side` is `maternal`, `paternal`, or `both`; each eligible copy independently converts at `rate`. With `side="both"`, an ordered `A|A` input at rate 0.4 gives 36% `A|A`, 24% `B|A`, 24% `A|B`, and 16% `B|B`.
+
+RuleSets apply rules in declaration order, including branches produced by earlier rules. There is no numeric priority or first-match stop. An eligible state without the source allele remains unchanged; unknown alleles, cross-locus targets, and illegal targets are errors. See [filters](genotype_filter.md) for the five supported scope keys.
+
+When several RuleSets are registered in one gamete or zygote modifier pipeline, each consumes the preceding result in registration order. Rebuilding or refreshing the model starts a fresh pipeline from the unmodified species baseline; it does not reapply rules to the previous compiled result.
+
+The following declarations are independently runnable; compiling them requires matching species alleles and labels.
+
+```python
+from natal import (
+    GameteGtypeConversionRule, ZygoteZtypeConversionRule,
+    GameteAlleleConversionRule, ZygoteAlleleConversionRule,
+)
+
+whole_gamete = GameteGtypeConversionRule(
+    filters={"current": "A@default"}, to="B@I", rate=0.4,
+)
+whole_zygote = ZygoteZtypeConversionRule(
+    filters={"maternal": "*@I"}, to="*@I", rate=0.9,
+)
+gamete_allele = GameteAlleleConversionRule(
+    from_allele="A", to_allele="B", rate=0.4,
+    filters={"parent_sex": "female"},
+)
+zygote_allele = ZygoteAlleleConversionRule(
+    from_allele="A", to_allele="B", rate=0.4, side="both",
+    filters={"current": "*@I"},
+)
+```
+
+Use `add_rule(rule)` to append these declarations. `GameteConversionRuleSet.add_gtype_convert()`, `ZygoteConversionRuleSet.add_ztype_convert()`, and each stage's `add_allele_convert()` expose the corresponding constructor fields.
+
+This API intentionally breaks compatibility. The former label-only classes and rule aliases are removed; label conversion uses the whole-state rules above. Old rule parameters, object/callable inputs, and colon-separated label names are not supported. Use `@` for labels; the existing unordered filter syntax `::` is unchanged. In particular, migrate an allele conversion that jointly changed a label to a whole-state joint conversion, not to two independent events.
+
 ## 1. Start with Allele Conversion Rules
 
 The design process of a `GeneticPreset` begins with a clear expression of the genetic mechanism. For most drive systems, this step is usually embodied in the formulation of **allele conversion rules**.
@@ -58,21 +114,19 @@ Allele conversion can also occur at the zygote (fertilized egg) stage, typically
 
 #### Using ZygoteConversionRuleSet
 
+The following two fragments assume an existing `pop` whose species declares W and D at one locus.
+
 ```python
 from natal.frontend.modifiers import ZygoteConversionRuleSet
 
 ruleset = ZygoteConversionRuleSet(name="zygote_drive")
 
 # In the zygote, if the A locus has the D allele, convert W->D
-def has_d_at_a(genotype) -> bool:
-    # Pseudo-code, depends on your Genotype structure
-    return "D" in str(genotype)
-
 ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.9,
-    genotype_filter=has_d_at_a,
+    filters={"current": "*::D"},
 )
 
 zygote_mod = ruleset.to_zygote_modifier(pop)
@@ -86,14 +140,12 @@ Drive systems typically use both types of rules simultaneously:
 ```python
 # Gamete stage: W -> D (biased)
 gamete_ruleset = GameteConversionRuleSet("gamete_drive")
-gamete_ruleset.add_allele_convert("W", "D", rate=0.99)
+gamete_ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.99)
 
 # Zygote stage: allele conversion (ensure homozygosity)
 zygote_ruleset = ZygoteConversionRuleSet("zygote_copy")
-zygote_ruleset.add_allele_convert(
-    "W", "D",
-    rate=0.95,
-    genotype_filter=lambda g: "D" in str(g)
+zygote_ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.95,
+    filters={"current": "*::D"}
 )
 
 pop.add_gamete_modifier(gamete_ruleset.to_gamete_modifier(pop))
@@ -164,7 +216,7 @@ class PointMutation(GeneticPreset):
 
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("PointMutation")
-        ruleset.add_allele_convert("WT", "Mutant", rate=self.mutation_rate)
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Mutant", rate=self.mutation_rate)
         return ruleset.to_gamete_modifier(host)
 
     def zygote_modifier(self, host):
@@ -193,9 +245,9 @@ class BidirectionalMutation(GeneticPreset):
         ruleset = GameteConversionRuleSet("BidirectionalMutation")
 
         # A -> B (forward mutation)
-        ruleset.add_allele_convert("A", "B", rate=self.forward_rate)
+        ruleset.add_allele_convert(from_allele="A", to_allele="B", rate=self.forward_rate)
         # B -> A (back mutation)
-        ruleset.add_allele_convert("B", "A", rate=self.backward_rate)
+        ruleset.add_allele_convert(from_allele="B", to_allele="A", rate=self.backward_rate)
 
         return ruleset.to_gamete_modifier(host)
 
@@ -203,90 +255,85 @@ class BidirectionalMutation(GeneticPreset):
         return None
 ```
 
-## 2. Using genotype_filter to Control Rule Scope
+## 2. Using filters to Control Rule Scope
 
-After defining conversion rules, `genotype_filter` is used to solve a key problem: **the same conversion rule typically should not apply to all genotypes**.
+`filters` is a mapping from scope names to existing type-pattern strings. It does not accept functions or parsed Pattern objects. Pass the original pattern string; the rule compiler resolves it against the host species and registry.
 
-`genotype_filter` applies the results of pattern matching to the rule's scope, enabling precise control of the rule.
+### Supported keys
 
-### Understanding genotype_filter
+The two gamete rules share one set of keys; the two zygote rules share another.
 
-`genotype_filter` is a function that takes a `Genotype` as input and returns `True` or `False`:
+| Key | Gamete rules | Zygote rules |
+|---|---|---|
+| `current` | Entering gamete gtype | Entering zygote branch ztype |
+| `parent` | Producer parent ztype | Unsupported |
+| `parent_sex` | `female`, `male`, or `both` | Unsupported |
+| `maternal` | Unsupported | Fertilizing maternal gamete gtype |
+| `paternal` | Unsupported | Fertilizing paternal gamete gtype |
 
-- Returns `True`: the rule applies to this genotype
-- Returns `False`: the rule does not apply to this genotype
+A gtype is `haploid_genotype@glab`; a ztype is `genotype@slab`. Multiple keys are AND-ed. Omitted keys, `filters=None`, and an empty mapping impose no corresponding restriction. Unknown keys, keys from the wrong stage, invalid patterns, and unknown labels are errors; they do not silently match nothing.
 
-```python
-def my_filter(genotype):
-    return True  # or False
-```
+`current` is checked when each rule receives a branch, after earlier rules have acted. Parent and fertilizing-gamete information remains fixed throughout that stage. There is no separate `when` parameter or new condition-expression language.
 
-### Core Example: W->D Only in W::D Heterozygotes
+### Parent and current-state conditions
+
+This declaration is independently runnable. Compiling it requires a species with W and D at the same locus.
 
 ```python
 from natal.frontend.modifiers import GameteConversionRuleSet
-
-
-def is_wd_heterozygote(genotype) -> bool:
-    name = str(genotype)
-    return name in {"W|D", "D|W"}
-
 
 ruleset = GameteConversionRuleSet("homing_drive")
 ruleset.add_allele_convert(
     from_allele="W",
     to_allele="D",
     rate=0.5,
-    genotype_filter=is_wd_heterozygote,
+    filters={"parent": "W::D", "parent_sex": "female"},
 )
 ```
 
-This clearly defines the scope of the mechanism.
+`W::D` selects heterozygous parents in either phase. Use `*::D` for any parent carrying D in this single-locus example. In a multilocus model, supply the full appropriate pattern rather than a substring test on the genotype name.
 
-### Common Filtering Patterns
-
-- **Carries a certain allele**: Suitable for "trigger if carrying drive" scenarios.
-- **Specific heterozygote/homozygote**: Suitable for "cleave only in heterozygotes" or "apply only in homozygotes" scenarios.
-- **Combined logic**: Multiple filters can be combined with AND/OR/NOT logic while maintaining readability.
-
-### Integration with Pattern Matching Syntax
-
-When rule conditions are complex, it is recommended to reuse the pattern matching syntax (see [Genotype Pattern Matching](2_genotype_patterns.md)) rather than writing manual string containment checks.
+At the zygote stage, use `current` for a condition on the offspring itself:
 
 ```python
-def build_filter_from_pattern(species, pattern: str):
-    return species.parse_genotype_pattern(pattern)
+from natal.frontend.modifiers import ZygoteConversionRuleSet
 
-
-ruleset.add_allele_convert(
+zygote_rules = ZygoteConversionRuleSet("zygote_copy")
+zygote_rules.add_allele_convert(
     from_allele="W",
     to_allele="D",
-    rate=0.5,
-    genotype_filter=build_filter_from_pattern(
-        population.species,
-        "A1/B1|A2/B2; C1/D1|C2/D2",
-    ),
+    rate=0.9,
+    filters={"current": "*::D"},
 )
 ```
 
-Benefits of this approach:
+### Labels and fixed sources
 
-1. Semantic consistency: aligns with the pattern expansion rules in the Observation section
-2. Maintainability: patterns can be placed directly in experiment configuration files
-3. Testability: the pattern's matching set can be independently verified
+A bare genetic pattern does not restrict the label. `*@infected` restricts only the label; `@default` explicitly names the default label. Both output catalogs and patterns use `@`; the old colon label format is not supported. The existing unordered-pair separator `::` retains its meaning.
 
-### Practical Advice for Designing Filters
-
-1. Filters should have "single responsibility"
-2. First write the simplest readable version, then optimize for performance
-3. Write unit tests for complex filters to avoid false matches
-4. Record filter names and semantics in experiment logs
-
-### Integration with Pattern Matching (Recommended Approach)
-
-When the rule scope is complex, it is recommended to use the species' pattern resolution capability to generate `genotype_filter`, avoiding fragile string checks.
+The following declaration keeps the offspring genotype and gives an uninfected offspring the infected slab with probability 0.9 if its maternal gamete is labeled infected. The host must declare both labels in their appropriate gamete and somatic catalogs.
 
 ```python
+from natal.frontend.modifiers import ZygoteConversionRuleSet
+
+infection = ZygoteConversionRuleSet("maternal_transmission")
+infection.add_ztype_convert(
+    filters={"current": "*@default", "maternal": "*@infected"},
+    to="*@infected",
+    rate=0.9,
+)
+```
+
+`maternal` and `paternal` refer to gametes, not to the parents' diploid genotypes or somatic labels.
+
+### Reusing a pattern in a preset
+
+Store strings in configuration and pass them directly. This class definition is runnable; using it requires WT and Drive at one locus and a valid parent pattern for that species.
+
+```python
+from natal.frontend.presets import GeneticPreset
+from natal.frontend.modifiers import GameteConversionRuleSet
+
 class PatternBasedPreset(GeneticPreset):
     def __init__(self, pattern: str, conversion_rate: float = 0.95):
         super().__init__(name="PatternBasedPreset")
@@ -294,16 +341,12 @@ class PatternBasedPreset(GeneticPreset):
         self.conversion_rate = conversion_rate
 
     def gamete_modifier(self, host):
-        from natal.frontend.modifiers import GameteConversionRuleSet
-
         ruleset = GameteConversionRuleSet("PatternBased")
-        pattern_filter = host.species.parse_genotype_pattern(self.pattern)
-
         ruleset.add_allele_convert(
             from_allele="WT",
             to_allele="Drive",
             rate=self.conversion_rate,
-            genotype_filter=pattern_filter,
+            filters={"parent": self.pattern},
         )
         return ruleset.to_gamete_modifier(host)
 
@@ -311,59 +354,9 @@ class PatternBasedPreset(GeneticPreset):
         return None
 ```
 
-Practical advice:
+For background-dependent mutation, put the background requirement in the parent pattern and the source allele in `from_allele`. Use the same type pattern for observation groups when the intended population scope is the same. A parent condition and a current-offspring condition describe different objects even if their strings look identical.
 
-1. Maintain pattern strings in configuration files
-2. The Preset is responsible for compiling the pattern internally
-3. Observation groups should also use the same pattern or be expanded from the same pattern, ensuring statistical and rule scopes are aligned
-
-### Conditional Mutation (Genotype-Dependent)
-
-```python
-class ConditionalMutation(GeneticPreset):
-    """Conditional mutation - only occurs in specific genetic backgrounds"""
-
-    def __init__(self, target_allele: str = "B", required_background: str = "A"):
-        super().__init__(name="ConditionalMutation")
-        self.target_allele = target_allele
-        self.required_background = required_background
-
-    def gamete_modifier(self, host):
-        from natal.frontend.modifiers import GameteConversionRuleSet
-
-        ruleset = GameteConversionRuleSet("ConditionalMutation")
-
-        # Mutation only occurs when the background allele is present
-        ruleset.add_allele_convert(
-            from_allele=self.target_allele,
-            to_allele=f"{self.target_allele}_mutant",
-            rate=1e-4,
-            genotype_filter=lambda gt: self.required_background in str(gt)
-        )
-
-        return ruleset.to_gamete_modifier(host)
-
-    def zygote_modifier(self, host):
-        return None
-```
-
-### Maintaining Statistical Consistency with Observations
-
-It is recommended to use the same pattern for both:
-
-1. The Preset's `genotype_filter` (determining who is affected by the rule)
-2. The Observation's `groups["genotype"]` (determining who is counted)
-
-If different definitions are used on both sides, common symptoms are "the rule appears to be working, but the observed metrics don't change" or "observation changes don't match mechanism expectations."
-
-### Debugging Methods
-
-When the filter's effect is not as expected, you can:
-
-1. Print the filter's matching results
-2. Check if the pattern was compiled correctly
-3. Verify the genotype string representation
-4. Compare expected and actual genotype sets
+See [conversion rules](allele_conversion_rules.md) for targets and probability semantics, and [preset validation](preset_encapsulation_and_validation.md) for a complete builder example.
 
 ## 3. Encapsulation, Validation, and Pre-Release Checks
 
@@ -408,15 +401,11 @@ class DrivePreset(GeneticPreset):
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("drive_rules")
 
-        def is_wd_heterozygote(genotype) -> bool:
-            name = str(genotype)
-            return name in {"W|D", "D|W"}
-
         ruleset.add_allele_convert(
             from_allele="W",
             to_allele="D",
             rate=self.conversion_rate,
-            genotype_filter=is_wd_heterozygote,
+            filters={"parent": "W::D"},
         )
 
         return ruleset.to_gamete_modifier(host)
@@ -450,7 +439,7 @@ This is the most recommended way to integrate "Preset as a configuration compone
 Before conducting large-scale experiments, at least complete the following checks:
 
 1. Mechanism check: Are the conversion direction and target allele correct?
-2. Filter check: Does the `genotype_filter` hit range match expectations?
+2. Filter check: Does the `filters` hit range match expectations?
 3. Conservation check: Is frequency normalization valid?
 4. Control check: Is the trend reasonable compared to a baseline without Preset?
 5. Stability check: for stochastic models (`stochastic=True`), are conclusions robust across repeated runs? (No public random-seed API is exposed yet.)
@@ -482,12 +471,12 @@ class ComplexDrive(GeneticPreset):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # Stage 1: Drive conversion (WT -> Drive)
-        ruleset.add_allele_convert("WT", "Drive", rate=0.95,
-                           genotype_filter=lambda gt: "Drive" in str(gt))
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Drive", rate=0.95,
+                           filters={"parent": "*::Drive"})
 
         # Stage 2: Resistance formation (remaining WT -> Resistance)
-        ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
-                           genotype_filter=lambda gt: "Drive" in str(gt))
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Resistance", rate=0.05,
+                           filters={"parent": "*::Drive"})
 
         return ruleset.to_gamete_modifier(host)
 
@@ -499,7 +488,7 @@ class ComplexDrive(GeneticPreset):
             from_allele="WT",
             to_allele="Resistance",
             rate=0.02,
-            maternal_glab="cas9"  # Requires maternal Cas9 deposition
+            filters={"maternal": "*@cas9"}  # Requires maternal Cas9 deposition
         )
 
         return ruleset.to_zygote_modifier(host)
@@ -561,7 +550,7 @@ Before releasing a Preset, it is recommended to:
 Congratulations! You have completed the full "Design Your Own Preset" main line:
 
 1. Rule definition (Gamete and Zygote conversion)
-2. Fine-grained rule scope control (genotype_filter)
+2. Fine-grained rule scope control (filters)
 3. Preset engineering, validation, and release
 
 You now have mastered the complete workflow of designing, implementing, validating, and publishing custom Presets from scratch.

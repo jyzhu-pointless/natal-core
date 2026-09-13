@@ -11,7 +11,6 @@ the :class:`TickContext` — the population is never re-dressed for a callback.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple, cast
 
@@ -114,15 +113,31 @@ class TickMetrics:
 
     @property
     def genotype_counts(self) -> dict[str, float]:
-        """Total count per zygote type, keyed by catalog name."""
+        """Total count per zygote type, keyed by catalog name.
+
+        The state's ztype axis and the blueprint name directory must be
+        aligned; a mismatch raises instead of silently truncating.
+        """
+        return {
+            name: float(count)
+            for name, count in zip(
+                self._blueprint.ztype_names, self._ztype_count_totals, strict=True
+            )
+        }
+
+    @property
+    def _ztype_count_totals(self) -> NDArray[np.float64]:
+        """Per-ztype totals aligned to the registry catalog (checked)."""
         ic = self._state.individual_count
         counts = ic.sum(axis=(0, 1))
         names = self._blueprint.ztype_names
-        return {
-            name: float(counts[idx])
-            for idx, name in enumerate(names)
-            if idx < len(counts)
-        }
+        if len(names) != counts.shape[0]:
+            raise RuntimeError(
+                f"ztype count axis ({counts.shape[0]} entries) is not aligned "
+                f"with the catalog ({len(names)} names); refusing to produce "
+                "misaligned statistics"
+            )
+        return counts
 
     @property
     def genotype_frequencies(self) -> dict[str, float]:
@@ -137,14 +152,21 @@ class TickMetrics:
 
     @property
     def allele_frequencies(self) -> dict[str, dict[str, float]]:
-        """Per-locus allele frequencies from the live genotype counts.
+        """Per-locus allele frequencies from the live state ztype counts.
 
-        Alleles are decomposed through the species: each zygote type's
-        ``Genotype`` contributes its maternal/paternal allele at every
-        locus, weighted by the type's total count.  Gene-duplicated allele
-        names merge across chromosomes under the same key.
+        Walks the state's ztype count axis through the registry's
+        ``(Genotype, slab)`` catalog directly — no name-string reverse
+        lookup.  Axis/catalog misalignment is an explicit error (see
+        :attr:`genotype_counts`).  Gene-duplicated allele names merge
+        across chromosomes under the same key.
         """
-        counts = self.genotype_counts
+        counts = self._ztype_count_totals
+        ztypes = self._registry.index_to_ztype
+        if len(ztypes) != counts.shape[0]:
+            raise RuntimeError(
+                f"ztype count axis ({counts.shape[0]} entries) is not aligned "
+                f"with the registry catalog ({len(ztypes)} entries)"
+            )
         loci: List[Any] = [
             locus
             for chromosome in self._species.chromosomes
@@ -153,23 +175,17 @@ class TickMetrics:
         freqs: dict[str, dict[str, float]] = {}
         for locus in loci:
             allele_counts: dict[str, float] = {}
-            ztypes = self._registry.index_to_ztype
-            for name, count in counts.items():
+            for (genotype, _slab), count in zip(ztypes, counts, strict=True):
                 if count <= 0.0:
-                    continue
-                # The catalog name is "maternal|paternal[+slab]"; resolving
-                # the genotype through the registry avoids re-parsing.
-                genotype = self._genotype_for_name(name, ztypes)
-                if genotype is None:
                     continue
                 maternal, paternal = genotype.get_alleles_at_locus(locus)
                 if maternal is not None:
                     allele_counts[maternal.name] = (
-                        allele_counts.get(maternal.name, 0.0) + count
+                        allele_counts.get(maternal.name, 0.0) + float(count)
                     )
                 if paternal is not None:
                     allele_counts[paternal.name] = (
-                        allele_counts.get(paternal.name, 0.0) + count
+                        allele_counts.get(paternal.name, 0.0) + float(count)
                     )
             locus_total = sum(allele_counts.values())
             if locus_total > 0.0:
@@ -180,18 +196,6 @@ class TickMetrics:
             else:
                 freqs[locus.name] = {}
         return freqs
-
-    def _genotype_for_name(self, name: str, ztypes: List[Tuple[Any, str]]) -> Any:
-        """Resolve one catalog name to its ``Genotype`` (or ``None``).
-
-        Catalog names carry an optional slab qualifier (``"WT|WT@slab"`` or
-        ``"WT|WT:default"``); the genotype part is matched exactly.
-        """
-        base = re.split(r"[@:]", name, maxsplit=1)[0]
-        for genotype, _slab in ztypes:
-            if genotype.name == base:
-                return genotype
-        return None
 
     @property
     def c_star(self) -> float:

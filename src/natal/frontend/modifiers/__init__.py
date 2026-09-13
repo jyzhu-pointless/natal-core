@@ -4,12 +4,14 @@ This subpackage defines protocols and helper functions for constructing and
 wrapping modifiers that alter gamete or zygote production in the simulation.
 """
 
-from natal.frontend.modifiers.gamete_conversion import (  # noqa: F401
+from natal.frontend.modifiers.conversion_rules import (  # noqa: F401
     GameteAlleleConversionRule,
-    GameteConversionRuleSet,
-    GameteGlabConversionRule,
     GameteGtypeConversionRule,
-    GameteHaploidGenomeConversionRule,  # backward compat alias
+    ZygoteAlleleConversionRule,
+    ZygoteZtypeConversionRule,
+)
+from natal.frontend.modifiers.gamete_conversion import (  # noqa: F401
+    GameteConversionRuleSet,
 )
 from natal.frontend.modifiers.module import (  # noqa: F401
     GameteModifier,
@@ -22,11 +24,7 @@ from natal.frontend.modifiers.module import (  # noqa: F401
     wrap_zygote_modifier,
 )
 from natal.frontend.modifiers.zygote_conversion import (  # noqa: F401
-    ZygoteAlleleConversionRule,
     ZygoteConversionRuleSet,
-    ZygoteGenotypeConversionRule,  # backward compat alias
-    ZygoteGlabRedirectRule,
-    ZygoteZtypeConversionRule,
 )
 
 __all__ = [
@@ -34,9 +32,7 @@ __all__ = [
     "evaluate_genotype_filter",
     "GameteAlleleConversionRule",
     "GameteConversionRuleSet",
-    "GameteGlabConversionRule",
     "GameteGtypeConversionRule",
-    "GameteHaploidGenomeConversionRule",
     "GameteModifier",
     "GenotypeFilter",
     "GlabSelector",
@@ -44,8 +40,6 @@ __all__ = [
     "wrap_zygote_modifier",
     "ZygoteAlleleConversionRule",
     "ZygoteConversionRuleSet",
-    "ZygoteGenotypeConversionRule",
-    "ZygoteGlabRedirectRule",
     "ZygoteModifier",
     "ZygoteZtypeConversionRule",
 ]

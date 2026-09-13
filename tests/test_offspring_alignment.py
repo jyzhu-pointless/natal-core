@@ -173,7 +173,7 @@ def _wf_expected_from_maps(cfg: ModelDraft) -> NDArray[np.float64]:
 def _ztype_index(cfg: ModelDraft, genotype: str) -> int:
     """Name-directory lookup: index of the first ztype with this genotype."""
     for idx, name in enumerate(cfg.ztype_names):
-        if name.split(":")[0] == genotype:
+        if name.split("@")[0] == genotype:
             return idx
     raise AssertionError(f"genotype {genotype!r} not in the name directory")
 

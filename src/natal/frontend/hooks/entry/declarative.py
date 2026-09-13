@@ -607,7 +607,15 @@ def _parse_atomic_condition(atom: str) -> Tuple[int, int]:
 
     match = re.fullmatch(r"tick\s*%\s*(\d+)\s*==\s*0", atom)
     if match:
-        return (COND_TICK_MOD, int(match.group(1)))
+        divisor = int(match.group(1))
+        if divisor == 0:
+            # A zero divisor is an illegal condition, not an always-false
+            # predicate: reject it at parse time instead of letting the
+            # interpreter mask it.
+            raise ValueError(
+                f"Modulo divisor must be a positive integer, got 0: {atom!r}"
+            )
+        return (COND_TICK_MOD, divisor)
 
     match = re.fullmatch(r"tick\s*==\s*(\d+)", atom)
     if match:
@@ -1146,7 +1154,7 @@ def compile_declarative_hook(
         age_offsets.append(len(age_data_list))  # Record end offset for this operation
 
         # 4) Sex mask + numeric parameter
-        # Convert sex selector to boolean mask [male_selected, female_selected]
+        # Convert sex selector to boolean mask [female_selected, male_selected]
         sex_masks_list.append(_resolve_sex(op.sex))
         params_list.append(float(op.param))  # Convert parameter to float
 
@@ -1231,7 +1239,7 @@ def compile_declarative_hook(
         age_data=np.array(age_data_list, dtype=np.int32) if age_data_list else np.array([], dtype=np.int32),
 
         # Sex selection masks - 2D boolean array [n_ops x 2]
-        # Each row: [male_selected, female_selected]
+        # Each row: [female_selected, male_selected]
         sex_masks=np.vstack(sex_masks_list) if sex_masks_list else np.zeros((0, 2), dtype=np.bool_),
 
         # Operation parameters - numeric values for each operation

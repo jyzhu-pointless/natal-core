@@ -31,6 +31,7 @@ from natal.frontend.genetics import Genotype, Species
 from natal.frontend.model import (
     ModelDraft,
 )
+from natal.frontend.model.initial_state import resolve_genotype_key_ztype_index
 from natal.frontend.population.base import BasePopulation
 from natal.frontend.registry.index import IndexRegistry
 from natal.frontend.utils.types import Sex
@@ -319,22 +320,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             else:
                 raise ValueError(f"Sex must be 'female' or 'male', got '{sex_key}'")
             for genotype_key, age_data in genotype_dist.items():
-                from natal.frontend.patterns import (
-                    GenotypePatternParser,
-                    ZygoteTypePattern,
+                z_idx = resolve_genotype_key_ztype_index(
+                    genotype_key, self.species, self.registry
                 )
-
-                if isinstance(genotype_key, str):
-                    pattern = ZygoteTypePattern.from_slab_key(
-                        genotype_key, self.species
-                    )
-                else:
-                    parser = GenotypePatternParser(self.species)
-                    pattern = ZygoteTypePattern(
-                        parser.parse(str(genotype_key)), slab=None
-                    )
-
-                z_idx = self.registry.resolve_default_ztype_index(pattern)
                 age0_count, age1_count = self._resolve_age_distribution(age_data)
                 self._live_state().individual_count[sex_idx, 0, z_idx] = age0_count
                 self._live_state().individual_count[sex_idx, 1, z_idx] = age1_count

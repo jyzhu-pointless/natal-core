@@ -761,7 +761,7 @@ class TestR5SnapshotChannelAttacks:
             seen["total"] = float(ctx.metrics.total)
             seen["female"] = float(ctx.metrics.by_sex[0])
             seen["male"] = float(ctx.metrics.by_sex[1])
-            seen["wildtype"] = ctx.metrics.genotype_counts["WT|WT:default"]
+            seen["wildtype"] = ctx.metrics.genotype_counts["WT|WT@default"]
             return 0
 
         pop = _build_age("R5MetricsTruth", hook_calls=[((probe,), {"event": "first"})])

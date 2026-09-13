@@ -72,6 +72,8 @@ class DiscretePopulationState(NamedTuple):
   - `n_sexes`, `n_ages`, `n_ztypes`, `n_gtypes`, `n_glabs`, `n_slabs`
   - `stochastic`, `continuous_sampling`, `sex_ratio`
 
+  - 名称目录 `ztype_names` / `gtype_names` 的统一格式为 `基因型@标签`（如 `WT|WT@default`），显式保留 `@default`；无序模式的 `::` 标记与空间日志的 `deme{i}:` 前缀是独立语法。状态统计与目录必须按索引对齐，失配时显式报错。
+
 2. **年龄相关参数**
   - `age_based_survival_rates`
   - `age_based_mating_rates`

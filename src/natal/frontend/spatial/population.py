@@ -1851,7 +1851,19 @@ class SpatialPopulation:
 
         Returns:
             int: RESULT_CONTINUE (0) to continue, RESULT_STOP (1) to stop.
+
+        Raises:
+            ValueError: If *event_name* is not in the population event
+                catalog.  Validated before any deme or session access,
+                mirroring the panmictic entry.
         """
+        from natal.frontend.population.base import BasePopulation
+
+        if event_name not in BasePopulation.ALLOWED_EVENTS:
+            raise ValueError(
+                f"Unknown event '{event_name}'; allowed events: "
+                f"{BasePopulation.ALLOWED_EVENTS}"
+            )
         if 0 <= deme_id < self.n_demes:
             return self._demes[deme_id].trigger_event(event_name, deme_id)
         return 0  # RESULT_CONTINUE

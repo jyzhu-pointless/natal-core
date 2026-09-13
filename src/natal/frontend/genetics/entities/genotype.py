@@ -77,43 +77,9 @@ class Genotype:
         if species not in cls._cache:
             cls._cache[species] = {}
 
-        # Create a cache key using canonical string representations of the
-        # maternal/paternal haploid genotypes so the cache key matches
-        # the instance `name`/`__str__` representation.
-        # Build canonical genotype string as per-chromosome pairs: "A|a;B|b"
-        chrom_pairs: List[str] = []
-        for chrom in species.chromosomes:
-            try:
-                mat_hap = maternal.get_haplotype_for_chromosome(chrom)
-                pat_hap = paternal.get_haplotype_for_chromosome(chrom)
-            except Exception:
-                mat_hap = None
-                pat_hap = None
-
-            def hap_allele_str(
-                hap: Optional[Haplotype],
-                loci: List[Locus] = chrom.loci,
-            ) -> str:
-                if hap is None:
-                    return ""
-                names: List[str] = []
-                for locus in loci:
-                    gene = hap.get_gene_at_locus(locus)
-                    names.append(gene.name if gene is not None else "")
-                return "/".join(names)
-
-            mat_str = hap_allele_str(mat_hap)
-            pat_str = hap_allele_str(pat_hap)
-            chrom_pairs.append(f"{mat_str}|{pat_str}")
-
-        genotype_name = ";".join(chrom_pairs)
-
-        cache_key = (
-            id(maternal),
-            id(paternal),
-            genotype_name,
-        )
-
+        # Canonical cache key: unordered species normalize the maternal/
+        # paternal pair first, so the key matches the instance `name`/
+        # `__str__` representation.
         if species.unordered:
             from natal.frontend.genetics.structures._helpers import (  # noqa: E402
                 canonical_haploid_pair,
@@ -187,10 +153,6 @@ class Genotype:
 
         # Alias for backward compatibility
         self.genome = species
-
-        # Cache for gamete frequencies (Mendelian only)
-        # Single cache entry per genotype
-        self._gamete_cache: Optional[Dict[HaploidGenotype, float]] = None
 
         self._initialized = True
 
@@ -268,15 +230,10 @@ class Genotype:
             ...     print(f"{haploid_genotype}: {freq:.3f}")
 
         Note:
-            Results are cached for performance. Each genotype has one cached result.
-
-            If you modify the recombination rates after calling this method,
-            you must manually clear the cache by setting `self._gamete_cache = None`.
-            Best practice: set recombination rates during Chromosome construction.
+            The Mendelian recomputation runs on every call: the result
+            always reflects the current recombination map, so changing
+            rates never requires manual cache invalidation.
         """
-        # Check cache first
-        if self._gamete_cache is not None:
-            return self._gamete_cache
 
         # Dictionary to accumulate gamete frequencies
         # Key: chromosome/group index -> Dict[haplotype, frequency]
@@ -394,48 +351,87 @@ class Genotype:
             else:
                 gamete_freqs[haploid_genotype] = frequency
 
-        # Cache the result (single cache per genotype)
-        self._gamete_cache = gamete_freqs
-
         return gamete_freqs
 
     def to_string(self) -> str:
         """
         Return a species-parsable string representation of this genotype.
 
-        Format: "<maternal_hap_str>|<paternal_hap_str>"
-        where each hap_str is a semicolon-separated list of chromosome haplotype
-        allele lists, and alleles on a chromosome are joined with '/'.
-        Chromosomes not present in both haploid genotypes are omitted.
+        Format: one ``<maternal_hap_str>|<paternal_hap_str>`` segment per
+        autosome (species declaration order), then one segment per
+        sex-chromosome group.  A sex-group segment shows the maternal and
+        paternal group haplotypes — ``"X|Y"`` for an XY male, ``"X|X"``
+        for an XY female — so sex chromosomes survive the round trip
+        through :meth:`Species.get_genotype_from_str`.  Within one side,
+        alleles on a chromosome are joined with '/'.
         """
         species = self.species
 
-        # For each chromosome produce "maternal_part|paternal_part"
-        chrom_pairs: List[str] = []
+        def hap_allele_str(hap: Optional[Haplotype], loci: List[Locus]) -> str:
+            if hap is None:
+                return ""
+            names: List[str] = []
+            for locus in loci:
+                gene = hap.get_gene_at_locus(locus)
+                names.append(gene.name if gene is not None else "")
+            return "/".join(names)
+
+        get_groups = getattr(species, "get_sex_chromosome_groups", None)
+        sex_groups = (
+            cast(Optional[Dict[str, List[Chromosome]]], get_groups())
+            if callable(get_groups)
+            else None
+        )
+        grouped: set[Chromosome] = set()
+        if sex_groups:
+            for group_chromosomes in sex_groups.values():
+                grouped.update(group_chromosomes)
+
+        segments: List[str] = []
         for chrom in species.chromosomes:
+            if chrom in grouped:
+                continue
+            mat_hap = self.maternal.get_haplotype_for_chromosome(chrom)
+            pat_hap = self.paternal.get_haplotype_for_chromosome(chrom)
+            segments.append(
+                f"{hap_allele_str(mat_hap, chrom.loci)}|"
+                f"{hap_allele_str(pat_hap, chrom.loci)}"
+            )
+
+        if sex_groups:
+            for group_chromosomes in sex_groups.values():
+                mat_hap = self._find_group_haplotype(self.maternal, group_chromosomes)
+                pat_hap = self._find_group_haplotype(self.paternal, group_chromosomes)
+                if mat_hap is None and pat_hap is None:
+                    continue
+                # The two sides may carry different chromosomes of the
+                # group (X vs Y), each with its own loci list.
+                mat_str = (
+                    hap_allele_str(mat_hap, mat_hap.chromosome.loci) if mat_hap else ""
+                )
+                pat_str = (
+                    hap_allele_str(pat_hap, pat_hap.chromosome.loci) if pat_hap else ""
+                )
+                segments.append(f"{mat_str}|{pat_str}")
+
+        return ";".join(segments)
+
+    def _find_group_haplotype(
+        self, haploid: HaploidGenotype, group_chromosomes: List[Chromosome]
+    ) -> Optional[Haplotype]:
+        """Return the unique haplotype from one sex-chromosome group."""
+        found: Optional[Haplotype] = None
+        for group_chromosome in group_chromosomes:
             try:
-                mat_hap = self.maternal.get_haplotype_for_chromosome(chrom)
-                pat_hap = self.paternal.get_haplotype_for_chromosome(chrom)
+                current = haploid.get_haplotype_for_chromosome(group_chromosome)
             except ValueError:
-                continue  # Chromosome not present — skip (e.g. sex chromosomes)
-
-            def hap_allele_str(
-                hap: Optional[Haplotype],
-                loci: List[Locus] = chrom.loci,
-            ) -> str:
-                if hap is None:
-                    return ""
-                names: List[str] = []
-                for locus in loci:
-                    gene = hap.get_gene_at_locus(locus)
-                    names.append(gene.name if gene is not None else "")
-                return "/".join(names)
-
-            mat_str = hap_allele_str(mat_hap)
-            pat_str = hap_allele_str(pat_hap)
-            chrom_pairs.append(f"{mat_str}|{pat_str}")
-
-        return ";".join(chrom_pairs)
+                continue
+            if found is not None and found is not current:
+                raise ValueError(
+                    "Haploid genotype contains multiple chromosomes from the same sex group."
+                )
+            found = current
+        return found
 
     def _should_use_recombination(self, chromosome: Chromosome) -> bool:
         """

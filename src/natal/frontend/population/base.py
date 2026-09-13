@@ -152,9 +152,10 @@ class BasePopulation(ABC, Generic[T_State]):
             underlying tuple via identity.
     """
 
-    # Allowed hook events (subclasses may extend this list).
+    # Allowed hook events (subclasses may extend this list).  The catalog
+    # is shared by hook registration and manual triggers; unknown names are
+    # rejected instead of being silently ignored.
     ALLOWED_EVENTS = [
-        "initialization",
         "first",
         "early",
         "late",
@@ -1735,7 +1736,16 @@ class BasePopulation(ABC, Generic[T_State]):
         Returns:
             int: ``RESULT_CONTINUE`` (0) to continue, ``RESULT_STOP`` (1)
             to stop.
+
+        Raises:
+            ValueError: If *event_name* is not in :attr:`ALLOWED_EVENTS`.
+                Validated before any session side effect.
         """
+        if event_name not in self.ALLOWED_EVENTS:
+            raise ValueError(
+                f"Unknown event '{event_name}'; allowed events: "
+                f"{self.ALLOWED_EVENTS}"
+            )
         native = getattr(self, "_runtime_parameter_writer", None)
         if native is None:
             native = getattr(self, "_rust_lifecycle_backend", None)

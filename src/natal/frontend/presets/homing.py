@@ -3,9 +3,9 @@
 Public module — provides HomingDrive for CRISPR/Cas9 gene drive simulations.
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from natal.frontend.genetics import Gene, Genotype
+from natal.frontend.genetics import Gene
 from natal.frontend.modifiers.gamete_conversion import GameteConversionRuleSet
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 from natal.frontend.modifiers.zygote_conversion import ZygoteConversionRuleSet
@@ -249,20 +249,38 @@ class HomingDrive(GeneticPreset):
             return float(rate)
         return rate[sex]
 
+    @staticmethod
+    def _zygote_filters(
+        m_glab: Optional[str], p_glab: Optional[str], zygote_has_cas9: str
+    ) -> Dict[str, str]:
+        """Assemble zygote-stage filters from deposition labels and somatic expression.
+
+        Deposition gating (``m_glab``/``p_glab``) edits every embryo formed
+        from a deposited gamete — including non-drive embryos (the maternal/
+        paternal carryover effect).  Only the zygotic-expression path (no
+        deposition label for this sex) restricts the rule to embryos that
+        carry the Cas9 source themselves.
+        """
+        filters: Dict[str, str] = {}
+        if m_glab:
+            filters["maternal"] = f"*@{m_glab}"
+        if p_glab:
+            filters["paternal"] = f"*@{p_glab}"
+        if not m_glab and not p_glab:
+            filters["current"] = zygote_has_cas9
+        return filters
+
     def gamete_modifier(self, host: "RecipeHost") -> Optional[GameteModifier]:
         """Implement homing in heterozygous parents, germline resistance, and Cas9 deposition.
 
         In heterozygotes (drive/wild-type), gametes are biased towards drive.
         """
-        def drive_carrier_filter(gt: Genotype) -> bool:
-            """Return True if the genotype carries both drive and Cas9 alleles."""
-            from natal.frontend.presets._types import count_allele_copies
+        from natal.frontend.presets._types import carrier_pattern
 
-            has_drive = count_allele_copies(gt, self.drive_allele) > 0
-            if self.cas9_allele:
-                has_cas9 = count_allele_copies(gt, self.cas9_allele) > 0
-                return has_drive and has_cas9
-            return has_drive
+        required = [self.drive_allele.name] + (
+            [self.cas9_allele.name] if self.cas9_allele else []
+        )
+        carrier = carrier_pattern(host.species, *required)
 
         # RuleSet compiles these rules into a Sequential Cascade.
         # This means the target pool shrinks after every rule.
@@ -276,11 +294,10 @@ class HomingDrive(GeneticPreset):
             # Examples: If homing_rate is 0.7, 70% of targets become Drive. 30% pass to the next rule.
             if homing_rate > 0:
                 rule_set.add_allele_convert(
-                    from_allele=self.target_allele,
-                    to_allele=self.drive_allele,
+                    from_allele=self.target_allele.name,
+                    to_allele=self.drive_allele.name,
                     rate=homing_rate,
-                    sex_filter=sex,
-                    genotype_filter=drive_carrier_filter,
+                    filters={"parent_sex": ("female" if sex == Sex.FEMALE else "male"), "parent": carrier},
                 )
 
             # 2. Germline Resistance (Target -> Resistance)
@@ -292,11 +309,10 @@ class HomingDrive(GeneticPreset):
                     # calculates rates against the *current* target pool. So if 30% targets are left, and this
                     # rate is 0.1, it converts 10% of that 30% (overall 3% of origin).
                     rule_set.add_allele_convert(
-                        from_allele=self.target_allele,
-                        to_allele=self.functional_resistance_allele,
+                        from_allele=self.target_allele.name,
+                        to_allele=self.functional_resistance_allele.name,
                         rate=res_rate * self.functional_resistance_ratio,
-                        sex_filter=sex,
-                        genotype_filter=drive_carrier_filter,
+                        filters={"parent_sex": ("female" if sex == Sex.FEMALE else "male"), "parent": carrier},
                     )
 
                     # 2b. Non-functional resistance
@@ -308,20 +324,18 @@ class HomingDrive(GeneticPreset):
                                         / target_remaining) if target_remaining > 0 else 0.0
                     if adjusted_nf_rate > 0:
                         rule_set.add_allele_convert(
-                            from_allele=self.target_allele,
-                            to_allele=self.resistance_genotype,
+                            from_allele=self.target_allele.name,
+                            to_allele=self.resistance_genotype.name,
                             rate=adjusted_nf_rate,
-                            sex_filter=sex,
-                            genotype_filter=drive_carrier_filter,
+                            filters={"parent_sex": ("female" if sex == Sex.FEMALE else "male"), "parent": carrier},
                         )
                 else:
                     # Generic resistance (no functional/non-functional split)
                     rule_set.add_allele_convert(
-                        from_allele=self.target_allele,
-                        to_allele=self.resistance_genotype,
+                        from_allele=self.target_allele.name,
+                        to_allele=self.resistance_genotype.name,
                         rate=res_rate,
-                        sex_filter=sex,
-                        genotype_filter=drive_carrier_filter,
+                        filters={"parent_sex": ("female" if sex == Sex.FEMALE else "male"), "parent": carrier},
                     )
 
             # 3. Gamete labeling for maternal Cas9 deposition
@@ -330,15 +344,13 @@ class HomingDrive(GeneticPreset):
             # this tag to apply embryo resistance.
             if self.cas9_deposition_glab:
                 if sex == Sex.FEMALE or self.use_paternal_deposition:
-                    rule_set.add_glab_convert(
-                        from_glab=None,
-                        to_glab=self.cas9_deposition_glab,
+                    rule_set.add_gtype_convert(
+                        to=f"*@{self.cas9_deposition_glab}",
                         rate=1.0,
-                        sex_filter=sex,
-                        genotype_filter=drive_carrier_filter,
+                        filters={"parent_sex": ("female" if sex == Sex.FEMALE else "male"), "parent": carrier},
                     )
 
-        return rule_set.to_gamete_modifier(host) if rule_set.rules else None
+        return rule_set.to_gamete_modifier(host) if rule_set.rules else None  # type: ignore[return-type]  # structurally satisfies the GameteModifier protocol
 
     def zygote_modifier(self, host: "RecipeHost") -> Optional[ZygoteModifier]:
         """Implement embryo resistance.
@@ -348,19 +360,14 @@ class HomingDrive(GeneticPreset):
         """
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoResistance")
 
-        def zygote_has_cas9(gt: Genotype) -> bool:
-            """Check if the zygote itself carries the Cas9 source (somatic cleavage).
+        from natal.frontend.presets._types import carrier_pattern
 
-            Args:
-                gt: The zygote genotype to check.
-
-            Returns:
-                True if the zygote carries cas9_allele or drive_allele.
-            """
-            from natal.frontend.presets._types import count_allele_copies
-
-            target = self.cas9_allele if self.cas9_allele else self.drive_allele
-            return count_allele_copies(gt, target) > 0
+        # Somatic/zygotic expression: the zygote itself carries the Cas9
+        # source (cas9_allele, or the drive allele when they coincide).
+        zygote_has_cas9 = carrier_pattern(
+            host.species,
+            (self.cas9_allele or self.drive_allele).name,
+        )
 
         for sex in (Sex.FEMALE, Sex.MALE):
             rate = HomingDrive._rate_at(self.embryo_resistance_formation_rate, sex)
@@ -390,34 +397,28 @@ class HomingDrive(GeneticPreset):
                 if self.functional_resistance_allele and func_res_ratio > 0:
                     # 1. Functional resistance
                     rule_set.add_allele_convert(
-                        from_allele=self.target_allele,
-                        to_allele=self.functional_resistance_allele,
+                        from_allele=self.target_allele.name,
+                        to_allele=self.functional_resistance_allele.name,
                         rate=rate * func_res_ratio,
-                        maternal_glab=m_glab,
-                        paternal_glab=p_glab,
-                        genotype_filter=g_filter,
+                        filters=self._zygote_filters(m_glab, p_glab, zygote_has_cas9),
                     )
                     # 2. Non-functional resistance on remaining targets
                     target_remaining = 1.0 - (rate * func_res_ratio)
                     nf_rate = (rate * (1.0 - func_res_ratio)) / target_remaining if target_remaining > 0 else 0.0
                     if nf_rate > 0:
                         rule_set.add_allele_convert(
-                            from_allele=self.target_allele,
-                            to_allele=self.resistance_genotype,
+                            from_allele=self.target_allele.name,
+                            to_allele=self.resistance_genotype.name,
                             rate=nf_rate,
-                            maternal_glab=m_glab,
-                            paternal_glab=p_glab,
-                            genotype_filter=g_filter,
+                            filters=self._zygote_filters(m_glab, p_glab, zygote_has_cas9),
                         )
                 else:
                     # Generic resistance (no functional split)
                     rule_set.add_allele_convert(
-                        from_allele=self.target_allele,
-                        to_allele=self.resistance_genotype,
+                        from_allele=self.target_allele.name,
+                        to_allele=self.resistance_genotype.name,
                         rate=rate,
-                        maternal_glab=m_glab,
-                        paternal_glab=p_glab,
-                        genotype_filter=g_filter,
+                        filters=self._zygote_filters(m_glab, p_glab, zygote_has_cas9),
                     )
 
-        return rule_set.to_zygote_modifier(host) if rule_set.rules else None
+        return rule_set.to_zygote_modifier(host) if rule_set.rules else None  # type: ignore[return-type]  # structurally satisfies the ZygoteModifier protocol

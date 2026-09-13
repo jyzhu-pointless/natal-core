@@ -63,6 +63,8 @@ def build_config_maps(
     infer_capacity_from_initial_state: bool,
     equilibrium_individual_distribution: Optional[NDArray[np.float64]],
     external_expected_eggs: Optional[float],
+    female_only_by_sex_chrom_given: Optional[NDArray[np.bool_]] = None,
+    male_only_by_sex_chrom_given: Optional[NDArray[np.bool_]] = None,
     pre_expanded: bool = False,
     extreme_speed_mode: int = 0,
     generation_time: Optional[float] = None,
@@ -232,17 +234,37 @@ def build_config_maps(
             for g in range(n_genotypes_i)
             for s in range(n_slabs_i)
         }
-        for g_off in range(n_genotypes_i):
-            f_ok = female_ztype_compatibility[g_off] > _EPS
-            m_ok = male_ztype_compatibility[g_off] > _EPS
-            if n_slabs_i > 1:
-                for s in range(n_slabs_i):
-                    z = _ztype_index[(g_off, s)]
-                    female_only_by_sex_chrom[z] = f_ok and not m_ok
-                    male_only_by_sex_chrom[z] = m_ok and not f_ok
-            else:
-                female_only_by_sex_chrom[g_off] = f_ok and not m_ok
-                male_only_by_sex_chrom[g_off] = m_ok and not f_ok
+        if (
+            female_only_by_sex_chrom_given is not None
+            and male_only_by_sex_chrom_given is not None
+        ):
+            # Structure-derived constraints (XX/XY, ZW/ZZ from the valid
+            # sex-chromosome pairs) replace the compatibility heuristic,
+            # which cannot distinguish homogametic from heterogametic
+            # pairs when every baseline map row sums to 1.
+            for g_off in range(n_genotypes_i):
+                f_only = bool(female_only_by_sex_chrom_given[g_off])
+                m_only = bool(male_only_by_sex_chrom_given[g_off])
+                if n_slabs_i > 1:
+                    for s in range(n_slabs_i):
+                        z = _ztype_index[(g_off, s)]
+                        female_only_by_sex_chrom[z] = f_only
+                        male_only_by_sex_chrom[z] = m_only
+                else:
+                    female_only_by_sex_chrom[g_off] = f_only
+                    male_only_by_sex_chrom[g_off] = m_only
+        else:
+            for g_off in range(n_genotypes_i):
+                f_ok = female_ztype_compatibility[g_off] > _EPS
+                m_ok = male_ztype_compatibility[g_off] > _EPS
+                if n_slabs_i > 1:
+                    for s in range(n_slabs_i):
+                        z = _ztype_index[(g_off, s)]
+                        female_only_by_sex_chrom[z] = f_ok and not m_ok
+                        male_only_by_sex_chrom[z] = m_ok and not f_ok
+                else:
+                    female_only_by_sex_chrom[g_off] = f_ok and not m_ok
+                    male_only_by_sex_chrom[g_off] = m_ok and not f_ok
 
     # Offspring probability tensor — via the single shared derivation
     # (counts resolve from the table shapes, which are already the
@@ -341,6 +363,8 @@ def build_population_config(
     juvenile_growth_mode: int = LOGISTIC,
     generation_time: Optional[float] = None,
     has_sex_chromosomes: bool = False,
+    female_only_by_sex_chrom: Optional[NDArray[np.bool_]] = None,
+    male_only_by_sex_chrom: Optional[NDArray[np.bool_]] = None,
     zygotes_to_gametes_map: Optional[NDArray[np.float64]] = None,
     gametes_to_zygotes_map: Optional[NDArray[np.float64]] = None,
     initial_individual_count: Optional[NDArray[np.float64]] = None,
@@ -454,6 +478,8 @@ def build_population_config(
         low_density_growth_rate=float(low_density_growth_rate),
         juvenile_growth_mode=int(juvenile_growth_mode),
         has_sex_chromosomes=bool(has_sex_chromosomes),
+        female_only_by_sex_chrom_given=female_only_by_sex_chrom,
+        male_only_by_sex_chrom_given=male_only_by_sex_chrom,
         zygotes_to_gametes_map=zygotes_to_gametes_map,
         gametes_to_zygotes_map=gametes_to_zygotes_map,
         initial_individual_count=initial_individual_count,
@@ -591,6 +617,8 @@ def build_discrete_engine_config(
         generation_time=0.0,
         ztype_names=kwargs.pop("ztype_names", None),
         gtype_names=kwargs.pop("gtype_names", None),
+        female_only_by_sex_chrom_given=kwargs.pop("female_only_by_sex_chrom", None),
+        male_only_by_sex_chrom_given=kwargs.pop("male_only_by_sex_chrom", None),
         discrete_generation=True,
     )
 

@@ -59,6 +59,8 @@ class SpeciesConfigBlueprint(TypedDict):
     offspring_tensor: NDArray[np.float64]
     female_ztype_compatibility: NDArray[np.float64]
     male_ztype_compatibility: NDArray[np.float64]
+    female_only_by_sex_chrom: NDArray[np.bool_]
+    male_only_by_sex_chrom: NDArray[np.bool_]
 
 
 class Species(
@@ -141,6 +143,11 @@ class Species(
             self._somatic_labels: List[str] = []
 
         self.config_blueprint: Optional[SpeciesConfigBlueprint] = None
+        # Opaque dependency-content token compared with `==` on every
+        # baseline acquisition (see _structure_dependency_snapshot);
+        # None means "no baseline built yet".
+        self.blueprint_snapshot: object = None
+        self.blueprint_content_snapshot: object = None
 
     @property
     def gamete_labels(self) -> List[str]:
@@ -472,6 +479,37 @@ class Species(
     def get_linkage(self, name: str) -> Optional[Chromosome]:
         """Alias for get_chromosome (backward compatibility)."""
         return self.get_chromosome(name)
+
+    def validate_structure(self) -> None:
+        """Validate that every chromosome and locus can take part in computation.
+
+        The rule: every chromosome (autosome and sex chromosome alike)
+        carries at least one locus, and every locus carries at least one
+        allele.  Species construction and stepwise editing may be
+        temporarily incomplete — this check gates only calculation entry
+        points (genotype enumeration, genotype string parsing, genetic
+        matrix generation, and baseline acquisition), so a cache hit must
+        not bypass it.
+
+        Raises:
+            ValueError: If a chromosome has no loci or a locus has no
+                alleles; the message names the species, chromosome, and
+                locus.
+        """
+        for chrom in self.chromosomes:
+            if not chrom.loci:
+                raise ValueError(
+                    f"Species '{self.name}': chromosome '{chrom.name}' has no "
+                    "loci; every chromosome must declare at least one locus "
+                    "before genetic computation."
+                )
+            for locus in chrom.loci:
+                if not locus.alleles:
+                    raise ValueError(
+                        f"Species '{self.name}': chromosome '{chrom.name}' "
+                        f"locus '{locus.name}' has no alleles; declare at "
+                        "least one allele before genetic computation."
+                    )
 
     def build_gene_index(self) -> Dict[str, Gene]:
         """

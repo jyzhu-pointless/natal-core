@@ -5,7 +5,7 @@ Public module — provides ToxinAntidoteDrive for TARE/TADE gene drive simulatio
 
 from typing import TYPE_CHECKING, Any, Optional
 
-from natal.frontend.genetics import Gene, Genotype
+from natal.frontend.genetics import Gene
 from natal.frontend.modifiers.gamete_conversion import GameteConversionRuleSet
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 from natal.frontend.modifiers.zygote_conversion import ZygoteConversionRuleSet
@@ -22,7 +22,6 @@ from ._types import (
     SexualSelectionScalingConfig,
     ViabilityScalingConfig,
     ZygoteViabilityScalingConfig,
-    count_allele_copies,
 )
 
 if TYPE_CHECKING:
@@ -163,56 +162,61 @@ class ToxinAntidoteDrive(GeneticPreset):
 
     def gamete_modifier(self, host: "RecipeHost") -> Optional[GameteModifier]:
         """Implement target disruption in the germline of drive carriers."""
-        def drive_carrier_filter(gt: Genotype) -> bool:
-            """Return True if the genotype carries at least one drive allele."""
-            return count_allele_copies(gt, self.drive_allele) > 0
+        from natal.frontend.presets._types import carrier_pattern
+
+        species = host.species
+        carrier = carrier_pattern(species, self.drive_allele.name)
 
         rule_set = GameteConversionRuleSet(f"{self.name}_GermlineDisruption")
         for sex in (Sex.FEMALE, Sex.MALE):
             rate = ToxinAntidoteDrive._rate_at(self.conversion_rate, sex)
             if rate > 0:
                 rule_set.add_allele_convert(
-                    from_allele=self.target_allele,
-                    to_allele=self.disrupted_allele,
+                    from_allele=self.target_allele.name,
+                    to_allele=self.disrupted_allele.name,
                     rate=rate,
-                    sex_filter=sex,
-                    genotype_filter=drive_carrier_filter,
+                    filters={"parent_sex": ("female" if sex == Sex.FEMALE else "male"), "parent": carrier},
                 )
 
             if self.cas9_deposition_glab and (sex == Sex.FEMALE or self.use_paternal_deposition):
-                rule_set.add_glab_convert(
-                    from_glab=None,
-                    to_glab=self.cas9_deposition_glab,
+                rule_set.add_gtype_convert(
+                    to=f"*@{self.cas9_deposition_glab}",
                     rate=1.0,
-                    sex_filter=sex,
-                    genotype_filter=drive_carrier_filter,
+                    filters={"parent_sex": ("female" if sex == Sex.FEMALE else "male"), "parent": carrier},
                 )
 
-        return rule_set.to_gamete_modifier(host) if rule_set.rules else None
+        return rule_set.to_gamete_modifier(host) if rule_set.rules else None  # type: ignore[return-type]  # structurally satisfies the GameteModifier protocol
 
     def zygote_modifier(self, host: "RecipeHost") -> Optional[ZygoteModifier]:
         """Implement target disruption in embryos."""
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoDisruption")
 
-        def zygote_has_drive(gt: Genotype) -> bool:
-            """Return True if the zygote carries at least one drive allele."""
-            return count_allele_copies(gt, self.drive_allele) > 0
+        from natal.frontend.presets._types import carrier_pattern
+
+        zygote_has_drive = carrier_pattern(host.species, self.drive_allele.name)
 
         for sex in (Sex.FEMALE, Sex.MALE):
             rate = ToxinAntidoteDrive._rate_at(self.embryo_disruption_rate, sex)
             if rate > 0:
                 m_glab = self.cas9_deposition_glab if sex == Sex.FEMALE else None
                 p_glab = self.cas9_deposition_glab if (sex == Sex.MALE and self.use_paternal_deposition) else None
-                g_filter = None if (m_glab or p_glab) else zygote_has_drive
 
-                if m_glab or p_glab or g_filter:
-                    rule_set.add_allele_convert(
-                        from_allele=self.target_allele,
-                        to_allele=self.disrupted_allele,
-                        rate=rate,
-                        maternal_glab=m_glab,
-                        paternal_glab=p_glab,
-                        genotype_filter=g_filter,
-                    )
+                # Deposition labels edit every embryo formed from a
+                # deposited gamete (carryover); without a label, only
+                # embryos carrying the drive themselves are edited.
+                filters: dict[str, str] = {}
+                if m_glab:
+                    filters["maternal"] = f"*@{m_glab}"
+                if p_glab:
+                    filters["paternal"] = f"*@{p_glab}"
+                if not m_glab and not p_glab:
+                    filters["current"] = zygote_has_drive
 
-        return rule_set.to_zygote_modifier(host) if rule_set.rules else None
+                rule_set.add_allele_convert(
+                    from_allele=self.target_allele.name,
+                    to_allele=self.disrupted_allele.name,
+                    rate=rate,
+                    filters=filters,
+                )
+
+        return rule_set.to_zygote_modifier(host) if rule_set.rules else None  # type: ignore[return-type]  # structurally satisfies the ZygoteModifier protocol

@@ -142,33 +142,24 @@ class LocusPattern:
         self.paternal_pattern = paternal_pattern
         self.unordered = unordered
 
-    def matches(self, mat_gene: Optional[Gene], pat_gene: Optional[Gene]) -> bool:
+    def matches(self, mat_gene: Optional[Gene], pat_gene: Optional[Gene], *, allow_absent: bool = False) -> bool:
         """Check if a pair of alleles matches this locus pattern.
 
         Args:
             mat_gene: Maternal allele.
             pat_gene: Paternal allele.
+            allow_absent: Let a wildcard accept a structurally absent sex-chromosome copy.
 
         Returns:
             True if the allele pair matches.
         """
+        def accepts(pattern: PatternElement, gene: Optional[Gene]) -> bool:
+            return (allow_absent and gene is None and isinstance(pattern, WildcardPattern)) or pattern.matches(gene)
+
+        straight = accepts(self.maternal_pattern, mat_gene) and accepts(self.paternal_pattern, pat_gene)
         if self.unordered:
-            # Try both orderings
-            match_straight = (
-                self.maternal_pattern.matches(mat_gene) and
-                self.paternal_pattern.matches(pat_gene)
-            )
-            match_reversed = (
-                self.maternal_pattern.matches(pat_gene) and
-                self.paternal_pattern.matches(mat_gene)
-            )
-            return match_straight or match_reversed
-        else:
-            # Strict ordering
-            return (
-                self.maternal_pattern.matches(mat_gene) and
-                self.paternal_pattern.matches(pat_gene)
-            )
+            return straight or (accepts(self.maternal_pattern, pat_gene) and accepts(self.paternal_pattern, mat_gene))
+        return straight
 
     def __repr__(self) -> str:
         """Return a string representation of this locus pattern."""

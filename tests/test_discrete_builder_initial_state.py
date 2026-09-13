@@ -45,10 +45,16 @@ class TestDiscreteBuilderInitialState(unittest.TestCase):
                     return idx
             raise KeyError(f"No ZType matches pattern {pattern}")
 
+        def _ztype_indices_for(gt) -> list:
+            # Identity scan: enumerated genotype objects are cached
+            # singletons, so the exact key is present when registered.
+            return [idx for g, idx in genotype_to_index.items() if g is gt]
+
         pop._index_registry = SimpleNamespace(
             get_genotype_index=lambda gt: genotype_to_index[gt],
             genotype_to_index=genotype_to_index,
             resolve_default_ztype_index=_resolve_default_ztype_index,
+            ztype_indices_for=_ztype_indices_for,
         )  # type: ignore
 
         pop._state = SimpleNamespace(

@@ -808,8 +808,20 @@ pub fn run_wf_tick(
                     } else if bp.male_only_by_sex_chrom[go] {
                         expected_m[go] += offspring;
                     } else {
-                        expected_f[go] += offspring * genetics.female_ztype_compatibility[go];
-                        expected_m[go] += offspring * genetics.male_ztype_compatibility[go];
+                        // Same probability definition as the staged path:
+                        // the compatibility row sums are per-sex gamete
+                        // availability, not a pair of sex probabilities —
+                        // normalize them so female + male mass conserves
+                        // the offspring total exactly.
+                        let denom = genetics.female_ztype_compatibility[go]
+                            + genetics.male_ztype_compatibility[go];
+                        let p_f = if denom > EPS {
+                            clamp01(genetics.female_ztype_compatibility[go] / denom)
+                        } else {
+                            0.5
+                        };
+                        expected_f[go] += offspring * p_f;
+                        expected_m[go] += offspring * (1.0 - p_f);
                     }
                 } else {
                     expected_f[go] += offspring * sex_ratio;

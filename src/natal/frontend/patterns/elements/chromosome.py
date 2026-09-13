@@ -8,11 +8,12 @@ a pair of homologous chromosomes with optional unordered matching).
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Callable, Tuple
+from typing import Callable, Optional, Tuple
 
 from natal.frontend.genetics import Haplotype
 
 from ._base import PatternElement
+from .atom import AllelePattern, LocusPattern, SetPattern
 
 
 class HaplotypePath:
@@ -98,7 +99,8 @@ class ChromosomePairPattern:
         maternal_pattern: HaplotypePath,
         paternal_pattern: HaplotypePath,
         unordered: bool = False,
-        explicit_grouping: bool = False
+        explicit_grouping: bool = False,
+        locus_patterns: Optional[Sequence[LocusPattern]] = None,
     ):
         """Initialize a chromosome pair pattern.
 
@@ -107,11 +109,13 @@ class ChromosomePairPattern:
             paternal_pattern: HaplotypePath for paternal haplotype.
             unordered: If True, use :: ordering (match either order).
             explicit_grouping: If True, this pattern was explicitly grouped with ().
+            locus_patterns: Independent ordering constraints for bracketed locus pairs.
         """
         self.maternal_pattern = maternal_pattern
         self.paternal_pattern = paternal_pattern
         self.unordered = unordered
         self.explicit_grouping = explicit_grouping
+        self.locus_patterns = locus_patterns
 
     def matches(self, haplotype_pair: Tuple[Haplotype, Haplotype]) -> bool:
         """Check if a pair of haplotypes (one chromosome pair) matches.
@@ -123,6 +127,46 @@ class ChromosomePairPattern:
             True if the haplotype pair matches.
         """
         mat_hap, pat_hap = haplotype_pair
+
+        if self.locus_patterns is not None:
+            heteromorphic = (
+                mat_hap.chromosome is not pat_hap.chromosome
+                and mat_hap.chromosome.is_sex_chromosome
+                and pat_hap.chromosome.is_sex_chromosome
+            )
+            mat_loci, pat_loci = mat_hap.chromosome.loci, pat_hap.chromosome.loci
+            if heteromorphic:
+                # Locate named loci by identity. X and Y positions do not
+                # imply homology; a missing copy satisfies only a wildcard.
+                # Resolve against the current catalog so cached patterns do
+                # not retain locus identities replaced by a Species edit.
+                for index, pattern in enumerate(self.locus_patterns):
+                    names: set[str] = set()
+                    for atom in (pattern.maternal_pattern, pattern.paternal_pattern):
+                        if isinstance(atom, AllelePattern):
+                            names.add(atom.allele_name)
+                        elif isinstance(atom, SetPattern):
+                            names.update(atom.alleles)
+                    named_loci = {
+                        locus for locus in (*mat_loci, *pat_loci)
+                        if any(gene.name in names for gene in locus.alleles)
+                    }
+                    locus = next(iter(named_loci)) if len(named_loci) == 1 else None
+                    if locus is not None:
+                        mat_gene = mat_hap.get_gene_at_locus(locus) if locus in mat_loci else None
+                        pat_gene = pat_hap.get_gene_at_locus(locus) if locus in pat_loci else None
+                    else:
+                        mat_gene = mat_hap.get_gene_at_locus(mat_loci[index]) if index < len(mat_loci) else None
+                        pat_gene = pat_hap.get_gene_at_locus(pat_loci[index]) if index < len(pat_loci) else None
+                    if not pattern.matches(mat_gene, pat_gene, allow_absent=True):
+                        return False
+                return True
+            if len(mat_loci) != len(self.locus_patterns) or len(pat_loci) != len(self.locus_patterns):
+                return False
+            return all(
+                pattern.matches(mat_hap.get_gene_at_locus(mat_locus), pat_hap.get_gene_at_locus(pat_locus))
+                for pattern, mat_locus, pat_locus in zip(self.locus_patterns, mat_loci, pat_loci)
+            )
 
         if self.unordered:
             # Try both orderings

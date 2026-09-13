@@ -1,5 +1,236 @@
 # TODO
 
+## 本轮审查方案汇总（2026-09-13）
+
+整合 architecture-deep-dive.html 及后续核验。**当前只记录方案，所有 CR 项均未在本轮实施；确认设计不等于代码已修复。** 下方测试结果是调查时的历史自测，不能当作新合同验收；临时复现脚本可能不再存在，实施时转为持久回归测试。源码行号为调查定位，后续可能漂移。
+
+| 编号 | 最终范围 | 状态 |
+|---|---|---|
+| CR-0 | XY/ZW 解析、字符串化、精确初始化与性别约束 | ✅ 已实施（2026-09-13），待最终审查 |
+| CR-1 | 四类规则、统一 filters/to、联合概率与声明顺序 | ✅ 已实施并获终审 APPROVED（2026-09-13） |
+| CR-2 | 配子修饰器非法键报错，先验证再应用 | ✅ 已实施（2026-09-13） |
+| CR-3 | 仅 first/early/late/finish，拒绝非法事件 | ✅ 已实施（2026-09-13） |
+| CR-4 | 配置快照尺寸失配报错 | ✅ 已实施（2026-09-13） |
+| CR-5 | 取模除数为正整数，解析时拒绝零 | ✅ 已实施（2026-09-13） |
+| CR-6 | 注释、乱码、遗留与不可达代码、过时引用 | ✅ 已实施（2026-09-13） |
+| CR-7 | 删除配子缓存，统一基线，内容快照失效 | ✅ 已实施（2026-09-13）；规则基线统一并入 CR-1 引擎 |
+| CR-8 | 物种与实体缓存生命周期重构 | 明确暂缓 |
+| CR-9 | 计算前校验遗传结构完整性 | ✅ 已实施（2026-09-13） |
+| CR-10 | XY/ZW 同源区段交换 | 明确不在本轮实现 |
+| CR-11 | 删除重复且被覆盖的 genotype 缓存键计算 | ✅ 已实施（2026-09-13） |
+| CR-12 | TickMetrics 索引直查，类型名称统一 @ | ✅ 已实施并获终审 APPROVED（2026-09-13） |
+| CR-13 | WF 性别分配归一化与总量守恒 | ✅ 已实施（2026-09-13） |
+
+**实施依赖与验证边界**
+
+- CR-0/9/13 联合验证：仅修公开性染色体标志会暴露 WF 翻倍，不将单点修改当作完整修复。
+- CR-1/12 同步迁移，不兼容旧规则接口和冒号标签格式；既有无序模式 ::、空间日志冒号含义不变。
+- CR-7 提供未修饰基线，CR-1 刷新验收同时检查来源、概率不重复叠加、索引对齐与对象隔离；CR-8 不随此项扩大实施。
+- 实施遵循 AGENTS.md 和质量规范：基本验证、相关 stub/中英文文档/示例同步、高风险独立 evaluator 审查及最终门禁。本次仅文档整理，不运行或声称新合同代码验证。
+
+## CR-0 📋 性染色体公开路径修复（修复边界已梳理，未实施）
+
+**已核验的问题链**
+
+以下路径除注明外相对 src/natal/frontend/。
+
+- genetics/entities/genotype.py:402 按每条染色体同时取母父 haplotype，缺一侧就跳过；XY/ZW 异型对丢失性染色体部分，纯性染色体对象可得到空串。
+- genetics/structures/_construction.py:216,291 读取未初始化的 sex_chromosome_groups 属性而非已有 get_sex_chromosome_groups 方法，合法 XY 字符串被按错误段数拒绝。
+- model/initial_state.py:108 将 Genotype 对象转字符串再解析模式；patterns/elements/diploid.py:138 的 from_pair 也内部转字符串。registry/index.py:324 取首个匹配项，空串/宽泛模式使精确初始化落错类型；报告建议仅调用 from_pair 不足以修复。
+- builder/_base.py:600 读取不存在的 has_sex_chromosomes 并回退 False；开启标志后，assembly 从配子行和推断性别 mask 也不充分，见 CR-13。
+- 前期公开路径复现 XY 雄性对象初始化落到 XX 类型、XY 字符串解析失败。内部手工开启标志的测试通过不能替代公开入口覆盖。
+
+**修复边界**
+
+- 性别系统与性染色体分组使用一致来源；字符串化、完整解析、模式匹配按性染色体组处理，保留母父相位；覆盖 XY/ZW 以及混合常染色体的往返。
+- 精确对象、精确字符串和显式 slab 初始化按 registry 精确身份定位；对象入口不先转字符串再匹配，合法模式选择与精确初始化分开，避免静默选择首个类型。
+- XX/XY、ZW/ZZ 性别约束来自遗传结构，不能由配子行和推断；年龄结构、分阶段离散代与 WF 遵守同一概率定义，保留各自抽样方式。
+- 按 CR-9 拒绝计算时无位点的染色体，不新增空 Y/W 字符串占位语法或自动虚拟等位基因；按 CR-10 不实现异型性染色体同源区段交换。
+- 验收通过公开 builder，覆盖对象/字符串/标签输入、非 0.5 sex_ratio、XY/ZW、压缩与 slab 扩展、初始与后代性别/类型一致性、往返及总量守恒。辅助方法名称在实施时确定。
+
+## CR-1 📋 Conversion rules 统一接口与执行语义（方案已确认，未实施）
+
+**四类 API**
+
+采用关键字参数。rate 必填，filters=None 表示不限制，name=None 仅用于展示。
+
+| 类别 | 必填字段 | 可选字段 | 动作 |
+|---|---|---|---|
+| GameteGtypeConversionRule | to: str、rate: float | filters、name | 一次事件转换完整 gtype |
+| ZygoteZtypeConversionRule | to: str、rate: float | filters、name | 一次事件转换完整 ztype |
+| GameteAlleleConversionRule | from_allele: str、to_allele: str、rate: float | filters、name | 局部替换，不改变 glab |
+| ZygoteAlleleConversionRule | from_allele: str、to_allele: str、rate: float | filters、name、side | 局部替换，不改变 slab |
+
+- filters 类型为 Mapping[str, str] 或 None；name 为 str 或 None。side 为 maternal/paternal/both，默认 both，表示合子遗传副本而非亲本个体，两侧独立转换。
+- 不要求 locus：Gene 名在同一 Species 内唯一（src/natal/frontend/genetics/entities/gene.py:98），由源等位基因定位位点，并验证目标等位基因属于同一位点。
+- GameteGlabConversionRule 并入 Gtype 转换；ZygoteGlabRedirectRule 并入 Ztype 转换，原母源 glab 是来源条件，目标 slab 是动作。
+- 新接口不兼容旧规则接口，不保留旧标签类、旧参数、旧别名或对象/callable 输入的兼容包装；同步迁移规则相关公开导出、stub、预设、文档、示例与测试，不扩大为删除全库无关历史 API。
+- 现有 GameteAllele.target_glab 的成功联动模型迁移为完整 Gtype 联合转换，不能机械拆成两个独立事件。
+
+**统一 filters**
+
+普通字符串字典，复用既有类型模式，不新增条件 DSL；同一阶段的整体/Allele 规则支持相同的键。
+
+| 键 | 配子规则 | 合子规则 |
+|---|---|---|
+| current | 当前分支 gtype 模式 | 当前分支 ztype 模式 |
+| parent | 产生配子的亲本 ztype 模式 | 不支持 |
+| parent_sex | female/male/both | 不支持 |
+| maternal | 不支持 | 形成合子的母源配子 gtype 模式 |
+| paternal | 不支持 | 形成合子的父源配子 gtype 模式 |
+
+- 各键之间为 AND，省略表示不限制；类型模式用 @ 限定标签，裸遗传组成模式不限制标签，@default 明确限定默认标签。
+- current 检查进入本条规则的分支状态；其他键检查固定来源。此前“合子 when 检查当前状态”的要求由 filters["current"] 承担，不另设 when 或 Condition 对象接口。
+- 未知键、拼写错误、阶段不支持的键、非法模式均在编译时显式报错，不解释为匹配失败。
+
+**目标、概率与顺序**
+
+- 整体转换 to 必须为 `[genotype 或 *]@[label 或 *]`，配子侧为单倍体遗传组成。两部分显式给出，整部分 * 保留输入对应部分，具体值精确替换；不支持多候选目标或遗传组成内部的局部通配替换。
+- 合子 `A|B@I` 联合替换两部分，`*@I` 只改 slab，`A|B@*` 只改 genotype；`*@*` 为恒等转换，不额外禁止。
+- rate 必须有限且在 [0, 1]。整体转换成功分支同时采用目标各部分，失败分支保持原状态；独立变化用两条规则表达，条件须覆盖相应分支，不增加 independent 开关。
+- Allele 转换先检查分支条件，再对指定侧带源等位基因的副本独立以 rate 转换。合法输入未匹配源正常保持原状态；未知源/目标、非法标签或跨位点替换显式报错。
+- RuleSet 只按声明/追加顺序级联，无数字 priority，不按类型排序，不在首次匹配后停止。便捷方法完整暴露对应字段，不固定 rate。
+- 合子编译以 `(Genotype, slab) → probability` 跟踪联合分支，不再使用所有基因型共用的 effective_slab；实施时验证概率合并、压缩轴及目标可达性。
+
+**证据与验收**
+
+以下 modifiers 路径均位于 src/natal/frontend/。
+
+- modifiers/zygote_conversion.py:439,617：redirect 的 rate=0/0.25/1 均整体重定向；便捷方法固定 rate=1，已复现。
+- zygote_conversion.py:627、gamete_conversion.py:776,810：redirect 整数目标 1 被当作名称 "1"，未知目标无操作；配子负索引 -1 选择末标签。新规则取消整数索引输入，不保留此行为。
+- zygote_conversion.py:586,601,636：genotype 条件检查当前分支，redirect when 检查 base_gt/base_slab；A→B 后 when=B 不匹配，已复现。conditions.py:144,228,250 的合子性别条件均假、母源/父源条件均真，由新的阶段限定 filters 取代。
+- gamete_conversion.py:424、zygote_conversion.py:328,484 的首次匹配获胜文档错误；实际 A→B→C 得到 C。gamete_conversion.py:927、zygote_conversion.py:756 静态发现源存在而目标缺失时可能静默跳过。
+- 历史自测：`.venv/bin/python -m pytest -q tests/test_modifiers.py tests/test_conditions.py tests/test_conversion_refresh_contracts.py` → **173 passed**，未覆盖全部缺陷；`/tmp/review_conversion_rules.py` 已执行，临时文件不保证保留。不是新接口验证结果。
+- 实施验收覆盖 rate=0/1/中间值、联合转换、两侧独立转换、当前与来源条件、级联、恒等目标、非法输入、标签及压缩目录、刷新不重复叠加。执行高风险独立审查与最终门禁。
+
+## CR-2 📋 自定义配子修饰器静默吞错进入仿真（2026-09-12）
+
+- **公开路径已复现，尚未修复：** `DiscreteGenerationPopulation.setup(...).modifiers(gamete_modifiers=[...]).build()` 接受非法源/目标键；错误没有被最终构建校验拦住。
+- 在确定性模式、100 个 A|A 雌性与 100 个 A|A 雄性、每雌性 1 个卵、无竞争的对照中：无修饰器产生 100 后代；非法源键被忽略仍为 100；`{"A|A": {"NOT_A_GAMETE": 1.0}}` 将配子行清零，产生 0；`{"A|A": {"A": 0.5, "NOT_A_GAMETE": 0.5}}` 留下行和 0.5，产生 25。四种构建均成功。
+- 源码：`src/natal/frontend/modifiers/module.py:264` 先清零，268 行吞目标解析异常，397/425/432 行吞源解析等异常，443 行返回结果副本。原输入数组未被直接修改，但错误输出进入配置。
+- 修复方向：明确输入键必须有效，先验证再替换；无效目标报错并定位声明。不得简单把残余概率归一化，也不能统一禁止零行（合法生物学模型可能需要零配子输出）。
+- **用户已确认：** 明确无效的基因型、配子、标签或越界索引应显式报错；合法条件不匹配正常跳过，合法全零分布按模型合同处理。先验证整份输出再应用；构建遇错失败，运行时更新遇错保留此前有效配置。本轮只记录决定，尚未实施。
+- 主 agent 执行 `.venv/bin/python /tmp/review_modifier_public.py` 得到上述结果；脚本在临时目录。本项未修复，未运行完整门禁或独立审查。
+
+## CR-3 📋 统一事件支持范围并拒绝未知事件（2026-09-12）
+
+- **用户已确认：** 不支持 `initialization`；未知或拼错的事件名必须显式报错。合法事件没有 callback 时仍正常返回继续。
+- 允许事件统一为 `first / early / late / finish`，注册与手动触发入口使用同一事件目录。移除 `BasePopulation.ALLOWED_EVENTS` 中的 `initialization`，注册或手动触发它均应拒绝，不映射为 `first`。
+- 手动触发应先校验事件名，再初始化会话或执行其他副作用；错误信息包含传入名称及合法名称。普通种群和空间种群入口保持一致。
+- 源码：`src/natal/frontend/population/base.py:156,1751`、`src/natal/frontend/hooks/types.py:186`、`src/natal/frontend/hooks/tick_context.py:726`。现有 runner 会跳过无事件 ID 的 callback。
+- 现有测试明确要求未知事件无操作、initialization callback 不执行；本次是已获用户确认的合同调整，后续将这些断言更新为拒绝非法事件，并保留合法空事件、正常 callback 和空间入口覆盖，不能只删除测试。
+- 自测命令：`.venv/bin/python -m pytest -q tests/test_hooks_slice4_adversarial.py -k 'trigger_event_unknown_event_is_noop or runner_skips_non_tick_event_descriptors'` → **2 passed, 30 deselected**，仅证明旧行为。尚未实施修复，未运行新合同测试、完整门禁或独立审查。
+
+## CR-4 📋 配置快照尺寸不一致时静默回退（2026-09-12）
+
+- `src/natal/backends/rust/rust_backend.py:59` 仅在原生张量元素数量等于 draft 数量时覆盖字段；不等时，71 行后的补齐逻辑复制旧 draft 值，形成混合快照。
+- 主 agent 用真实已构建种群的 session 读代理，仅将 `viability_fitness` 的读取替换为单元素 `[0.125]`：快照仍成功返回 draft 的 `(2,2,3)` 全 1 数组。这是故障注入复现，**不是正常公开操作可触发的证据**。
+- 同一真实 session 直接写入错误尺寸被原生层拒绝：`ValueError: genetics viability_fitness: expected 12 elements, got 1`。尚未发现合法公开操作导致尺寸失配；不能据此宣称压缩或恢复已损坏。
+- 影响入口：普通种群 `config` 读取、空间 deme 配置投影、hook 事务候选配置物化都复用该函数。
+- **用户已确认（2026-09-13）：** 在预期一致的元素数量不匹配时显式报内部一致性错误，不回退旧值；错误包含字段名和预期/实际数量。合法空张量或特殊投影单独处理。原生读取通常为扁平数组，不应直接比较 Python shape。修复方案已确认，尚未修改实现。
+
+## CR-5 📋 Hook 条件语法说明与零除数校验（2026-09-13）
+
+- 已复现 `tick >= -5`、`tick >= threshold` 均明确报 ValueError；非负整数字面量限制本身不属于静默计算错误。`docs/en/2_hooks.md` 和 `docs/zh/2_hooks.md` 尚未明确 N 的范围及不支持变量引用。
+- **新增公开路径复现：** `parse_condition("tick % 0 == 0")` 成功编译；将 `Op.scale(factor=0.0, when="tick % 0 == 0")` 注册到 early，build 和手动触发都成功，总数保持 200。对照 `when="tick >= 0"` 同一操作使总数从 200 变为 0。
+- 原因：`src/natal/frontend/hooks/entry/declarative.py:609` 的数字解析接受 0；`rust/src/hooks/interpreter.rs:488` 使用 `cond_param > 0 && tick % cond_param == 0`，将零除数表达式解释为恒假，避免崩溃但掩盖非法条件。
+- **用户已确认（2026-09-13）：** 取模除数必须为正整数，零除数在解析时显式报错，不解释为恒假。保持现有有限语法，并同步中英文文档说明这一限制。修复方案已确认，尚未修改实现。
+- 主 agent 执行专项 Python 片段复现上述行为；`.venv/bin/python -m pytest -q tests/test_hook_condition_interpreter.py` → **20 passed**。未运行完整门禁或独立审查。
+
+## CR-6 📋 轻量清理方案（2026-09-13，暂不实施）
+
+- **用户已确认清理方向，随后明确暂不执行、只记录方案。** 本轮仅调查源码，没有修改以下实现文件。
+- 修正 `src/natal/frontend/hooks/entry/declarative.py:1149,1234` 的性别 mask 注释为 `[female_selected, male_selected]`，不改变实际顺序。
+- 修正 `src/natal/frontend/modifiers/gamete_conversion.py:339` 默认规则名中的 `â†’` 为 `→`。
+- 清理 `src/natal/frontend/patterns/selector.py` 中已标记遗留且无外部调用的选择器方法；删除前核对公开导出、stub、文档和兼容范围，不能仅凭无仓库内调用就移除公开合同。保留在用的选择器与解析功能。
+- 清理 `src/natal/frontend/patterns/parser.py` 中当前调用链不触发的 species 分支、`_parse_flexible_loci`、仅供其使用的 `_is_valid_gene_char`，以及无调用者的 `_are_all_genes_single_characters`；相应移除不再需要的私有参数和导入，保持当前有效解析行为。
+- 更新或删除 `src/natal/frontend/registry/index.py:430` 对已删除 `natal.frontend.population_config` 模块的注释引用。
+- 实施时按实际变更风险验证：正文注释做准确性检查；代码删除与默认名称修复做针对性验证和最终完整门禁；若涉及公开 API 移除，执行独立审查及相关合同、stub、文档同步。
+- 本项仅负责轻量清理；缓存、重复键、指标索引与 WF 数值修复分别由 CR-7/8/11/12/13 跟踪。
+
+## CR-7 📋 物种基线、配子缓存与内容快照失效（方案已确认，未实施）
+
+**最终边界**
+
+- 删除 Genotype._gamete_cache，produce_gametes 直接计算；不删除实体去重缓存，不扩大到 CR-8。
+- 规则编译从 Species 的未修饰孟德尔基线开始：基线生成 → 当前 registry 轴投影 → 顺序应用规则 → 种群运行矩阵。配子 RuleSet 不再自行重复 initialize_gamete_map；合子侧遵守同一来源边界。
+- 不得以已施加规则的运行矩阵作为刷新基线，不污染共享基线；同一声明反复编译不叠加转换。
+- 基线内部持有；编译和种群获取隔离的投影/副本。重建替换缓存条目，不原地修改旧矩阵；修改 Species 不暗中更新已建种群。构建期间修改 Species 的检测边界在实施时核对，不声称支持并发修改。
+
+**内容快照失效机制**
+
+- 唯一基线获取入口保存并比较依赖内容快照；有效且相同则复用，变化则重建。复用前执行必要校验；重建失败显式报错，不回退旧缓存；仅在新基线完整构建成功后更新缓存及快照。
+- 快照保存独立值而非共享视图，精确比较，不用 allclose 忽略微小变化。不仅比较数组身份、标签数量或 setter 版本号，也不为生成缓存键枚举全部 genotype。
+- 覆盖有序染色体/位点/等位基因目录及身份、位点位置、性染色体定义、unordered、glab/slab 名称与顺序、重组图位点对应关系及数值。结构变化后下游目录/身份缓存有效性须验证，不能假定清基线即修复全部结构缓存。
+- map setter、批量入口和共享数组视图写入都应被检测；不引入 ndarray 子类或写入代理，不以禁止视图写入替代用户要求。
+- 惰性失效保证下次获取不复用旧结果，不要求数组写入时立刻置 None。通过视图写入的非法数值也要在使用前检查有限性、范围、长度及位点映射。
+- 更新要求用户手动清 _gamete_cache 的文档和旧测试。clear_all_caches 不能被宣传为可靠的计算结果失效入口。
+
+**源码、证据与验收**
+
+- src/natal/frontend/genetics/entities/genotype.py:278 和 genetics/structures/_mapping.py:104 两层非空即返回；genetics/compile.py:77 复用物种基线。Chromosome.set_recombination 只写图，不使两层缓存失效。
+- 双杂合 `A1/B1|A2/B2`：r=0.1 时亲本配子各 0.45、重组配子各 0.05；改 r=0.5 后直接查询仍旧。清单基因型缓存后直接查询各 0.25，但新建种群仍用 0.05；再清 config_blueprint 后新建种群才用 0.25。此操作仅用于定位，不是推荐用户 API。
+- 无 preset 首次构建每个基因型 produce_gametes 一次；同 Species 再构建与运行一代均零次；一个 HomingDrive preset 首次构建部分基因型调用两次，第二次来自 gamete_conversion.py:636 重建基线。
+- `/tmp/review_cache_snapshot.py` 已验证独立副本比较检测 setter、切片视图、np.asarray、np.copyto、ufunc out 五种写入；视图写入后当前基线仍返回同一对象。另行将 gamete_labels 设为 ['default', 'tagged']，缓存 n_glabs 仍为 1；现有基线矩阵可写。
+- 单数组 np.array_equal 微基准：10/1000/100000 个 float64 约 0.6/0.9/24 微秒；只代表当时本机数组比较，不是完整快照或端到端性能。临时脚本不保证长期保留。
+- 历史自测：`.venv/bin/python -m pytest -q tests/test_genetic_entities.py -k 'rate_change_requires_manual_cache_clear or two_loci_half_recombination_equal_quarters'` → **2 passed, 67 deselected**，证明旧行为。新合同未实施，未运行完整门禁或独立审查。
+- 实施验收：未改依赖时命中；五种写法修改后更新；标签/结构变化不复用旧轴；非法输入不回退旧结果；刷新不叠加规则；新旧种群隔离；CR-9 完整性校验不能被缓存绕过。
+
+## CR-8 📋 物种与实体缓存的生命周期（2026-09-13，暂缓）
+
+- **用户决定暂缓：** 改动范围较大，本轮不调整缓存归属、清理接口或实体身份合同。以下方案仅供后续单独评估，不视为已批准实施；保留现状和核验证据。
+
+- 区分 CR-7 的配子计算结果缓存与实体去重缓存：后者保证同一 Species 下相同遗传实体返回相同实例，不能简单随 `_gamete_cache` 一并删除。
+- 主 agent 最小复现：一个双等位基因 Species 枚举后有 6 条 GeneticEntity 缓存、3 条 Genotype 缓存、1 条 pattern 缓存；调用 `species.clear_all_caches()` 后分别为 0、3、1。释放外部引用并 `gc.collect()` 后 weakref 仍存活，Genotype 全局字典仍持有 Species 键。
+- 源码：`genetics/entities/_base.py:42,173,184` 全局字典保存实体、实体保存结构；`genetics/entities/genotype.py:61` 全局字典直接以 Species 为键；`patterns/parser.py:39,96` 类级缓存以 `(id(species), pattern)` 为键；`genetics/structures/species.py:195,200` 只清通用实体及结构缓存，未覆盖后两者。
+- 已证实的是缓存清理覆盖不完整及对象被保留，未复现 `id()` 复用导致错误匹配，也未量化长期内存增长。对象存活可能还有其他强引用根，不把上述路径声称为全部保留来源。
+- 建议以 Species 作为物种绑定实体及解析缓存的生命周期拥有者，保留实体唯一性；没有外部引用后由 GC 回收物种内部引用环，避免进程级字典永久持有 Species。实施前盘点全局 fallback 等其他引用根。
+- 必须区分计算结果失效与身份目录清理；活跃 registry 可能依赖对象身份，不能把清理实体缓存当成普通参数更新。明确 `clear_all_caches()` 是何种操作，再同步合同与测试。
+- 不建议仅替换成 WeakKeyDictionary：若值持有实体、实体反向持有 Species，仍可能阻止键回收。本项已按用户要求暂缓，未修改实现或运行完整门禁。
+
+## CR-9 📋 遗传结构完整性校验边界（2026-09-13，方案已确认）
+
+- **用户已确认：** 用于遗传计算的结构中，每条染色体至少有一个位点，每个位点至少有一个等位基因。该要求同样适用于常染色体和 X/Y/Z/W；无位点染色体不作为支持的计算输入。
+- `Species.__init__()` 及染色体、位点的逐步构造/编辑允许暂时不完整；仍检查已提供参数本身的合法性，但不因尚未添加子项而报错。查看结构不要求其完整。
+- 在完整基因型枚举、完整基因型字符串解析、遗传矩阵生成和物种基线获取前统一校验，建议由单一 `Species.validate_structure()` 入口实现，实际名称实施时确定。种群 setup 已会获取基线，不能延迟到最终 build 才检查。
+- 校验失败显式抛 ValueError，并定位 Species、染色体及位点；不静默跳过空染色体或空位点。缓存命中不能绕过有效性检查或既定失效机制。
+- 无须增加 finalize 或永久冻结状态。修改期间可暂时不完整，下一次计算前再检查。现有 from_dict 支持仅声明位点、随后添加等位基因，应保留这种逐步构造能力，不未经兼容核对就强制其返回时完整。
+- 单态染色体可由用户显式提供单一等位基因的标记位点，系统不自动添加占位位点或等位基因。性染色体修复因此无需新增无位点 haplotype 的字符串语法；此前空 Y/W 的支持设想由本决定替代。
+- 尚未修改实现；实施时同步公开合同、stub（若新增校验 API）、中英文文档和测试，并按高风险流程独立审查。
+
+## CR-10 🎨 XY/ZW 同源区段交换（2026-09-13，暂不实现）
+
+- **用户决定：** 暂不实现 X/Y 或 Z/W 之间的同源区段交换，不纳入当前性染色体问题修复。
+- 当前 `Genotype.produce_gametes()` 仅在两个 haplotype 属于同一 Chromosome 时计算重组；异型 X/Y、Z/W 按完整单倍型各 0.5 分离。XX、ZZ 的同型副本可使用既有重组逻辑。
+- 将来若实现，需要独立定义跨染色体的同源位点对应、可交换区间及重组率、交换后的染色体身份和合法配子；属于新增科学模型能力。
+- 此项暂缓不影响 XY/ZW 的字符串解析、初始化精确索引和性别约束修复；不能将这些修复宣称为同源区段交换支持。
+
+## CR-11 📋 Genotype 构造时重复计算缓存键（2026-09-13，方案已确认）
+
+- `src/natal/frontend/genetics/entities/genotype.py:80` 起先遍历染色体生成 `chrom_pairs/genotype_name`，111 行构造 cache_key；117 行起再按 unordered 规则规范化母父单倍体并生成 canon_name，139 行无条件覆盖 cache_key。两次赋值之间没有使用第一个 key，旧字符串计算未参与后续对象名称设置。
+- 前一段在完整遗传对象上只做读取和字符串拼接，属于冗余计算，不是已确认的数值错误。即使最终命中缓存，仍会先执行该段；未测量性能收益，不夸大影响。
+- 建议仅删除前一套被覆盖的计算及失效注释，保留后面的 canonical key、unordered 处理、缓存查找和对象唯一性语义；不与 CR-8 的缓存生命周期重构捆绑，也不删除实体去重缓存。
+- **用户已确认：** 删除前一套被覆盖的计算，保留 canonical key 与对象唯一性。当前只记录方案，未修改实现；实际删除时验证有序/无序、重复构造对象身份及性染色体的既有行为，并按最终风险分类执行检查。
+
+## CR-12 📋 TickMetrics 通过目录名称反查基因型（2026-09-13，索引直查方案已确认）
+
+- `src/natal/frontend/hooks/tick_context.py:140` 的 allele_frequencies 先取得名称→计数字典，然后对每个位点、每个名称调用 `_genotype_for_name()`；184 行后的实现按 `@/:` 拆字符串，再线性扫描 registry 比较 genotype.name。
+- 当前 Gene 名通过 `utils/helpers.py:31` 限制为字母、数字和下划线；标准 ztype 名由 `contracts/materialize.py:348` 从 registry 生成。因此报告对合法基因型名称含冒号的担忧尚未证实为可触发缺陷，不据此宣称频率计算错误。
+- 已存在 state ztype 轴与 registry.index_to_ztype 的对应关系，先生成字符串再反查属于冗余耦合；每个位点重复线性查找还增加开销，未测量性能影响。
+- **用户已确认：** allele_frequencies 直接沿当前 state 的 ztype 计数轴，通过 registry.index_to_ztype 取得 `(Genotype, slab)` 对象计算，移除字符串反查；保留 genotype_counts 等公开输出的名称字典形式。确认压缩、slab 扩展及空间 deme 目录对齐，失配明确报错，不能静默截断。
+- 不以本项扩大到其他科学统计语义修改或实体缓存重构。本项只记录方案，未修改实现。
+- 后续核对确认名称格式混用：`contracts/blueprint.py:135` 的公开 `format_type_name()` 生成 `genotype:slab` / `haplotype:glab`，materialize 与部分 hook 目录沿用；`patterns/parser.py:50` 解析 `@lab`，`output/observation.py:920` 与 `spatial/population.py:1050` 的输出也使用 `@`。用户提出统一为 `@`，建议统一具体 ztype/gtype 名称生成，目录显式保留 `@default`；裸 genotype 选择器仍保留匹配任意 slab 的既有语义。
+- **用户已确认不兼容旧冒号标签格式：** 统一使用 @，不保留 genotype:slab / haplotype:glab 兼容解析。实施同步名称生成方、消费者、文档和锁定冒号格式的测试；不能简单全局替换冒号（无序模式 `::`、空间日志 `deme{i}:param` 各有独立含义）。即使格式统一，内部统计仍直接使用 registry 对象与索引，避免字符串反查。当前仅记录，未修改实现。
+
+## CR-13 📋 WF 融合路径性别分配未归一化（2026-09-13，已复现，修复方向已确认）
+
+- 报告称 `rust/src/kernels/discrete_generation.rs:298,806` 的分阶段/WF 性别分配差异仅为风格漂移；实际核验不成立。分阶段在非单性别 mask 分支按 `f / (f + m)` 分配（零和回退 0.5），WF 则分别乘 f、m；age_structured.rs:392 后也使用归一化写法。
+- `frontend/model/assembly.py:225` 的 compatibility 来自雌、雄配子矩阵各自行和，并非一对相加为 1 的性别概率；`frontend/genetics/matrices.py:258` 后分别过滤和归一化配子行。实际 XY 案例两侧均为 1，female-only/male-only mask 均为 False，差异分支可以到达。
+- **主 agent 实际复现：** 复用 `tests/test_discrete_generation_sex_chromosome_mendelian.py::test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelian`，1000 雌性与 1000 雄性亲本，每雌性 1 个卵，无竞争、适合度 1、确定性；仅通过 config._replace 将 extreme_speed_mode 从 0 切换为 3。分阶段后代雌雄各 500（原断言通过），WF 各 1000（原 500 断言失败），总数从预期 1000 变为 2000。脚本 `/tmp/review_wf_sex.py` 已运行，临时文件不保证长期存在。
+- 复现使用现有测试的内部构建入口，显式 has_sex_chromosomes=True，调用真实 Rust session 并 run(1)；没有手工伪造 compatibility 数组。当前公开 builder 的 has_sc 错误通常关闭此分支，因此不能宣称未经绕过该入口缺陷的公开 XY 构建已复现翻倍。修复入口标志时必须一并覆盖此问题。
+- **用户已确认修复方向：** 统一三条路径的性别分配概率定义，保留随机抽样方式各自的语义，保证分配前后总量守恒；不能将雌雄分别归一化的配子行和直接视为性别概率。与此同时，当前案例双侧 compatibility=1，表明通过能否产生配子推断性染色体性别掩码并不充分；真正 XX/XY、ZW/ZZ 的性别约束应按遗传结构定义，不能认为单纯归一化就修完性染色体问题。当前只记录，未实施。
+- `.venv/bin/python -m pytest -q tests/test_discrete_generation_sex_chromosome_mendelian.py tests/test_wright_fisher.py` → **7 passed**；现有覆盖没有阻止该差异。仅主 agent 调查与复现，未修改实现、未运行完整门禁或独立审查。
+
 > [!NOTE] 历史标注
 > 本文件中所有与 numba 相关的条目（`numba`、`njit_switch`、`NUMBA_ENABLED`、
 > `enable_numba()/disable_numba()`、`.numba_cache`、`NATAL_DISABLE_NUMBA`、

@@ -132,3 +132,55 @@ def test_export_deme_drafts_detaches_custom_slots() -> None:
     for slot in owner._demes:  # pyright: ignore[reportPrivateUsage]  # every live draft stays uncorrupted
         assert "probe_leak" not in slot._config.custom  # pyright: ignore[reportPrivateUsage]
         assert slot._config.custom["grid"][0] == 0.0  # pyright: ignore[reportPrivateUsage]
+
+
+def test_snapshot_size_mismatch_raises_instead_of_stale_fallback() -> None:
+    """A native/draft tensor size mismatch fails the snapshot explicitly.
+
+    Regression target (CR-4): mismatched reads used to be silently skipped,
+    so the fallback loop copied the stale draft value and the snapshot
+    blended old declaration data with fresh native reads.
+    """
+    import natal.backends.rust.rust_backend as backend_module
+
+    owner = _history_population("ConfigSnapshotSizeGuard", "discrete")
+    assert not isinstance(owner, nt.SpatialPopulation)
+    backend = owner._rust_lifecycle_backend
+    assert backend is not None
+    session = backend._session
+    draft = owner._config
+    assert draft is not None
+
+    class _BrokenTensorSession:
+        """Read proxy: one tensor read returns the wrong element count."""
+
+        def __init__(self, inner: object, bad_name: str) -> None:
+            self._inner = inner
+            self._bad_name = bad_name
+
+        def get_scalar(self, name: str) -> float:
+            return self._inner.get_scalar(name)  # pyright: ignore[reportAnyAttributeAccess]
+
+        def get_tensor(self, name: str) -> np.ndarray:
+            values = self._inner.get_tensor(name)  # pyright: ignore[reportAnyAttributeAccess]
+            if name == self._bad_name:
+                return values[:1]
+            return values
+
+        def get_custom_slots(self) -> dict[str, bool | int | float | np.ndarray]:
+            return self._inner.get_custom_slots()  # pyright: ignore[reportAnyAttributeAccess]
+
+    broken = _BrokenTensorSession(session, "viability_fitness")
+    with pytest.raises(
+        RuntimeError,
+        match=r"viability_fitness.*expected \d+ elements, got 1",
+    ):
+        backend_module.config_snapshot_from_session(broken, draft)  # pyright: ignore[reportArgumentType]
+
+    # The same proxy keeps every other field intact: a healthy read still
+    # projects the draft shapes exactly.
+    healthy = backend_module.config_snapshot_from_session(session, draft)
+    assert healthy is not None
+    np.testing.assert_array_equal(
+        healthy.viability_fitness, draft.viability_fitness  # pyright: ignore[reportAttributeAccessIssue]
+    )

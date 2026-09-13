@@ -11,6 +11,7 @@ from typing import Callable, List, Optional
 
 from natal.frontend.genetics import Genotype, Species
 
+from .._groups import chromosome_groups, group_haplotype
 from .atom import LabPattern
 from .chromosome import ChromosomePairPattern
 
@@ -48,7 +49,7 @@ class GenotypePattern:
         Returns:
             True if the genotype matches all specified chromosome patterns.
         """
-        species = genotype.species
+        groups = chromosome_groups(genotype.species)
 
         for i, chr_pattern in enumerate(self.chromosome_patterns):
             if chr_pattern is None:
@@ -56,10 +57,9 @@ class GenotypePattern:
                 continue
 
             # Get the haplotype pair for this chromosome
-            chromosome = species.chromosomes[i]
             try:
-                mat_hap = genotype.maternal.get_haplotype_for_chromosome(chromosome)
-                pat_hap = genotype.paternal.get_haplotype_for_chromosome(chromosome)
+                mat_hap = group_haplotype(genotype.maternal, groups[i])
+                pat_hap = group_haplotype(genotype.paternal, groups[i])
             except (AttributeError, KeyError, IndexError, ValueError):
                 return False
 
@@ -122,17 +122,8 @@ class ZygoteTypePattern:
         from natal.frontend.patterns.parser import GenotypePatternParser
 
         parser = GenotypePatternParser(species)
-        # Inline _strip_lab logic to avoid protected-access warning.
-        lab: Optional[LabPattern] = None
-        base = pattern_str
-        if "@" in pattern_str:
-            idx = pattern_str.rindex("@")
-            base = pattern_str[:idx].strip()
-            suffix = pattern_str[idx + 1:].strip()
-            if suffix:
-                lab = LabPattern.parse(suffix)
-        genotype = parser.parse(base)
-        return ZygoteTypePattern(genotype, lab)
+        genotype = parser.parse(pattern_str)
+        return ZygoteTypePattern(genotype, genotype.lab)
 
     @staticmethod
     def from_pair(

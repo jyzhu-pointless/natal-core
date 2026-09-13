@@ -27,7 +27,10 @@ def test_locus_name_list_form_builds_skeleton_loci() -> None:
     assert [locus.name for locus in loci] == ["locA"]
     # Alleles are inferred on first reference, so the skeleton is empty.
     assert [list(locus.alleles) for locus in loci] == [[]]
-    assert list(species.get_all_genotypes()) == []
+    # Stepwise construction is legal, but enumeration is a computation
+    # entry: an allele-less locus is rejected there (CR-9 contract).
+    with pytest.raises(ValueError, match="locA.*no alleles"):
+        list(species.get_all_genotypes())
 
 
 def test_locus_allele_map_form_expands_genotypes() -> None:
@@ -86,8 +89,10 @@ def test_xy_species_produce_sex_specific_genotypes() -> None:
     """An XY species exposes exactly the XX and XY diploid genotypes.
 
     With one locus on each sex chromosome the haploid set is ``{A1;X,
-    A1;Y}``; the diploid set combines them into XX and XY.  The XY
-    string compresses its empty per-parent sex segments to ``A1|A1``.
+    A1;Y}``; the diploid set combines them into XX and XY.  The strings
+    keep the sex-chromosome pair (contract change, CR-0: stringification
+    preserves the maternal/paternal sex chromosomes instead of dropping
+    the heterogametic side), so the male reads ``A1|A1;X|Y``.
     """
     species = nt.Species.from_dict(
         name="FrozenSpXY",
@@ -100,7 +105,11 @@ def test_xy_species_produce_sex_specific_genotypes() -> None:
     )
 
     genotypes = {str(g) for g in species.iter_genotypes(unordered=False)}
-    assert genotypes == {"X|X;A1|A1", "A1|A1"}
+    assert genotypes == {"A1|A1;X|X", "A1|A1;X|Y"}
+
+    # Round trip: every string parses back to the same object.
+    for g in species.iter_genotypes(unordered=False):
+        assert species.get_genotype_from_str(str(g)) is g
 
     haploids = {str(h) for h in species.get_all_haploid_genotypes()}
     assert haploids == {"A1;X", "A1;Y"}

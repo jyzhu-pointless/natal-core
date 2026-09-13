@@ -260,6 +260,10 @@ chr1.remove_locus("A")
 
 After deletion, the locus will be removed from the chromosome, but the `Locus` instance itself will continue to exist. The loci on either side of the deleted locus become new adjacent loci, and the recombination rate between them is automatically set to the sum of the recombination rates on both sides of the original locus.
 
+#### Structure Completeness Validation
+
+Structures used for genetic computation require: every chromosome (autosomes and sex chromosomes alike) carries at least one locus, and every locus carries at least one allele. Construction and editing may be temporarily incomplete (for example, declaring a locus first and adding alleles later), but the computation entry points — full genotype enumeration, genotype string parsing, genetic matrix generation, and species baseline acquisition — validate through `Species.validate_structure()` first, raising a `ValueError` that names the Species, chromosome, and locus when incomplete. A monomorphic chromosome can explicitly declare a single-allele locus; the system does not add placeholder loci or alleles automatically.
+
 #### About the `position` Parameter
 
 The `position` parameter is used to define the relative position of a locus on a chromosome, **serving only as a sorting label**; its absolute magnitude is unrelated to the recombination rate.
@@ -293,6 +297,12 @@ gene_drive = sp.get_gene("Drive")
 Manual retrieval of `Haplotype` instances is generally not required.
 
 ```python
+import natal as nt
+
+sp = nt.Species.from_dict(
+    name="HaplotypeExample",
+    structure={"chr1": {"A": ["A1", "A2"], "B": ["B1", "B2"]}},
+)
 # Get all possible haplotypes on a chromosome: take each haploid genotype's
 # haplotype for this chromosome, then deduplicate
 chr1 = sp.get_chromosome("chr1")  # Get chromosome object
@@ -415,6 +425,10 @@ gt2 = sp.get_genotype_from_str("A/B/C|a/b/c; WT/R1|Drive/R2")
 gt3 = sp.get_genotype_from_str("abc|ABC; Drive/R2|WT/R1")
 print(gt1 is gt2, gt1 is gt3)  # Output: True True
 ```
+
+#### Sex-Chromosome String Format
+
+For species with a declared sex-chromosome system (XY, ZW, ...), the genotype string carries **one segment per sex-chromosome group** after the autosome segments, written like any other segment. An XY male reads `"A|a;X1|Y1"` (maternal X, paternal Y), an XY female `"A|a;X1|X2"`; a ZW female `"A|a;W1|Z1"`, a ZW male `"A|a;Z1|Z1"`. Stringification and parsing both handle sex-chromosome groups while preserving the maternal/paternal phase, so every enumerated genotype's string round-trips through `get_genotype_from_str` to the same object.
 
 #### Caching Mechanism
 

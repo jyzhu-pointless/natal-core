@@ -403,7 +403,7 @@ def test_runtime_modifiers_register_zygote_side_and_batch_defers() -> None:
     )
 
     pop = _build("RUZygoteModifier")
-    rule_set = ZygoteConversionRuleSet().add_allele_convert("WT", "Dr", rate=0.1)
+    rule_set = ZygoteConversionRuleSet().add_allele_convert(from_allele="WT", to_allele="Dr", rate=0.1)
     modifier = rule_set.to_zygote_modifier(pop)
     up = pop.update()
     up.modifiers(zygote_modifiers=[modifier])

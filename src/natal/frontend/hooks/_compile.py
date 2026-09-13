@@ -173,6 +173,12 @@ def compile_hook_call(
                 "Use HookOp objects (Op.*), @hook-decorated functions, "
                 "or single-parameter callables."
             )
+    for desc in descriptors:
+        # Item-level events (op.event or @hook meta) resolve here too, so
+        # the final descriptors are validated against the same catalog as
+        # the call-level event above.
+        if desc.event not in allowed_events:
+            raise ValueError(f"Event '{desc.event}' not in {list(allowed_events)}")
     return descriptors
 
 

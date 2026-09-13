@@ -11,6 +11,7 @@ from typing import Callable, List, Optional
 
 from natal.frontend.genetics import HaploidGenome
 
+from .._groups import chromosome_groups, group_haplotype
 from .atom import LabPattern
 from .chromosome import HaplotypePath
 
@@ -72,7 +73,7 @@ class HaploidGenomePattern:
         Returns:
             True if the haploid genome matches all specified patterns.
         """
-        species = haploid_genome.species
+        groups = chromosome_groups(haploid_genome.species)
 
         for i, haplotype_pattern in enumerate(self.haplotype_patterns):
             if haplotype_pattern is None:
@@ -80,10 +81,9 @@ class HaploidGenomePattern:
                 continue
 
             # Get the haplotype for this chromosome
-            chromosome = species.chromosomes[i]
             try:
-                haplotype = haploid_genome.get_haplotype_for_chromosome(chromosome)
-            except (AttributeError, KeyError, IndexError):
+                haplotype = group_haplotype(haploid_genome, groups[i])
+            except (AttributeError, KeyError, IndexError, ValueError):
                 return False
 
             if not haplotype_pattern.matches(haplotype):

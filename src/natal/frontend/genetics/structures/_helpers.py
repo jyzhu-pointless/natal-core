@@ -36,7 +36,13 @@ def canonical_haploid_pair(
     paternal_haps: list[Haplotype] = []
     needs_reassembly = False
 
-    for chromosome in species.chromosomes:
+    # Reassembled genomes must use the same order as enumeration and parsing:
+    # autosomes first, then the selected member of each sex group.
+    groups = list((species.get_sex_chromosome_groups() or {}).values())
+    grouped = {chrom for group in groups for chrom in group}
+    chromosomes = [chrom for chrom in species.chromosomes if chrom not in grouped]
+    chromosomes.extend(chrom for group in groups for chrom in group)
+    for chromosome in chromosomes:
         try:
             hap1 = hg1.get_haplotype_for_chromosome(chromosome)
         except ValueError:

@@ -13,12 +13,9 @@ from numpy.typing import NDArray
 from natal.frontend.genetics import (
     Genotype,
     Species,
-    extract_gamete_frequencies_by_glab,
 )
 from natal.frontend.modifiers.gamete_conversion import (
     GameteConversionRuleSet,
-    _build_single_rule_matrix,
-    _resolve_rule_glabs,
 )
 from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 
@@ -60,9 +57,10 @@ class CytoplasmicPreset(GeneticPreset):
     def gamete_modifier(self, host: "RecipeHost") -> Optional[GameteModifier]:
         """Tag maternal gametes: default-glab → *glab_name* for matching slabs.
 
-        Uses declarative :class:`GameteConversionRuleSet` with pre-compiled
-        ``n_gtypes × n_gtypes`` matrices — one matrix per glab_name,
-        applied only to ztypes whose slab matches.
+        Uses the declarative :class:`GameteConversionRuleSet`: one whole-gtype
+        conversion per target glab, restricted to female producers whose
+        ztype slab matches and to gametes currently carrying the default
+        glab.
         """
         if not self._maternal_map:
             return None
@@ -76,64 +74,19 @@ class CytoplasmicPreset(GeneticPreset):
         if not active_map:
             return None
 
-        # Build declarative ruleset: one glab convert per target glab
         ruleset = GameteConversionRuleSet()
-        for _slab_name, glab_name in active_map.items():
-            ruleset.add_glab_convert(
-                from_glab="default", to_glab=glab_name, rate=1.0,
+        for slab_name, glab_name in active_map.items():
+            ruleset.add_gtype_convert(
+                to=f"*@{glab_name}",
+                rate=1.0,
+                filters={
+                    "parent_sex": "female",
+                    "parent": f"*@{slab_name}",
+                    "current": "*@default",
+                },
             )
 
-        # Pre-compile: one n_gtypes×n_gtypes matrix per rule
-        resolved = _resolve_rule_glabs(ruleset.rules, host)
-        glab_to_matrix: dict[str, NDArray[np.float64]] = {}
-        for (rule, src_idx, tgt_idx), (_slab, glab_name) in zip(
-            resolved, active_map.items()
-        ):
-            glab_to_matrix[glab_name] = _build_single_rule_matrix(
-                rule, src_idx, tgt_idx, host.registry,
-            )
-
-        # Pre-compute ztype index lookup: slab_name → [ztype_idx, ...]
-        registry = host.registry
-        slab_ztypes: dict[str, list[int]] = {}
-        for zidx, (_gt, slab) in enumerate(registry.index_to_ztype):
-            slab_ztypes.setdefault(slab, []).append(zidx)
-
-        n_gtypes = registry.n_gtypes
-        z2g = host.config.zygotes_to_gametes_map
-        hgs = registry.index_to_haplo
-        n_glabs = int(host.config.n_glabs)
-
-        def modifier_func(*_args: object, **_kwargs: object) -> Dict[
-            Tuple[int, int], Dict[int, float]
-        ]:
-            result: Dict[Tuple[int, int], Dict[int, float]] = {}
-
-            for slab_name, glab_name in active_map.items():
-                M = glab_to_matrix[glab_name]
-                for ztype_idx in slab_ztypes.get(slab_name, []):
-                    initial = extract_gamete_frequencies_by_glab(
-                        z2g, 0, ztype_idx, hgs, n_glabs,
-                    )
-                    if not initial:
-                        continue
-
-                    freq_vec = np.zeros(n_gtypes, dtype=np.float64)
-                    for (hg, glab_idx), freq in initial.items():
-                        glab_str = registry.glab_labels[glab_idx]
-                        freq_vec[registry.gtype_index(hg, glab_str)] = freq
-
-                    converted = freq_vec @ M
-                    compressed: Dict[int, float] = {
-                        int(i): float(converted[i])
-                        for i in np.nonzero(converted > 1e-12)[0]
-                    }
-                    if compressed:
-                        result[(0, ztype_idx)] = compressed
-
-            return result
-
-        return modifier_func  # type: ignore[return-type]  # inner func matches GameteModifier protocol
+        return ruleset.to_gamete_modifier(host) if ruleset.rules else None  # type: ignore[return-type]  # structurally satisfies the GameteModifier protocol
 
     def zygote_modifier(self, host: "RecipeHost") -> Optional[ZygoteModifier]:
         """Redirect zygotes: tagged maternal gamete + any paternal → target slab.

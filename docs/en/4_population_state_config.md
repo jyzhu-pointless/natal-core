@@ -72,6 +72,8 @@ Key differences from `PopulationState`:
   - `n_sexes`, `n_ages`, `n_ztypes`, `n_gtypes`, `n_glabs`, `n_slabs`
   - `stochastic`, `continuous_sampling`, `sex_ratio`
 
+  - The name catalogs `ztype_names` / `gtype_names` use the unified `genotype@label` format (e.g. `WT|WT@default`) with the explicit `@default` entry; the unordered-pair marker `::` and the spatial log prefix `deme{i}:` are independent syntaxes. State statistics and the catalogs must be index-aligned; a mismatch raises explicitly.
+
 2. **Age-Related Parameters**
   - `age_based_survival_rates`
   - `age_based_mating_rates`

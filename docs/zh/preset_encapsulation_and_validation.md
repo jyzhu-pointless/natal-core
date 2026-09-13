@@ -41,15 +41,11 @@ class DrivePreset(GeneticPreset):
     def gamete_modifier(self, host):
         ruleset = GameteConversionRuleSet("drive_rules")
 
-        def is_wd_heterozygote(genotype) -> bool:
-            name = str(genotype)
-            return name in {"W|D", "D|W"}
-
         ruleset.add_allele_convert(
             from_allele="W",
             to_allele="D",
             rate=self.conversion_rate,
-            genotype_filter=is_wd_heterozygote,
+            filters={"parent": "W::D"},
         )
 
         return ruleset.to_gamete_modifier(host)
@@ -63,11 +59,14 @@ class DrivePreset(GeneticPreset):
 ```python
 import natal as nt
 
+species = nt.Species.from_dict(
+    name="DriveExample", structure={"chr1": {"loc": ["W", "D"]}}
+)
 pop = (
     nt.AgeStructuredPopulation
     .setup(species=species, name="DriveExperiment", stochastic=True)
     .age_structure(n_ages=8, new_adult_age=1)
-    .initial_state({"female": {"WT|WT": 500}, "male": {"WT|WT": 500}})
+    .initial_state(individual_count={"female": {"W|W": 500}, "male": {"W|W": 500}})
     .presets(DrivePreset(conversion_rate=0.55))
     .build()
 )
@@ -80,7 +79,7 @@ pop = (
 在做大规模实验前，至少完成以下检查：
 
 1. 机制检查：转换方向和目标等位基因是否正确
-2. 过滤检查：`genotype_filter` 命中范围是否符合预期
+2. 过滤检查：`filters` 命中范围是否符合预期
 3. 质量守恒检查：频率归一化是否成立
 4. 对照检查：与无 Preset 的 baseline 对比趋势是否合理
 5. 稳定性检查：在随机性模型（`stochastic=True`）下重复运行，结论是否稳健（当前没有公开的随机种子 API，见[模拟内核深度解析](4_simulation_engine.md)的随机流一节）
@@ -112,12 +111,12 @@ class ComplexDrive(GeneticPreset):
         ruleset = GameteConversionRuleSet("ComplexDrive")
 
         # 阶段1: 驱动转换 (WT → Drive)
-        ruleset.add_allele_convert("WT", "Drive", rate=0.95,
-                           genotype_filter=lambda gt: "Drive" in str(gt))
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Drive", rate=0.95,
+                           filters={"parent": "*::Drive"})
 
         # 阶段2: 抗性形成 (剩余WT → Resistance)
-        ruleset.add_allele_convert("WT", "Resistance", rate=0.05,
-                           genotype_filter=lambda gt: "Drive" in str(gt))
+        ruleset.add_allele_convert(from_allele="WT", to_allele="Resistance", rate=0.05,
+                           filters={"parent": "*::Drive"})
 
         return ruleset.to_gamete_modifier(host)
 
@@ -129,7 +128,7 @@ class ComplexDrive(GeneticPreset):
             from_allele="WT",
             to_allele="Resistance",
             rate=0.02,
-            maternal_glab="cas9"  # 需要母源Cas9沉积
+            filters={"maternal": "*@cas9"}  # 需要母源Cas9沉积
         )
 
         return ruleset.to_zygote_modifier(host)
@@ -195,7 +194,7 @@ class DebugPreset(GeneticPreset):
 🎉 恭喜！你已经完成了"设计自己的 Preset"的完整主线：
 
 1. 规则定义（Gamete 与 Zygote 转换
-2. 规则生效范围精细化（genotype_filter）
+2. 规则生效范围精细化（filters）
 3. Preset 工程化、验证与发布
 
 现在你已经掌握了从零开始设计、实现、验证和发布自定义 Preset 的完整流程。
