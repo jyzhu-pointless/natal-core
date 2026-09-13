@@ -7,7 +7,29 @@ permissions:
   contents: read
 
 jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install Corepack
+        run: npm install --global corepack@0.32.0
+      - name: Check and build dashboard assets
+        run: python scripts/build_frontend.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-assets
+          path: src/natal/frontend/webui/dist
+          if-no-files-found: error
+
   build:
+    needs: frontend
     name: wheel ${{ matrix.os }} py${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -18,6 +40,10 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dashboard-assets
+          path: src/natal/frontend/webui/dist
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}

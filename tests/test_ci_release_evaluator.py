@@ -18,6 +18,16 @@ def load_verifier():
     return module
 
 
+def test_frontend_cli_reports_missing_build_prerequisite(monkeypatch):
+    """The executable entry point must fail clearly instead of packaging stale assets."""
+    import runpy
+    import shutil
+
+    monkeypatch.setattr(shutil, 'which', lambda command: None)
+    with pytest.raises(SystemExit, match='Corepack'):
+        runpy.run_path(str(ROOT / 'scripts/build_frontend.py'), run_name='__main__')
+
+
 @pytest.mark.parametrize('failure', ['package-version', 'metadata-version', 'package-path', 'engine-path', 'python-engine', None])
 def test_installed_import_guard_detects_contamination(tmp_path, failure):
     verifier = load_verifier()
@@ -52,7 +62,7 @@ if failure == 'python-engine': engine.__file__ = str(root / 'natal/_engine_rs.py
         assert 'RuntimeError' in result.stderr
 
 
-@pytest.mark.parametrize('failed_index', range(4))
+@pytest.mark.parametrize('failed_index', range(5))
 def test_install_failures_stop_remaining_checks_and_remove_sandbox(tmp_path, monkeypatch, failed_index):
     verifier = load_verifier()
     sandboxes = []
@@ -70,6 +80,46 @@ def test_install_failures_stop_remaining_checks_and_remove_sandbox(tmp_path, mon
     assert failure.value.returncode == 23
     assert len(sandboxes) == failed_index + 1
     assert not sandboxes[0].exists()
+
+
+@pytest.mark.parametrize('damage', [None, 'missing-js', 'html-instead-of-js', 'fallback-page'])
+def test_installed_dashboard_guard_rejects_broken_assets(tmp_path, monkeypatch, damage):
+    """The actual wheel guard must reject a 200 fallback or broken asset links."""
+    import natal.frontend.webui.app as app
+
+    assets = tmp_path / 'assets'
+    assets.mkdir()
+    (tmp_path / 'index.html').write_text(
+        '<div id="app"></div><script src="/assets/app.js"></script>'
+        '<link rel="stylesheet" href="/assets/app.css">'
+    )
+    (assets / 'app.css').write_text('body { color: black; }')
+    if damage != 'missing-js':
+        (assets / 'app.js').write_text('console.log("ready")')
+    if damage == 'html-instead-of-js':
+        from starlette.responses import HTMLResponse
+        from starlette.routing import Route
+
+        create_app = app.create_app
+
+        async def fallback(request):
+            return HTMLResponse('<h1>Wrong fallback</h1>', status_code=200)
+
+        def wrong_content_app(*args, **kwargs):
+            result = create_app(*args, **kwargs)
+            result.router.routes.insert(0, Route('/assets/app.js', endpoint=fallback))
+            return result
+
+        monkeypatch.setattr(app, 'create_app', wrong_content_app)
+    if damage == 'fallback-page':
+        (tmp_path / 'index.html').write_text('<h1>Frontend build not found</h1>')
+    monkeypatch.setattr(app, '_DIST_DIR', tmp_path)
+    verifier = load_verifier()
+    if damage is None:
+        exec(verifier.WEBUI_CHECK, {})
+    else:
+        with pytest.raises(AssertionError):
+            exec(verifier.WEBUI_CHECK, {})
 
 
 def test_locked_baseline_uses_same_explicit_python_when_running():

@@ -395,7 +395,7 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 
 ### `setup(...)`
 
-参数与年龄结构模型一致：`name`、`stochastic`、`continuous_sampling`、`fixed_egg_count`、`species`，并新增 `backend`（`"auto"` / `"rust"` / `"python"`，默认 `"auto"`）。其中 `species` 是必填参数，用于定义种群的遗传结构。
+参数与年龄结构模型一致：`name`、`stochastic`、`continuous_sampling`、`fixed_egg_count`、`species`。其中 `species` 是必填参数，用于定义种群的遗传结构。
 
 ### `initial_state(...)`
 

@@ -101,13 +101,16 @@ def test_release_tag_contract(verifier, tag, valid):
             verifier.check_tag(tag, Version('0.3.0b0'))
 
 
-def _wheel(tmp_path, *, version='0.3.0b1', metadata_version=None, extension=True, tag=None, name='natal_core'):
+def _wheel(tmp_path, *, version='0.3.0b1', metadata_version=None, extension=True, tag=None, name='natal_core', frontend=True):
     tag = tag or str(next(sys_tags()))
     path = tmp_path / f'{name}-{version}-{tag}.whl'
     with zipfile.ZipFile(path, 'w') as archive:
         archive.writestr(f'{name}-{version}.dist-info/METADATA', f'Name: {name}\nVersion: {metadata_version or version}\n')
         suffix = importlib.machinery.EXTENSION_SUFFIXES[0] if extension else '.py'
         archive.writestr(f'natal/_engine_rs{suffix}', b'not executed in identity tests')
+        if frontend:
+            archive.writestr('natal/frontend/webui/dist/index.html', '<div id="app"></div>')
+            archive.writestr('natal/frontend/webui/dist/assets/index.js', 'console.log("built")')
     return path
 
 
@@ -118,7 +121,7 @@ def test_wheel_identity_returns_exact_artifact(verifier, tmp_path):
 
 @pytest.mark.parametrize('options', [
     {'version': '0.3.0b2'}, {'metadata_version': '0.3.0b2'},
-    {'extension': False}, {'tag': 'cp27-cp27m-win32'}, {'name': 'other'},
+    {'extension': False}, {'tag': 'cp27-cp27m-win32'}, {'name': 'other'}, {'frontend': False},
 ])
 def test_wrong_wheels_fail_before_install(verifier, tmp_path, options):
     _wheel(tmp_path, **options)
@@ -167,6 +170,7 @@ def test_isolated_install_scrubs_paths_and_uses_copied_tests(verifier, tmp_path,
     assert str(wheel) in commands[0]
     assert any('check' in command and 'pip' in command for command in commands)
     assert any(verifier.IMPORT_CHECK in command for command in commands)
+    assert any(verifier.WEBUI_CHECK in command for command in commands)
     assert 'pytest' in commands[-1]
 
 
@@ -187,7 +191,7 @@ def test_verification_cli_requires_work_and_accepts_tag_only(verifier, monkeypat
     assert verifier.main(['--check-tag', 'v0.3.0b1']) == 0
 
 
-@pytest.mark.parametrize('failed_stage', [0, 1, 2, None])
+@pytest.mark.parametrize('failed_stage', [0, 1, 2, 3, None])
 def test_build_never_verifies_or_installs_after_a_failure(tmp_path, monkeypatch, failed_stage):
     builder = _load('build_rust_wheel')
     commands = []
@@ -195,14 +199,41 @@ def test_build_never_verifies_or_installs_after_a_failure(tmp_path, monkeypatch,
     def run(command, **kwargs):
         index = len(commands)
         commands.append(command)
-        if index == 0:
+        if index == 1:
             _wheel(output)
         return SimpleNamespace(returncode=19 if index == failed_stage else 0)
     monkeypatch.setattr(builder.subprocess, 'run', run)
     assert builder.main(['--out', str(output), '--install']) == (19 if failed_stage is not None else 0)
-    assert len(commands) == (failed_stage + 1 if failed_stage is not None else 3)
-    assert commands[0][commands[0].index('--interpreter') + 1] == sys.executable
-    assert '--locked' in commands[0]
+    assert len(commands) == (failed_stage + 1 if failed_stage is not None else 4)
+    assert commands[0] == [sys.executable, 'scripts/build_frontend.py']
+    if failed_stage != 0:
+        assert commands[1][commands[1].index('--interpreter') + 1] == sys.executable
+        assert '--locked' in commands[1]
+
+
+@pytest.mark.parametrize('failed_stage', [0, 1, 2, 3, None])
+def test_frontend_build_stops_on_failed_check(monkeypatch, failed_stage):
+    builder = _load('build_frontend')
+    commands = []
+    monkeypatch.setattr(builder.shutil, 'which', lambda name: '/tools/corepack')
+    def run(command, **kwargs):
+        index = len(commands)
+        commands.append(command)
+        assert kwargs['cwd'] == ROOT / 'frontend'
+        return SimpleNamespace(returncode=9 if index == failed_stage else 0)
+    monkeypatch.setattr(builder.subprocess, 'run', run)
+    assert builder.main() == (9 if failed_stage is not None else 0)
+    assert len(commands) == (failed_stage + 1 if failed_stage is not None else 4)
+    assert commands[0][-2:] == ['install', '--frozen-lockfile']
+    if failed_stage is None:
+        assert '--emptyOutDir' in commands[-1]
+
+
+def test_frontend_build_requires_corepack(monkeypatch):
+    builder = _load('build_frontend')
+    monkeypatch.setattr(builder.shutil, 'which', lambda name: None)
+    with pytest.raises(SystemExit, match='Corepack'):
+        builder.main()
 
 
 def test_build_rejects_old_output_before_running_commands(tmp_path):

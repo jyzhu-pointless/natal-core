@@ -39,6 +39,11 @@ def main(argv: list[str] | None = None) -> int:
         output = Path(tempfile.mkdtemp(prefix="build-", dir=parent))
     env = os.environ.copy()
     env.setdefault("CARGO_TARGET_DIR", str(ROOT_DIR / "rust" / "target"))
+    result = subprocess.run(
+        [sys.executable, "scripts/build_frontend.py"], cwd=ROOT_DIR, env=env, check=False,
+    )
+    if result.returncode:
+        return result.returncode
     command = [
         sys.executable, "-m", "maturin", "build", "--release", "--locked",
         "--interpreter", sys.executable, "--out", str(output),

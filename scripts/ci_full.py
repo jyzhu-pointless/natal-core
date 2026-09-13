@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 STAGES = ("lint", "types", "stubs", "tests", "baseline", "rust", "wheel")
 CHECK_SCRIPTS = (
+    "scripts/build_frontend.py",
     "scripts/ci_full.py",
     "scripts/build_rust_wheel.py",
     "scripts/verify_wheel.py",

@@ -52,6 +52,48 @@ if not any(str(engine.__file__).endswith(s) for s in importlib.machinery.EXTENSI
     raise RuntimeError('Rust backend is not a native extension')
 """
 
+WEBUI_CHECK = """
+import asyncio
+from html.parser import HTMLParser
+import httpx
+import natal as nt
+from natal.frontend.webui.app import create_app
+
+class Assets(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.paths = []
+    def handle_starttag(self, tag, attrs):
+        for name, value in attrs:
+            if (tag, name) in {('script', 'src'), ('link', 'href')} and value:
+                self.paths.append(value)
+
+async def check():
+    species = nt.Species.from_dict(name='wheel-ui', structure={'chr1': {'loc1': ['WT']}})
+    population = (nt.DiscreteGenerationPopulation.setup(species=species, name='wheel-ui')
+        .initial_state(individual_count={'male': {'WT|WT': 10}, 'female': {'WT|WT': 10}})
+        .reproduction(eggs_per_female=2)
+        .competition(carrying_capacity=100, juvenile_growth_mode='fixed').build())
+    app = create_app(population)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://wheel') as client:
+        page = await client.get('/')
+        assert page.status_code == 200 and '<div id="app">' in page.text, page.text
+        assets = Assets()
+        assets.feed(page.text)
+        assert any(path.endswith('.js') for path in assets.paths), 'Missing compiled JavaScript'
+        assert any(path.endswith('.css') for path in assets.paths), 'Missing compiled stylesheet'
+        for path in assets.paths:
+            response = await client.get(path)
+            assert response.status_code == 200 and response.content, path
+            assert 'text/html' not in response.headers['content-type'], path
+        meta = await client.get('/api/meta')
+        assert meta.status_code == 200 and meta.json()['population_name'] == 'wheel-ui'
+        assert 'backend' not in meta.json()
+    print('Installed dashboard HTML, linked assets and API passed')
+
+asyncio.run(check())
+"""
+
 
 def project_version(root: Path = ROOT_DIR) -> Version:
     """Require the distribution and import version declarations to agree."""
@@ -95,6 +137,11 @@ def wheel_identity(directory: Path, expected: Version) -> Path:
         if not any(f"natal/_engine_rs{suffix}" in names
                    for suffix in importlib.machinery.EXTENSION_SUFFIXES):
             raise ValueError("Wheel has no native natal._engine_rs extension")
+        prefix = "natal/frontend/webui/dist/"
+        if (prefix + "index.html" not in names
+                or not any(name.startswith(prefix + "assets/") and name.endswith(".js")
+                           for name in names)):
+            raise ValueError("Wheel has no compiled dashboard assets")
     return wheel
 
 
@@ -114,7 +161,8 @@ def verify_install(wheel: Path, expected: Version) -> None:
             env.pop(key, None)
         env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
         subprocess.run(
-            [str(python), "-I", "-m", "pip", "install", str(wheel), "pytest>=7", "packaging>=24"],
+            [str(python), "-I", "-m", "pip", "install", str(wheel), "pytest>=7",
+             "packaging>=24", "httpx>=0.27,<0.29"],
             cwd=sandbox, env=env, check=True,
         )
         subprocess.run(
@@ -123,6 +171,9 @@ def verify_install(wheel: Path, expected: Version) -> None:
         subprocess.run(
             [str(python), "-I", "-c", IMPORT_CHECK, str(expected)],
             cwd=sandbox, env=env, check=True,
+        )
+        subprocess.run(
+            [str(python), "-I", "-c", WEBUI_CHECK], cwd=sandbox, env=env, check=True,
         )
         for name in WHEEL_TESTS:
             shutil.copyfile(ROOT_DIR / "tests" / name, sandbox / name)

@@ -134,7 +134,7 @@ For more ready-to-run examples, see the [demos](https://github.com/jyzhu-pointle
 
 ## Development Checks
 
-Use Python 3.10 or later, a Rust toolchain with rustfmt/clippy, and a virtual environment:
+Use Python 3.10 or later, a Rust toolchain with rustfmt/clippy, Node.js 24 with Corepack, and a virtual environment:
 
 ```bash
 python -m pip install -e ".[dev]"
@@ -144,7 +144,9 @@ python scripts/ci_full.py
 Local checks and GitHub Actions share this entry point. Use `--only lint types stubs`,
 `--only tests`, `--only baseline`, or `--only rust` to run selected stages.
 The default run also builds a fresh release wheel and installs it in a temporary,
-isolated environment to run the complex genetic, spatial, and runtime-update tests.
+isolated environment to run the complex genetic, spatial, and runtime-update tests,
+and request the bundled dashboard HTML, assets, and API. End users installing a
+release wheel do not need Node.js; it is required only to build the dashboard.
 This requires access to the package index for dependencies. Passing locally verifies
 the current environment; GitHub checks Python 3.10–3.13 across the supported wheel platforms.
 See [development and release checks](docs/en/index.md#development-and-release-checks) for details.

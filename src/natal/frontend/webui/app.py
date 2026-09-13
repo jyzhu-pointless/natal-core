@@ -10,10 +10,9 @@ Handlers are module-level functions reading session state from
 ``app.state`` (FastAPI convention): this keeps them referenceable for the
 type checker and directly testable without closures.
 
-When ``frontend/dist`` exists (production build), it is served at ``/`` so a
-single ``launch_vue(pop)`` call is self-contained.  During frontend
-development the dist directory is absent and the Vite dev server proxies
-``/api`` and ``/ws`` to this app instead.
+Release wheels include a package-local ``dist`` served at ``/``. Source
+checkouts can also use ``frontend/dist`` or the Vite dev server, which
+proxies ``/api`` and ``/ws`` to this app.
 """
 
 from __future__ import annotations
@@ -31,9 +30,10 @@ from .session import SimulationSession
 from .types import DashboardPopulation
 from .ws import session_from_app, websocket_endpoint
 
-#: Location of the built frontend, relative to this file:
-#: ``<repo-root>/frontend/dist`` (parents: webui -> frontend -> natal -> src -> root).
-_DIST_DIR = Path(__file__).resolve().parents[4] / "frontend" / "dist"
+# Installed wheels must not depend on a source checkout's directory layout.
+_PACKAGED_DIST = Path(__file__).resolve().parent / "dist"
+_DIST_DIR = (_PACKAGED_DIST if _PACKAGED_DIST.is_dir()
+             else Path(__file__).resolve().parents[4] / "frontend" / "dist")
 
 
 async def _get_meta(request: Request) -> dict[str, object]:  # object: heterogeneous JSON meta payload

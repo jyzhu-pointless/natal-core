@@ -205,12 +205,18 @@ python scripts/ci_full.py --only wheel
 stub 检查不会改写文件；有意变更导出后，使用
 `python scripts/generate_init_pyi.py` 重新生成。
 
+构建 wheel 需要 Node.js 24 和 Corepack。`python scripts/build_frontend.py`
+会安装锁定的前端依赖、运行 lint 和测试，并将面板构建到
+`src/natal/frontend/webui/dist`。wheel 构建脚本会自动调用它；CI 只构建一次，
+供全部 wheel 任务共用。发布的 wheel 内含这些资源，最终用户不需要 Node.js。
+
 本地每次 wheel 构建都使用当前解释器，并在 `rust/target/wheels` 下创建独立输出目录。
 `python scripts/build_rust_wheel.py --out PATH` 要求指定目录尚不存在。
 本地构建和 CI 都使用 `python scripts/verify_wheel.py --wheel-dir PATH` 验证唯一的 wheel：
 包名、版本、解释器与平台兼容性、元数据和原生扩展必须匹配。
 验证器会在仓库之外的新临时虚拟环境中安装这个确切的 wheel，检查导入路径和版本，
-然后运行已有的复杂遗传、空间种群和运行时更新端到端测试。
+还会运行已有的复杂遗传、空间种群和运行时更新端到端测试，并通过 HTTP 请求
+验证已安装应用的面板 HTML、引用的 JavaScript/CSS 和 API。
 安装依赖需要访问包索引；验证不会复用可编辑安装，也不会读取仓库的 pytest 路径配置。
 
 GitHub Actions 调用相同的检查阶段。完整 Python 测试在 Linux 上分别使用

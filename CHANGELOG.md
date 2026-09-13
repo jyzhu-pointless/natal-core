@@ -2,6 +2,10 @@
 
 ## v0.3.0b0 (2026-09-13)
 
+Release wheels bundle the Vue dashboard. Installation checks verify the actual
+HTML, linked assets, and API outside the source checkout; Node.js is only needed
+when building from source.
+
 ### Breaking Changes
 
 - **Python 3.10 or later is required**. Release wheels cover CPython 3.10–3.13

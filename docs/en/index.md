@@ -204,6 +204,12 @@ are errors. A failed required stage stops execution with a nonzero exit code.
 Stub checking never rewrites the file; use `python scripts/generate_init_pyi.py`
 to regenerate it after an intentional export change.
 
+Wheel builds require Node.js 24 and Corepack. `python scripts/build_frontend.py`
+installs locked frontend dependencies, runs lint and tests, and builds the dashboard
+into `src/natal/frontend/webui/dist`. The wheel builder calls this automatically;
+CI builds it once and shares the assets across the wheel matrix. Installed wheels
+include these assets, so end users do not need Node.js.
+
 Each local wheel build uses the current interpreter and a new output directory
 under `rust/target/wheels`. `python scripts/build_rust_wheel.py --out PATH`
 requires a directory that does not yet exist. Both local builds and CI use
@@ -212,7 +218,8 @@ its package name, version, interpreter/platform compatibility, metadata, and nat
 extension must match. Verification installs that exact wheel in a fresh temporary
 virtual environment outside the checkout, checks import locations and versions,
 and runs the existing complex genetics, spatial population, and runtime-update
-E2E tests. It needs package-index access to install dependencies; it does not reuse
+E2E tests. It also verifies dashboard HTML, linked JavaScript/CSS, and the API through
+HTTP requests against the installed application. It needs package-index access to install dependencies; it does not reuse
 an editable installation or the repository's pytest path settings.
 
 GitHub Actions calls the same check stages. Full Python tests run on Linux with
