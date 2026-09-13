@@ -176,17 +176,14 @@ from .frontend.population import (
 )
 from .frontend.presets import (
     CytoplasmicPreset,
-    GameteConversionRuleSet,
     GeneticPreset,
     HomingDrive,
     PresetFitnessPatch,
     ToxinAntidoteDrive,
     TransgenicBackground,
     Wolbachia,
-    ZygoteConversionRuleSet,
     count_allele_copies,
 )
-from .frontend.presets._fitness import apply_preset_fitness_patch
 from .frontend.registry import IndexRegistry
 from .frontend.spatial import (
     BatchSetting,

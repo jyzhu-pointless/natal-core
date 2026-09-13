@@ -9,7 +9,11 @@ runtime instead of re-scanning the tree."""
 
 from __future__ import annotations
 
+import argparse
+import subprocess
+import sys
 from pathlib import Path
+from typing import cast
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT_DIR / "src" / "natal"
@@ -27,8 +31,14 @@ def iter_public_modules(package_dir: Path) -> list[tuple[str, list[str]]]:
     sys.path.insert(0, str(ROOT_DIR / "src"))
     import natal  # noqa: PLC0415 — the explicit list IS the source of truth
 
+    # These typed runtime declarations are intentionally absent from the public stub.
+    exports = cast(dict[str, list[str]], vars(natal)["_PUBLIC_EXPORTS"])
+    owners = cast(dict[str, str], vars(natal)["_lazy_map"])
+    # Multiple units may re-export the same object. Match the first owner used
+    # by the runtime lazy map, rather than emitting duplicate stub bindings.
     return sorted(
-        (unit, list(names)) for unit, names in natal._PUBLIC_EXPORTS.items()  # noqa: SLF001 — generated from the pinned list
+        (unit, [name for name in names if owners[name] == unit])
+        for unit, names in exports.items()
     )
 
 
@@ -95,21 +105,32 @@ def render_stub(module_exports: list[tuple[str, list[str]]]) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """Generate or check the formatted stub without changing it in check mode."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args(argv)
     module_exports = iter_public_modules(PACKAGE_DIR)
     content = render_stub(module_exports)
+    # Format in memory so a failed check never overwrites a developer's stub.
+    formatted = subprocess.run(
+        [sys.executable, "-m", "ruff", "check", "--fix", "--stdin-filename", str(OUTPUT_FILE), "-"],
+        input=content, capture_output=True, text=True, cwd=ROOT_DIR, check=False,
+    )
+    if formatted.returncode:
+        print(formatted.stderr, file=sys.stderr)
+        return formatted.returncode
+    content = formatted.stdout
+    if args.check:
+        if not OUTPUT_FILE.exists() or OUTPUT_FILE.read_text(encoding="utf-8") != content:
+            print("Public stub is out of date; run python scripts/generate_init_pyi.py.")
+            return 1
+        print("Public stub is up to date.")
+        return 0
     OUTPUT_FILE.write_text(content, encoding="utf-8")
     export_count = sum(len(names) for _, names in module_exports)
     print(f"Wrote {OUTPUT_FILE.relative_to(ROOT_DIR)} with {export_count} exports from {len(module_exports)} modules.")
 
-    # Auto-fix ruff formatting on the generated stub.
-    import subprocess
-    import sys
-
-    subprocess.run(
-        [sys.executable, "-m", "ruff", "check", "--fix", str(OUTPUT_FILE)],
-        capture_output=True,
-    )
     return 0
 
 

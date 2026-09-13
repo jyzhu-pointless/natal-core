@@ -1,81 +1,65 @@
 #!/usr/bin/env python3
-"""Build a release wheel containing the Rust backend extension.
+"""Build and test one fresh release wheel for the current interpreter.
 
-The project build backend is maturin, so a plain ``pip install .`` also
-builds the extension.  This script exists for CI and release workflows that
-need the wheel artifact explicitly and want a post-build sanity check.
-
-Usage:
-
-    python scripts/build_rust_wheel.py
-    python scripts/build_rust_wheel.py --install
+Each build owns a new output directory. Cargo's compilation cache may be
+shared, but old wheel artifacts never participate in verification.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
-import zipfile
+import sys
+import tempfile
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-WHEEL_DIR = ROOT_DIR / "rust" / "target" / "wheels"
-MODULE_SUFFIX = "natal/_engine_rs"
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """Build, verify in isolation, and optionally install into the caller's env.
+
+    ``--out`` must name a new directory. With no output argument, the verified
+    artifact is retained in a unique directory under ``rust/target/wheels``.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--install",
-        action="store_true",
-        help="install the built wheel into the current environment",
-    )
-    args = parser.parse_args()
-
-    maturin = shutil.which("maturin")
-    python = os.environ.get("PYTHON", "python")
-    if maturin is None:
-        command = [python, "-m", "maturin", "build", "--release"]
+    parser.add_argument("--out", type=Path, help="new output directory")
+    parser.add_argument("--install", action="store_true",
+                        help="also install the verified wheel into this environment")
+    args = parser.parse_args(argv)
+    if args.out is not None:
+        output = args.out.resolve()
+        if output.exists():
+            parser.error("--out must be a new directory, never a previous build directory")
+        output.mkdir(parents=True)
     else:
-        command = [maturin, "build", "--release"]
-
+        parent = ROOT_DIR / "rust" / "target" / "wheels"
+        parent.mkdir(parents=True, exist_ok=True)
+        output = Path(tempfile.mkdtemp(prefix="build-", dir=parent))
     env = os.environ.copy()
-    if not env.get("CARGO_TARGET_DIR"):
-        target = ROOT_DIR / "rust" / "target"
-        target.mkdir(parents=True, exist_ok=True)
-        env["CARGO_TARGET_DIR"] = str(target)
-    print(f"==> {' '.join(command)}")
+    env.setdefault("CARGO_TARGET_DIR", str(ROOT_DIR / "rust" / "target"))
+    command = [
+        sys.executable, "-m", "maturin", "build", "--release", "--locked",
+        "--interpreter", sys.executable, "--out", str(output),
+    ]
+    print(f"==> {' '.join(command)}", flush=True)
     result = subprocess.run(command, cwd=ROOT_DIR, env=env, check=False)
-    if result.returncode != 0:
-        print("maturin build failed.")
+    if result.returncode:
         return result.returncode
-
-    wheels = sorted(WHEEL_DIR.glob("natal_core-*.whl"))
-    if not wheels:
-        print(f"No wheel found under {WHEEL_DIR}.")
-        return 1
-    wheel = wheels[-1]
-    with zipfile.ZipFile(wheel) as archive:
-        names = archive.namelist()
-        if not any(name.startswith(MODULE_SUFFIX) for name in names):
-            print(f"Wheel {wheel} does not contain the Rust extension.")
-            return 1
-    print(f"Built and verified wheel: {wheel}")
-
+    result = subprocess.run(
+        [sys.executable, "scripts/verify_wheel.py", "--wheel-dir", str(output)],
+        cwd=ROOT_DIR, env=env, check=False,
+    )
+    if result.returncode:
+        return result.returncode
+    print(f"Verified wheel directory: {output}", flush=True)
     if args.install:
-        install = subprocess.run(
-            [python, "-m", "pip", "install", "--force-reinstall", "--no-deps", str(wheel)],
-            cwd=ROOT_DIR,
-            env=env,
-            check=False,
-        )
-        if install.returncode != 0:
-            print("pip install failed.")
-            return install.returncode
-        print("Installed wheel into the current environment.")
-
+        wheel, = output.glob("*.whl")
+        return subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--force-reinstall", "--no-deps", str(wheel)],
+            cwd=ROOT_DIR, env=env, check=False,
+        ).returncode
     return 0
 
 

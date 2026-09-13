@@ -4,79 +4,69 @@ on:
   push:
     branches: [main, "feat/**"]
   pull_request:
+  merge_group:
+  workflow_call:
+  workflow_dispatch:
 
+# Called workflows inherit github.workflow from their caller. The ci- prefix
+# keeps this group distinct from release publication concurrency.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  # ── Layer 1: lint + types + stub consistency (fail fast) ────────────────
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install tooling
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-          pip install ruff pyright
-      - name: Ruff
-        run: ruff check src demos
-      - name: Pyright (strict)
-        run: pyright
-      - name: Stub regeneration must be a no-op
-        run: |
-          python scripts/generate_init_pyi.py
-          git diff --exit-code src/natal/__init__.pyi
+      - name: Install development tools
+        run: python -m pip install -e ".[dev]"
+      - name: Lint, types, and generated exports
+        run: python scripts/ci_full.py --only lint types stubs
 
-  # ── Layer 2: full test suite across Python versions ─────────────────────
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install package
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[test]"
-      - name: Pytest
-        run: pytest -q
+      - name: Install package and test tools
+        run: python -m pip install -e ".[test]"
+      - name: Python tests
+        run: python scripts/ci_full.py --only tests
 
-  # ── Layer 3: numeric lock — deterministic outputs bit-identical ─────────
   baseline:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-          cache: pip
-      - name: Install package
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-      - name: Phase-0 baseline digests
-        run: python scripts/phase0_baseline.py --check
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.6.14"
+      - name: Install locked baseline environment
+        run: uv sync --locked --python 3.13
+      - name: Deterministic baseline digests
+        run: uv run --no-sync --python 3.13 python scripts/ci_full.py --only baseline
 
-  # ── Layer 4: Rust gate (fmt + clippy + check) ───────────────────────────
   rust-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -86,27 +76,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Rust gate
-        run: python scripts/check_rust.py
+      - name: Rust checks and tests
+        run: python scripts/ci_full.py --only rust
 
-  # ── Layer 5: wheel buildability (no publish) ────────────────────────────
   wheel-build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    uses: ./.github/workflows/wheel-build.yml
+
+  ci-success:
+    name: ci-success
+    if: always()
+    needs: [lint, test, baseline, rust-gate, wheel-build]
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - uses: PyO3/maturin-action@v1
-        with:
-          # Pin the interpreter: inside the manylinux container maturin
-          # otherwise picks its default (cp39), which cannot be installed
-          # by the 3.13 smoke test below.
-          args: --release --out dist -i 3.13
-          sccache: true
-          manylinux: auto
-      - name: Smoke-test the built wheel
+      - name: Require every check to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          pip install dist/*.whl
-          python -c "import natal; print('wheel import ok, version', natal.__version__)"
+          python3 - <<'PY'
+          import json
+          import os
+          results = json.loads(os.environ["RESULTS"])
+          failures = {name: job["result"] for name, job in results.items() if job["result"] != "success"}
+          if failures:
+              raise SystemExit(f"Required CI jobs did not succeed: {failures}")
+          PY

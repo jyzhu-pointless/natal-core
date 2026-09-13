@@ -4,7 +4,7 @@
 
 [![GitHub](https://img.shields.io/github/v/release/jyzhu-pointless/natal-core?label=GitHub&color=purple)](https://github.com/jyzhu-pointless/natal-core/releases/latest)
 [![PyPI](https://img.shields.io/pypi/v/natal-core.svg?label=PyPI&color=yellow)](https://pypi.org/project/natal-core/)
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![NumPy](https://img.shields.io/badge/NumPy-2.0.0+-green.svg)](https://numpy.org/)
 [![Docs](https://img.shields.io/readthedocs/natal-core?label=docs)](https://natal-core.readthedocs.io/en/latest/)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](https://github.com/jyzhu-pointless/natal-core/blob/main/LICENSE)
@@ -31,11 +31,11 @@ NATAL Core is part of the NATAL project. The full project also includes **NATAL 
 
 It is strongly recommended to use a virtual environment to manage dependencies.
 
-Choose one of the following commands. **Python 3.12** is recommended, but any Python version >= 3.9 should work.
+Choose one of the following commands. **Python 3.12** is recommended, but any Python version >= 3.10 should work.
 
 ```bash
 uv venv --python 3.12 .venv            # uv (recommended)
-python -m venv .venv                   # venv (please ensure Python >= 3.9 is used)
+python -m venv .venv                   # venv (please ensure Python >= 3.10 is used)
 conda create -n natal-env python=3.12  # conda
 ```
 
@@ -131,6 +131,23 @@ launch(pop)
 ```
 
 For more ready-to-run examples, see the [demos](https://github.com/jyzhu-pointless/natal-core/tree/main/demos) directory in the GitHub repository.
+
+## Development Checks
+
+Use Python 3.10 or later, a Rust toolchain with rustfmt/clippy, and a virtual environment:
+
+```bash
+python -m pip install -e ".[dev]"
+python scripts/ci_full.py
+```
+
+Local checks and GitHub Actions share this entry point. Use `--only lint types stubs`,
+`--only tests`, `--only baseline`, or `--only rust` to run selected stages.
+The default run also builds a fresh release wheel and installs it in a temporary,
+isolated environment to run the complex genetic, spatial, and runtime-update tests.
+This requires access to the package index for dependencies. Passing locally verifies
+the current environment; GitHub checks Python 3.10–3.13 across the supported wheel platforms.
+See [development and release checks](docs/en/index.md#development-and-release-checks) for details.
 
 ## Documentation and Links
 
