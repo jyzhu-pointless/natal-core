@@ -16,9 +16,9 @@ from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 from natal.frontend.utils.types import Sex
 
 from ._types import (
+    AlleleSpecifier,
     PresetFitnessPatch,
-    _AlleleSpecifier,
-    _SexSpecificRates,
+    SexSpecificRates,
 )
 
 if TYPE_CHECKING:
@@ -216,7 +216,7 @@ class GeneticPreset(ABC):
         self._custom_fitness_patch = None
         return self
 
-    def _resolve_allele_name(self, allele: _AlleleSpecifier) -> str:
+    def _resolve_allele_name(self, allele: AlleleSpecifier) -> str:
         """Helper to resolve allele inputs to their string names."""
         # Gene objects already carry their canonical name; strings pass through.
         if isinstance(allele, Gene):
@@ -224,7 +224,7 @@ class GeneticPreset(ABC):
         return allele
 
     def _resolve_rates(
-        self, rate: _SexSpecificRates
+        self, rate: SexSpecificRates
     ) -> Tuple[float, float]:
         """Helper to resolve rate inputs into a tuple of (female_rate, male_rate)."""
         # Scalar applies to both sexes; an explicit pair is used as (female, male).

@@ -81,8 +81,8 @@ def detach_draft(draft: ModelDraft) -> ModelDraft:
     )
 
 
-class _CompileHost:
-    """Read surface handed to recipes while a candidate compile runs.
+class CompileHost:
+    """Internal collaboration surface handed to recipes during compilation.
 
     The compile function owns the working draft; this view only exposes
     the :class:`~natal.frontend.genetics.compile.RecipeHost` protocol so
@@ -118,7 +118,7 @@ class _CompileHost:
         return self._registry
 
 
-def _apply_fitness_step(host: _CompileHost, step: Mapping[str, object]) -> None:
+def _apply_fitness_step(host: CompileHost, step: Mapping[str, object]) -> None:
     """Re-apply one declared explicit fitness patch to the working draft.
 
     Uses the same route-table writer spelling as the ``fitness()`` chain
@@ -173,7 +173,7 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
             or registry.index_to_gtype != complete.index_to_gtype):
         raise ValueError("Compilation requires the complete species registry.")
     species = definition.species
-    host = _CompileHost(species, registry, draft)
+    host = CompileHost(species, registry, draft)
     for name, base in zip(FITNESS_FIELDS, definition.fitness_base):
         target: NDArray[np.float64] = getattr(host.draft, name)
         target[...] = base if base.shape == target.shape else np.ones_like(target)
