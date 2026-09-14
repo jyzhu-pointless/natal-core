@@ -63,6 +63,18 @@
   Both land on `pop.params.migration_rate`, matching the existing runtime
   `params.tensor_write("migration_rate", ...)` channel. Boundary demes are now
   controlled through this rate, not through their adjacency rows.
+- **`PointMutation` preset for spontaneous point mutation**. The new built-in
+  preset converts a source allele into one or more target alleles in every
+  gamete carrying it (no parent-genotype filter). The mutation is germline-only
+  for now (the embryonic channel is deferred with TODO.md item #14).
+  Multi-target declarations compete: the preset compensates for the conversion
+  cascade internally (`r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`), so each target's realized
+  share equals its declared rate instead of the earlier-declared target taking
+  its mass first. `rate_mode="strict"` (default) rejects non-finite, negative,
+  or above-1 rates and any declaration summing above 1;
+  `rate_mode="proportional"` reads them as proportions and scales them to 1.
+  Available as `natal.PointMutation` /
+  `natal.frontend.presets.PointMutation`.
 
 ### Fixed
 

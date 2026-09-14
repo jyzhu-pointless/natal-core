@@ -593,7 +593,44 @@ modifier 则是不透明 callable。不同 preset 修改同一行时，目前也
 - 添加测试验证优先级链：`carrying_capacity` > `age_1_carrying_capacity` > `initial_individual_count`
 - 覆盖 Configurator 和 `pop.update()` 两个入口
 
-### #14 🎨 PointMutation 预设 —— 多点突变 + 概率自动校正
+### #14 ✅ DONE — PointMutation 预设 —— 多点突变 + 概率自动校正
+
+**结论（已实装）**：新增内置预设 `PointMutation`
+（`src/natal/frontend/presets/point_mutation.py`），公开导出为
+`natal.PointMutation` 与 `natal.frontend.presets.PointMutation`。实现与下方设计一致：
+
+- 单 target（`target_allele` + `mutation_rate`）与多 target（`target_alleles` +
+  `mutation_rates`）两种声明形式；速率支持 `float` / `(female, male)` / 按性别字典
+- 级联补偿 `r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`，按性别分别计算，公开
+  `effective_rates()` 可查看补偿后的速率
+- `rate_mode="strict"`（默认，Σr > 1 报 `ValueError`）与 `"proportional"`
+  （等比缩放到和为 1）
+- 仅生殖系通道：原设计中的可选 `zygotic_mutation_rate`（胚胎期突变）曾实现，随后按要求
+  **暂时取消**（2026-09 维护者决定），`zygote_modifier()` 固定返回 `None`；该参数已不存在，
+  传入会直接 `TypeError`。胚胎期通道若将来需要，应作为独立条目重新设计（可考虑按 target
+  的速率形状与阶段维度，而不是再加一个孤立标量）
+- 对所有 target 的 declarative fitness patch（`make_fitness_patch_given_allele_scaling`）
+- 构造期即校验声明（形式混用、target 重复/等于 source、速率数量不匹配、速率非有限或
+  为负、按性别键非法、Σr 越界、非法 `rate_mode`），`reconfigure_preset` 写入的原始值
+  在编译期重新归一化并复检
+
+**未改动**：`GameteConversionRuleSet`、`GameteAlleleConversionRule`、`modifiers.py`、
+任何 Rust 内核。
+
+**文档**：`docs/{en,zh}/2_genetic_presets.md`（新增小节 + 可运行示例）、
+`docs/{en,zh}/1_quickstart.md`、`docs/{en,zh}/3_custom_presets.md`、
+`docs/{en,zh}/allele_conversion_rules.md`、`CHANGELOG.md`。
+**测试**：`tests/test_point_mutation_preset.py`（单/多 target、补偿公式、按性别、
+Σr>1 边界、reconfigure、负向声明、germline-only 负向契约与导出）+
+`tests/test_point_mutation_adversarial_review.py`（独立对抗式审查补充的输入契约回归：
+非法性别键的异常类型、非有限/越界速率拒绝、reconfigure 状态一致性）+
+`tests/test_point_mutation_dynamics.py`（端到端动力学：中性累积 `q(t)=1-(1-μ)^t`、
+竞争 target 的 B:C 比例逐代不变、隐性致死突变-选择平衡 `√μ/(1+√μ)`、乘性有害平衡与
+独立参考递推逐代一致、雌性特异速率折半、X 连锁双性别累积、spatial 全局递推与迁移扩散、
+重叠世代的调度决定衰减率（并在关闭精子存储时与由实测年龄结构算出的更新方程主根
+逐位吻合）、随机运行的复现性与二项一致性）。三个文件合计使新模块行覆盖率达 100%。
+
+**原设计（历史记录）**：
 
 **来源**：2026-06-05 设计讨论。用户需求：同时声明 source → [target₁, target₂, …] 的多条点突变，且各 target 的突变率互不干扰（"同时竞争"语义，而非 "先到先得"的级联语义）。
 

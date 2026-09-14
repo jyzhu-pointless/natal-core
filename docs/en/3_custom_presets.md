@@ -228,6 +228,11 @@ class PointMutation(GeneticPreset):
         }
 ```
 
+> **Note**: NATAL ships a built-in `PointMutation` preset covering this behavior
+> (plus multi-target competition and sex-specific rates); see
+> [Genetic Presets](2_genetic_presets.md). The class above is a minimal
+> custom-preset exercise, not the built-in API.
+
 #### Bidirectional Mutation Balance
 
 ```python

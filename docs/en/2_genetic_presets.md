@@ -109,31 +109,78 @@ ta_drive_with_mating_cost = ToxinAntidoteDrive(
 )
 ```
 
+### PointMutation -- Spontaneous Point Mutation
+
+`PointMutation` models spontaneous mutation of a source allele into one or more target alleles. The mutation happens in every gamete carrying the source allele, regardless of the parent's genotype, and each target keeps the rate you declare — the targets compete instead of consuming each other's share:
+
+```python
+from natal.frontend.presets import PointMutation
+
+# Single target
+mutation = PointMutation(
+    "A2B",
+    source_allele="A",
+    target_allele="B",
+    mutation_rate=1e-5,          # 1e-5 of the source gametes become B
+    viability_scaling=0.98,      # optional: slightly deleterious target
+)
+
+# Several targets: the rates are effective rates, not cascade shares
+multi = PointMutation(
+    "MultiMut",
+    source_allele="A",
+    target_alleles=["B", "C", "D"],
+    mutation_rates=[1e-7, 5e-6, 1e-5],
+)
+
+population.apply_preset(mutation)
+```
+
+Parameter descriptions:
+
+1. `source_allele`: The allele that mutates. Every gamete carrying it converts, with no parent-genotype filter (point mutation is spontaneous).
+2. `target_allele` / `mutation_rate` and `target_alleles` / `mutation_rates`: The single-target and multi-target declaration forms; each rate accepts a `float`, a `(female, male)` pair, or a per-sex dictionary. A missing sex key means no conversion for that sex.
+3. `rate_mode`: `"strict"` (default) treats the rates as probabilities and rejects a sum above 1; `"proportional"` treats them as proportions and scales them to sum to 1, so `[2, 3, 5]` is the same model as `[0.2, 0.3, 0.5]`.
+4. `viability_scaling` / `fecundity_scaling` / `sexual_selection_scaling` / `zygote_viability_scaling` (and their `*_mode`): Fitness effects applied to the whole target group; all default to neutral.
+
+The mutation happens in the germline only (while gametes are produced, before fertilization); the preset registers no zygote-stage modifier. An embryonic channel is deliberately deferred (TODO.md item #14), so `zygote_modifier()` always returns `None`.
+
+The conversion rules of one ruleset run as a cascade: each rule only sees the source mass the previous rule left. Declaring `[0.3, 0.5, 0.1]` would therefore hand the second target an effective share of `0.5 × 0.7 = 0.35` if the raw rates were passed through. `PointMutation` compensates internally with `r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`, so the realized gamete distribution of an `A|A` parent is exactly:
+
+| target | declared rate | rate passed to the cascade | realized share |
+|---|---|---|---|
+| B | 0.3 | 0.3 | 0.3 |
+| C | 0.5 | 0.5 / 0.7 ≈ 0.714 | 0.5 |
+| D | 0.1 | 0.1 / 0.2 = 0.5 | 0.1 |
+| A (unchanged) | — | — | 0.1 |
+
+This "simultaneous competition" semantics is what distinguishes one multi-target `PointMutation` from several stacked single-target presets, whose rules cascade in registration order (first declared, first served). The compensation is computed per sex, so sex-specific rates compete independently within each sex.
+
 ## Practical Examples
 
 ### Simple Point Mutation
 
 ```python
 import natal as nt
-from natal.frontend.presets import HomingDrive
+from natal.frontend.presets import PointMutation
 
-# Create gene drive
-drive = HomingDrive(
-    name="DemoDrive",
-    drive_allele="Drive",
-    target_allele="WT",
-    drive_conversion_rate=0.95
+# A wild-type allele A mutates into the allele R at 1e-4
+mutation = PointMutation(
+    name="A2R",
+    source_allele="A",
+    target_allele="R",
+    mutation_rate=1e-4,
 )
 
 # Build population and apply preset
-species = nt.Species.from_dict("TestSpecies", {
-    "chr1": {"GeneA": ["WT", "Drive"]}
+species = nt.Species.from_dict("PointMutationSpecies", {
+    "chr1": {"GeneA": ["A", "R"]}
 })
 
-pop = (nt.AgeStructuredPopulation.setup(species, name="DriveTest", stochastic=False)
+pop = (nt.AgeStructuredPopulation.setup(species, name="MutationTest", stochastic=False)
        .age_structure(n_ages=5, new_adult_age=2)
-       .initial_state({"female": {"WT|WT": [0, 0, 100, 0, 0]}})
-       .presets(drive)
+       .initial_state({"female": {"A|A": [0, 0, 100, 0, 0]}})
+       .presets(mutation)
        .build())
 
 # Run simulation

@@ -141,7 +141,8 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "BasePopulation", "AgeStructuredPopulation", "DiscreteGenerationPopulation",
     ],
     "frontend.presets": [
-        "GeneticPreset", "HomingDrive", "ToxinAntidoteDrive", "CytoplasmicPreset",
+        "GeneticPreset", "HomingDrive", "ToxinAntidoteDrive", "PointMutation",
+        "CytoplasmicPreset",
         "Wolbachia", "TransgenicBackground", "apply_preset_fitness_patch",
         "PresetFitnessPatch", "count_allele_copies",
         "GameteConversionRuleSet", "ZygoteConversionRuleSet",

@@ -199,7 +199,7 @@ pop = (nt.DiscreteGenerationPopulation
 
 ### 使用其他预设
 
-目前预设系统包括 [HomingDrive](api/presets.md#natal.frontend.presets.HomingDrive) 和 [ToxinAntidoteDrive](api/presets.md#natal.frontend.presets.ToxinAntidoteDrive) 两类，未来会持续扩展更多预设类型。
+目前预设系统包括 [HomingDrive](api/presets.md#natal.frontend.presets.HomingDrive)、[ToxinAntidoteDrive](api/presets.md#natal.frontend.presets.ToxinAntidoteDrive) 和 [PointMutation](api/presets.md#natal.frontend.presets.PointMutation) 三类，未来会持续扩展更多预设类型。
 
 你也可以自定义预设，详见 [设计你自己的预设](3_custom_presets.md)。
 
