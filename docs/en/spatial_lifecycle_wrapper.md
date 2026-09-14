@@ -32,10 +32,13 @@ At build time `fold_migration_csr()` folds the migration configuration into the
 CSR (`indptr` / `dest_idx` / `weights` / `stay_after_send`); at runtime it is just
 `outbound * weight`:
 
-- **adjacency mode**: each source row stores the raw adjacency values in
-  destination-ascending order and is **not row-normalized**; a row's outbound
-  total depends on the adjacency matrix itself (`build_adjacency_matrix(...)`
-  defaults to `row_normalize=False`).
+- **adjacency mode**: each source row stores the adjacency values in
+  destination-ascending order. The builder row-normalizes every non-empty row to
+  a probability vector first, so an adjacency holds **relative outbound
+  weights**: row-stochastic, sub-stochastic and super-stochastic inputs describe
+  the same outbound distribution and migration conserves mass. An all-zero row
+  (isolated deme) is kept, so that deme holds its mass. "Migrate less" is
+  expressed through `migration_rate`, not by shrinking a row.
 - **kernel mode**: the per-source historical row builder is reproduced in kernel
   row-major visit order; invalid (out-of-grid) offsets are dropped or wrapped;
   each emitted entry is scaled by the reciprocal of the kernel total -- or of

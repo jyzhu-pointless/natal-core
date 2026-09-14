@@ -25,8 +25,10 @@ Rust 原生扩展是唯一的执行引擎，所有路径共享同一套 hook 计
 构建时 `fold_migration_csr()` 把迁移配置折叠为 CSR
 （`indptr` / `dest_idx` / `weights` / `stay_after_send`），运行时只做 `outbound * weight`：
 
-- **adjacency 模式**：每个源行按目标升序存原始邻接值，**不做行归一化**；行的迁出
-  总量取决于邻接矩阵本身（`build_adjacency_matrix(..., row_normalize=False)` 是默认值）。
+- **adjacency 模式**：每个源行按目标升序存邻接值；builder 先把每个非空行归一化为
+  概率向量，因此邻接矩阵存的是**相对迁出权重**：行随机、次随机与超随机输入描述的
+  是同一套迁出分布，迁移守恒质量。全零行（孤立 deme）原样保留，其质量留在源端。
+  要「少迁移」请调 `migration_rate`，不要缩小邻接行。
 - **kernel 模式**：按 kernel row-major 访问顺序复现历史 per-source 构建器；
   无效（越界）偏移丢弃或回绕；条目按 `1/kernel_total` 缩放——当
   `adjust_on_edge=True` 时按 `1/valid_row_total` 缩放；折叠时再对已缩放条目做一次

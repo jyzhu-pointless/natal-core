@@ -80,10 +80,10 @@ spatial = SpatialPopulation(
 - `migration_kernel`：迁移核，走 kernel 路径时使用。
 - `kernel_bank`：可选的 kernel 集合，用于不同 source deme 使用不同 kernel。
 - `deme_kernel_ids`：可选的 per-deme kernel id，索引到 `kernel_bank`。
-- `migration_rate`：每步参与迁移的比例。标量仅应用于成年年龄（>= `new_adult_age`），幼年迁移率为 0；也可传入 `(n_ages,)` 数组按年龄精确配置。
+- `migration_rate`：每个 deme 每步参与迁移的比例。标量仅应用于成年年龄（>= `new_adult_age`），幼年迁移率为 0；`(n_ages,)` 数组按年龄精确配置；`(n_sexes, n_ages)` 表或按性别映射按性别配置；`(n_demes, n_sexes, n_ages)` 列（或 `(n_demes, n_ages)`，随后按性别广播）直接为每个 deme 指定；`batch_setting` 则为每个 deme 给出各自的比例声明。
 - `migration_strategy`：`auto`、`adjacency`、`kernel`、`hybrid`，默认 `auto`。
 - `kernel_include_center`：kernel 路径下是否把中心格也算进迁移目标。
-- `adjust_migration_on_edge`：是否在边界调整迁移量（见「migration_rate 与边界效应」一节），默认 `False`。
+- `adjust_migration_on_edge`：历史位级兼容开关，默认 `False`。它是数值 no-op：迁出行无论取何值都会被归一化为相对权重，因此不改变目的地方向分布（见「migration_rate 与边界效应」一节）。
 
 最重要的规则：
 
@@ -131,13 +131,13 @@ pop = (
 ```python
 .migration(
     kernel=None,                     # [B] NDArray: 奇数维迁移核
-    migration_rate=0.0,             # float | NDArray | Sequence: 迁移比例（标量广播到所有年龄）
+    migration_rate=0.0,             # [B] float | NDArray | Sequence | dict: per-deme 迁移比例
     strategy="auto",                # "auto" | "adjacency" | "kernel" | "hybrid"
-    adjacency=None,                 # 显式邻接矩阵
+    adjacency=None,                 # 相对迁出权重（行会被归一化）
     kernel_bank=None,               # 异构 kernel 集合
     deme_kernel_ids=None,           # per-deme kernel 索引
     kernel_include_center=False,    # 是否包含中心格
-    adjust_migration_on_edge=False, # 是否调整边界迁移量
+    adjust_migration_on_edge=False, # 历史位级兼容 no-op
 )
 ```
 
@@ -161,6 +161,7 @@ pop = (
 | `presets` | 位置参数 | preset 对象 |
 | `fitness` | `viability` / `fecundity` / `sexual_selection` / `zygote_viability` | dict |
 | `migration` | `kernel` | NDArray |
+| `migration` | `migration_rate` | float / NDArray / 映射 |
 
 以下参数**不接受** `batch_setting`：
 - **hooks**：通过 `.hooks(..., deme=...)` 实现 per-deme 选择性执行。
@@ -513,10 +514,15 @@ print(observed_history.values.shape)
 
 ### migration_rate
 
-`migration_rate` 控制每一步中参与跨 deme 流动的质量比例。支持两种形式：
+`migration_rate` 是「每个 deme 的迁出配额」：每一步该 deme 参与跨 deme 流动的质量比例。支持以下形式：
 
 - **标量**（`float`）：仅成年年龄（>= 种群的 `new_adult_age`）使用该迁移率，幼年迁移率默认为 0。离散世代种群中 age 0 代表整个种群，标量正常广播。
-- **按年龄的数组**（`NDArray[np.float64]` 或 `Sequence[float]`，形状 `(n_ages,)`）：每个年龄按传入值精确配置。
+- **按年龄的数组**（`NDArray[np.float64]` 或 `Sequence[float]`，形状 `(n_ages,)`）：每个年龄按传入值精确配置，所有 deme 共享。
+- **按性别的表或映射**（`(n_sexes, n_ages)` 数组，或 `{"F": 0.2, "M": 0.05}`）：对每个性别套用上述标量/向量规则，所有 deme 共享。
+- **per-deme 列**（`(n_demes, n_sexes, n_ages)`；或 `(n_demes, n_ages)`，随后按性别广播）：直接为每个 deme 指定各自的迁移率。
+- **`batch_setting([...])`**（仅 builder）：为每个 deme 给出各自的声明，每个元素都接受上述任意形式。
+
+所有形式最终都落到 `pop.params.migration_rate`，形状为 `(n_demes, n_sexes, n_ages)`，与运行时 `params.tensor_write("migration_rate", ...)` 通道写入的是同一列。
 
 ```python
 # 标量 — age < new_adult_age 迁出 0%，成年迁出 10%（默认 new_adult_age=2）
@@ -524,6 +530,14 @@ spatial = SpatialPopulation(demes, migration_rate=0.1)
 
 # 按年龄 — 精确指定每个年龄的迁移率
 spatial = SpatialPopulation(demes, migration_rate=[0.0, 0.0, 0.3, 0.1])
+
+# per-deme — 三 deme 链中中间 deme 的迁出量是两侧的四倍
+spatial = (
+    SpatialPopulation.builder(species, n_demes=3, topology=topo)
+    .migration(migration_rate=batch_setting([0.1, 0.4, 0.1]))
+    # ... 其余链式调用 ...
+    .build()
+)
 
 # 运行时修改
 spatial.migration_rate = 0.2                 # 仅成年年龄生效
@@ -533,51 +547,39 @@ spatial.migration_rate = [0.0, 0.0, 0.3, 0.1]  # 按年龄精确设置
 - `0.0`：不迁移（所有年龄）。
 - `0.1`：成年年龄（>= new_adult_age）每步迁出 10%，离散世代下全种群迁出 10%。
 
-### 边界效应与 adjust_migration_on_edge
+### 迁出权重与边界效应
 
-当 topology 的 `wrap=False` 时，边界 deme 的有效邻居数少于内部 deme。`adjust_migration_on_edge` 控制如何处理这种差异：
+迁移 CSR 存的是**相对迁出权重**，不是概率。builder 在折叠进 CSR 之前会把每个非空行归一化为概率向量，因此行随机（行和 = 1）、次随机（行和 < 1）与超随机（行和 > 1）输入描述的是同一套迁出分布，迁移守恒质量。要「少迁移」请调 `migration_rate`，不要缩小邻接行；全零行（没有出边的孤立 deme）原样保留，其质量留在源端。
 
-| `adjust_migration_on_edge` | 行为 |
-|---|---|
-| `False`（默认） | 边界 deme 自然迁出更少。每个邻居的迁移概率 = `weight / kernel_total_sum`，总迁移量正比于有效邻居数 |
-| `True` | 所有 deme 迁出相同总量。每个邻居的迁移概率 = `weight / effective_sum`（归一化到 1.0） |
+当 `topology` 的 `wrap=False` 时，边界 deme 的有效邻居更少。它们仍然送出完整的 `migration_rate` 配额——落到网格外的偏移被丢弃，其份额被重新分配给剩余的有效邻居。因此边界 deme 是**给每个邻居更大的份额**，而不是总迁出更少。
 
-其中 `kernel_total_sum` 是 kernel 中所有正向权重的总和，作为统一的缩放参考基准。
+`adjust_migration_on_edge` 只是保留历史位级兼容的开关，是数值 no-op：取任何值目的地方向分布都相同（它选择的分母会在行归一化中被约掉）。
 
 **实际影响**：
 
 ```python
-# 3x3 kernel，中心权重 0，周围权重 1.0
-# kernel_total_sum = 8.0
-
-# 默认行为（adjust_migration_on_edge=False）：
-#   内部 deme（8 个邻居）：每个邻居概率 = 1.0/8.0 = 0.125，总迁移 = rate * 1.0
-#   角落 deme（3 个邻居）：每个邻居概率 = 1.0/8.0 = 0.125，总迁移 = rate * 0.375
-#   → 边界迁出更少，更符合生物直觉
-
-# 调整行为（adjust_migration_on_edge=True）：
-#   内部 deme（8 个邻居）：每个邻居概率 = 1.0/8.0 = 0.125，总迁移 = rate * 1.0
-#   角落 deme（3 个邻居）：每个邻居概率 = 1.0/3.0 ≈ 0.333，总迁移 = rate * 1.0
-#   → 所有 deme 迁出相同总量，边界效应被人为抹平
+# 3x3 von Neumann kernel（4 个邻居），migration_rate = r
+# 内部 deme（4 个邻居）：每个邻居得到 r / 4，总迁移 = r
+# 角落 deme（2 个有效邻居）：每个邻居得到 r / 2，总迁移 = r
+#   → 所有 deme 迁出总量相同；边界 deme 只是把配额分给更少的目的地
 ```
 
-**特殊情况**：当 `topology.wrap=True` 时，所有 deme 都有相同数量的有效邻居，两种模式行为一致。
+**特殊情况**：当 `topology.wrap=True` 时，所有 deme 的有效邻居数相同，各自在同一邻居集合上归一化，边界差异随之消失。
 
 ### 非均匀权重 Kernel
 
-当 kernel 中的权重不全是 1 时（如高斯核），`kernel_total_sum` 保留了 kernel 的相对权重结构：
+当 kernel 中的权重不全是 1 时（如高斯核），相对权重结构会被保留：每个邻居的份额等于它的权重除以该源 deme 有效邻居权重之和。
 
 ```python
 # 5x5 高斯核：中心权重高，边缘权重低
-# kernel_total_sum 是所有权重的总和
 #
 # 内部 deme（25 个邻居全有效）：
-#   每个邻居概率 = weight / kernel_total_sum
-#   总迁移率 = rate * (effective_sum / kernel_total_sum) = rate * 1.0
+#   每个邻居份额 = weight / valid_weight_sum
+#   总迁移率 = rate * 1.0
 #
 # 边界 deme（如 15 个有效邻居）：
-#   每个邻居概率 = weight / kernel_total_sum  (相对权重不变)
-#   总迁移率 = rate * (effective_sum / kernel_total_sum) ≈ rate * 0.6
+#   每个邻居份额 = weight / valid_weight_sum（相对权重不变）
+#   总迁移率 = rate * 1.0 —— 被丢弃的偏移把份额重新分配给有效邻居，而不是把质量留下
 ```
 
 ### 内核实现
@@ -592,11 +594,11 @@ $$(r_d, c_d) = (r_s + (i - i_c),\; c_s + (j - j_c))$$
 
 其中 $(i_c, j_c)$ 是核中心的矩阵坐标。落入网格内的坐标成为有效邻居；超出网格的坐标在 `wrap=False` 时被丢弃，在 `wrap=True` 时取模折回。
 
-源 deme 向邻居 $n$ 迁出的概率由 `adjust_migration_on_edge` 决定：
+每个源 deme 的迁出分布与核权重成正比，并按它的有效邻居归一化：
 
-$$p_n = \frac{w_n}{S_{\text{ref}}}, \quad S_{\text{ref}} = \begin{cases} \sum_{m} w_m & \text{(adjust=True，按有效邻居归一化)} \\ \sum_{i,j} K_{i,j} & \text{(adjust=False，按核总和缩放)} \end{cases}$$
+$$p_n = \frac{w_n}{\sum_m w_m}$$
 
-其中 $\sum_{i,j} K_{i,j}$ 是核所有权重之和（记为 `kernel_total_sum`），$\sum_m w_m$ 是当前 deme 实际有效邻居的权重之和。在 `adjust=False` 下，边界 deme 的总迁出量为 $r \cdot \frac{\sum_m w_m}{\sum_{i,j} K_{i,j}}$，自然小于内部 deme。
+其中 $\sum_m w_m$ 是该源 deme 有效邻居（即上面保留的坐标）的权重之和。因此每个 deme 都会迁出完整配额 $r$；边界 deme 被丢弃的偏移会把份额重新分配给有效邻居，于是每个邻居拿到更大的份额。`adjust_migration_on_edge` 选择的分母（核总和 vs. 有效行总和）会被这次归一化约掉，属历史 no-op。
 
 ### 构造常用 Kernel
 
@@ -701,7 +703,7 @@ $$x = i + 0.5j, \qquad y = \frac{\sqrt{3}}{2}\,j$$
 | 更丰富的局部连接 | `SquareGrid` + `moore` |
 | 各向同性扩散、大规模空间模拟 | `HexGrid` |
 | 消除边界伪影 | 任一拓扑 + `wrap=True` |
-| 保留边界自然效应 + 边界感知迁移 | 任一拓扑 + `wrap=False` + `adjust_migration_on_edge=False` |
+| 保留边界自然效应（边缘邻居更少、份额更大） | 任一拓扑 + `wrap=False` |
 
 ### 完整示例：SquareGrid
 
@@ -795,7 +797,7 @@ SpatialPopulation 的实际使用顺序可以记成四步：
 
 1. 用 `SpatialPopulation.builder(...)` 开始链式构造。
 2. 可以使用异构 deme config（`batch_setting`），但迁移采样模式要在各 deme 之间保持一致。
-3. 选择 adjacency 或 migration_kernel；需要边界感知时用 `adjust_migration_on_edge`。
+3. 选择 adjacency 或 migration_kernel；用 `migration_rate` 设定每个 deme 的迁出配额（历史开关 `adjust_migration_on_edge` 不改变任何行为）。
 4. 用 `run_tick()` 调试，用 `run(...)` 跑批量实验。
 
 ---
