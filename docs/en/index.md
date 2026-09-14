@@ -16,6 +16,10 @@
 
 NATAL Core is part of the NATAL project. The full project also includes **NATAL Inferencer**, a toolkit for inferring population genetics model parameters based on NATAL Core.
 
+## Choose a reading route
+
+For modeling and execution, start with the user [quickstart](1_quickstart.md). For architecture, data flow, and algorithm implementation, follow the separate [developer guide](developer/index.md). For object signatures and parameters, use the [API reference](api/index.md).
+
 ## Key Features
 
 - 🪲 Forward-time simulation with flexible population lifecycles (age-structured and discrete-generation populations)

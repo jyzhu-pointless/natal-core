@@ -126,6 +126,18 @@ nav:
     - 迁移核实现（历史）: migration_kernel_impl.md
     - 空间构建器（已被取代）: spatial_builder.md
     - 空间初始化方案: spatial_initialization_plan.md
+  - 开发者指南:
+    - 阅读路线: developer/index.md
+    - 样章：模型的完整旅程: developer/model_journey.md
+    - 样章：一次繁殖如何计算: developer/reproduction.md
+    - 架构与数据流: developer/architecture.md
+    - 模型编译与索引发布: developer/model.md
+    - 会话与一次 tick: developer/runtime.md
+    - 关键数值算法: developer/algorithms.md
+    - Hook 与受控修改: developer/hooks.md
+    - 空间执行与迁移: developer/spatial.md
+    - 观测、历史与检查点: developer/output.md
+    - 修改与验证路线: developer/development.md
   - API 参考:
     - API 概览: api/index.md
     - 遗传结构: api/genetic_structures.md

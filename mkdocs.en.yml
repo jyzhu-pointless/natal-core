@@ -126,6 +126,18 @@ nav:
     - Migration Kernel Implementation (historical): migration_kernel_impl.md
     - Spatial Builder (superseded): spatial_builder.md
     - Spatial Initialization Plan: spatial_initialization_plan.md
+  - Developer guide:
+    - Reading route: developer/index.md
+    - "Sample: A model’s complete journey": developer/model_journey.md
+    - "Sample: Reproduction calculations": developer/reproduction.md
+    - Architecture and data flow: developer/architecture.md
+    - Model compilation and index publication: developer/model.md
+    - Sessions and a single tick: developer/runtime.md
+    - Numerical algorithms: developer/algorithms.md
+    - Hooks and controlled updates: developer/hooks.md
+    - Spatial execution and migration: developer/spatial.md
+    - Observation, history, and checkpoints: developer/output.md
+    - Making and validating changes: developer/development.md
   - API Reference:
     - Overview: api/index.md
     - genetic_structures: api/genetic_structures.md
