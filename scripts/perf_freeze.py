@@ -1,7 +1,7 @@
 """Freeze the S0 performance scenarios and build identity for the refactor.
 
-RUST_ONLY_REFACTOR_PLAN.md section 13.1 fixes these scenarios, machine,
-and threshold at S0 time: a >10% regression in median wall time or peak
+The frozen contracts in ``CHANGELOG.md`` ("Frozen contracts") fix these
+scenarios, machine, and threshold at S0 time: a >10% regression in median wall time or peak
 memory on any scenario is a blocking finding for the stage that caused
 it.  Thresholds must not be relaxed after seeing results.
 

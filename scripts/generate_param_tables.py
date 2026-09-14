@@ -1,7 +1,8 @@
 """Generate the Rust wire tables for runtime-mutable ecology parameters.
 
-RUST_ONLY_REFACTOR_PLAN.md section 5.4: the parameter inventory and
-bounds must not be hand-written in more than one place.
+The frozen contracts in ``CHANGELOG.md`` ("Frozen contracts"): the
+parameter inventory and bounds must not be hand-written in more than one
+place.
 ``src/natal/parameters.jsonc`` is the single source; this script derives
 the Rust mirror (``rust/src/generated/ecology_parameters.rs``) from it, in the fixed
 ``ECO_PARAM_NAMES`` wire order shared with the Python hook compiler.

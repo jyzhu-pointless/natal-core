@@ -1,5 +1,86 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+
+- **Stale root-level plan documents removed**: `lifecycle-tick-unification-design.md`
+  (the unified lifecycle tick has shipped), `P5_EXPLORATION.md` (superseded by the
+  Rust callback path; its `research/p5_cfunc_bridge/` spike is gone),
+  `RUST_BACKEND_PLAN.md`, `RUST_MODULE_ORGANIZATION_PLAN.md` (landed as
+  `refactor(rust): organize kernel, session, model, output and hook modules`),
+  `DOCS_CONSISTENCY_REPAIR_PLAN.md` (its D1–D7 items landed) and
+  `RUST_ONLY_REFACTOR_PLAN.md`.
+- `RUST_BACKEND_IMPLEMENTATION.md` is now a short index. Its previous body
+  described Numba as the default backend beside Rust, pre-reorganization module
+  paths and APIs that no longer exist; the maintained description lives in `docs/`.
+- The frozen contracts recorded by the retired `RUST_ONLY_REFACTOR_PLAN.md` are
+  carried over below; the tests and scripts that cited its sections now cite this
+  section. The retired plan stays readable in history:
+  `git show f04848f:RUST_ONLY_REFACTOR_PLAN.md`.
+
+### Frozen contracts (carried over from the retired Rust-only refactor plan)
+
+- **User surface (plan §2.1)**: the chained configuration API syntax; the
+  `Species.from_dict` chromosome / locus / allele / sex-chromosome / label /
+  recombination-rate declarations; preset rules (species binding, idempotent
+  registration, priority, modifier order, fitness composition, reconfiguration
+  semantics); and the declarative hook format (`Op.*`, `.hooks(...)`, selectors,
+  condition expressions, events, priority, `every`/`start` scheduling, deme
+  selection). Only the syntax is frozen — internal classes, inheritance, caches,
+  array layouts and old import paths are not. The removed `backend=` selector is
+  the explicit exception.
+- **Preset semantics (plan §5.3)**: species binding, idempotent registration by
+  object identity, priority ordering, manual-modifier ordering, dose effects,
+  labels, sex and compressed-axis semantics are frozen. A preset reconfiguration
+  rebuilding fitness and thereby overwriting manual fitness writes is accepted
+  behavior and must not change silently.
+- **One hand-written parameter inventory (plan §5.4)**: `src/natal/parameters.jsonc`
+  owns names, aliases, types, bounds, target section, shape, writable phase and
+  derived dependencies; the Rust mirror is generated from it and must not be
+  hand-written twice. Rust re-validates Python input rather than trusting Python
+  pre-checks; `apply` validates the whole batch before committing and
+  `tensor_write` validates the whole candidate tensor before replacing; one public
+  method call is one transaction, and chained calls are not jointly atomic.
+- **Stop, error and run phases (plan §7.4)**: the accepted first/early/late stop
+  short-circuit and the rule that a stopped population needs `reset()` before it
+  can run again are frozen, as is keeping the modifications already in effect at
+  that boundary. A failed parameter transaction changes no target value; a failed
+  Python callback commits neither its candidate state nor its parameters and rolls
+  back the RNG it consumed; a run error marks Failed without promising an automatic
+  rollback to the start point. Nested runs, external writes during a run and stale
+  hook contexts are rejected; Rust validation errors map to specific
+  `ValueError`/`TypeError` rather than a catch-all `RuntimeError`.
+- **Checkpoints and restore (plan §9)**: a checkpoint holds tick, phase cursor, run
+  status, individual/sperm arrays, ecology parameters (including migration and
+  custom), per-deme RNG, log position and structure/program compatibility. Genetic
+  tensors do **not** roll back — bit-exact replay only holds while genetics and the
+  program are unchanged. `restore_checkpoint(tick)` locates the record at the
+  recoverable raw boundary, validates all inputs and compatibility, then atomically
+  replaces state/ecology/RNG/cursors and truncates future history and the parameter
+  log; a normal runnable boundary restores Ready instead of a leftover
+  Stopped/Failed. Incompatible blueprints or programs are rejected without changing
+  the session. `reset()` and restore are separate, and importing counts is not a
+  checkpoint restore (no historical RNG). Checkpoints do not capture Python
+  closures or external state.
+- **History lifecycle (plan §8.3)**: History keeps only the query / label / export
+  surface on the Python side; the Rust HistoryStore owns the values and schema and
+  slices or aggregates before returning. Queries default to independent arrays, and
+  an array handed out earlier must not change or dangle after run, clear, restore or
+  ring eviction. The parameter log appends only on a successful commit where the
+  value actually changed, carrying tick, event/phase, deme, parameter name, old and
+  new value, through one commit path shared by direct writes, updates, preset
+  recompiles and both hook kinds. `clear_history()` clears history and its retained
+  checkpoints only — not current state, parameters or RNG. `record_snapshot()` after
+  a stop stores explicit phase metadata for an unfinished tick instead of passing it
+  off as a complete row.
+- **Contract ledger (plan §11, S0)**: three machine-checkable ledgers — must-exist,
+  must-not-exist and invariants — distinguish pre-existing known defects from new
+  regressions.
+- **Performance freeze (plan §13.1)**: scenarios, machine and thresholds are frozen
+  at S0 time; a >10% regression in median wall time or peak memory on any scenario
+  is a blocking finding, and thresholds must not be relaxed after seeing results.
+
 ## v0.3.0b0 (2026-09-13)
 
 Release wheels bundle the Vue dashboard. Installation checks verify the actual

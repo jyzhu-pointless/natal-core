@@ -1,7 +1,7 @@
 """Frozen user-surface contract samples: the chained configuration API.
 
-RUST_ONLY_REFACTOR_PLAN.md section 2.1 freezes the user-facing chained
-syntax: configuration method names, parameter names, chaining, and
+The frozen contracts in ``CHANGELOG.md`` ("Frozen contracts") freeze the
+user-facing chained syntax: configuration method names, parameter names, chaining, and
 build expressions must stay available while the execution backend
 becomes Rust-only.  Each test here is an executable sample of that
 surface, built only from the public ``natal`` namespace and pinned with

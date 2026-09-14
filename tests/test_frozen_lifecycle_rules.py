@@ -1,9 +1,9 @@
 """Frozen contract samples: event / stop / reset / import / restore rules.
 
-RUST_ONLY_REFACTOR_PLAN.md section 7.4 keeps the accepted stop
-short-circuit behavior and the rule that a stopped population needs
-``reset()`` before it can run again; section 9 pins restore semantics
-and section 8.3 history lifecycle.  These tests record the current
+The frozen contracts in ``CHANGELOG.md`` ("Frozen contracts") keep the
+accepted stop short-circuit behavior and the rule that a stopped
+population needs ``reset()`` before it can run again, and pin restore
+semantics and the history lifecycle.  These tests record the current
 actual rules as executable samples on deterministic dynamics.
 """
 

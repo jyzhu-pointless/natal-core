@@ -1,7 +1,7 @@
 """Frozen user-surface contract samples: the declarative hook format.
 
-RUST_ONLY_REFACTOR_PLAN.md section 2.1 freezes the declarative hook
-format: ``Op.*`` actions, ``.hooks(...)`` registration, selectors,
+The frozen contracts in ``CHANGELOG.md`` ("Frozen contracts") freeze the
+declarative hook format: ``Op.*`` actions, ``.hooks(...)`` registration, selectors,
 condition expressions, events, priority, scheduling (every/start), and
 deme selection.  These tests are executable samples of that syntax with
 numerical anchors on deterministic dynamics.

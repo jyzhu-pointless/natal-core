@@ -1,8 +1,9 @@
 """Machine-checkable contract ledger for the Rust-only refactor (S0 exit).
 
-RUST_ONLY_REFACTOR_PLAN.md section 11 (S0) requires three checkable
-ledgers — must-exist, must-not-exist, and invariants — that distinguish
-pre-existing known defects from new regressions.  This module encodes
+The frozen contracts in ``CHANGELOG.md`` ("Frozen contracts", plan §11 S0)
+require three checkable ledgers — must-exist, must-not-exist, and
+invariants — that distinguish pre-existing known defects from new
+regressions.  This module encodes
 the ledgers as data and checks them mechanically:
 
 - ``MUST_EXIST``: every frozen user surface and recorded rule maps to
