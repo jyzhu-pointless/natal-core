@@ -455,7 +455,6 @@ class TestBuildFromSelectors:
             n_ages=n_ages,
             n_ztypes=n_ztypes,
             selectors=(IndividualSelector(ztype="WT|WT"),),
-            collapse_age=False,
         )
 
         # Via the legacy dict spelling (normalized to selectors at the
@@ -487,7 +486,6 @@ class TestBuildFromSelectors:
             n_ages=n_ages,
             n_ztypes=n_ztypes,
             selectors=(IndividualSelector(ztype="*|Dr"),),
-            collapse_age=False,
         )
 
         obs_legacy = compiler.build_filter(
@@ -501,35 +499,23 @@ class TestBuildFromSelectors:
 
         np.testing.assert_array_equal(mask_sel, mask_legacy)
 
-    def test_collapse_age_mask_shape(
+    def test_mask_from_selectors_is_always_4d(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """collapse_age=True produces 3-D mask (n_groups, n_sexes, n_ztypes)."""
-        compiler = ObservationFilter(phase2_registry)
-        mask = compiler.build_mask_from_selectors(
-            n_sexes=2,
-            n_ages=5,
-            n_ztypes=3,
-            selectors=(IndividualSelector(),),  # wildcard
-            collapse_age=True,
-        )
-        # Invariant: 3-D shape
-        assert mask.ndim == 3
-        assert mask.shape == (1, 2, 3)
+        """The selector mask always keeps the age axis.
 
-    def test_collapse_age_false_mask_shape(
-        self, phase2_registry: IndexRegistry
-    ) -> None:
-        """collapse_age=False produces 4-D mask."""
+        A collapsed observation keeps this 4-D mask and applies the age
+        reduction in the projection; the compiler never OR-s the age axis
+        away, which would lose which ages a selector matched.
+        """
         compiler = ObservationFilter(phase2_registry)
         mask = compiler.build_mask_from_selectors(
             n_sexes=2,
             n_ages=5,
             n_ztypes=3,
             selectors=(IndividualSelector(),),
-            collapse_age=False,
         )
-        # Invariant: 4-D shape
+        # Invariant: 4-D shape, age axis intact
         assert mask.ndim == 4
         assert mask.shape == (1, 2, 5, 3)
 
@@ -548,7 +534,6 @@ class TestBuildFromSelectors:
                     ztype="WT|WT", sex="female", age=1
                 ),
             ),
-            collapse_age=False,
         )
         # Invariant: female (sex=0), age=1 only → exactly one coordinate True
         # WT|WT is ztype index 0 in phase2_registry
@@ -570,7 +555,6 @@ class TestBuildFromSelectors:
                 IndividualSelector(ztype="WT|WT"),
                 IndividualSelector(ztype="*|Dr"),
             ),
-            collapse_age=False,
         )
         # Invariant: shape = (2, 2, 1, 3)
         assert mask.shape == (2, 2, 1, 3)
@@ -1436,40 +1420,43 @@ class TestEdgeCases:
         d = obs.to_dict()
         assert "identity" not in d
 
-    def test_collapse_age_mask_any_true_semantics(
+    def test_collapsed_observation_keeps_age_resolution(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """Collapse_age=True mask: ztype selected if any age matches."""
+        """collapse_age=True bakes a 4-D mask and sums exactly the matched ages.
+
+        The selector targets age 2 only.  An OR'd 3-D mask would lose that and
+        report every age of the ZType, so the collapsed projection must still
+        read only age 2 — this pins the 4-D contract end to end.
+        """
         compiler = ObservationFilter(phase2_registry)
-        # Select age=2 only, with 5 age classes
-        mask = compiler.build_mask_from_selectors(
-            n_sexes=2,
-            n_ages=5,
-            n_ztypes=3,
-            selectors=(
-                IndividualSelector(ztype="WT|WT", age=2),
-            ),
+        n_sexes, n_ages, n_ztypes = 2, 5, 3
+        wt_z_idx = next(
+            z
+            for z in range(n_ztypes)
+            if str(phase2_registry.index_to_ztype[z][0]) == "WT|WT"
+        )
+        obs = compiler.build_filter(
+            groups={"age2": IndividualSelector(ztype="WT|WT", age=2)},
+            n_sexes=n_sexes,
+            n_ages=n_ages,
+            n_ztypes=n_ztypes,
             collapse_age=True,
         )
-        # After collapse: mask shape = (1, 2, 3)
-        # Since age=2 exists and WT|WT is present, ztype column should be 1.0
-        # for all sexes
-        assert mask.shape == (1, 2, 3)
-        # Find WT|WT ztype index
-        wt_z_idx = 0
-        for z in range(3):
-            gt, _ = phase2_registry.index_to_ztype[z]
-            if str(gt) == "WT|WT":
-                wt_z_idx = z
-                break
-        # Both sexes should have WT|WT ztype set to 1.0
-        assert mask[0, 0, wt_z_idx] == 1.0
-        assert mask[0, 1, wt_z_idx] == 1.0
-        # Other ztypes should be 0.0
-        for z in range(3):
-            if z != wt_z_idx:
-                assert mask[0, 0, z] == 0.0
-                assert mask[0, 1, z] == 0.0
+        mask = obs.build_mask(n_sexes, n_ages, n_ztypes)
+        assert mask.ndim == 4
+        # The mask records which age matched: only age 2 of WT|WT is set.
+        assert mask[0, :, 2, wt_z_idx].sum() == 2.0
+        assert mask[0, :, [0, 1, 3, 4], wt_z_idx].sum() == 0.0
+
+        state = np.arange(1, n_sexes * n_ages * n_ztypes + 1, dtype=np.float64)
+        state = state.reshape(n_sexes, n_ages, n_ztypes)
+        collapsed = obs.apply(state)
+        # Only age 2 of the WT|WT column, per sex.
+        np.testing.assert_allclose(
+            collapsed.ravel(),
+            [state[0, 2, wt_z_idx], state[1, 2, wt_z_idx]],
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

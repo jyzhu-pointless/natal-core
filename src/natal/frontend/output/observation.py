@@ -136,7 +136,8 @@ class Observation:
 
     Attributes:
         labels: Group labels aligned with the first axis of the mask.
-        collapse_age: Whether the age axis was collapsed during compilation.
+        collapse_age: Whether the projection sums the age axis away.  The
+            baked mask keeps 4-D age resolution either way.
         mask: 4-D binary mask ``(n_groups, n_sexes, n_ages, n_ztypes)``
             or ``None`` when not yet baked.
         population_fingerprint: Hash derived from the layout when built.
@@ -262,24 +263,22 @@ class Observation:
         if self.mask is not None:
             return self.mask.copy()
         # No baked mask (n_ztypes was unknown at compile time): rebuild from the
-        # stored selectors. collapse_age stays False because the mask always
-        # carries the full age axis; the projection applies the collapse.
-        return self._rebuild_mask_dim(n_sexes, n_ages, n_ztypes, collapse_age=False)
+        # stored selectors.  The mask always carries the full age axis; the
+        # projection applies the collapse.
+        return self._rebuild_mask_dim(n_sexes, n_ages, n_ztypes)
 
     def _rebuild_mask_dim(
         self,
         n_sexes: int,
         n_ages: int,
         n_ztypes: int,
-        collapse_age: bool = False,
     ) -> NDArray[np.float64]:
-        """Recompile a missing mask for concrete population dimensions.
+        """Recompile a missing 4-D mask for concrete population dimensions.
 
         Args:
             n_sexes: Number of sex entries.
             n_ages: Number of age entries.
             n_ztypes: Number of ZType entries.
-            collapse_age: Whether the compiled mask omits the age axis.
 
         Returns:
             Rebuilt floating-point selection mask.
@@ -299,7 +298,6 @@ class Observation:
             n_ages=n_ages,
             n_ztypes=n_ztypes,
             selectors=self._selectors,
-            collapse_age=collapse_age,
         )
 
     def project(
@@ -422,42 +420,35 @@ class ObservationFilter:
         n_ages: int,
         n_ztypes: int,
         selectors: Tuple[IndividualSelector, ...],
-        collapse_age: bool,
     ) -> NDArray[np.float64]:
-        """Build a mask from :class:`IndividualSelector` instances.
+        """Build the 4-D selector mask for the given dimensions.
+
+        The age axis is always kept, even for a collapsed observation.  A
+        selector mask is a boolean *set*, and dropping its age axis could only
+        OR the ages together — which keeps "some age matched" and loses which
+        ones.  The projection needs the age-resolved mask to sum the right
+        cells, so a collapsed observation keeps this 4-D mask and applies the
+        age reduction through its own ``collapse_age`` flag instead.  A 3-D
+        "collapsed" mask is therefore never produced here.
 
         Args:
             n_sexes: Number of sexes.
             n_ages: Number of age classes.
             n_ztypes: Number of ZTypes.
             selectors: One selector per group.
-            collapse_age: Whether to collapse the age axis.
 
         Returns:
-            Float64 binary mask ``(n_groups, n_sexes, [n_ages,] n_ztypes)``.
+            Float64 binary mask ``(n_groups, n_sexes, n_ages, n_ztypes)``.
         """
         n_groups = len(selectors)
-        # Full mask keeps the age axis: one (n_sexes, n_ages, n_ztypes) plane per group.
-        if not collapse_age:
-            mask = np.zeros(
-                (n_groups, n_sexes, n_ages, n_ztypes), dtype=np.float64
-            )
-            for gi, sel in enumerate(selectors):
-                bool_mask = sel.compile(
-                    self.registry, n_sexes=n_sexes, n_ages=n_ages
-                )
-                mask[gi] = bool_mask.astype(np.float64)
-            return mask
-
-        # Collapsed mask drops the age axis by OR-ing over ages: a coordinate is
-        # selected when any age matched. Production baking always requests the
-        # full mask above; this form exists for direct compiler use.
-        mask = np.zeros((n_groups, n_sexes, n_ztypes), dtype=np.float64)
+        mask = np.zeros(
+            (n_groups, n_sexes, n_ages, n_ztypes), dtype=np.float64
+        )
         for gi, sel in enumerate(selectors):
             bool_mask = sel.compile(
                 self.registry, n_sexes=n_sexes, n_ages=n_ages
             )
-            mask[gi] = bool_mask.any(axis=1).astype(np.float64)
+            mask[gi] = bool_mask.astype(np.float64)
         return mask
 
     def build_from_selectors(
@@ -512,7 +503,8 @@ class ObservationFilter:
             raise ValueError("Cannot build observation with n_ztypes <= 0")
 
         # Identity observations deliberately skip the dense mask; every other
-        # observation bakes one so later projections need no recompilation.
+        # observation bakes the full 4-D mask so later projections (collapsed or
+        # not) need no recompilation.
         mask: Optional[NDArray[np.float64]] = None
         identity_map: Optional[NDArray[np.int32]] = None
         if n_ztypes is not None:
@@ -522,7 +514,6 @@ class ObservationFilter:
                     n_ages=n_ages,
                     n_ztypes=effective_n_ztypes,
                     selectors=selectors,
-                    collapse_age=False,
                 )
 
         # Identity map is group -> ZType index: group g selects ZType g, which is
@@ -999,6 +990,14 @@ def apply_rule(
       - rule: ``(n_groups, n_sexes, n_ages, n_ztypes)`` or
         ``(n_groups, n_sexes, n_ztypes)``
 
+    A 3-D rule must be a rule that genuinely has *no* age dimension (a
+    selection by sex and ZType only, or a non-age population): its value is
+    applied to every age and the result is summed over the age axis.  Do not
+    build it by OR-ing an age-constrained selector mask — that keeps only
+    "some age matched" and the sum would then include the ages that did not
+    match.  Selector masks are always 4-D; use
+    :func:`Observation.apply <Observation.apply>` for collapsed observations.
+
     Args:
         individual_count: Count array.
         rule: Binary mask with shape matching the observation groups.
@@ -1015,7 +1014,8 @@ def apply_rule(
     arr = np.ascontiguousarray(individual_count, dtype=np.float64)
     mask = np.asarray(rule, dtype=np.float64)
     # Lift counts and rule to the 4-D (deme, sex, age, ztype) form the native
-    # projection expects; a 3-D rule means the age axis was already collapsed.
+    # projection expects; a 3-D rule is defined without an age axis, so it is
+    # applied to every age and the age axis is then summed away.
     if arr.ndim == 3:
         sexes, ages, ztypes = arr.shape
         collapse = mask.ndim == 3
