@@ -1314,7 +1314,11 @@ class SpatialPopulationBuilder:
                 mapping such as ``{"F": 0.2, "M": 0.05}``.  A full
                 ``(n_demes, S, A)`` column sets each deme directly, and an
                 ``(n_demes, n_ages)`` table broadcasts each deme's age
-                vector across sexes.  A ``BatchSetting`` gives one rate
+                vector across sexes — except that a 2-D shape of exactly
+                ``(S, A)`` keeps its shared per-sex reading, so when
+                ``n_demes == n_sexes`` the two 2-D shapes collide and the
+                per-deme reading is unavailable: pass the 3-D column or a
+                ``BatchSetting`` there.  A ``BatchSetting`` gives one rate
                 declaration per deme (each element follows the same
                 sugar), so ``batch_setting([0.1, 0.4, 0.1])`` on a 3-deme
                 chain sends the middle deme four times as much as its

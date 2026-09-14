@@ -764,8 +764,12 @@ class SpatialPopulation:
                 ``{"F": 0.2, "M": 0.05}`` applies the scalar/vector rules
                 per sex.  A full ``(n_demes, n_sexes, n_ages)`` column is
                 used as-is and an ``(n_demes, n_ages)`` table is broadcast
-                across sexes, giving each deme its own rate.  The normalized
-                column lands on ``pop.params.migration_rate`` with shape
+                across sexes, giving each deme its own rate — except that a
+                2-D shape of exactly ``(n_sexes, n_ages)`` keeps its shared
+                per-sex reading, so when ``n_demes == n_sexes`` the two
+                2-D shapes collide and only the 3-D column gives per-deme
+                rates.  The normalized column lands on
+                ``pop.params.migration_rate`` with shape
                 ``(n_demes, n_sexes, n_ages)``.
             adjust_migration_on_edge: Legacy bit-parity flag.  It does
                 not change the destination distribution: the fold

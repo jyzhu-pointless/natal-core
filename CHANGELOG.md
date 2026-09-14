@@ -24,13 +24,31 @@
   that relied on the implicit 5.0 weight change dynamics; pass
   `competition_strength=5.0` to keep them.
 
+- **Adjacency rows now mean relative outbound weights**. The builder
+  row-normalizes every non-empty adjacency row to a probability vector before
+  folding it into the migration CSR, so a sub-stochastic row (sum < 1, e.g.
+  0.5) no longer drops the unrouted share every tick and a super-stochastic row
+  (sum > 1) no longer creates mass. The default topology-derived adjacency —
+  `build_adjacency_matrix(topology)` without `row_normalize` — hit exactly that
+  path whenever `migration_rate > 0` was set without an explicit adjacency (for
+  example `SquareGrid(1, 3)` has row sums `[1, 2, 1]`). All-zero rows (isolated
+  demes) are left untouched and keep their mass at the source. A model that
+  used a shrunken row to mean "migrate less" now migrates the full
+  `migration_rate`; express that intent through `migration_rate` instead. The
+  old "boundary demes migrate less because they have fewer neighbors" behavior
+  is gone — a boundary deme still sends its full quota, just to fewer
+  neighbors, so each one receives a larger share.
+
 ### Added
 
 - **Build-time `migration_rate` supports per-deme values**. A
   `batch_setting([...])` gives one rate declaration per deme (each element
   follows the scalar / age-vector / `(S, A)` / per-sex-mapping sugar), and
   `SpatialPopulationBuilder.migration()` also accepts the whole per-deme column
-  directly: `(n_demes, S, A)`, or `(n_demes, n_ages)` broadcast across sexes.
+  directly: `(n_demes, S, A)`, or `(n_demes, n_ages)` broadcast across sexes —
+  except that a 2-D shape of exactly `(S, A)` keeps its shared per-sex reading,
+  so when `n_demes == n_sexes` the two 2-D shapes collide and only the 3-D
+  column (or `batch_setting`) gives per-deme rates.
   Both land on `pop.params.migration_rate`, matching the existing runtime
   `params.tensor_write("migration_rate", ...)` channel. Boundary demes are now
   controlled through this rate, not through their adjacency rows.
@@ -75,20 +93,6 @@
   `% every` with zero. Installing such a program now raises, and the
   interpreter returns an error rather than dividing by zero if one is
   assembled directly.
-- **Adjacency rows are now normalized to relative weights, so migration
-  conserves mass**. The builder row-normalizes every non-empty adjacency row to
-  a probability vector before folding it into the migration CSR. Previously a
-  sub-stochastic row (sum < 1, e.g. 0.5) dropped the unrouted share every tick
-  while a super-stochastic row (sum > 1) created mass, and the default
-  topology-derived adjacency — `build_adjacency_matrix(topology)` without
-  `row_normalize` — hit exactly that path whenever `migration_rate > 0` was set
-  without an explicit adjacency (for example `SquareGrid(1, 3)` has row sums
-  `[1, 2, 1]`). All-zero rows (isolated demes) are left untouched and keep their
-  mass at the source. Sub-, row- and super-stochastic inputs now mean the same
-  outbound distribution; use `migration_rate` to migrate less. The old
-  "boundary demes migrate less because they have fewer neighbors" behavior is
-  gone — a boundary deme still sends its full quota, just to fewer neighbors, so
-  each one receives a larger share.
 - **`collapse_age=True` observation histories can be read back**.
   `population_observation_history_to_readable_dict` reshaped every history row
   with the full age axis, but a collapsed recording writes one value per age
