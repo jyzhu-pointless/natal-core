@@ -13,7 +13,14 @@ from .assembly import (
     build_population_config,
     compress_config,
 )
-from .constants import BEVERTON_HOLT, FIXED, LINEAR, LOGISTIC, NO_COMPETITION
+from .constants import (
+    BEVERTON_HOLT,
+    FIXED,
+    LINEAR,
+    LOGISTIC,
+    NO_COMPETITION,
+    RICKER,
+)
 from .definition import ModelDefinition
 from .draft import ModelDraft
 
@@ -28,6 +35,7 @@ __all__ = [
     "LOGISTIC",
     "LINEAR",
     "BEVERTON_HOLT",
+    "RICKER",
     # assembly.py
     "build_population_config",
     "build_discrete_engine_config",

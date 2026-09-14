@@ -104,7 +104,7 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     ],
     "frontend.model": [
         "ModelDefinition", "ModelDraft", "NO_COMPETITION", "FIXED", "LOGISTIC",
-        "LINEAR", "BEVERTON_HOLT", "build_population_config",
+        "LINEAR", "BEVERTON_HOLT", "RICKER", "build_population_config",
         "build_discrete_engine_config", "build_custom_slots", "compress_config",
     ],
     "frontend.modifiers": [
