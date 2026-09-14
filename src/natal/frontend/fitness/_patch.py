@@ -3,7 +3,7 @@
 Private module — not part of the public API.
 """
 
-# pyright: reportPrivateUsage=false, reportUnusedFunction=false
+# pyright: reportUnusedFunction=false
 
 from collections.abc import Mapping
 from typing import List, Tuple, Union, cast
@@ -11,23 +11,23 @@ from typing import List, Tuple, Union, cast
 from natal.frontend.genetics import Gene, Genotype
 from natal.frontend.genetics.compile import RecipeHost
 from natal.frontend.presets._types import (
+    FecundityScalingConfig,
     PresetFitnessPatch,
-    _calculate_allele_effect,
-    _coerce_selector,
-    _coerce_sex_specifier,
-    _count_combined_allele_copies,
-    _FecundityScalingConfig,
-    _is_effect_scale,
-    _is_fecundity_scaling_config,
-    _is_sexual_selection_scaling_config,
-    _is_simple_age_scale_map,
-    _is_viability_age_map,
-    _is_viability_scaling_config,
-    _is_zygote_viability_scaling_config,
-    _SexualSelectionScalingConfig,
-    _split_config_mode,
-    _ViabilityScalingConfig,
-    _ZygoteViabilityScalingConfig,
+    SexualSelectionScalingConfig,
+    ViabilityScalingConfig,
+    ZygoteViabilityScalingConfig,
+    calculate_allele_effect,
+    coerce_selector,
+    coerce_sex_specifier,
+    count_combined_allele_copies,
+    is_effect_scale,
+    is_fecundity_scaling_config,
+    is_sexual_selection_scaling_config,
+    is_simple_age_scale_map,
+    is_viability_age_map,
+    is_viability_scaling_config,
+    is_zygote_viability_scaling_config,
+    split_config_mode,
 )
 from natal.frontend.utils.helpers import resolve_sex_label
 
@@ -36,7 +36,7 @@ def _apply_viability_allele_scaling(
     deps: RecipeHost,
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
-    config: _ViabilityScalingConfig,
+    config: ViabilityScalingConfig,
     mode: str = "multiplicative",
 ) -> None:
     """Apply allele-driven viability scaling using multiplicative copy-number effect."""
@@ -58,7 +58,7 @@ def _apply_viability_allele_scaling(
         target_genes.append(gene)
 
     for genotype in all_genotypes:
-        copies = _count_combined_allele_copies(genotype, target_genes)
+        copies = count_combined_allele_copies(genotype, target_genes)
         if copies == 0:
             # No target allele copies in this genotype: no effect.
             continue
@@ -68,7 +68,7 @@ def _apply_viability_allele_scaling(
             if isinstance(config, (int, float, tuple, list)):
                 # Scalar/custom tuple branch:
                 # apply same factor to both sexes at default viability age.
-                factor = _calculate_allele_effect(config, copies, mode)
+                factor = calculate_allele_effect(config, copies, mode)
                 for sex_idx in (0, 1):
                     current = float(viability_arr[sex_idx, default_age, z_idx])
                     deps.config.set_viability_fitness(sex_idx, z_idx, current * factor, default_age)
@@ -76,10 +76,10 @@ def _apply_viability_allele_scaling(
 
             config_map = cast(Mapping[object, object], config)
 
-            if _is_viability_age_map(config_map):
+            if is_viability_age_map(config_map):
                 # Age-map branch: config treated as {age: scale} for both sexes.
                 for age, scale in config_map.items():
-                    factor = _calculate_allele_effect(scale, copies, mode)
+                    factor = calculate_allele_effect(scale, copies, mode)
                     for sex_idx in (0, 1):
                         current = float(viability_arr[sex_idx, age, z_idx])
                         deps.config.set_viability_fitness(sex_idx, z_idx, current * factor, age)
@@ -90,9 +90,9 @@ def _apply_viability_allele_scaling(
                 # sex_config can be either:
                 #   - direct scale for default age
                 #   - nested {age: scale}
-                sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
-                if _is_effect_scale(sex_config):
-                    factor = _calculate_allele_effect(sex_config, copies, mode)
+                sex_idx = resolve_sex_label(coerce_sex_specifier(sex_key))
+                if is_effect_scale(sex_config):
+                    factor = calculate_allele_effect(sex_config, copies, mode)
                     current = float(viability_arr[sex_idx, default_age, z_idx])
                     deps.config.set_viability_fitness(sex_idx, z_idx, current * factor, default_age)
                 elif isinstance(sex_config, Mapping):
@@ -102,12 +102,12 @@ def _apply_viability_allele_scaling(
                             raise TypeError(
                                 f"Invalid viability sex-age key for '{allele_name}', sex '{sex_key}': {type(age).__name__}"
                             )
-                        if not _is_effect_scale(scale):
+                        if not is_effect_scale(scale):
                             raise TypeError(
                                 f"Invalid viability sex-age scale for '{allele_name}', sex '{sex_key}', age {age}: "
                                 f"{type(scale).__name__}"
                             )
-                        factor = _calculate_allele_effect(scale, copies, mode)
+                        factor = calculate_allele_effect(scale, copies, mode)
                         current = float(viability_arr[sex_idx, int(age), z_idx])
                         deps.config.set_viability_fitness(sex_idx, z_idx, current * factor, int(age))
                 else:
@@ -121,7 +121,7 @@ def _apply_fecundity_allele_scaling(
     deps: RecipeHost,
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
-    config: _FecundityScalingConfig,
+    config: FecundityScalingConfig,
     mode: str = "multiplicative",
 ) -> None:
     """Apply allele-driven fecundity scaling using multiplicative copy-number effect."""
@@ -141,7 +141,7 @@ def _apply_fecundity_allele_scaling(
         target_genes.append(gene)
 
     for genotype in all_genotypes:
-        copies = _count_combined_allele_copies(genotype, target_genes)
+        copies = count_combined_allele_copies(genotype, target_genes)
         if copies == 0:
             continue
 
@@ -149,7 +149,7 @@ def _apply_fecundity_allele_scaling(
         for z_idx in z_indices:
             if isinstance(config, (int, float, tuple, list)):
                 # Global branch (both sexes).
-                factor = _calculate_allele_effect(config, copies, mode)
+                factor = calculate_allele_effect(config, copies, mode)
                 for sex_idx in (0, 1):
                     current = float(fecundity_arr[sex_idx, z_idx])
                     deps.config.set_fecundity_fitness(sex_idx, z_idx, current * factor)
@@ -158,12 +158,12 @@ def _apply_fecundity_allele_scaling(
             config_map = cast(Mapping[object, object], config)
             for sex_key, scale in config_map.items():
                 # Sex-specific branch.
-                sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
-                if not _is_effect_scale(scale):
+                sex_idx = resolve_sex_label(coerce_sex_specifier(sex_key))
+                if not is_effect_scale(scale):
                     raise TypeError(
                         f"Invalid fecundity sex scale for '{allele_name}', sex '{sex_key}': {type(scale).__name__}"
                     )
-                factor = _calculate_allele_effect(scale, copies, mode)
+                factor = calculate_allele_effect(scale, copies, mode)
                 current = float(fecundity_arr[sex_idx, z_idx])
                 deps.config.set_fecundity_fitness(sex_idx, z_idx, current * factor)
 
@@ -172,7 +172,7 @@ def _apply_sexual_selection_allele_scaling(
     deps: RecipeHost,
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
-    config: _SexualSelectionScalingConfig,
+    config: SexualSelectionScalingConfig,
     mode: str = "multiplicative",
 ) -> None:
     """Apply allele-driven sexual-selection scaling.
@@ -199,7 +199,7 @@ def _apply_sexual_selection_allele_scaling(
         f_z_indices = deps.index_registry.ztype_indices_for(f_genotype)
         for m_genotype in all_genotypes:
             m_z_indices = deps.index_registry.ztype_indices_for(m_genotype)
-            copies = _count_combined_allele_copies(m_genotype, target_genes)
+            copies = count_combined_allele_copies(m_genotype, target_genes)
 
             if isinstance(config, tuple):
                 # Binary carrier logic:
@@ -211,7 +211,7 @@ def _apply_sexual_selection_allele_scaling(
                 factor = float(config[1] if copies > 0 else config[0])
             else:
                 # Copy-number-based logic via mode.
-                factor = _calculate_allele_effect(config, copies, mode)
+                factor = calculate_allele_effect(config, copies, mode)
 
             for f_z in f_z_indices:
                 for m_z in m_z_indices:
@@ -223,7 +223,7 @@ def _apply_zygote_viability_allele_scaling(
     deps: RecipeHost,
     all_genotypes: List[Genotype],
     allele_name: Union[str, Tuple[str, ...]],
-    config: _ZygoteViabilityScalingConfig,
+    config: ZygoteViabilityScalingConfig,
     mode: str = "multiplicative",
 ) -> None:
     """Apply allele-driven zygote viability scaling using copy-number and scaling mode."""
@@ -245,7 +245,7 @@ def _apply_zygote_viability_allele_scaling(
 
     # Compute scaling factors for each genotype
     for genotype in all_genotypes:
-        copy_count: int = _count_combined_allele_copies(genotype, target_genes)
+        copy_count: int = count_combined_allele_copies(genotype, target_genes)
 
         # Apply scaling based on copy count
         if copy_count == 0:
@@ -254,9 +254,9 @@ def _apply_zygote_viability_allele_scaling(
         z_indices = deps.index_registry.ztype_indices_for(genotype)
         for z_idx in z_indices:
             # Get scaling factor for this copy count
-            if _is_effect_scale(config):
+            if is_effect_scale(config):
                 # Scalar/custom tuple branch for both sexes.
-                total_scale = _calculate_allele_effect(config, copy_count, mode)
+                total_scale = calculate_allele_effect(config, copy_count, mode)
                 for sex_idx in range(2):
                     current = float(zygote_arr[sex_idx, z_idx])
                     deps.config.set_zygote_viability_fitness(sex_idx, z_idx, current * total_scale)
@@ -264,9 +264,9 @@ def _apply_zygote_viability_allele_scaling(
                 # Sex-specific config.
                 config_map = cast(Mapping[object, object], config)
                 for sex_key, sex_config in config_map.items():
-                    sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
-                    if _is_effect_scale(sex_config):
-                        total_scale = _calculate_allele_effect(sex_config, copy_count, mode)
+                    sex_idx = resolve_sex_label(coerce_sex_specifier(sex_key))
+                    if is_effect_scale(sex_config):
+                        total_scale = calculate_allele_effect(sex_config, copy_count, mode)
                         current = float(zygote_arr[sex_idx, z_idx])
                         deps.config.set_zygote_viability_fitness(sex_idx, z_idx, current * total_scale)
                     elif isinstance(sex_config, Mapping):
@@ -361,8 +361,8 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     """Apply a declarative preset fitness patch to population config tensors.
 
     Patch schema (all keys optional):
-    - viability: Dict[genotype_selector, _ViabilityScalingConfig]
-    - fecundity: Dict[genotype_selector, _FecundityScalingConfig]
+    - viability: Dict[genotype_selector, ViabilityScalingConfig]
+    - fecundity: Dict[genotype_selector, FecundityScalingConfig]
     - sexual_selection: Dict[female_selector, Union[float, Dict[male_selector, float]]]
     """
     if not patch:
@@ -397,7 +397,7 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
 
             # age-specific for both sexes: {age: scale}
             config_map = cast(Mapping[object, object], config)
-            if _is_simple_age_scale_map(config_map):
+            if is_simple_age_scale_map(config_map):
                 for z_idx in z_indices:
                     for age, scale in config_map.items():
                         deps.config.set_viability_fitness(0, z_idx, float(scale), int(age))
@@ -406,7 +406,7 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
 
             # sex-specific: {sex: float | {age: scale}}
             for sex_key, sex_config in config_map.items():
-                sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
+                sex_idx = resolve_sex_label(coerce_sex_specifier(sex_key))
                 if isinstance(sex_config, (int, float)):
                     for z_idx in z_indices:
                         deps.config.set_viability_fitness(sex_idx, z_idx, float(sex_config))
@@ -450,7 +450,7 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
 
             config_map = cast(Mapping[object, object], config)
             for sex_key, scale in config_map.items():
-                sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
+                sex_idx = resolve_sex_label(coerce_sex_specifier(sex_key))
                 if not isinstance(scale, (int, float)):
                     raise TypeError(
                         f"Invalid fecundity sex scale for selector '{selector}', sex '{sex_key}'"
@@ -485,7 +485,7 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
                     f"Invalid sexual_selection scale for female selector '{female_selector}'"
                 )
             male_matched = deps.species.resolve_genotype_selectors(
-                selector=_coerce_selector(male_selector),
+                selector=coerce_selector(male_selector),
                 all_genotypes=all_genotypes,
                 context='preset.sexual_selection(male)',
             )
@@ -508,22 +508,22 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     # ----------------------------------------------------------------------
     viability_per_allele_patch = patch.get('viability_per_allele', {})
     for allele_name, val in viability_per_allele_patch.items():
-        config, mode = _split_config_mode(val)
-        if not _is_viability_scaling_config(config):
+        config, mode = split_config_mode(val)
+        if not is_viability_scaling_config(config):
             raise TypeError(f"Invalid viability_per_allele config for '{allele_name}'")
         _apply_viability_allele_scaling(deps, all_genotypes, allele_name, config, mode)
 
     fecundity_per_allele_patch = patch.get('fecundity_per_allele', {})
     for allele_name, val in fecundity_per_allele_patch.items():
-        config, mode = _split_config_mode(val)
-        if not _is_fecundity_scaling_config(config):
+        config, mode = split_config_mode(val)
+        if not is_fecundity_scaling_config(config):
             raise TypeError(f"Invalid fecundity_per_allele config for '{allele_name}'")
         _apply_fecundity_allele_scaling(deps, all_genotypes, allele_name, config, mode)
 
     sexual_selection_per_allele_patch = patch.get('sexual_selection_per_allele', {})
     for allele_name, val in sexual_selection_per_allele_patch.items():
-        config, mode = _split_config_mode(val)
-        if not _is_sexual_selection_scaling_config(config):
+        config, mode = split_config_mode(val)
+        if not is_sexual_selection_scaling_config(config):
             raise TypeError(f"Invalid sexual_selection_per_allele config for '{allele_name}'")
         _apply_sexual_selection_allele_scaling(deps, all_genotypes, allele_name, config, mode)
 
@@ -544,7 +544,7 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
             elif isinstance(config, Mapping):
                 config_map = cast(Mapping[object, object], config)
                 for sex_key, sex_config in config_map.items():
-                    sex_idx = resolve_sex_label(_coerce_sex_specifier(sex_key))
+                    sex_idx = resolve_sex_label(coerce_sex_specifier(sex_key))
                     if isinstance(sex_config, (int, float)):
                         for z_idx in z_indices:
                             deps.config.set_zygote_viability_fitness(sex_idx, z_idx, float(sex_config))
@@ -552,8 +552,8 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     # 6) Zygote allele-based fitness patch
     zygote_per_allele_patch = patch.get('zygote_per_allele', {})
     for allele_name, val in zygote_per_allele_patch.items():
-        config, mode = _split_config_mode(val)
-        if not _is_zygote_viability_scaling_config(config):
+        config, mode = split_config_mode(val)
+        if not is_zygote_viability_scaling_config(config):
             raise TypeError(f"Invalid zygote_per_allele config for '{allele_name}'")
         _apply_zygote_viability_allele_scaling(deps, all_genotypes, allele_name, config, mode)
 

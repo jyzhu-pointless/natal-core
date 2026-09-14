@@ -1072,7 +1072,7 @@ def recompile_modifier_maps(target: _UpdateTarget) -> None:
     """
     from natal.frontend.builder._registry_builder import rebuild_config_maps
     from natal.frontend.model.definition_compiler import (
-        _CompileHost,  # pyright: ignore[reportPrivateUsage]  # canonical isolated recipe host
+        CompileHost,
     )
 
     pop = target.pop
@@ -1084,7 +1084,7 @@ def recompile_modifier_maps(target: _UpdateTarget) -> None:
     full_draft = definition.draft
     full_registry = definition.registry
     assert full_draft is not None and full_registry is not None
-    host = _CompileHost(target.species, full_registry, full_draft)
+    host = CompileHost(target.species, full_registry, full_draft)
     new = rebuild_config_maps(
         target.species, full_draft, full_registry,
         gamete_modifiers=gamete, zygote_modifiers=zygote, host=host,

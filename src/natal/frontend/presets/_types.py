@@ -22,14 +22,10 @@ from natal.frontend.genetics import Gene, Genotype, Species
 from natal.frontend.utils.types import Age, Sex
 
 # Temporary type alias
-_AlleleSpecifier = Union[Gene, str]
-AlleleSpecifier = _AlleleSpecifier
-_SexSpecifier = Union[Sex, int, str]
-SexSpecifier = _SexSpecifier
-_SexSpecificRates = Union[float, Tuple[float, float], Dict[_SexSpecifier, float]]
-SexSpecificRates = _SexSpecificRates
-_AlleleScalingMode = Literal["multiplicative", "dominant", "recessive", "custom"]
-AlleleScalingMode = _AlleleScalingMode
+AlleleSpecifier = Union[Gene, str]
+SexSpecifier = Union[Sex, int, str]
+SexSpecificRates = Union[float, Tuple[float, float], Dict[SexSpecifier, float]]
+AlleleScalingMode = Literal["multiplicative", "dominant", "recessive", "custom"]
 
 # Defines how a specific allele scales fitness
 # e.g., if "Dr" allele has viability_scaling = 0.8, then:
@@ -46,54 +42,50 @@ AlleleScalingMode = _AlleleScalingMode
 #    -> apply to both sexes by age
 # 4) {sex: scale or {age: scale}}
 #    -> sex-specific, optionally age-specific
-_ViabilityScalingConfig = Union[
+ViabilityScalingConfig = Union[
     float,             # both sex, at the largest juvenile age
     Tuple[float, float],
     Dict[Age, Union[float, Tuple[float, float]]],  # both sex, age-specific
     Dict[  # sex-specific
-        _SexSpecifier,
+        SexSpecifier,
         Union[float, Tuple[float, float], Dict[Age, Union[float, Tuple[float, float]]]],
     ],
 ]
-ViabilityScalingConfig = _ViabilityScalingConfig
 
 # Fecundity patch config for one allele key.
 # Supported shapes:
 # 1) float
 # 2) (het, hom) tuple for mode="custom"
 # 3) {sex: scale}
-_FecundityScalingConfig = Union[
+FecundityScalingConfig = Union[
     float,  # both sex
     Tuple[float, float],
-    Dict[_SexSpecifier, Union[float, Tuple[float, float]]],  # sex-specific
+    Dict[SexSpecifier, Union[float, Tuple[float, float]]],  # sex-specific
 ]
-FecundityScalingConfig = _FecundityScalingConfig
 
 # Sexual-selection patch config for one allele key.
 # float: copy-number based scaling (by mode)
 # tuple(default, carrier): binary carrier rule
-_SexualSelectionScalingConfig = Union[
+SexualSelectionScalingConfig = Union[
     float,                        # applies to all female genotypes
     Tuple[float, float]           # (male selected by default, male selected by allele carriers)
 ]
-SexualSelectionScalingConfig = _SexualSelectionScalingConfig
 
 # Zygote patch config for one allele key.
 # Supported shapes:
 # 1) float
 # 2) (het, hom) tuple for mode="custom"
 # 3) {sex: scale}
-_ZygoteViabilityScalingConfig = Union[
+ZygoteViabilityScalingConfig = Union[
     float,  # both sex
     Tuple[float, float],
-    Dict[_SexSpecifier, Union[float, Tuple[float, float]]],  # sex-specific
+    Dict[SexSpecifier, Union[float, Tuple[float, float]]],  # sex-specific
 ]
-ZygoteViabilityScalingConfig = _ZygoteViabilityScalingConfig
 
 PresetFitnessPatch = Dict[str, Any]
 
 
-def _count_allele_copies(genotype: Genotype, target_gene: Gene) -> int:
+def count_allele_copies(genotype: Genotype, target_gene: Gene) -> int:
     """Count copies of a target allele in a diploid genotype.
 
     This assumes gene names are unique within a species and therefore map to a
@@ -104,21 +96,18 @@ def _count_allele_copies(genotype: Genotype, target_gene: Gene) -> int:
     return int(mat_gene is target_gene) + int(pat_gene is target_gene)
 
 
-# Public alias for cross-function and cross-module reuse.
-count_allele_copies = _count_allele_copies
-
-def _count_combined_allele_copies(genotype: Genotype, target_genes: List[Gene]) -> int:
+def count_combined_allele_copies(genotype: Genotype, target_genes: List[Gene]) -> int:
     """Count total copies of a list of alleles in a genotype."""
     total = 0
     # Optimization: Usually these alleles are at the same locus.
     # We could optimize, but summing individual counts is safe and correct.
     for gene in target_genes:
-        total += _count_allele_copies(genotype, gene)
+        total += count_allele_copies(genotype, gene)
     # Cap at 2 for diploid systems if they are alleles of the same locus,
     # but logic holds generally (e.g. 2 means homozygous-equivalent cost).
     return total
 
-def _calculate_allele_effect(
+def calculate_allele_effect(
     scale: Union[float, Tuple[float, float]],
     copies: int,
     mode: str = "multiplicative"
@@ -149,8 +138,8 @@ def _calculate_allele_effect(
         raise ValueError(f"Unknown fitness scaling mode: '{mode}'. "
                          "Expected 'multiplicative', 'dominant', 'recessive', or 'custom'.")
 
-def _is_effect_scale(value: object) -> TypeGuard[Union[float, Tuple[float, float]]]:
-    """Narrow runtime config value to the scale type accepted by _calculate_allele_effect."""
+def is_effect_scale(value: object) -> TypeGuard[Union[float, Tuple[float, float]]]:
+    """Narrow runtime config value to the scale type accepted by calculate_allele_effect."""
     if isinstance(value, (int, float)):
         return True
     if not isinstance(value, tuple):
@@ -161,7 +150,7 @@ def _is_effect_scale(value: object) -> TypeGuard[Union[float, Tuple[float, float
     return isinstance(pair[0], (int, float)) and isinstance(pair[1], (int, float))
 
 
-def _is_viability_age_map(config: Mapping[object, object]) -> TypeGuard[Dict[Age, Union[float, Tuple[float, float]]]]:
+def is_viability_age_map(config: Mapping[object, object]) -> TypeGuard[Dict[Age, Union[float, Tuple[float, float]]]]:
     """Type guard: check if *config* maps age integers to effect scales.
 
     Args:
@@ -170,10 +159,10 @@ def _is_viability_age_map(config: Mapping[object, object]) -> TypeGuard[Dict[Age
     Returns:
         True if every key is an int and every value is a valid effect scale.
     """
-    return all(isinstance(age_key, int) and _is_effect_scale(scale) for age_key, scale in config.items())
+    return all(isinstance(age_key, int) and is_effect_scale(scale) for age_key, scale in config.items())
 
 
-def _is_simple_age_scale_map(config: Mapping[object, object]) -> TypeGuard[Dict[int, Union[int, float]]]:
+def is_simple_age_scale_map(config: Mapping[object, object]) -> TypeGuard[Dict[int, Union[int, float]]]:
     """Type guard: check if *config* maps age integers to simple numeric scales.
 
     Args:
@@ -202,7 +191,7 @@ def _as_pair(value: object) -> Optional[Tuple[object, object]]:
     return items[0], items[1]
 
 
-def _coerce_sex_specifier(value: object) -> _SexSpecifier:
+def coerce_sex_specifier(value: object) -> SexSpecifier:
     """Coerce an unknown value to a valid sex specifier (Sex, int, or str).
 
     Args:
@@ -219,7 +208,7 @@ def _coerce_sex_specifier(value: object) -> _SexSpecifier:
     raise TypeError(f"Invalid sex key type: {type(value).__name__}")
 
 
-def _coerce_selector(value: object) -> Union[Genotype, str, Tuple[Union[Genotype, str], ...]]:
+def coerce_selector(value: object) -> Union[Genotype, str, Tuple[Union[Genotype, str], ...]]:
     """Coerce an unknown value to a genotype selector.
 
     Args:
@@ -240,7 +229,7 @@ def _coerce_selector(value: object) -> Union[Genotype, str, Tuple[Union[Genotype
     raise TypeError(f"Invalid selector type: {type(cast(object, value)).__name__}")
 
 
-def _split_config_mode(value: object) -> Tuple[object, str]:
+def split_config_mode(value: object) -> Tuple[object, str]:
     """Split a scaling config value from its mode specifier.
 
     If *value* is a 2-tuple ``(scaling_value, mode_str)``, return
@@ -258,7 +247,7 @@ def _split_config_mode(value: object) -> Tuple[object, str]:
     return value, "multiplicative"
 
 
-def _is_viability_scaling_config(value: object) -> TypeGuard[_ViabilityScalingConfig]:
+def is_viability_scaling_config(value: object) -> TypeGuard[ViabilityScalingConfig]:
     """Type guard: check if *value* is a valid viability scaling config.
 
     Accepts:
@@ -272,25 +261,25 @@ def _is_viability_scaling_config(value: object) -> TypeGuard[_ViabilityScalingCo
     Returns:
         True if *value* matches the ViabilityScalingConfig shape.
     """
-    if isinstance(value, (int, float)) or _is_effect_scale(value):
+    if isinstance(value, (int, float)) or is_effect_scale(value):
         return True
     if not isinstance(value, Mapping):
         return False
     config_map = cast(Mapping[object, object], value)
-    if _is_viability_age_map(config_map):
+    if is_viability_age_map(config_map):
         return True
     for sex_key, sex_config in config_map.items():
         if not isinstance(sex_key, (Sex, int, str)):
             return False
-        if _is_effect_scale(sex_config):
+        if is_effect_scale(sex_config):
             continue
-        if isinstance(sex_config, Mapping) and _is_viability_age_map(cast(Mapping[object, object], sex_config)):
+        if isinstance(sex_config, Mapping) and is_viability_age_map(cast(Mapping[object, object], sex_config)):
             continue
         return False
     return True
 
 
-def _is_fecundity_scaling_config(value: object) -> TypeGuard[_FecundityScalingConfig]:
+def is_fecundity_scaling_config(value: object) -> TypeGuard[FecundityScalingConfig]:
     """Type guard: check if *value* is a valid fecundity scaling config.
 
     Args:
@@ -300,15 +289,15 @@ def _is_fecundity_scaling_config(value: object) -> TypeGuard[_FecundityScalingCo
         True if *value* is a number, effect scale, or sex-keyed dict
         of effect scales.
     """
-    if isinstance(value, (int, float)) or _is_effect_scale(value):
+    if isinstance(value, (int, float)) or is_effect_scale(value):
         return True
     if not isinstance(value, Mapping):
         return False
     config_map = cast(Mapping[object, object], value)
-    return all(isinstance(sex_key, (Sex, int, str)) and _is_effect_scale(scale) for sex_key, scale in config_map.items())
+    return all(isinstance(sex_key, (Sex, int, str)) and is_effect_scale(scale) for sex_key, scale in config_map.items())
 
 
-def _is_sexual_selection_scaling_config(value: object) -> TypeGuard[_SexualSelectionScalingConfig]:
+def is_sexual_selection_scaling_config(value: object) -> TypeGuard[SexualSelectionScalingConfig]:
     """Type guard: check if *value* is a valid sexual selection scaling config.
 
     Args:
@@ -322,7 +311,7 @@ def _is_sexual_selection_scaling_config(value: object) -> TypeGuard[_SexualSelec
     pair = _as_pair(value)
     return pair is not None and isinstance(pair[0], (int, float)) and isinstance(pair[1], (int, float))
 
-def _is_zygote_viability_scaling_config(value: object) -> TypeGuard[_ZygoteViabilityScalingConfig]:
+def is_zygote_viability_scaling_config(value: object) -> TypeGuard[ZygoteViabilityScalingConfig]:
     """Type guard for zygote viability scaling configuration."""
     if isinstance(value, (int, float)):
         return True
@@ -332,7 +321,7 @@ def _is_zygote_viability_scaling_config(value: object) -> TypeGuard[_ZygoteViabi
     if not isinstance(value, Mapping):
         return False
     config_map = cast(Mapping[object, object], value)
-    return all(isinstance(sex_key, (Sex, int, str)) and _is_effect_scale(scale) for sex_key, scale in config_map.items())
+    return all(isinstance(sex_key, (Sex, int, str)) and is_effect_scale(scale) for sex_key, scale in config_map.items())
 
 
 def carrier_pattern(species: "Species", *allele_names: str) -> str:
