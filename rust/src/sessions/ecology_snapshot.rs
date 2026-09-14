@@ -45,9 +45,10 @@ pub(crate) fn ecology_snapshot<'py>(
 /// Write an ecology snapshot dict back into *params*.
 ///
 /// ## Errors
-/// Returns ``PyValueError`` when a vector has the wrong size; each
-/// ``tensor_write`` validates before committing, so the previous contents
-/// are preserved for the failing field.
+/// Returns ``PyValueError`` when a field name is unknown or a vector has the
+/// wrong size.  The section is rebuilt on a clone and committed in a single
+/// assignment, so a malformed dict leaves *every* field at its previous
+/// contents, not just the field that failed.
 pub(crate) fn restore_ecology(
     params: &mut EcologyParams,
     bp: &Blueprint,

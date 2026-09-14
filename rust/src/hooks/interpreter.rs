@@ -1175,7 +1175,15 @@ impl HookProgram {
                     let start_tick = self.sp_start[op_idx];
                     let every_ticks = self.sp_every[op_idx];
                     // Firing plan is tick >= start and (tick - start) % every
-                    // == 0; Op.set_param enforces every >= 1, so no zero modulus.
+                    // == 0.  HookProgram::from_python rejects a non-positive
+                    // period, but a program assembled directly from the public
+                    // fields bypasses that, so guard the modulus rather than
+                    // letting integer division panic.
+                    if every_ticks <= 0 {
+                        return Err(format!(
+                            "sp_every must be positive, got {every_ticks} at operation {op_idx}"
+                        ));
+                    }
                     if tick >= start_tick && (tick - start_tick) % every_ticks == 0 {
                         let rpn_start = self.rpn_offsets[op_idx] as usize;
                         let rpn_end = self.rpn_offsets[op_idx + 1] as usize;

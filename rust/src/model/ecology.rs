@@ -1033,26 +1033,30 @@ impl EcologyParams {
 
     /// Restore the ecology section from parallel word vectors.
     ///
-    /// Companion of [`EcologyParams::ecology_snapshot_words`]: per-field
-    /// validation through ``apply`` / ``tensor_write`` keeps prior contents
-    /// on failure, exactly like the dict-based ``restore_ecology``.
+    /// Companion of [`EcologyParams::ecology_snapshot_words`].  Every field is
+    /// validated through ``apply`` / ``tensor_write`` into a clone, which is
+    /// committed in one assignment only once the whole section is accepted —
+    /// the same clone-and-commit guarantee as the dict-based
+    /// ``restore_ecology``.  Writing field by field into ``self`` would leave
+    /// the first fields overwritten when a later one is rejected.
     pub(crate) fn ecology_restore_words(
         &mut self,
         bp: &Blueprint,
         scalars: &[f64],
         vectors: &[Vec<f64>],
     ) -> PyResult<()> {
-        // Replay each field through the validated writers so a bad entry leaves the
-        // previous checkpoint contents intact instead of a partial restore.
+        let mut candidate = self.clone();
         for (name, value) in crate::generated::ecology_parameters::ECOLOGY_SCALARS
             .iter()
             .zip(scalars.iter())
         {
-            self.apply(HashMap::from([(name.to_string(), *value)]))?;
+            candidate.apply(HashMap::from([(name.to_string(), *value)]))?;
         }
         for (name, values) in ECOLOGY_VECTORS.iter().zip(vectors.iter()) {
-            self.tensor_write(bp, name, values.clone())?;
+            candidate.tensor_write(bp, name, values.clone())?;
         }
+        // Commit only after every field validated.
+        *self = candidate;
         Ok(())
     }
 

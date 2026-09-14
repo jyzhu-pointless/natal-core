@@ -1154,6 +1154,18 @@ impl HookProgram {
         // Copy every flat CSR column out of the Python program; the
         // interpreter indexes these by the offsets/offsets_data pairs, so any
         // change to the Python-side layout must be mirrored here.
+        // The hook compiler enforces a positive firing period, but HookProgram
+        // is a half-public wire type whose fields are pub, so a hand-built
+        // program can carry zero; the interpreter's ``% every`` would then
+        // divide by zero.  Reject it here, where the error can be reported.
+        let sp_every = extract_i64_array(program, "sp_every")?;
+        if let Some((op_index, &every)) =
+            sp_every.iter().enumerate().find(|(_, &period)| period <= 0)
+        {
+            return Err(PyValueError::new_err(format!(
+                "sp_every must be positive, got {every} at operation {op_index}"
+            )));
+        }
         Ok(Self {
             n_events: extract_i64_scalar(program, "n_events")?,
             n_hooks,
@@ -1173,7 +1185,7 @@ impl HookProgram {
             deme_selector_offsets: extract_i64_array(program, "deme_selector_offsets")?,
             deme_selector_data: extract_i64_array(program, "deme_selector_data")?,
             sp_param_ids: extract_i64_array(program, "sp_param_ids")?,
-            sp_every: extract_i64_array(program, "sp_every")?,
+            sp_every,
             sp_start: extract_i64_array(program, "sp_start")?,
             rpn_offsets: extract_i64_array(program, "rpn_offsets")?,
             rpn_kinds: extract_i64_array(program, "rpn_kinds")?,

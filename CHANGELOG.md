@@ -64,6 +64,17 @@
   population purely from hooks (release/inundation runs); set
   `growth_mode="no_competition"` there if the injected individuals must
   survive.
+- **The word-vector ecology restore is now atomic**. `ecology_restore_words`
+  wrote each field straight into the live section, so a field rejected
+  part-way left the earlier fields already overwritten — while its docstring
+  promised the clone-and-commit guarantee that `restore_ecology` provides. It
+  now validates into a clone and commits in one assignment.
+- **A non-positive `sp_every` firing period is rejected instead of panicking**.
+  The hook compiler enforces `every >= 1`, but `HookProgram` is a half-public
+  wire type whose fields are public, so a hand-built program could reach
+  `% every` with zero. Installing such a program now raises, and the
+  interpreter returns an error rather than dividing by zero if one is
+  assembled directly.
 - **Adjacency rows are now normalized to relative weights, so migration
   conserves mass**. The builder row-normalizes every non-empty adjacency row to
   a probability vector before folding it into the migration CSR. Previously a

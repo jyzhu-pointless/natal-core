@@ -450,3 +450,43 @@ fn install_callback_lists_shrink_demotes_surplus_slots() {
     assert_eq!(program.n_hooks, 8);
     assert_eq!(program.event_callback_count(2), 2);
 }
+
+/// A non-positive firing period must be reported, not panicked on.
+///
+/// The Python hook compiler enforces ``every >= 1``, but ``HookProgram`` is a
+/// half-public wire type whose fields are public, so a hand-built program can
+/// carry zero and reach ``% every`` directly.
+#[test]
+fn set_param_with_a_non_positive_period_is_rejected_not_panicking() {
+    let mut program = single_op_program(OP_SET_PARAM, 0.0);
+    program.sp_param_ids = vec![0];
+    program.sp_every = vec![0];
+    program.sp_start = vec![0];
+    program.rpn_offsets = vec![0, 1];
+    program.rpn_kinds = vec![RPN_LITERAL];
+    program.rpn_payload = vec![0];
+    program.sp_literals = vec![1.0];
+
+    let mut eco = [200.0, 0.0, 0.0, 0.0, 0.0];
+    let mut rng = seeded();
+    let mut ind = vec![0.0; 2];
+    let err = program
+        .execute_event(
+            &mut rng,
+            1,
+            &mut ind,
+            &mut [],
+            2,
+            1,
+            1,
+            5,
+            false,
+            false,
+            0,
+            &mut eco,
+            &mut None,
+        )
+        .unwrap_err();
+    assert!(err.contains("sp_every"), "message names the column: {err}");
+    assert_eq!(eco[0], 200.0, "the rejected op must not write");
+}
