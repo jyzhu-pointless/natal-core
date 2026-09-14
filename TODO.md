@@ -20,6 +20,7 @@
 | CR-11 | 删除重复且被覆盖的 genotype 缓存键计算 | ✅ 已实施（2026-09-13） |
 | CR-12 | TickMetrics 索引直查，类型名称统一 @ | ✅ 已实施并获终审 APPROVED（2026-09-13） |
 | CR-13 | WF 性别分配归一化与总量守恒 | ✅ 已实施（2026-09-13） |
+| CR-14 | 计数与规则统一携带年龄轴（含两处归一化收敛） | ✅ 已实施并获独立审查 APPROVED（2026-09-14） |
 
 **实施依赖与验证边界**
 
@@ -28,9 +29,9 @@
 - CR-7 提供未修饰基线，CR-1 刷新验收同时检查来源、概率不重复叠加、索引对齐与对象隔离；CR-8 不随此项扩大实施。
 - 实施遵循 AGENTS.md 和质量规范：基本验证、相关 stub/中英文文档/示例同步、高风险独立 evaluator 审查及最终门禁。本次仅文档整理，不运行或声称新合同代码验证。
 
-## CR-0 📋 性染色体公开路径修复（修复边界已梳理，未实施）
+## CR-0 ✅ DONE — 性染色体公开路径修复（2026-09-13 实施，2026-09-14 复核一致）
 
-> **状态复核（2026-09-14）**：本条部分子因已随 `33236e7` 与 `370adf5`（D1）修掉——`builder/_base.py:607` 现在从 `species.get_sex_chromosome_groups()` 取标志并从 blueprint 转发掩码；`genetics/structures/_construction.py` 三个点改用 `get_sex_chromosome_groups()` 方法；`genetics/entities/genotype.py:399-411` 按性染色体组拼接而非缺一侧就跳过；`model/initial_state.py:144-157` 的 Genotype 键不再转字符串，`registry/index.py:318-333` 改为 O(1) 精确查找。**实施本条前需要先重新审计**，把仍成立的子项（例如 `patterns/elements/diploid.py:129-148` 仍在 `from_pair` 内部 `str(genotype)` 再解析）与已修项分开，避免再次按过期描述排期。
+> **状态复核（2026-09-14）**：与上表状态一致——列出的子因均已随 `33236e7` 与 `370adf5`（D1）修复：`builder/_base.py:607` 从 `species.get_sex_chromosome_groups()` 取标志并经 blueprint 转发掩码；`genetics/structures/_construction.py` 三处改用 `get_sex_chromosome_groups()` 方法；`genetics/entities/genotype.py:399-411` 按性染色体组拼接；`model/initial_state.py:144-157` 的 Genotype 键不再转字符串；`registry/index.py:318-333` 为 O(1) 精确查找。唯一仍在的旧写法是 `patterns/elements/diploid.py:129-148` 的 `from_pair` 内部 `str(genotype)` 再解析——它是构造匹配模式的既有路径，若将来发现具体缺陷再单开条目。
 
 **已核验的问题链**
 
@@ -245,43 +246,31 @@ extreme_speed_mode=3 (WF)    : female=500.0 male=500.0 total=1000.0
 
 修复前 WF 路径为雌雄各 1000、总数 2000；现在两条路径一致。
 
-## CR-14 📋 Observation 的计数与规则统一携带年龄轴（讨论中，2026-09-14）
+## CR-14 ✅ DONE — 计数与规则统一携带年龄轴（2026-09-14，已获独立审查 APPROVED）
 
-**背景**：B8 修完后，`apply_rule` 仍接受三维规则 `(n_groups, n_sexes, n_ztypes)`，
-而一个被 OR 掉年龄的选择器掩码与"设计上不分年龄的规则"逐字节相同，函数无法分辨，
-外部手搓的坏输入仍会静默多算（只能靠 docstring 警告）。
+**已实施**（`355c551`；讨论记录见 `3dc66f7` 之前的版本）。契约与实现：
 
-**已核验的事实**：
-- `DiscretePopulationState.individual_count`（`frontend/data/state.py:174`）形状已经是
-  `(n_sexes, n_ages, n_ztypes)`；离散世代模型确实有 age 0/1 两个阶段，只是 age 1
-  繁殖后在同一 tick 内死亡、两代不重叠。**所以"没有年龄轴"并不是离散模型的属性。**
-- 真正"没有年龄轴"的输入是历史便捷写法：`apply_rule` 文档化的二维计数
-  `(n_sexes, n_ztypes)`，以及 `Observation.apply`（`frontend/output/observation.py:203-206`）
-  对二维输入的边界提升——它在内部升为 `(1 deme, sexes, 1 age, ztypes)` 并强制
-  `collapse=True`（`:222-223`）。也就是说"无年龄"在这条路径上已经被当作"年龄轴长度为 1"
-  处理了，只是规则一侧还允许丢掉这一维。
-- 仓库内**没有任何产品代码调用 `apply_rule`**（只有 `natal/__init__.py`、
-  `frontend/output/__init__.py`、stub 的导出，以及若干测试）；三维规则只可能来自外部
-  调用方或直接调用编译器。
+- 计数与规则**始终携带年龄轴**，缺失时归一化为长度 1 的退化年龄类。
+  `apply_rule` 只接受四维规则；传二维/三维规则抛
+  `rule must carry the age axis like the counts: expected 4-D (...) ...`，并给出补轴示例。
+- 二维计数 `(S, Z)` 在边界升为 `(S, 1, Z)`；其规则写作 `(n_groups, S, 1, Z)`。
+  `Observation.apply` 的计数输入与输出与改动前逐位一致（40 例并排对照，唯一差异是
+  "掩码与计数年龄范围不匹配"的报错信息更清晰，错误类型不变）。
+- 规则与计数的 sex/age/ztype 维度不匹配现在**在进入 Rust 前**报
+  `rule shape does not match the counts: ...`。这顺手修掉一个旧静默错算：元素总数恰好是
+  plane 整数倍、但布局不匹配的规则以前会被原生守卫放行并按错误布局重索引。
+- 归一化收敛到 `observation.py` 的 `_lift_projection_counts` / `_require_age_axis_rule`，
+  `apply` 与 `apply_rule` 共用；**另外三处**同样的"无年龄轴 = 1 个年龄类"推导
+  （`output/_recording.py`、`population/base.py`、`hooks/tick_context.py`）已收敛到
+  `frontend/data/state.py::state_axes`（内部 helper，不新增公共导出）。
+- 破坏性变更已写入 `CHANGELOG.md` 的 Breaking Changes；`docs/{en,zh}/observation_impl.md`
+  记录"规则与计数始终带 age 轴"；stub 无需改动（签名未变）。
 
-**拟议方向（用户 2026-09-14 提出，待定）**：统一离散世代与年龄结构传入 observation 的计数，
-让规则/掩码**必然携带年龄轴**；缺失时归一化为长度为 1 的退化轴。
-- `apply_rule` 只接受四维规则；三维规则报错，并提示补一个长度为 1 的 age 轴。
-- 计数可继续接受 `(S, Z)`，在边界升成 `(S, 1, Z)`（`Observation.apply` 已经如此）。
-- 收益：彻底消除"形状相同、语义不同"的歧义，B8 那一类静默错误不再可能，
-  `collapse` 在长度为 1 的轴上退化为无操作，语义自然统一。
-- 代价：公共 API 语义变更（`apply_rule` 的三维规则从"支持"变"报错"），需要同步
-  docstring、stub、`tests/test_observation_phase2.py`（`test_apply_rule_2d_input_3d_mask`、
-  `test_apply_rule_3d_input_3d_mask`、`test_apply_rule_3d_input_unsupported_mask` 等）、
-  `docs/{en,zh}/observation_impl.md` 与 CHANGELOG；属产品代码改动，需独立审查。
+**用户决定（2026-09-14）**：不新增 `age_free` 开关——"不分年龄汇总"由
+`Observation(...)` + `collapse_age=True` 覆盖，`apply_rule` 的三维便利不值得一个公共参数。
 
-**待决问题**：
-1. 是否保留"不分年龄的规则"这一能力：直接移除（调用方自己 `np.broadcast_to` 补轴），
-   还是保留但要求显式声明（如 `apply_rule(..., age_free=True)`）？
-2. 二维计数 `(S, Z)` 是继续在边界升为 `(S, 1, Z)`（对持有聚合矩阵的用户友好），
-   还是一并要求显式三维？
-3. 若最终统一，`apply_rule` 与 `Observation.apply` 的规则形状契约应写进哪份文档作为权威
-   （候选：`docs/{en,zh}/observation_impl.md` 的 "rule 形状" 段落）。
+**回归**：`tests/test_observation_phase2.py` 五条规则形状测试改到新契约；
+独立审查新增 `tests/test_observation_age_axis_contract.py`（18 条，父提交 17 failed / 1 passed）。
 
 > [!NOTE] 历史标注
 > 与 numba 相关的 backlog 条目（`.numba_cache`、`NUMBA_ENABLED`、

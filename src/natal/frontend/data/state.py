@@ -6,7 +6,7 @@ of NumPy array contents, which remains compatible with the engines.
 
 from __future__ import annotations
 
-from typing import NamedTuple, Optional, Union
+from typing import NamedTuple, Optional, Tuple, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -15,6 +15,26 @@ __all__ = [
     "PopulationState",
     "DiscretePopulationState",
 ]
+
+
+def state_axes(individual_count: NDArray[np.float64]) -> Tuple[int, int, int]:
+    """Derive ``(n_sexes, n_ages, n_ztypes)`` from a count tensor.
+
+    Every count tensor carries an age axis; a rank-2 ``(sex, ztype)`` tensor
+    simply has a degenerate one, so it is read as a single age class — the same
+    rule the projection inputs use.
+
+    Args:
+        individual_count: Count tensor of rank 2 ``(sex, ztype)`` or rank 3
+            ``(sex, age, ztype)``.
+
+    Returns:
+        ``(n_sexes, n_ages, n_ztypes)`` with ``n_ages == 1`` for a rank-2 input.
+    """
+    n_sexes = int(individual_count.shape[0])
+    n_ages = int(individual_count.shape[1]) if individual_count.ndim == 3 else 1
+    n_ztypes = int(individual_count.shape[-1])
+    return n_sexes, n_ages, n_ztypes
 
 
 class PopulationState(NamedTuple):

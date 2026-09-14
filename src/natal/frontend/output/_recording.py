@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Literal, Optional, Protocol
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.frontend.data.state import state_axes
+
 if TYPE_CHECKING:
     from natal.frontend.output.history import HistorySchema
     from natal.frontend.output.observation import Observation
@@ -93,10 +95,8 @@ def compile_recording_plan(
 
     state = population.state
     ind = state.individual_count
-    n_sexes = int(ind.shape[0])
-    # A rank-2 count tensor has no age axis and is treated as a single age.
-    n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1
-    n_ztypes = int(ind.shape[-1])
+    # Counts always carry an age axis; a rank-2 tensor has a degenerate one.
+    n_sexes, n_ages, n_ztypes = state_axes(ind)
     # Canonical sex labels, truncated to the axis count.
     sex_labels = ("female", "male")[:n_sexes]
 

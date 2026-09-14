@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.frontend.data.state import state_axes
 from natal.frontend.hooks._transaction import EventTransaction, HookRng
 from natal.frontend.hooks.types import RESULT_STOP
 
@@ -623,10 +624,11 @@ def _build_blueprint(pop: BasePopulation[Any]) -> BlueprintView:
     assert config is not None
     ic = pop._state.individual_count  # pyright: ignore[reportPrivateUsage, reportOptionalMemberAccess]  # shape probe only: shape is invariant and probing must never trigger the session pull (callbacks run inside the session borrow)
     discrete = bool(getattr(config, "discrete_generation", False))
+    n_sexes, n_ages, n_ztypes = state_axes(ic)
     return BlueprintView(
-        n_sexes=int(ic.shape[0]),
-        n_ages=int(ic.shape[1]) if ic.ndim == 3 else 1,
-        n_ztypes=int(ic.shape[-1]),
+        n_sexes=n_sexes,
+        n_ages=n_ages,
+        n_ztypes=n_ztypes,
         discrete=discrete,
         stochastic=bool(config.stochastic),
         continuous_sampling=bool(config.continuous_sampling),
