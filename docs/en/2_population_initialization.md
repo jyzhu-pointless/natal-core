@@ -178,7 +178,7 @@ Competition parameters take effect during the survival phase of the population.
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | Relative competition factor for old juveniles (age=1) | `5.0` | Juvenile density regulation | Competition weights vary by age: age=0 fixed at `1.0`, age=1 uses `competition_strength` |
+| `competition_strength` | `float` | Competition weight of the second juvenile age class (age=1) | `1.0` | Juvenile density regulation | Age 0 is fixed at `1.0`; leaving it unset keeps age 1 at the same weight. Needs `new_adult_age >= 2` — a model whose only juvenile age is age 0 rejects an explicit value instead of ignoring it |
 | `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"beverton_holt"` | Juvenile density regulation | Supports `"no_competition"`, `"fixed"`, `"logistic"` (alias `"linear"`), `"beverton_holt"` (default) and `"ricker"` |
 
 **Density-regulation curves** (`x` = actual competition strength / expected competition strength; `s` = expected survival; `r` = low-density growth rate):

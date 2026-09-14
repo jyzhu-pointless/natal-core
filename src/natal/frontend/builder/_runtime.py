@@ -135,6 +135,19 @@ def competition_writes(
     if mode_value is not None:
         writes["growth_mode"] = mode_value
     if competition_strength is not None:
+        # It writes age_based_relative_competition_strength[1], which is only
+        # consulted for juvenile ages below new_adult_age.  When age 0 is the
+        # only juvenile age its weight is fixed at 1.0, so the write never
+        # reaches the kernels — previously a silent no-op, rejected here.
+        if draft is not None and draft.new_adult_age < 2:
+            raise ValueError(
+                "competition_strength (relative_competition_factor) has no "
+                f"effect when new_adult_age is {draft.new_adult_age}: it sets "
+                "the competition weight of the second juvenile age class, and "
+                "this model's only juvenile age is age 0, whose weight is "
+                "fixed at 1.0.  Drop the argument, or build with "
+                "age_structure(..., new_adult_age >= 2)."
+            )
         writes["competition_strength"] = competition_strength
     if equilibrium_distribution is not None:
         writes["equilibrium_distribution"] = equilibrium_distribution

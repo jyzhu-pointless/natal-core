@@ -15,6 +15,28 @@
   `"logistic"`) explicitly to keep the previous curve — the modes themselves are
   unchanged. `BEVERTON_HOLT` is `g(x) = r / (1 + (r - 1) x)`: positive for every
   finite `x`, and `|g'(1)| < 1` for `r > 1`.
+- **`competition_strength` no longer defaults to 5.0 on the spatial path**.
+  `SpatialPopulationBuilder.competition()` used to inject 5.0 as the weight of
+  the second juvenile age class while every other entry point left the whole
+  competition-weight vector at 1.0. The default is now uniform: an unset
+  `competition_strength` means 1.0 everywhere, so age 1 carries the same weight
+  as age 0 unless the value is set explicitly. Spatial age-structured models
+  that relied on the implicit 5.0 weight change dynamics; pass
+  `competition_strength=5.0` to keep them.
+
+### Fixed
+
+- **A missing required gamete label is now a build error instead of a silent
+  no-op**. `Wolbachia` inherits through a gamete label (`"wolbachia"` by
+  default); when the species did not declare it, the preset registered no
+  modifiers, raised nothing and the simulation ran with transmission silently
+  absent while the fitness patch still applied. The missing label is now
+  reported with the label name.
+- **`competition_strength` on a model without a second juvenile age is
+  rejected**. It writes `age_based_relative_competition_strength[1]`, so with
+  `new_adult_age == 1` (every discrete model, and 2-age age-structured ones)
+  age 0 is the only juvenile age and its weight is fixed at 1.0 — the value
+  never reached the kernels.
 
 ### Documentation
 

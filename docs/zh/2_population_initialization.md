@@ -175,7 +175,7 @@ NATAL Core 提供两种主要的种群类型：
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | 老幼体（age=1）的相对竞争因子。 | `5.0` | 幼体密度调节 | 竞争权重按年龄区分：age=0 固定为 `1.0`，age=1 使用 `competition_strength`。 |
+| `competition_strength` | `float` | 第二个幼体龄（age=1）的竞争权重。 | `1.0` | 幼体密度调节 | age=0 固定为 `1.0`；不设置时 age=1 与 age=0 同权重。仅当 `new_adult_age >= 2` 时有效；模型只有 age 0 这个幼体龄时，显式传入会报错而不是被忽略。 |
 | `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"beverton_holt"` | 幼体密度调节 | 支持 `"no_competition"`、`"fixed"`、`"logistic"`（别名 `"linear"`）、`"beverton_holt"`（默认）、`"ricker"`。 |
 
 **密度调节曲线**（`x` = 实际竞争强度 / 期望竞争强度；`s` = 平衡存活率；`r` = 低密度增长率）：

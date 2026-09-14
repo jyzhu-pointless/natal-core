@@ -976,7 +976,7 @@ class SpatialPopulationBuilder:
     def competition(
         self,
         # Age-structured params
-        competition_strength: float = 5.0,
+        competition_strength: float | None = None,
         juvenile_growth_mode: Union[int, str, BatchSetting[Any]] = "beverton_holt",
         low_density_growth_rate: Union[float, BatchSetting[Any]] = 6.0,
         age_1_carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
@@ -991,8 +991,11 @@ class SpatialPopulationBuilder:
         """Configure competition and density-dependence.
 
         Args:
-            competition_strength: Relative competition factor for age-1 juveniles
-                (age-structured only).
+            competition_strength: Competition weight of the second juvenile
+                age class (age-structured only).  Defaults to ``1.0`` — the
+                same weight as age 0, so leaving it unset adds no special
+                weighting.  Passing it to a model whose only juvenile age is
+                age 0 is rejected.
             juvenile_growth_mode: Growth model identifier. Accepts ``BatchSetting``.
             low_density_growth_rate: Growth rate at low density. Accepts ``BatchSetting``.
             age_1_carrying_capacity: Carrying capacity at age=1 (age-structured).
@@ -1013,6 +1016,10 @@ class SpatialPopulationBuilder:
             if resolved_cc is None:
                 resolved_cc = carrying_capacity
 
+            # Unspecified means "no special weighting": the model default is
+            # 1.0 for every juvenile age, so nothing is written.  An explicit
+            # value on a model with only one juvenile age is rejected
+            # downstream instead of silently doing nothing.
             return self._detect_and_delegate(
                 "competition",
                 {
