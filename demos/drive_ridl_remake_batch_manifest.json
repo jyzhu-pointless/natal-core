@@ -1,0 +1,13 @@
+{
+  "n_repeats": 20,
+  "outputs": {
+    "drive_ridl_remake_batch_mean_weeks.csv": "f279e1b43be667d9ecb1fae9e37325ec046f112f8a143be9f471788db5d75143",
+    "drive_ridl_remake_batch_success_counts.csv": "6ffc53cb088ae95dcf23356ff37a796b75948d29b8eb60e9b7264d6bd2c65a0c",
+    "drive_ridl_remake_fitness_mean_weeks.csv": "a5fca7a4dc158c5ce786a6cd734e64563f287c13a199311db908aead2e65144f",
+    "drive_ridl_remake_fitness_success_counts.csv": "616b135064f964bd7e594b08f0b301ccc4c2804abf8600e562b9311e60d15e7a"
+  },
+  "repeats": 20,
+  "seed": 16066481715226434792,
+  "sim_weeks": 317,
+  "smoke": false
+}
