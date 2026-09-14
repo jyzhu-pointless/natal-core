@@ -35,8 +35,9 @@ Rust 原生扩展是唯一的执行引擎，所有路径共享同一套 hook 计
   emitted-row 求和除法，因此 kernel 模式的行权重和为 1，**边界 deme 与内部 deme 一样
   把全部迁出配额送往有效目标**。`adjust_on_edge` 的意义是保持与旧管线对位的历史位级
   运算顺序，而不是改变目的地分布。
-- `stay_after_send` 区分记账顺序：adjacency 模式为 `False`（先扣后发），kernel 模式为
-  `True`（先发后扣），用于保持各自的确定性运算顺序。
+- `stay_after_send` 只记录 CSR 是由哪条模式折叠的（`False` = adjacency，`True` =
+  kernel），保留它是为了冻结的 wire 契约；确定性运行时对两种取值使用同一套记账顺序：
+  先分发、再把 `value - moved_total` 留在源端，因此任意行和都守恒质量。
 - 迁移率与 CSR 分离：运行时 `migration_rate` 是 `(n_demes, S, A)` 列（写保护
   视图），实际出流量 = 率 × 权重。
 - **换拓扑 = 重建**：CSR 在构建时折叠；修改拓扑/邻接/核参数后必须重建种群

@@ -11,11 +11,15 @@ neither the topology nor the kernel is consulted again.  Changing the
 topology or the kernel therefore means rebuilding the model, exactly
 like any other frozen Blueprint field.
 
-Bitwise-parity contract: the fold reproduces, entry for entry, the
+CSR-construction parity: the fold reproduces, entry for entry, the
 arithmetic order of the legacy runtime row builders
 (``_build_sparse_migration_rows`` for adjacency mode,
-``_build_source_kernel_sparse_row`` for kernel mode), so deterministic
-trajectories are identical before and after the refactor.
+``_build_source_kernel_sparse_row`` for kernel mode).  The deterministic
+runtime itself no longer keeps the legacy per-mode bookkeeping split: both
+modes now distribute first and park the ``value - moved_total`` residual at
+the source, which conserves mass for any row sum (the legacy adjacency order
+parked ``value - outbound`` first and dropped the undelivered share of a raw
+sub-stochastic row).
 """
 
 from __future__ import annotations
@@ -64,12 +68,12 @@ class MigrationCSR(NamedTuple):
             kernel-mode rows carry the historically composed final
             per-entry probability (scaled then row-normalized with the
             same float-operation order as the legacy pipeline).
-        stay_after_send: Deterministic bookkeeping order.  ``False``
-            (adjacency mode) keeps the historical "stay = value -
-            outbound first, then distribute" order; ``True`` (kernel
-            mode) keeps "distribute first, then residual = value -
-            moved_total at source".  Both reproduce the legacy
-            arithmetic bitwise.
+        stay_after_send: Historical deterministic bookkeeping flag,
+            retained for the frozen wire contract.  It records which mode
+            folded the CSR (``False`` = adjacency, ``True`` = kernel) but
+            no longer changes the numbers: the runtime uses one order for
+            both — distribute first, then keep ``value - moved_total`` at
+            the source.
     """
 
     indptr: NDArray[np.int64]

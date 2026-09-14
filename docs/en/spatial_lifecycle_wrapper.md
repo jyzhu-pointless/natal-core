@@ -48,9 +48,11 @@ CSR (`indptr` / `dest_idx` / `weights` / `stay_after_send`); at runtime it is ju
   like interior demes. The `adjust_on_edge` switch exists for historical
   bit-exact parity with the old pipeline, not to change the destination
   distribution.
-- `stay_after_send` distinguishes the bookkeeping order: `False` for adjacency
-  mode (deduct then send) and `True` for kernel mode (send then deduct), keeping
-  each path's deterministic operation order.
+- `stay_after_send` records which mode folded the CSR (`False` = adjacency,
+  `True` = kernel) and is retained for the frozen wire contract, but it no
+  longer changes the numbers: the deterministic runtime uses one bookkeeping
+  order for both — distribute first, then keep `value - moved_total` at the
+  source, so any row sum conserves mass.
 - Migration rate and CSR are separate: the runtime `migration_rate` is a
   `(n_demes, S, A)` column (write-protected view); actual outflow =
   rate x weight.

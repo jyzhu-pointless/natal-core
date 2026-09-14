@@ -485,7 +485,9 @@ pub fn migrate_csr_deterministic(
     dest_idx: &[i64],
     weights: &[f64],
     rate: &[f64],
-    stay_after: bool,
+    // Retained for the frozen CSR/session contract; it no longer changes the
+    // deterministic result (both orders send first and keep the residual).
+    _stay_after: bool,
     n_demes: usize,
     n_ages: usize,
     n_ztypes: usize,
@@ -550,16 +552,15 @@ pub fn migrate_csr_deterministic(
                 // only splits that mass across the CSR destinations.
                 let outbound = virgin_count * female_rate;
                 let src_ind_idx = src * ind_stride + age * n_ztypes + female_ztype;
-                // Two bookkeeping orders are kept for parity: kernel mode
-                // (`stay_after`) sends first and keeps the `count - moved`
-                // residual at the source, conserving total mass even with
-                // non-unit row sums; adjacency mode parks `count - outbound`
-                // first and only then distributes, so a row whose sum differs
-                // from one loses (or creates) `outbound * (1 - sum)`.  Folded
-                // adjacency rows always sum to one, so that asymmetry is only
-                // reachable through a raw hand-built CSR — see the
-                // `test_spatial_slice5_adversarial` pins for the legacy numbers.
-                if stay_after {
+                // Send first, then keep the `count - moved` residual at the
+                // source.  This conserves total mass for any row sum; the old
+                // adjacency order (park `count - outbound` first) under-counted
+                // sub-stochastic rows, so it is gone.
+                if row_start == row_end {
+                    // Empty CSR row (isolated deme): nothing leaves, matching
+                    // the Python reference's keep-all branch.
+                    out_ind[src_ind_idx] += virgin_count;
+                } else {
                     let mut moved_total = 0.0;
                     for entry in row_start..row_end {
                         let dst = dest_idx[entry] as usize;
@@ -568,19 +569,6 @@ pub fn migrate_csr_deterministic(
                         moved_total += moved;
                     }
                     out_ind[src_ind_idx] += virgin_count - moved_total;
-                } else if row_start == row_end {
-                    // Empty CSR row (isolated deme): nothing leaves, matching
-                    // the Python reference's keep-all branch.
-                    out_ind[src_ind_idx] += virgin_count;
-                } else {
-                    let stay = virgin_count - outbound;
-                    out_ind[src_ind_idx] += stay;
-                    for entry in row_start..row_end {
-                        let dst = dest_idx[entry] as usize;
-                        let prob = weights[entry];
-                        out_ind[dst * ind_stride + age * n_ztypes + female_ztype] +=
-                            outbound * prob;
-                    }
                 }
 
                 // Stored sperm travels with its carrier female at the female
@@ -593,7 +581,11 @@ pub fn migrate_csr_deterministic(
                         + male_ztype;
                     let value = sperm_all[sperm_idx];
                     let outbound_sperm = value * female_rate;
-                    if stay_after {
+                    if row_start == row_end {
+                        // Empty CSR row: keep everything at the source.
+                        out_sperm[sperm_idx] += value;
+                        out_ind[src_ind_idx] += value;
+                    } else {
                         let mut moved_total = 0.0;
                         for entry in row_start..row_end {
                             let dst = dest_idx[entry] as usize;
@@ -607,24 +599,6 @@ pub fn migrate_csr_deterministic(
                         }
                         out_sperm[sperm_idx] += value - moved_total;
                         out_ind[src_ind_idx] += value - moved_total;
-                    } else if row_start == row_end {
-                        // Empty CSR row: keep everything at the source.
-                        out_sperm[sperm_idx] += value;
-                        out_ind[src_ind_idx] += value;
-                    } else {
-                        let stay_sperm = value - outbound_sperm;
-                        out_sperm[sperm_idx] += stay_sperm;
-                        out_ind[src_ind_idx] += stay_sperm;
-                        for entry in row_start..row_end {
-                            let dst = dest_idx[entry] as usize;
-                            let prob = weights[entry];
-                            let moved = outbound_sperm * prob;
-                            let dst_sperm_idx = (dst * n_ages + age) * n_ztypes * n_ztypes
-                                + female_ztype * n_ztypes
-                                + male_ztype;
-                            out_sperm[dst_sperm_idx] += moved;
-                            out_ind[dst * ind_stride + age * n_ztypes + female_ztype] += moved;
-                        }
                     }
                 }
             }
@@ -637,7 +611,10 @@ pub fn migrate_csr_deterministic(
                 let src_idx = src * ind_stride + (n_ages + age) * n_ztypes + ztype;
                 let value = ind_all[src_idx];
                 let outbound = value * male_rate;
-                if stay_after {
+                if row_start == row_end {
+                    // Empty CSR row: keep everything at the source.
+                    out_ind[src_idx] += value;
+                } else {
                     let mut moved_total = 0.0;
                     for entry in row_start..row_end {
                         let dst = dest_idx[entry] as usize;
@@ -646,18 +623,6 @@ pub fn migrate_csr_deterministic(
                         moved_total += moved;
                     }
                     out_ind[src_idx] += value - moved_total;
-                } else if row_start == row_end {
-                    // Empty CSR row: keep everything at the source.
-                    out_ind[src_idx] += value;
-                } else {
-                    let stay = value - outbound;
-                    out_ind[src_idx] += stay;
-                    for entry in row_start..row_end {
-                        let dst = dest_idx[entry] as usize;
-                        let prob = weights[entry];
-                        out_ind[dst * ind_stride + (n_ages + age) * n_ztypes + ztype] +=
-                            outbound * prob;
-                    }
                 }
             }
         }

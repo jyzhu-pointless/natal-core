@@ -115,6 +115,19 @@
   nothing. The guard now checks the session tick, and a baseline recorded by a
   different extension build reports a warning and defers instead of raising a
   false blocking regression.
+- **The deterministic migration engine now uses one bookkeeping order, so a raw
+  sub-stochastic CSR row conserves mass**. The adjacency order used to subtract
+  the full `value * rate` from the source and then deliver only
+  `outbound * row_sum`, which lost (or, for a super-stochastic row, created) the
+  remainder; the kernel order already distributed first and kept the
+  `value - moved_total` residual. Both modes now use the kernel order, so the
+  destination distribution is unchanged but the source keeps whatever was not
+  delivered. Builder-folded rows are normalized to one, so models built through
+  the public API are numerically unchanged (the `phase0` spatial baseline stays
+  bit-identical); this only alters hand-built CSR input. `stay_after_send`
+  remains on the CSR for the frozen wire contract but no longer changes the
+  numbers, and the retired "adjacency math reproduces the legacy Python order
+  bitwise" claim is gone.
 
 ### Documentation
 
