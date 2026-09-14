@@ -366,11 +366,12 @@ def fold_migration_csr(
     when ``adjust_on_edge`` is set.  The emitted row is then divided by
     its own sum (the runtime distributor did that historically), which
     cancels whichever denominator was chosen; ``adjust_on_edge`` is
-    therefore retained as a numeric no-op, see
-    :func:`_kernel_row_entries`.  Entries are kept unmerged in visit
-    order because a wrapping kernel narrower than the grid can emit the
-    same destination twice, and deterministic migration must add the two
-    contributions as separate multiplications to stay bit-identical.
+    therefore a numeric no-op up to floating-point rounding (measured
+    <= 1 ulp), see :func:`_kernel_row_entries`.  Entries are kept unmerged
+    in visit order because a wrapping kernel narrower than the grid can
+    emit the same destination twice, and deterministic migration must add
+    the two contributions as separate multiplications to stay
+    bit-identical.
 
     Args:
         n_demes: Number of demes.
@@ -383,8 +384,9 @@ def fold_migration_csr(
             target of its own source deme.
         adjust_on_edge: Denominator choice (kernel total, or the
             valid-row total). Both cancel in the final row
-            renormalization, so this is a numeric no-op retained for
-            bit-parity; see :func:`_kernel_row_entries`.
+            renormalization, so the flag does not change the destination
+            distribution (up to ~1 ulp of rounding); see
+            :func:`_kernel_row_entries`.
         mode: Resolved backend mode from :func:`resolve_migration_mode`.
 
     Returns:
@@ -499,7 +501,7 @@ def _kernel_row_entries(
         include_center: Whether the kernel center is emitted.
         adjust_on_edge: Row-total scaling instead of kernel-total. The
             final renormalization cancels it, so the emitted distribution
-            is identical for both values.
+            is the same either way up to ~1 ulp of rounding.
 
     Returns:
         ``(destinations, weights)`` parallel lists.
@@ -552,7 +554,8 @@ def _kernel_row_entries(
 
     # Denominator by mode: legacy bit-parity only. The historical runtime
     # distributor divided the emitted row by its own sum, so both choices
-    # below cancel in that division and yield the same distribution.
+    # below cancel in that division and yield the same distribution up to
+    # ~1 ulp of floating-point rounding.
     if adjust_on_edge:
         inv = 1.0 / total
     else:

@@ -83,7 +83,7 @@ The `SpatialPopulation` constructor supports these most commonly used parameters
 - `migration_rate`: Per-deme proportion of individuals migrating per step. A scalar applies only to adult ages (>= `new_adult_age` from config); juveniles default to 0. A `(n_ages,)` array sets explicit per-age rates, an `(n_sexes, n_ages)` table or a per-sex mapping sets rates per sex, and an `(n_demes, n_sexes, n_ages)` column (or `(n_demes, n_ages)`, broadcast across sexes) sets each deme directly. `batch_setting` gives one declaration per deme.
 - `migration_strategy`: `auto`, `adjacency`, `kernel`, or `hybrid`; default is `auto`.
 - `kernel_include_center`: Whether to include the center cell as a migration target in the kernel path, default `False`.
-- `adjust_migration_on_edge`: Legacy bit-parity flag, default `False`. It is a numeric no-op: outbound rows are normalized to relative weights either way, so it does not change the destination distribution (see "migration_rate and Boundary Effects").
+- `adjust_migration_on_edge`: Legacy bit-parity flag, default `False`. It does not change the destination distribution (up to ~1 ulp of floating-point rounding): outbound rows are normalized to relative weights either way, so the denominator it selects cancels (see "migration_rate and Boundary Effects").
 
 The most important rules:
 
@@ -560,7 +560,7 @@ The migration CSR stores **relative outbound weights**, not probabilities. The b
 
 When `topology.wrap=False`, boundary demes have fewer valid neighbors. They still send their full `migration_rate` quota — the offsets that fall outside the grid are dropped and their share is redistributed over the remaining neighbors. A boundary deme therefore sends a **larger share to each** neighbor, not a smaller total.
 
-`adjust_migration_on_edge` is retained as a legacy bit-parity flag and is a numeric no-op: both values produce the same destination distribution (the denominator it selects is cancelled by the row normalization).
+`adjust_migration_on_edge` is retained as a legacy bit-parity flag: both values produce the same destination distribution (up to ~1 ulp of rounding), because the denominator it selects is cancelled by the row normalization.
 
 **Practical impact**:
 
@@ -607,7 +607,7 @@ Each source deme's outbound distribution is proportional to the kernel weights a
 
 $$p_n = \frac{w_n}{\sum_m w_m}$$
 
-where $\sum_m w_m$ sums the weights of the source deme's valid neighbors (the coordinates kept above). Every deme therefore emigrates its full quota $r$; a boundary deme's dropped offsets redistribute their share over the valid neighbors, so each of them receives a larger share. The `adjust_migration_on_edge` denominator (kernel total vs. valid-row total) is cancelled by this normalization and is a legacy no-op.
+where $\sum_m w_m$ sums the weights of the source deme's valid neighbors (the coordinates kept above). Every deme therefore emigrates its full quota $r$; a boundary deme's dropped offsets redistribute their share over the valid neighbors, so each of them receives a larger share. The `adjust_migration_on_edge` denominator (kernel total vs. valid-row total) is cancelled by this normalization up to ~1 ulp of rounding, so the flag does not change the destination distribution.
 
 ### Constructing Common Kernels
 

@@ -83,7 +83,7 @@ spatial = SpatialPopulation(
 - `migration_rate`：每个 deme 每步参与迁移的比例。标量仅应用于成年年龄（>= `new_adult_age`），幼年迁移率为 0；`(n_ages,)` 数组按年龄精确配置；`(n_sexes, n_ages)` 表或按性别映射按性别配置；`(n_demes, n_sexes, n_ages)` 列（或 `(n_demes, n_ages)`，随后按性别广播）直接为每个 deme 指定；`batch_setting` 则为每个 deme 给出各自的比例声明。
 - `migration_strategy`：`auto`、`adjacency`、`kernel`、`hybrid`，默认 `auto`。
 - `kernel_include_center`：kernel 路径下是否把中心格也算进迁移目标。
-- `adjust_migration_on_edge`：历史位级兼容开关，默认 `False`。它是数值 no-op：迁出行无论取何值都会被归一化为相对权重，因此不改变目的地方向分布（见「migration_rate 与边界效应」一节）。
+- `adjust_migration_on_edge`：历史位级兼容开关，默认 `False`。它不改变目的地方向分布（仅差 ~1 ulp 的浮点舍入）：迁出行无论取何值都会被归一化为相对权重，它选择的分母随之被约掉（见「migration_rate 与边界效应」一节）。
 
 最重要的规则：
 
@@ -555,7 +555,7 @@ spatial.migration_rate = [0.0, 0.0, 0.3, 0.1]  # 按年龄精确设置
 
 当 `topology` 的 `wrap=False` 时，边界 deme 的有效邻居更少。它们仍然送出完整的 `migration_rate` 配额——落到网格外的偏移被丢弃，其份额被重新分配给剩余的有效邻居。因此边界 deme 是**给每个邻居更大的份额**，而不是总迁出更少。
 
-`adjust_migration_on_edge` 只是保留历史位级兼容的开关，是数值 no-op：取任何值目的地方向分布都相同（它选择的分母会在行归一化中被约掉）。
+`adjust_migration_on_edge` 只是保留历史位级兼容的开关：取任何值目的地方向分布都相同（仅差 ~1 ulp 的浮点舍入），因为它选择的分母会在行归一化中被约掉。
 
 **实际影响**：
 
@@ -600,7 +600,7 @@ $$(r_d, c_d) = (r_s + (i - i_c),\; c_s + (j - j_c))$$
 
 $$p_n = \frac{w_n}{\sum_m w_m}$$
 
-其中 $\sum_m w_m$ 是该源 deme 有效邻居（即上面保留的坐标）的权重之和。因此每个 deme 都会迁出完整配额 $r$；边界 deme 被丢弃的偏移会把份额重新分配给有效邻居，于是每个邻居拿到更大的份额。`adjust_migration_on_edge` 选择的分母（核总和 vs. 有效行总和）会被这次归一化约掉，属历史 no-op。
+其中 $\sum_m w_m$ 是该源 deme 有效邻居（即上面保留的坐标）的权重之和。因此每个 deme 都会迁出完整配额 $r$；边界 deme 被丢弃的偏移会把份额重新分配给有效邻居，于是每个邻居拿到更大的份额。`adjust_migration_on_edge` 选择的分母（核总和 vs. 有效行总和）会被这次归一化约掉（仅差 ~1 ulp 的浮点舍入），因此不改变目的地方向分布。
 
 ### 构造常用 Kernel
 

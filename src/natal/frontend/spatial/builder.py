@@ -1330,13 +1330,14 @@ class SpatialPopulationBuilder:
             deme_kernel_ids: Per-deme kernel ids into ``kernel_bank``.
             kernel_include_center: Whether kernel includes center cell.
             adjust_migration_on_edge: Legacy bit-parity flag, kept for
-                compatibility.  It is a numeric no-op: the fold
-                row-normalizes valid-adjacency rows to a total weight of 1
-                regardless, so the destination distribution does not
-                change.  Boundary demes merely have fewer neighbors and
-                therefore send a larger share to each; their total
-                outbound quota equals an interior deme's.  Use
-                ``migration_rate`` for per-deme quotas.
+                compatibility.  It does not change the destination
+                distribution: the fold renormalizes every emitted row
+                (and every non-empty adjacency row) to a total weight of
+                1, so the denominator it selects cancels up to
+                floating-point rounding (~1 ulp).  Boundary demes merely
+                have fewer neighbors and therefore send a larger share to
+                each; their total outbound quota equals an interior
+                deme's.  Use ``migration_rate`` for per-deme quotas.
 
         Returns:
             Self for chaining.

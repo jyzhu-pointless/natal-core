@@ -767,14 +767,15 @@ class SpatialPopulation:
                 across sexes, giving each deme its own rate.  The normalized
                 column lands on ``pop.params.migration_rate`` with shape
                 ``(n_demes, n_sexes, n_ages)``.
-            adjust_migration_on_edge: Legacy bit-parity flag.  It is a
-                numeric no-op: the fold already row-normalizes every
-                valid-adjacency row to a total weight of 1, so the
-                destination distribution is unchanged either way.  Boundary
-                demes simply have fewer neighbors and therefore send a
-                larger share to each one, while their total outbound quota
-                matches an interior deme's.  Use ``migration_rate`` for
-                per-deme control of that quota.
+            adjust_migration_on_edge: Legacy bit-parity flag.  It does
+                not change the destination distribution: the fold
+                renormalizes every emitted row to a total weight of 1, so
+                the denominator it selects cancels up to floating-point
+                rounding (~1 ulp).  Boundary demes simply have fewer
+                neighbors and therefore send a larger share to each one,
+                while their total outbound quota matches an interior
+                deme's.  Use ``migration_rate`` for per-deme control of
+                that quota.
             name: Human-readable container name.
 
         Raises:
