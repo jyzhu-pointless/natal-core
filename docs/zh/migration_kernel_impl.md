@@ -301,7 +301,7 @@ virgin female 数量 = female_total - stored_total，两者均来自 `float64` �
 
 ```python
 virgin_count = female_total - stored_total
-if virgin_count < 0.0 and abs(virgin_count) < 1e-10:
+if virgin_count < 0.0 and abs(virgin_count) < 1e-9:
     virgin_count = 0.0
 ```
 
