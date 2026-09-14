@@ -265,6 +265,24 @@ def build_config_maps(
                 else:
                     female_only_by_sex_chrom[g_off] = f_ok and not m_ok
                     male_only_by_sex_chrom[g_off] = m_ok and not f_ok
+            # The compatibility heuristic cannot distinguish homogametic from
+            # heterogametic pairs when every baseline map row sums to 1, which
+            # is the common case: it then yields no sex-fixed genotype at all.
+            # Sex would silently fall back to the compatibility ratio, sending
+            # about half of every sex-fixed genotype's mass to the wrong sex
+            # axis.  A species that declares sex chromosomes must determine sex
+            # structurally, so fail loudly instead.
+            if not (
+                female_only_by_sex_chrom.any() or male_only_by_sex_chrom.any()
+            ):
+                raise ValueError(
+                    "has_sex_chromosomes is set but no genotype is sex-fixed: "
+                    "the compatibility heuristic found neither a female-only "
+                    "nor a male-only genotype, so sex would be assigned from "
+                    "compatibility weights instead of from the genotype. Pass "
+                    "female_only_by_sex_chrom / male_only_by_sex_chrom taken "
+                    "from Species.get_config_blueprint()."
+                )
 
     # Publication derives this tensor once, after the complete model has
     # been projected onto its final runtime axes.  Keeping an empty marker

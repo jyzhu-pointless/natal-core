@@ -28,6 +28,21 @@ def _published_config(species: nt.Species, config: ModelDraft) -> ModelDraft:
     return publish_products(CompiledProducts(config, registry, [], [])).config
 
 
+def _sex_masks(species: nt.Species) -> dict[str, object]:
+    """Structure-derived sex masks for a hand-built low-level config.
+
+    ``build_discrete_engine_config`` refuses ``has_sex_chromosomes=True``
+    without them: the compatibility heuristic cannot tell homogametic from
+    heterogametic genotypes when every map row sums to 1, so it would silently
+    let the compatibility ratio decide sex.
+    """
+    bp = species.get_config_blueprint()
+    return {
+        "female_only_by_sex_chrom": bp["female_only_by_sex_chrom"],
+        "male_only_by_sex_chrom": bp["male_only_by_sex_chrom"],
+    }
+
+
 
 
 def _has_chromosome(haploid: object, chromosome: object) -> bool:
@@ -132,6 +147,7 @@ def test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelia
         has_sex_chromosomes=True,
         zygotes_to_gametes_map=gamete_map,
         gametes_to_zygotes_map=zygote_map,
+        **_sex_masks(species),
     )
 
     parent_count = 1000.0
@@ -304,6 +320,7 @@ def test_discrete_generation_x_linked_two_alleles_from_heterozygous_female() -> 
         has_sex_chromosomes=True,
         zygotes_to_gametes_map=gamete_map,
         gametes_to_zygotes_map=zygote_map,
+        **_sex_masks(species),
     )
 
         # Internal materialization path (shared by build/clone/restore),
