@@ -1185,35 +1185,39 @@ class TestBackwardCompatibility:
         # Invariant: total sum = 2 * input sum (2 groups, each sums all ztypes)
         assert result.sum() == 2 * ind.sum()
 
-    def test_apply_rule_2d_input_3d_mask(
+    def test_apply_rule_2d_input_uses_a_length_one_age_axis(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """apply_rule with 2D input + 3D mask."""
+        """A 2-D count is one age class, and the rule spells that axis out."""
         ind = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64)
-        mask = np.ones((1, 2, 3), dtype=np.float64)
+        mask = np.ones((1, 2, 1, 3), dtype=np.float64)
         result = apply_rule(ind, mask)
         assert result.shape == (1, 2)
         assert result.sum() == ind.sum()
+        # Dropping the axis is rejected instead of silently inferred.
+        with pytest.raises(ValueError, match="rule must carry the age axis"):
+            apply_rule(ind, np.ones((1, 2, 3), dtype=np.float64))
 
-    def test_apply_rule_3d_input_3d_mask(
+    def test_apply_rule_rejects_a_rule_without_an_age_axis(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """apply_rule with 3D input + 3D mask (collapse_age style)."""
+        """An age-resolved count cannot take a 3-D rule.
+
+        An age-collapsed selector mask and a genuinely age-free rule are the
+        same array, so the shape has to say which one it is: every rule carries
+        the age axis, even as a single class.
+        """
         ind = _make_ind_count_3d()  # (2, 2, 3)
-        mask = np.ones((1, 2, 3), dtype=np.float64)  # collapsed mask
-        result = apply_rule(ind, mask)
-        # expanded to (1, 2, 1, 3) → prod → sum(-1) → sum(-1) → (1, 2)
-        assert result.shape == (1, 2)
-        # Each sex × ztype sums over ages
-        assert result.sum() == ind.sum()
+        with pytest.raises(ValueError, match="rule must carry the age axis"):
+            apply_rule(ind, np.ones((1, 2, 3), dtype=np.float64))
 
     def test_apply_rule_unsupported_dimensions_raise(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """apply_rule raises ValueError for unsupported ndim combos."""
+        """apply_rule raises ValueError for an unsupported rule rank."""
         ind = _make_ind_count_3d()
         mask_2d = np.ones((1, 2), dtype=np.float64)
-        with pytest.raises(ValueError, match="Unsupported rule ndim"):
+        with pytest.raises(ValueError, match="rule must carry the age axis"):
             apply_rule(ind, mask_2d)
 
     def test_build_filter_with_species_diploid(
@@ -1656,12 +1660,12 @@ class TestApplyRuleEdgeCases:
     def test_apply_rule_2d_mask(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """apply_rule with 2D input and 2D mask → (n_groups, n_sexes)."""
+        """apply_rule with 2D input and a 4-D rule → (n_groups, n_sexes)."""
         ind = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64)
-        mask = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+        # (n_groups, n_ztypes) shared by both sexes and the single age class.
+        per_group = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+        mask = np.broadcast_to(per_group[:, None, None, :], (2, 2, 1, 3))
         result = apply_rule(ind, mask)
-        # mask[:, None, :] * arr[None, ...] → (2, 1, 3) * (1, 2, 3)
-        # → broadcast → (2, 2, 3) → sum over ztype → (2, 2)
         assert result.ndim == 2
         assert result.shape == (2, 2)  # (n_groups, n_sexes)
         # Group 0 selects ztype 0: [1, 2, 3]⋅[1,0,0]=1, [4,5,6]⋅[1,0,0]=4
@@ -1684,10 +1688,10 @@ class TestApplyRuleEdgeCases:
     def test_apply_rule_3d_input_unsupported_mask(
         self, phase2_registry: IndexRegistry
     ) -> None:
-        """apply_rule with 3D input + 2D mask raises."""
+        """apply_rule with 3D input + 2D mask raises: the rule keeps the age axis."""
         ind = _make_ind_count_3d()
         mask_2d = np.ones((1, 2), dtype=np.float64)
-        with pytest.raises(ValueError, match="Unsupported rule ndim"):
+        with pytest.raises(ValueError, match="rule must carry the age axis"):
             apply_rule(ind, mask_2d)
 
 

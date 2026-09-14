@@ -39,6 +39,17 @@
   is gone — a boundary deme still sends its full quota, just to fewer
   neighbors, so each one receives a larger share.
 
+- **`apply_rule` rules must carry the age axis**. The helper used to accept a
+  3-D `(n_groups, n_sexes, n_ztypes)` rule (and a 2-D one) and infer that the
+  rule had no age dimension. An age-collapsed selector mask and a genuinely
+  age-free rule are the same array, so an OR'd selector could pass as an
+  age-free rule and silently sum every age of the matched ZType. Every rule now
+  keeps the age axis, degenerating to one class when the counts have none: a
+  2-D `(sex, ztype)` count takes a `(n_groups, sex, 1, ztype)` rule, and a rule
+  that drops the axis is rejected with a message naming the expected shape.
+  `Observation.apply` accepts the same counts as before and now validates the
+  mask through the same shared normalization.
+
 ### Added
 
 - **Build-time `migration_rate` supports per-deme values**. A

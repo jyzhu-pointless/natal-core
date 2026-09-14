@@ -201,34 +201,32 @@ class Observation:
         # The native projection always works on (deme, sex, age, ztype); lower-rank
         # inputs are lifted to one deme and/or one age, and a 4-D input is accepted
         # only for a spatial Observation with an explicit deme selection.
-        if arr.ndim == 2:
-            dimensions = (1, arr.shape[0], 1, arr.shape[1])
-        elif arr.ndim == 3:
-            dimensions = (1, *arr.shape)
-        elif arr.ndim == 4 and self.deme_indices is not None:
-            dimensions = tuple(arr.shape)
-        else:
-            raise ValueError(f"Unsupported individual_count ndim: {arr.ndim}")
-        d, sexes, ages, ztypes = dimensions
+        arr, dimensions, missing_age, is_spatial = _lift_projection_counts(
+            arr, allow_deme=self.deme_indices is not None
+        )
+        _, sexes, ages, ztypes = dimensions
         # Non-spatial inputs have no deme axis, so pass a dummy single-deme selection.
-        selected = list(self.deme_indices) if arr.ndim == 4 and self.deme_indices is not None else [0]
+        selected = list(self.deme_indices) if is_spatial and self.deme_indices is not None else [0]
         # Fail before native indexing so an invalid selection cannot read out of bounds.
         if not selected:
             raise ValueError("Observation selects no demes")
-        if any(index < 0 or index >= d for index in selected):
+        if any(index < 0 or index >= dimensions[0] for index in selected):
             raise ValueError("Observation deme selection is outside the population layout")
-        mask = self.build_mask(sexes, ages, ztypes)
+        mask = _require_age_axis_rule(
+            np.ascontiguousarray(self.build_mask(sexes, ages, ztypes), dtype=np.float64),
+            dimensions,
+        )
         # A 2-D input has no age axis, so it is always collapsed; deme
         # aggregation only applies to spatial 4-D inputs.
-        collapse = self.collapse_age or arr.ndim == 2
-        aggregate = arr.ndim == 4 and self.deme_mode == "aggregate"
+        collapse = self.collapse_age or missing_age
+        aggregate = is_spatial and self.deme_mode == "aggregate"
         values = project_observation(
-            arr.ravel(), np.ascontiguousarray(mask).ravel(), dimensions,
+            arr.ravel(), mask.ravel(), dimensions,
             selected, collapse, aggregate,
         )
         # Group-first result: (groups, [selected demes if preserved], sexes, [ages]).
         shape = (self.n_groups,)
-        if arr.ndim == 4 and not aggregate:
+        if is_spatial and not aggregate:
             shape += (len(selected),)
         shape += (sexes,)
         if not collapse:
@@ -979,69 +977,129 @@ def build_identity_observation(
     )
 
 
+# ── Projection input normalization ───────────────────────────────────────────
+
+
+def _lift_projection_counts(
+    individual_count: NDArray[np.float64],
+    *,
+    allow_deme: bool,
+) -> tuple[NDArray[np.float64], tuple[int, int, int, int], bool, bool]:
+    """Normalize counts to the 4-D ``(deme, sex, age, ztype)`` projection layout.
+
+    Every count array carries an age axis in the projection contract; a 2-D
+    ``(sex, ztype)`` input simply has a degenerate one, so it is lifted to a
+    single age class and reported through ``missing_age`` (the projection then
+    collapses that one class).  This is the single normalization used by both
+    :meth:`Observation.apply` and :func:`apply_rule`, so the two entry points
+    cannot drift apart.
+
+    Args:
+        individual_count: Count array (any of the documented ranks).
+        allow_deme: Whether a 4-D (spatial) input is accepted.
+
+    Returns:
+        ``(counts_4d, dimensions, missing_age, is_spatial)``.
+
+    Raises:
+        ValueError: If the rank is not a supported form.
+    """
+    if individual_count.ndim == 2:
+        sexes, ztypes = individual_count.shape
+        dimensions = (1, int(sexes), 1, int(ztypes))
+        return individual_count.reshape(dimensions), dimensions, True, False
+    if individual_count.ndim == 3:
+        sexes, ages, ztypes = individual_count.shape
+        dimensions = (1, int(sexes), int(ages), int(ztypes))
+        return individual_count.reshape(dimensions), dimensions, False, False
+    if individual_count.ndim == 4 and allow_deme:
+        demes, sexes, ages, ztypes = individual_count.shape
+        dimensions = (int(demes), int(sexes), int(ages), int(ztypes))
+        return individual_count, dimensions, False, True
+    raise ValueError(f"Unsupported individual_count ndim: {individual_count.ndim}")
+
+
+def _require_age_axis_rule(
+    rule: NDArray[np.float64],
+    dimensions: tuple[int, int, int, int],
+) -> NDArray[np.float64]:
+    """Validate a rule against the 4-D projection contract.
+
+    A rule always carries the age axis, even for counts without one: the axis
+    is then a single class.  Requiring that shape is what keeps an
+    age-collapsed selector mask from passing as an age-free rule — the two are
+    byte-identical as arrays, so the shape itself must be unambiguous.
+
+    Args:
+        rule: Rule/mask array.
+        dimensions: ``(deme, sex, age, ztype)`` of the counts being projected.
+
+    Returns:
+        The rule unchanged.
+
+    Raises:
+        ValueError: If the rule omits the age axis or its extents do not match
+            the counts.
+    """
+    _, sexes, ages, ztypes = dimensions
+    if rule.ndim != 4:
+        raise ValueError(
+            "rule must carry the age axis like the counts: expected 4-D "
+            f"(n_groups, {sexes}, {ages}, {ztypes}), got {rule.ndim}-D shape "
+            f"{rule.shape}. Add the missing axis (for example "
+            "np.asarray(rule)[:, :, None, :]) or select the age classes "
+            "explicitly."
+        )
+    if rule.shape[1:] != (sexes, ages, ztypes):
+        raise ValueError(
+            "rule shape does not match the counts: expected "
+            f"(n_groups, {sexes}, {ages}, {ztypes}), got {rule.shape}"
+        )
+    return rule
+
+
 # ── Standalone projection function ───────────────────────────────────────────
 
 
 def apply_rule(
     individual_count: NDArray[np.float64], rule: NDArray[np.float64]
 ) -> NDArray[np.float64]:
-    """Apply `rule` to `individual_count` and sum over ZType axis.
+    """Apply ``rule`` to ``individual_count`` and sum over the ZType axis.
 
     Supported shapes:
       - individual_count: ``(n_sexes, n_ages, n_ztypes)`` or
         ``(n_sexes, n_ztypes)``
-      - rule: ``(n_groups, n_sexes, n_ages, n_ztypes)`` or
-        ``(n_groups, n_sexes, n_ztypes)``
+      - rule: ``(n_groups, n_sexes, n_ages, n_ztypes)``
 
-    A 3-D rule must be a rule that genuinely has *no* age dimension (a
-    selection by sex and ZType only, or a non-age population): its value is
-    applied to every age and the result is summed over the age axis.  Do not
-    build it by OR-ing an age-constrained selector mask — that keeps only
-    "some age matched" and the sum would then include the ages that did not
-    match.  Selector masks are always 4-D; use
-    :func:`Observation.apply <Observation.apply>` for collapsed observations.
+    Every rule carries the age axis.  A ``(n_sexes, n_ztypes)`` count has no
+    age axis, so it is read as a single age class and the rule must say so with
+    a length-1 axis.  A rule that drops the age axis is rejected: an
+    age-collapsed selector mask and a genuinely age-free rule are the same
+    array, so accepting one would silently over-count the other.
 
     Args:
         individual_count: Count array.
-        rule: Binary mask with shape matching the observation groups.
+        rule: 4-D binary rule matching the counts' sex/age/ztype extents.
 
     Returns:
-        Observed counts with shape ``(n_groups, n_sexes, n_ages)`` or
-        ``(n_groups, n_sexes)``.
+        Observed counts with shape ``(n_groups, n_sexes)`` for a 2-D input, or
+        ``(n_groups, n_sexes, n_ages)`` for a 3-D input.
 
     Raises:
-        ValueError: If array dimensions are incompatible.
+        ValueError: If the array ranks or extents do not match.
     """
     from natal._engine_rs import project_observation
 
     arr = np.ascontiguousarray(individual_count, dtype=np.float64)
-    mask = np.asarray(rule, dtype=np.float64)
-    # Lift counts and rule to the 4-D (deme, sex, age, ztype) form the native
-    # projection expects; a 3-D rule is defined without an age axis, so it is
-    # applied to every age and the age axis is then summed away.
-    if arr.ndim == 3:
-        sexes, ages, ztypes = arr.shape
-        collapse = mask.ndim == 3
-        if mask.ndim == 3:
-            mask = np.broadcast_to(mask[:, :, None, :], (mask.shape[0], sexes, ages, ztypes))
-        elif mask.ndim != 4:
-            raise ValueError("Unsupported rule ndim for age-structured state")
-    elif arr.ndim == 2:
-        sexes, ztypes = arr.shape
-        ages = 1
-        collapse = True
-        if mask.ndim == 2:
-            mask = np.broadcast_to(mask[:, None, None, :], (mask.shape[0], sexes, 1, ztypes))
-        elif mask.ndim == 3:
-            mask = mask[:, :, None, :]
-        else:
-            raise ValueError("Unsupported rule ndim for non-age state")
-    else:
-        raise ValueError("Unsupported individual_count ndim")
-    # One dummy deme and no aggregation: apply_rule never handles spatial input,
-    # so the native projection only performs the group/ztype reduction.
+    mask = np.ascontiguousarray(rule, dtype=np.float64)
+    arr, dimensions, missing_age, _ = _lift_projection_counts(arr, allow_deme=False)
+    mask = _require_age_axis_rule(mask, dimensions)
+    _, sexes, ages, _ = dimensions
+    # A 2-D count's single lifted age class is the whole observation, so the
+    # projection collapses that degenerate axis.
     values = project_observation(
-        arr.ravel(), np.ascontiguousarray(mask).ravel(), (1, sexes, ages, ztypes), [0], collapse, False,
+        arr.ravel(), mask.ravel(), dimensions, [0], missing_age, False
     )
-    shape = (mask.shape[0], sexes) if collapse else (mask.shape[0], sexes, ages)
-    return values.reshape(shape)
+    if missing_age:
+        return values.reshape((mask.shape[0], sexes))
+    return values.reshape((mask.shape[0], sexes, ages))

@@ -106,6 +106,8 @@ mask[group, sex, age, ztype]
 
 空间投影先按 `deme_indices` 切片，再对每个选中 deme 应用同一组 selector mask。`preserve` 保留切片后的 deme 轴；`aggregate` 对该轴显式求和。最后，`collapse_age=True` 会对 age 轴求和并移除它。
 
+计数与规则**始终携带 age 轴**：规则不允许丢掉这一维，缺省时退化为长度为 1 的年龄类。二维计数 `(sex, ztype)` 被当作单个年龄类读取，因此它的规则是 `(n_groups, sex, 1, ztype)`。`apply_rule` 因此拒绝没有 age 轴的规则：被折叠的选择器掩码与"本来就不分年龄的规则"是同一个数组，接受其中一个就会让另一个静默多算。
+
 这套顺序保证两个关键不变量：
 
 ```text

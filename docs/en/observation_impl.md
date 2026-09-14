@@ -106,6 +106,8 @@ Spatial input adds a regular deme axis at the front:
 
 Spatial projection first slices by `deme_indices`, then applies the same selector masks to every selected deme. `preserve` retains the sliced deme axis; `aggregate` explicitly sums that axis. Finally, `collapse_age=True` sums and removes the age axis.
 
+Both counts and rules always carry the age axis; a rule never drops it, it degenerates to one age class. A 2-D count `(sex, ztype)` is read as a single age class, so its rule is `(n_groups, sex, 1, ztype)`. `apply_rule` therefore rejects a rule without an age axis: an age-collapsed selector mask and a genuinely age-free rule are the same array, and accepting one would silently over-count the other.
+
 This ordering guarantees two key invariants:
 
 ```text
