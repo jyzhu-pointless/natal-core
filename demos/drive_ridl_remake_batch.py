@@ -20,6 +20,15 @@ seed is drawn from OS entropy and *recorded in the run manifest*
 check, and ``--check`` asserts the output contract before any file is written.
 The full paper grids (317 simulated weeks x 20 replicates x 672 cells) are a
 deliberate long run: keep them out of CI.
+
+Reference
+---------
+The original SLiM data is not available, so the repository's own figures are
+the reference.  ``--write-reference`` runs the canonical full grid
+(``seed=REFERENCE_SEED``, ``N_REPEATS``) and freezes its four matrices (with
+``null`` for the unsuppressed cells) plus the tolerances into
+``drive_ridl_remake_reference.json``; ``--check`` then compares a run with the
+same seed and grid against that file value by value.
 """
 
 from __future__ import annotations
@@ -47,6 +56,11 @@ SIM_WEEKS = 317
 N_REPEATS = 20
 SMOKE_REPEATS = 2
 MANIFEST_NAME = "drive_ridl_remake_batch_manifest.json"
+REFERENCE_NAME = "drive_ridl_remake_reference.json"
+# Canonical seed for the frozen reference run.  The figures originally approved
+# were produced with `SEED = None`, whose drawn seed was never recorded, so the
+# reference is re-frozen from this fixed seed instead.
+REFERENCE_SEED = 0
 
 DRIVE_CONVERSION_RATES = np.round(np.arange(0.0, 1.0001, 0.05), 2)
 RELEASE_RATIOS = np.round(np.arange(0.0, 3.0001, 0.15), 2)
@@ -522,6 +536,154 @@ def write_manifest(
     return path
 
 
+def _matrix_to_json(matrix: np.ndarray) -> list[list[float | None]]:
+    """Serialize a grid, mapping NaN (no suppression) to JSON ``null``."""
+    return [
+        [None if np.isnan(value) else float(value) for value in row]
+        for row in np.asarray(matrix, dtype=np.float64)
+    ]
+
+
+def _matrix_from_json(payload: list[list[float | None]]) -> np.ndarray:
+    """Deserialize a grid, mapping JSON ``null`` back to NaN."""
+    return np.array(
+        [[np.nan if value is None else float(value) for value in row] for row in payload],
+        dtype=np.float64,
+    )
+
+
+def write_reference(
+    path: Path,
+    *,
+    seed: int,
+    repeats: int,
+    mean_suppression_weeks: np.ndarray,
+    success_counts: np.ndarray,
+    fitness_mean_suppression_weeks: np.ndarray,
+    fitness_success_counts: np.ndarray,
+) -> Path:
+    """Freeze one canonical run as the repository's reference grids.
+
+    Args:
+        path: Destination JSON path.
+        seed: Master seed the canonical run used.
+        repeats: Replicates per grid cell.
+        mean_suppression_weeks: Conversion-scan mean weeks.
+        success_counts: Conversion-scan suppressed counts.
+        fitness_mean_suppression_weeks: Fitness-scan mean weeks.
+        fitness_success_counts: Fitness-scan suppressed counts.
+
+    Returns:
+        The written reference path.
+    """
+    payload = {
+        "seed": seed,
+        "repeats": repeats,
+        "sim_weeks": SIM_WEEKS,
+        "rtol": 1e-9,
+        "atol": 1e-9,
+        "conversion": {
+            "mean_weeks": _matrix_to_json(mean_suppression_weeks),
+            "success_counts": np.asarray(success_counts, dtype=np.int64).tolist(),
+        },
+        "fitness": {
+            "mean_weeks": _matrix_to_json(fitness_mean_suppression_weeks),
+            "success_counts": np.asarray(fitness_success_counts, dtype=np.int64).tolist(),
+        },
+    }
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(f"Reference frozen to: {path}")
+    return path
+
+
+def check_reference(
+    path: Path,
+    *,
+    seed: int,
+    repeats: int,
+    mean_suppression_weeks: np.ndarray,
+    success_counts: np.ndarray,
+    fitness_mean_suppression_weeks: np.ndarray,
+    fitness_success_counts: np.ndarray,
+) -> bool:
+    """Compare a run against the frozen reference value by value.
+
+    Only a run with the reference's own seed, replicate count and window can be
+    compared; anything else is reported and skipped rather than failed, because
+    the grids are stochastic and any other seed is a different draw.
+
+    Args:
+        path: Reference JSON path.
+        seed: Master seed this run used.
+        repeats: Replicates per grid cell this run used.
+        mean_suppression_weeks: Conversion-scan mean weeks.
+        success_counts: Conversion-scan suppressed counts.
+        fitness_mean_suppression_weeks: Fitness-scan mean weeks.
+        fitness_success_counts: Fitness-scan suppressed counts.
+
+    Returns:
+        ``True`` when a comparison ran, ``False`` when it was skipped.
+
+    Raises:
+        AssertionError: If the run reproduces the reference configuration but a
+            value differs beyond the stored tolerance.
+    """
+    if not path.exists():
+        print(f"[check] no frozen reference at {path}; skipping the value comparison")
+        return False
+    reference = json.loads(path.read_text(encoding="utf-8"))
+    if (reference["seed"], reference["repeats"], reference["sim_weeks"]) != (
+        seed,
+        repeats,
+        SIM_WEEKS,
+    ):
+        print(
+            "[check] reference was frozen for "
+            f"seed={reference['seed']} repeats={reference['repeats']} "
+            f"sim_weeks={reference['sim_weeks']}; this run uses seed={seed} "
+            f"repeats={repeats} sim_weeks={SIM_WEEKS} — skipping the value comparison"
+        )
+        return False
+    rtol = float(reference.get("rtol", 1e-9))
+    atol = float(reference.get("atol", 1e-9))
+    pairs = (
+        ("conversion", reference["conversion"], mean_suppression_weeks, success_counts),
+        (
+            "fitness",
+            reference["fitness"],
+            fitness_mean_suppression_weeks,
+            fitness_success_counts,
+        ),
+    )
+    for label, block, mean_now, counts_now in pairs:
+        np.testing.assert_array_equal(
+            np.asarray(counts_now, dtype=np.int64),
+            np.asarray(block["success_counts"], dtype=np.int64),
+            err_msg=f"{label}: suppressed counts differ from the reference",
+        )
+        mean_ref = _matrix_from_json(block["mean_weeks"])
+        assert mean_ref.shape == np.asarray(mean_now).shape, (
+            f"{label}: grid shape differs from the reference"
+        )
+        np.testing.assert_array_equal(
+            np.isnan(mean_ref),
+            np.isnan(mean_now),
+            err_msg=f"{label}: which cells are suppressed differs from the reference",
+        )
+        suppressed = ~np.isnan(mean_ref)
+        np.testing.assert_allclose(
+            np.asarray(mean_now)[suppressed],
+            mean_ref[suppressed],
+            rtol=rtol,
+            atol=atol,
+            err_msg=f"{label}: mean suppression weeks differ from the reference",
+        )
+    print(f"[check] matched the frozen reference at {path} (rtol={rtol}, atol={atol})")
+    return True
+
+
 def _env_seed() -> int | None:
     """Read ``NATAL_RIDL_SEED``; an unset or empty value means "fresh entropy"."""
     raw = os.environ.get("NATAL_RIDL_SEED")
@@ -558,6 +720,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="skip heatmap rendering (useful headless or in CI)",
     )
+    parser.add_argument(
+        "--write-reference",
+        action="store_true",
+        help=(
+            "run the canonical full grid (seed "
+            f"{REFERENCE_SEED}, {N_REPEATS} replicates) and freeze it as "
+            f"{REFERENCE_NAME}"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -571,7 +742,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         Process exit code (0 on success).
     """
     args = parse_args(argv)
-    seed = resolve_seed(args.seed if args.seed is not None else _env_seed())
+    if args.write_reference and args.smoke:
+        raise SystemExit("--write-reference needs the full grid, not --smoke")
+    requested_seed = args.seed if args.seed is not None else _env_seed()
+    if requested_seed is None and args.write_reference:
+        requested_seed = REFERENCE_SEED
+    seed = resolve_seed(requested_seed)
     repeats = args.repeats if args.repeats is not None else (SMOKE_REPEATS if args.smoke else N_REPEATS)
     assert repeats >= 1, f"repeats must be positive, got {repeats}"
 
@@ -600,7 +776,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     elapsed_seconds_fitness = perf_counter() - start_time_fitness
 
-    if args.check:
+    if args.check or args.write_reference:
         check_outputs(
             mean_suppression_weeks, success_counts, repeats=repeats, label="conversion"
         )
@@ -609,6 +785,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             fitness_success_counts,
             repeats=repeats,
             label="fitness",
+        )
+
+    if args.write_reference:
+        write_reference(
+            Path(__file__).with_name(REFERENCE_NAME),
+            seed=seed,
+            repeats=repeats,
+            mean_suppression_weeks=mean_suppression_weeks,
+            success_counts=success_counts,
+            fitness_mean_suppression_weeks=fitness_mean_suppression_weeks,
+            fitness_success_counts=fitness_success_counts,
+        )
+
+    if args.check:
+        check_reference(
+            Path(__file__).with_name(REFERENCE_NAME),
+            seed=seed,
+            repeats=repeats,
+            mean_suppression_weeks=mean_suppression_weeks,
+            success_counts=success_counts,
+            fitness_mean_suppression_weeks=fitness_mean_suppression_weeks,
+            fitness_success_counts=fitness_success_counts,
         )
 
     provenance = (
