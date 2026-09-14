@@ -21,6 +21,7 @@ import pytest
 
 import natal as nt
 from natal.frontend.spatial.builder import batch_setting
+from natal.frontend.spatial.migration import fold_migration_csr
 from natal.frontend.spatial.population import SpatialPopulation
 
 # Row sums 0.5: the old adjacency bookkeeping dropped the unrouted 0.5.
@@ -242,3 +243,107 @@ class TestBuildTimePerDemeRate:
         assert np.allclose(from_full.params.migration_rate, full)
         # The (D, A) shortcut broadcasts the age vector across both sexes.
         assert np.allclose(from_age.params.migration_rate, full)
+
+
+KERNEL = np.full((3, 3), 1.0 / 9.0, dtype=np.float64)
+
+
+def _kernel_build(
+    name: str,
+    *,
+    adjacency: np.ndarray | None = None,
+) -> SpatialPopulation:
+    """Build a 3-deme discrete chain routed by a uniform 3x3 kernel.
+
+    No adjacency is declared, so the only adjacency the builder could
+    materialize is the topology-derived default.
+    """
+    counts = batch_setting(
+        [{"female": {"W|W": 500}, "male": {"W|W": 500}}] * 3
+    )
+    return (
+        nt.SpatialPopulation.builder(
+            _species(name + "_sp"),
+            n_demes=3,
+            pop_type="discrete_generation",
+            topology=nt.SquareGrid(1, 3),
+        )
+        .setup(name=name, stochastic=False)
+        .initial_state(individual_count=counts)
+        .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        .reproduction(eggs_per_female=1, sex_ratio=0.5)
+        .competition(
+            carrying_capacity=1e12,
+            low_density_growth_rate=2.0,
+            juvenile_growth_mode="logistic",
+        )
+        .migration(
+            kernel=KERNEL,
+            adjacency=adjacency,
+            migration_rate=RATE,
+            strategy="kernel",
+        )
+        .build()
+    )
+
+
+class TestKernelModeAdjacencyMaterialization:
+    """Kernel routing must not pay for the adjacency it never reads.
+
+    The topology-derived default adjacency is a dense
+    ``(n_demes, n_demes)`` matrix and coercion row-normalizes it, which reads
+    and copies every element.  Building it for a kernel-mode model therefore
+    cost O(n_demes**2) resident memory for a matrix the CSR fold never
+    consults: a 10,201-deme kernel model peaked at 1.7 GiB against 0.23 GiB
+    before the normalization landed, and the 501x501 hex demo (251,001 demes)
+    requested hundreds of gigabytes and was killed by the OS instead of
+    running.  These tests pin the skip and the validation it must not remove.
+    """
+
+    def test_kernel_mode_skips_the_default_adjacency(self, monkeypatch) -> None:
+        """A kernel-only build never materializes the default adjacency."""
+        from natal.frontend.spatial import population as population_module
+
+        def _forbidden_default(topology: object) -> np.ndarray:
+            raise AssertionError(
+                "kernel mode materialized the default dense adjacency"
+            )
+
+        monkeypatch.setattr(
+            population_module, "build_adjacency_matrix", _forbidden_default
+        )
+        pop = _kernel_build("kernel_skip_default")
+        # The kernel still routed the demes: the folded CSR has outbound edges.
+        assert pop.migration_csr.dest_idx.size > 0
+
+    def test_kernel_mode_still_validates_an_explicit_adjacency(self) -> None:
+        """An explicitly declared adjacency keeps its shape validation.
+
+        The skip applies to the default matrix only; a caller-supplied
+        adjacency is still coerced in every mode, so a malformed one fails
+        loudly instead of being silently ignored by kernel routing.
+        """
+        with pytest.raises(ValueError, match="adjacency array must be"):
+            _kernel_build(
+                "kernel_bad_adjacency",
+                adjacency=np.ones((2, 2), dtype=np.float64),
+            )
+
+    def test_adjacency_mode_requires_a_matrix(self) -> None:
+        """The fold names the missing matrix instead of failing on a subscript.
+
+        Kernel callers may pass ``None``; adjacency callers may not, and the
+        error must say which argument is missing.
+        """
+        with pytest.raises(ValueError, match="adjacency_dense is required"):
+            fold_migration_csr(
+                n_demes=1,
+                topology=None,
+                adjacency_dense=None,
+                migration_kernel=None,
+                kernel_bank=None,
+                deme_kernel_ids=None,
+                kernel_include_center=False,
+                adjust_on_edge=False,
+                mode="adjacency",
+            )

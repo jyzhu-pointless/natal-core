@@ -850,17 +850,6 @@ class SpatialPopulation:
                     "migration_kernel must be a 2D array with odd dimensions"
                 )
 
-        if adjacency is None:
-            # Default adjacency:
-            # - no topology: identity matrix (no migration unless diagonal used)
-            # - with topology: topology-derived neighborhood matrix
-            if topology is None:
-                adjacency = np.eye(n_demes, dtype=np.float64)
-            else:
-                adjacency = build_adjacency_matrix(topology)
-
-        adjacency_dense = _coerce_adjacency_dense(adjacency, n_demes=n_demes)
-
         normalized_kernel_bank: tuple[NDArray[np.float64], ...] | None = None
         if kernel_bank is not None:
             if len(kernel_bank) == 0:
@@ -912,6 +901,33 @@ class SpatialPopulation:
             kernel_bank=normalized_kernel_bank,
             deme_kernel_ids=normalized_deme_kernel_ids,
         )
+
+        # Materialize the adjacency only for the mode that reads it.  Kernel
+        # routing never consults the CSR's adjacency input, and the
+        # topology-derived default is a dense (n_demes, n_demes) matrix that
+        # coercion row-normalizes — reading and copying every element.  Building
+        # that default for a kernel-mode model therefore cost O(n_demes**2)
+        # resident memory for a matrix nothing consumes: at the 501x501 hex grid
+        # the default matrix alone is 469 GiB and normalization doubles it.  An
+        # explicitly declared adjacency is still coerced (and validated)
+        # whichever mode wins.
+        adjacency_dense: NDArray[np.float64] | None
+        if adjacency is not None:
+            adjacency_dense = _coerce_adjacency_dense(adjacency, n_demes=n_demes)
+        elif migration_mode == "adjacency":
+            # Default adjacency:
+            # - no topology: identity matrix (no migration unless diagonal used)
+            # - with topology: topology-derived neighborhood matrix
+            default_adjacency = (
+                np.eye(n_demes, dtype=np.float64)
+                if topology is None
+                else build_adjacency_matrix(topology)
+            )
+            adjacency_dense = _coerce_adjacency_dense(
+                default_adjacency, n_demes=n_demes
+            )
+        else:
+            adjacency_dense = None
 
         self._name = name
         self._topology = topology

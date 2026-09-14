@@ -348,7 +348,7 @@ def resolve_migration_mode(
 def fold_migration_csr(
     n_demes: int,
     topology: GridTopology | None,
-    adjacency_dense: NDArray[np.float64],
+    adjacency_dense: NDArray[np.float64] | None,
     migration_kernel: NDArray[np.float64] | None,
     kernel_bank: Sequence[NDArray[np.float64]] | None,
     deme_kernel_ids: NDArray[np.int64] | None,
@@ -380,7 +380,9 @@ def fold_migration_csr(
     Args:
         n_demes: Number of demes.
         topology: Grid topology (required in kernel mode).
-        adjacency_dense: Dense ``(n_demes, n_demes)`` adjacency matrix.
+        adjacency_dense: Dense ``(n_demes, n_demes)`` adjacency matrix, read in
+            adjacency mode only. Kernel mode ignores it and accepts ``None``,
+            so a kernel-mode caller need not materialize the default matrix.
         migration_kernel: Single shared kernel (kernel mode, no bank).
         kernel_bank: Heterogeneous kernel bank, when used.
         deme_kernel_ids: Per-deme kernel ids into the bank, when used.
@@ -397,7 +399,8 @@ def fold_migration_csr(
         The folded :class:`MigrationCSR`.
 
     Raises:
-        ValueError: If kernel mode is requested without a usable kernel.
+        ValueError: If kernel mode is requested without a usable kernel, or
+            adjacency mode is requested without an adjacency matrix.
     """
     indptr = np.zeros(n_demes + 1, dtype=np.int64)
     # CSR is assembled row by row: indptr accumulates each source's entry
@@ -406,6 +409,8 @@ def fold_migration_csr(
     weight_parts: list[NDArray[np.float64]] = []
 
     if mode == "adjacency":
+        if adjacency_dense is None:
+            raise ValueError("adjacency_dense is required in adjacency mode")
         for src in range(n_demes):
             row = adjacency_dense[src]
             # np.nonzero returns ascending column indices, so each row is
