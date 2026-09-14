@@ -41,10 +41,11 @@ unchanged from `v0.3.0b0`.
   example `SquareGrid(1, 3)` has row sums `[1, 2, 1]`). All-zero rows (isolated
   demes) are left untouched and keep their mass at the source. A model that
   used a shrunken row to mean "migrate less" now migrates the full
-  `migration_rate`; express that intent through `migration_rate` instead. The
-  old "boundary demes migrate less because they have fewer neighbors" behavior
-  is gone — a boundary deme still sends its full quota, just to fewer
-  neighbors, so each one receives a larger share.
+  `migration_rate`; express that intent through `migration_rate` instead.
+  `adjust_migration_on_edge` is now documented as the legacy ~1-ulp no-op it
+  already was: the kernel fold had always divided each emitted row by its own
+  sum, so a boundary deme already sent its full quota, just to fewer neighbors,
+  each of which received a larger share.
 
 - **`apply_rule` rules must carry the age axis**. The helper used to accept a
   3-D `(n_groups, n_sexes, n_ztypes)` rule (and a 2-D one) and infer that the
@@ -77,10 +78,15 @@ unchanged from `v0.3.0b0`.
   Multi-target declarations compete: the preset compensates for the conversion
   cascade internally (`r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`), so each target's realized
   share equals its declared rate instead of the earlier-declared target taking
-  its mass first. `rate_mode="strict"` (default) rejects non-finite, negative,
-  or above-1 rates and any declaration summing above 1;
-  `rate_mode="proportional"` reads them as proportions and scales them to 1.
-  Available as `natal.PointMutation` /
+  its mass first. Both modes reject non-finite and negative rates;
+  `rate_mode="strict"` (default) additionally rejects rates above 1 and any
+  declaration summing above 1, while `rate_mode="proportional"` reads them as
+  proportions and scales them to 1. A declaration whose rates are all zero
+  registers no conversion rule, and the preset also carries the allele-scaling
+  fitness keywords (`viability_scaling`, `fecundity_scaling`,
+  `sexual_selection_scaling`, `zygote_viability_scaling` and their `*_mode`
+  companions), `effective_rates()` and the `source_allele` / `target_alleles`
+  accessors. Available as `natal.PointMutation` /
   `natal.frontend.presets.PointMutation`.
 - **`RICKER` growth-mode constant**. The fourth compensatory curve was reachable
   only through the string `"ricker"` or the bare integer `4` while the other
@@ -91,12 +97,14 @@ unchanged from `v0.3.0b0`.
 
 ### Fixed
 
-- **A missing required gamete label is now a build error instead of a silent
-  no-op**. `Wolbachia` inherits through a gamete label (`"wolbachia"` by
-  default); when the species did not declare it, the preset registered no
-  modifiers, raised nothing and the simulation ran with transmission silently
-  absent while the fitness patch still applied. The missing label is now
-  reported with the label name.
+- **A species that declares none of the preset's maternal labels is now a build
+  error instead of a silent no-op**. `Wolbachia` inherits through a gamete label
+  (`"wolbachia"` by default); when the species declared none of the labels the
+  preset matched, it registered no modifiers, raised nothing and the simulation
+  ran with transmission silently absent while the fitness patch still applied.
+  The unmatched labels are now reported by name. A preset that declares several
+  maternal labels still only requires one of them to be present; the absent
+  ones are not reported.
 - **`competition_strength` on a model without a second juvenile age is
   rejected**. It writes `age_based_relative_competition_strength[1]`, so with
   `new_adult_age == 1` (every discrete model, and 2-age age-structured ones)
@@ -120,44 +128,56 @@ unchanged from `v0.3.0b0`.
   are evaluated against. When it was zero the ratio guard substituted 1.0 (the
   neutral point of every curve) and the survival guard substituted 1.0, so the
   scaling was exactly 1.0 and regulation silently switched off. `C*` is zero
-  whenever the equilibrium produces no competing juveniles: a carrying
-  capacity of zero, a declared equilibrium distribution with no reproducing
-  females, or `eggs_per_female == 0`. Such a model used to grow without bound
-  (1000 adults reached 3,125,000 in five ticks) and now recruits nothing.
+  exactly when the reference equilibrium carries no competing juvenile mass: a
+  carrying capacity of zero, or a declared equilibrium distribution whose
+  juvenile entries are all zero. A zero `eggs_per_female` is a third trigger
+  only when `new_adult_age == 1` — every discrete model, and the 2-age
+  age-structured ones — because age 0 is then the only competing age; from
+  `new_adult_age == 2` on, the derived distribution still places
+  `K · sex_ratio` juveniles at age 1, so `C*` stays positive. Such a model used
+  to grow without bound (1000 adults reached 3,125,000 in five ticks) and now
+  recruits nothing.
 
-  Modes 2–4 therefore return a zero scaling, matching `FIXED`. This
-  deliberately diverges from the retired Python reference, which had the same
-  guard combination. `eggs_per_female == 0` is a legitimate way to drive a
-  population purely from hooks (release/inundation runs); set
-  `growth_mode="no_competition"` there if the injected individuals must
-  survive.
+  Modes 2–4 therefore return a zero scaling. That matches `FIXED` only for the
+  `K == 0` trigger: `FIXED` is evaluated against the carrying capacity rather
+  than `C*`, so a positive `K` with an all-zero declared equilibrium still
+  clamps at `K` instead of extinguishing (measured: 1000 after five ticks,
+  against 0 for the compensatory modes). The divergence from the retired Python
+  reference, which had the same guard combination, is deliberate. For a model
+  whose only competing age is age 0 and which is driven purely from hooks
+  (release/inundation runs) with `eggs_per_female == 0`, set
+  `growth_mode="no_competition"` if the injected individuals must survive.
 - **The word-vector ecology restore is now atomic**. `ecology_restore_words`
   wrote each field straight into the live section, so a field rejected
   part-way left the earlier fields already overwritten — while its docstring
   promised the clone-and-commit guarantee that `restore_ecology` provides. It
   now validates into a clone and commits in one assignment.
-- **A non-positive `sp_every` firing period is rejected instead of panicking**.
-  The hook compiler enforces `every >= 1`, but `HookProgram` is a half-public
-  wire type whose fields are public, so a hand-built program could reach
-  `% every` with zero. Installing such a program now raises, and the
-  interpreter returns an error rather than dividing by zero if one is
-  assembled directly.
+- **A zero or negative `sp_every` firing period is rejected**. The hook compiler
+  enforces `every >= 1`, but `HookProgram` is a half-public wire type whose
+  fields are public: a hand-built program reached `% every` with zero and
+  panicked, and a negative period silently fired on multiples of its magnitude.
+  Installing such a program now raises, and the interpreter returns an error
+  rather than dividing by zero if one is assembled directly.
 - **`collapse_age=True` observation histories can be read back**.
   `population_observation_history_to_readable_dict` reshaped every history row
   with the full age axis, but a collapsed recording writes one value per age
   class, so the conversion raised `ValueError: cannot reshape array of size 2
   into shape (1, 2, 2)` for any `n_ages > 1`. The row layout now follows the
   same collapsed/full distinction the recorder uses.
-- **A negative age key in `initial_state` is rejected instead of silently
-  writing the last age class**. The dict branch of the age-structured initial
-  state tested only `age < n_ages`, and NumPy treats `-1` as the last index, so
-  `{-1: 50.0}` landed on the oldest class while the sperm branch already
-  raised. Both branches now require `0 <= age < n_ages`.
+- **An out-of-range age key in `initial_state` is rejected instead of silently
+  writing or dropping it**. The dict branch of the age-structured initial state
+  tested only `age < n_ages`, and NumPy treats `-1` as the last index, so
+  `{-1: 50.0}` landed on the oldest class while the sperm branch already raised.
+  It now rejects both a negative index and a positive key at or beyond
+  `n_ages`, which it used to drop without a word. The list branch keeps its
+  existing silent drop.
 - **Flattened-state parsing validates its length before slicing**.
   `parse_flattened_state` and `parse_flattened_discrete_state` accepted any
   1-D buffer and surfaced a truncated or oversized input as a NumPy reshape
   error (and an empty one as `IndexError`). The declared size is now checked
-  first, so a malformed buffer fails with the expected and actual lengths.
+  first, so a malformed buffer fails with the expected and actual lengths, and
+  a non-1-D input is rejected up front instead of surfacing a NumPy `TypeError`
+  from an implicit scalar conversion.
 - **`scripts/perf_freeze.py` runs to completion again**. Its scenario guards
   asked a `DemeSlice` for a `tick` attribute it does not expose, so the script
   aborted on the second scenario and the "frozen" performance gate protected
@@ -174,8 +194,12 @@ unchanged from `v0.3.0b0`.
   delivered. Builder-folded rows are normalized to one, so models built through
   the public API are unchanged apart from last-ulp rounding of the source
   residual (`value - outbound` vs `value - Σ outbound·wᵢ`); the `phase0` spatial
-  baseline stays bit-identical. The mass change itself only affects hand-built
-  CSR input. `stay_after_send`
+  baseline stays bit-identical. For a build whose adjacency rows are already
+  probability vectors — kernel routing, or adjacency mode after the row
+  normalization described above — this ordering is the only difference. Raw
+  hand-built CSR input is where the mass difference itself shows, while
+  public-API models with un-normalized rows (the degree-weighted default among
+  them) move because of the normalization change above. `stay_after_send`
   remains on the CSR for the frozen wire contract but no longer changes the
   numbers, and the retired "adjacency math reproduces the legacy Python order
   bitwise" claim is gone.
@@ -207,6 +231,14 @@ unchanged from `v0.3.0b0`.
   carried over below; the tests and scripts that cited its sections now cite this
   section. The retired plan stays readable in history:
   `git show f04848f:RUST_ONLY_REFACTOR_PLAN.md`.
+- **The Drive-RIDL remake demo is reproducible and self-checking**.
+  `demos/drive_ridl_remake_batch.py` gained `--seed`, `--repeats`, `--smoke`,
+  `--check`, `--no-plots` and `--write-reference` plus the `NATAL_RIDL_SEED`
+  environment override, records the seed it used in a run manifest, writes a
+  `#` provenance header on its four CSVs, and freezes or compares
+  `demos/drive_ridl_remake_reference.json`. The quickstart demos
+  (`mosquito.py`, `mosquito_ui.py`) dropped their stale
+  `expected_num_new_adult_females` expectation.
 
 ### Frozen contracts (carried over from the retired Rust-only refactor plan)
 
