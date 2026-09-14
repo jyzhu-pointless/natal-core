@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## v0.3.0b1 (2026-09-14)
+
+This release turns three silent behaviors into explicit contracts: every engine
+now defaults to Beverton-Holt density regulation, adjacency rows are read as
+relative outbound weights, and rules must carry the age axis. It adds the
+`PointMutation` preset, per-deme `migration_rate` declarations, and the missing
+`RICKER` growth-mode constant. The wheel matrix and the release checks are
+unchanged from `v0.3.0b0`.
 
 ### Breaking Changes
 
@@ -75,6 +82,12 @@
   `rate_mode="proportional"` reads them as proportions and scales them to 1.
   Available as `natal.PointMutation` /
   `natal.frontend.presets.PointMutation`.
+- **`RICKER` growth-mode constant**. The fourth compensatory curve was reachable
+  only through the string `"ricker"` or the bare integer `4` while the other
+  modes had constants. `natal.RICKER` / `natal.frontend.model.RICKER` completes
+  the set, and every constant now documents the curve it selects — `LOGISTIC`
+  and `LINEAR` are the same curve under two historical names, and the numeric
+  ids are the dispatch values of the Rust density-regulation kernel.
 
 ### Fixed
 
@@ -89,6 +102,19 @@
   `new_adult_age == 1` (every discrete model, and 2-age age-structured ones)
   age 0 is the only juvenile age and its weight is fixed at 1.0 — the value
   never reached the kernels.
+- **`age_structure()` forwards the sex-chromosome masks**. The builder rebuilt
+  its config from the species blueprint but carried only
+  `has_sex_chromosomes`, so `female_only_by_sex_chrom` /
+  `male_only_by_sex_chrom` were dropped and the draft fell back to the
+  compatibility heuristic. With every baseline map row summing to 1 that
+  heuristic cannot separate homogametic from heterogametic genotypes, and the
+  kernel assigned sex from the compatibility ratio: roughly half of every
+  sex-fixed genotype's mass landed on the wrong sex axis and was then handled
+  with the other sex's survival and mating rates (measured 150 of 300 on the
+  female ztype `X1|X1`). The masks are forwarded unexpanded, as
+  `build_population_config` expects, and the mask-less combination is rejected
+  there so no future rebuild path can silently reintroduce the fallback.
+  `from_species()` was unaffected.
 - **A zero equilibrium competition strength now extinguishes instead of
   disabling regulation**. `C*` is the reference point the compensatory curves
   are evaluated against. When it was zero the ratio guard substituted 1.0 (the
@@ -153,6 +179,17 @@
   remains on the CSR for the frozen wire contract but no longer changes the
   numbers, and the retired "adjacency math reproduces the legacy Python order
   bitwise" claim is gone.
+- **A kernel-routed spatial build no longer materializes the default dense
+  adjacency**. The topology-derived default is an `(n_demes, n_demes)` matrix,
+  and the row normalization added by the previous bullet reads and copies every
+  element — so a model that routes through a migration kernel paid
+  `O(n_demes²)` resident memory for a matrix the CSR fold never consults. A
+  10,201-deme kernel model peaked at 1.71 GiB instead of 0.16 GiB, and
+  `demos/spatial_hex_discrete.py` at its intended 501×501 grid (251,001 demes)
+  requested hundreds of gigabytes and was killed by the OS during the build
+  instead of running. The default matrix is now built only when adjacency
+  routing will read it; an explicitly declared adjacency is still coerced and
+  validated in either mode.
 
 ### Documentation
 
@@ -232,6 +269,25 @@
 - **Performance freeze (plan §13.1)**: scenarios, machine and thresholds are frozen
   at S0 time; a >10% regression in median wall time or peak memory on any scenario
   is a blocking finding, and thresholds must not be relaxed after seeing results.
+
+### Validation
+
+- Full test suites on Python 3.10, 3.11, 3.12, and 3.13, plus `ruff`, `pyright`,
+  the generated public stub and the Rust gates (release CI).
+- Twenty platform/interpreter wheel combinations, each installed outside the
+  checkout and checked with dashboard HTML/assets/API requests and the
+  end-to-end tests (release CI).
+- The six numerical `phase0` baselines stay bit-identical.
+- Eighteen demo smoke runs, including the 501×501 hex discrete grid at its full
+  251,001-deme size (1.9 GiB peak RSS) and the six UI demos driven through the
+  real app factory without serving.
+- Documentation examples: 519 Python blocks across 78 pages classified, 448
+  runnable; 302 pass and 144 fail. The failures are 118 page-context sketches
+  that reference objects no block on their page creates, 14 missing imports,
+  4 raw-versus-observation history conflicts, 2 stale allele examples, 2
+  unguarded census divisions and 2 deliberate error demonstrations. `v0.3.0b0`
+  shows the same profile (138 failing blocks), so this is a pre-existing
+  documentation condition rather than a regression of this release.
 
 ## v0.3.0b0 (2026-09-13)
 
