@@ -519,6 +519,29 @@ class TestBuildFromSelectors:
         assert mask.ndim == 4
         assert mask.shape == (1, 2, 5, 3)
 
+    def test_build_mask_from_selectors_rejects_age_collapse(
+        self, phase2_registry: IndexRegistry
+    ) -> None:
+        """The compiler provides no age-collapsed selector mask.
+
+        A 3-D selector mask could only OR the ages together: it keeps "some
+        age matched" and loses which ones, and that form is indistinguishable
+        from a genuinely age-free 3-D rule.  Fed to the public ``apply_rule``
+        it silently summed every age (an ``age=2`` selector over 5 ages
+        reported 5x).  The parameter that produced it is gone, so a caller
+        that asks for an age collapse now fails loudly instead of getting a
+        mask that over-counts.
+        """
+        compiler = ObservationFilter(phase2_registry)
+        with pytest.raises(TypeError):
+            compiler.build_mask_from_selectors(  # type: ignore[call-arg]
+                n_sexes=2,
+                n_ages=5,
+                n_ztypes=3,
+                selectors=(IndividualSelector(ztype="WT|WT", age=2),),
+                collapse_age=True,
+            )
+
     def test_selector_with_sex_and_age(
         self, phase2_registry: IndexRegistry
     ) -> None:

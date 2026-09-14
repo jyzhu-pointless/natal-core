@@ -468,7 +468,8 @@ class ObservationFilter:
         Args:
             groups: Mapping group label → :class:`IndividualSelector`.
                 Keys must be non-empty, unique strings.
-            collapse_age: Whether to collapse the age axis.
+            collapse_age: Whether the projection sums the age axis away;
+                the baked selector mask keeps 4-D age resolution either way.
             n_sexes: Number of sex axes.
             n_ages: Number of age classes.
             n_ztypes: Number of ZType entries.  When ``None``, the mask
@@ -867,7 +868,8 @@ class ObservationFilter:
                 population object used to resolve identity groups (``None``
                 groups) and genotype-index selectors.
             groups: Group specification (None, list/tuple, or dict).
-            collapse_age: Whether to collapse the age axis.
+            collapse_age: Whether the projection sums the age axis away;
+                the baked selector mask keeps 4-D age resolution either way.
             n_sexes: Number of sex axes (must match the target population).
             n_ages: Number of age classes.
             n_ztypes: Number of zygote-type entries.  When ``None``, the
@@ -922,7 +924,8 @@ def build_identity_observation(
 
     Args:
         index_registry: :class:`IndexRegistry` with active ZTypes.
-        collapse_age: Whether to collapse the age axis.
+        collapse_age: Whether the projection sums the age axis away;
+            the baked selector mask keeps 4-D age resolution either way.
         n_sexes: Number of sex axes.
         n_ages: Number of age classes.
         n_ztypes: Number of ZType entries.  When ``None``, the mask is
