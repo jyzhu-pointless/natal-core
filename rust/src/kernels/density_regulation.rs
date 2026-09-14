@@ -9,8 +9,10 @@
 //! ``g(0) == r``.
 //!
 //! Growth-mode ids: 0 = no regulation, 1 = ``fixed``, 2 = ``linear``
-//! (alias ``logistic``), 3 = ``beverton_holt``, 4 = ``ricker``,
-//! ``>= 5`` = user-registered custom slot.
+//! (alias ``logistic``), 3 = ``beverton_holt``, 4 = ``ricker``.  Ids
+//! ``>= 5`` are *reserved* for a future custom-curve mechanism: no registry
+//! exists, so any such id is rejected as an unknown mode (see
+//! ``DENSITY_CURVE_PLAN.md``).
 
 use pyo3::exceptions::{PyValueError, PyZeroDivisionError};
 use pyo3::prelude::*;
@@ -154,7 +156,7 @@ pub fn scaling_factor(mode: i64, x: f64, r: f64) -> PyResult<f64> {
         0 => 1.0,
         other => {
             return Err(PyValueError::new_err(format!(
-                "unrecognized growth mode {other} (built-ins: 0-4; custom slots via the curve registry)"
+                "unrecognized growth mode {other} (built-ins are 0-4; ids >= 5 are reserved and have no registry)"
             )))
         }
     })
@@ -231,7 +233,7 @@ pub fn regulation_scaling(
             Ok(scaling_factor(mode, ratio, r)? * survival_rate)
         }
         other => Err(PyValueError::new_err(format!(
-            "unrecognized growth mode {other} (built-ins: 0-4; custom slots via the curve registry)"
+            "unrecognized growth mode {other} (built-ins are 0-4; ids >= 5 are reserved and have no registry)"
         ))),
     }
 }

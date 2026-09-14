@@ -143,27 +143,22 @@ impl EcologyParams {
         column[deme * per..(deme + 1) * per].to_vec()
     }
 
-    /// Extract one deme's ecology into a fresh single-deme ``EcologyParams``.
+    /// Merge a validated single-deme candidate without touching sibling columns.
     ///
-    /// Spatial parallel ticks need a per-deme mutable write target for
-    /// ``Op.set_param`` commits, but the session's ecology columns cannot
-    /// be borrowed ``&mut`` by several demes at once.  Each deme therefore
-    /// ticks against this private single-column copy; the lifecycle kernels
-    /// read position 0, whose contents are exactly the values the source
-    /// column held at this deme (so a local-copy tick is numerically
-    /// identical to reading the session's per-deme segment).  Genetics are
-    /// *not* carried — the caller shares the immutable [`GeneticsTensors`].
+    /// Counterpart of [`EcologyParams::single_deme`]: a spatial tick mutates a
+    /// private single-deme copy and writes it back through this method, so only
+    /// the targeted deme's scalars and vector segments change.  Lazy columns
+    /// (declared equilibrium distribution, migration rate) are widened on the
+    /// first declaring deme and the sentinel is restored when the last declaring
+    /// deme drops back to derive mode.
     ///
     /// ## Parameters
-    /// - `deme`: Deme whose column entries and vector segments are copied.
-    ///
-    /// ## Returns
-    /// A ``EcologyParams`` with ``n_demes == 1`` holding only that deme's ecology
-    /// (scalar custom slots are shared by clone).
+    /// - `deme`: Destination column index; *candidate* must describe exactly
+    ///   that one deme (``n_demes == 1``).
+    /// - `candidate`: Single-deme values to merge in.
     ///
     /// ## Panics
     /// Panics when *deme* is out of range for the scalar columns.
-    /// Merge a validated single-deme candidate without touching sibling columns.
     pub fn replace_deme(&mut self, deme: usize, candidate: &EcologyParams) {
         // Scalars are one entry per deme: read the candidate's single column entry.
         self.carrying_capacity[deme] = candidate.carrying_capacity[0];
@@ -220,6 +215,26 @@ impl EcologyParams {
         self.custom_slots[deme] = candidate.custom_slots[0].clone();
     }
 
+    /// Extract one deme's ecology into a fresh single-deme ``EcologyParams``.
+    ///
+    /// Spatial parallel ticks need a per-deme mutable write target for
+    /// ``Op.set_param`` commits, but the session's ecology columns cannot be
+    /// borrowed ``&mut`` by several demes at once.  Each deme therefore ticks
+    /// against this private single-column copy; the lifecycle kernels read
+    /// position 0, whose contents are exactly the values the source column held
+    /// at this deme (so a local-copy tick is numerically identical to reading
+    /// the session's per-deme segment).  Genetics are *not* carried — the
+    /// caller shares the immutable genetics tensors instead.
+    ///
+    /// ## Parameters
+    /// - `deme`: Deme whose column entries and vector segments are copied.
+    ///
+    /// ## Returns
+    /// An ``EcologyParams`` with ``n_demes == 1`` holding only that deme's
+    /// ecology (scalar custom slots are cloned, not shared).
+    ///
+    /// ## Panics
+    /// Panics when *deme* is out of range for the scalar columns.
     pub fn single_deme(&self, deme: usize) -> EcologyParams {
         // Private n_demes == 1 copy: every kernel reads position 0, so the cut
         // contents must equal the session's per-deme entries bit-for-bit.

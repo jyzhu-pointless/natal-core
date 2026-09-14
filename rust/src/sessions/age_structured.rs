@@ -464,14 +464,11 @@ impl AgeStructuredSession {
 
     /// Run one complete age-structured tick with declarative hooks.
     ///
-    /// Returns ``0`` (continue) or ``1`` (a hook requested a stop).  The tick
-    /// value is *not* advanced here; the Python adapter owns tick bookkeeping
-    /// exactly like ``natal.engine.lifecycle``.
+    /// Returns ``0`` (continue) or ``1`` (a hook requested a stop).  The session
+    /// owns the tick cursor: a completed tick increments ``state_tick``, while a
+    /// hook stop freezes it so a retry re-runs the same tick.
     ///
     /// ## Parameters
-    /// - `ind`: Mutable individual-count array.
-    /// - `sperm`: Mutable sperm-storage array.
-    /// - `tick`: Current tick.
     /// - `deme_id`: Current deme id.
     ///
     /// ## Returns
@@ -669,20 +666,14 @@ impl AgeStructuredSession {
 
     /// Capture a memory checkpoint of everything the session owns.
     ///
-    /// The state arrays are Python-owned, so they are passed in and returned
-    /// as flat copies; the RNG state is captured as four raw state words so
-    /// ``restore -> run`` *continues* the exact stream (continuation, not a
-    /// reseed).  The ecology section of the params is copied; the genetics
-    /// section is never rolled back (a checkpoint is a save, not an
-    /// uninstallation of genetic mods).
-    ///
-    /// ## Parameters
-    /// - `individual_count`: Current state array.
-    /// - `sperm_storage`: Current sperm array.
-    /// - `tick`: Current tick value.
+    /// The state arrays are session-owned and exported as fresh flat copies; the
+    /// RNG state is captured as four raw state words so ``restore -> run``
+    /// *continues* the exact stream (continuation, not a reseed).  The ecology
+    /// section of the params is copied; the genetics section is never rolled back
+    /// (a checkpoint is a save, not an uninstallation of genetic mods).
     ///
     /// ## Returns
-    /// ``(tick, ind_flat, sperm_flat, rng_words, ecology)``.
+    /// A 5-tuple ``(tick, ind_flat, sperm_flat, rng_words, ecology)``.
     fn snapshot_state<'py>(&self, py: Python<'py>) -> PyResult<AgeSnapshot<'py>> {
         let ind_flat = PyArray1::from_slice(py, &self.state_ind);
         let sperm_flat = PyArray1::from_slice(py, &self.state_sperm);
@@ -691,14 +682,13 @@ impl AgeStructuredSession {
         Ok((self.state_tick, ind_flat, sperm_flat, rng_words, ecology))
     }
 
-    /// Restore a memory checkpoint produced by [`AgeStructuredSession::snapshot_state`].    ///
+    /// Restore a memory checkpoint produced by [`AgeStructuredSession::snapshot_state`].
+    ///
     /// Writes the state arrays back in place, rebuilds the RNG from the
     /// captured state words (exact continuation), and restores the ecology
     /// params section.  The genetics section is untouched.
     ///
     /// ## Parameters
-    /// - `individual_count`: Live state array, overwritten.
-    /// - `sperm_storage`: Live sperm array, overwritten.
     /// - `tick`: Tick value carried by the checkpoint.
     /// - `ind_flat`: Checkpoint individual counts.
     /// - `sperm_flat`: Checkpoint sperm storage.
@@ -768,9 +758,8 @@ impl AgeStructuredSession {
     /// uninstallation of genetic mods).
     ///
     /// ## Parameters
-    /// - `individual_count`: Live state array, overwritten.
-    /// - `sperm_storage`: Live sperm array, overwritten.
-    /// - `tick`: The recorded tick to roll back to.
+    /// - `tick`: The recorded tick to roll back to; the newest checkpoint with
+    ///   exactly this tick is restored (no nearest-earlier fallback).
     ///
     /// ## Returns
     /// ``Some((tick, ecology))`` with the restored ecology dict (for the
@@ -909,11 +898,6 @@ impl AgeStructuredSession {
         self.checkpoints.clear();
     }
 
-    /// Drop checkpoints captured after *retain_until_tick*.
-    ///
-    /// Paired with the history truncate after a restore: reruns from the
-    /// restored tick overwrite later ticks, so stale future checkpoints
-    /// must not survive.
     /// Drop checkpoints older than *from_tick* (history eviction pair).
     ///
     /// When the recording plan evicts the oldest history rows, their
@@ -924,6 +908,11 @@ impl AgeStructuredSession {
             .retain(|checkpoint| checkpoint.tick >= from_tick);
     }
 
+    /// Drop checkpoints captured after *retain_until_tick*.
+    ///
+    /// Paired with the history truncate after a restore: reruns from the
+    /// restored tick overwrite later ticks, so stale future checkpoints must not
+    /// survive.
     fn truncate_checkpoints(&mut self, retain_until_tick: i64) {
         // Keep checkpoints at or before the restored tick; a rerun overwrites
         // the later ticks, so their stale checkpoints must not survive.

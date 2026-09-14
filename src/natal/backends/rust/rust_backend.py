@@ -1203,14 +1203,15 @@ class RustHeterogeneousSpatialLifecycleBackend:
         return int(_session_call(self._session.capture_checkpoint))
 
     def restore_from_checkpoint(self, tick: int) -> int | None:
-        """Restore the newest checkpoint at or before *tick*.
+        """Restore the checkpoint recorded at exactly *tick*.
 
         Atomically replaces the owned state, all per-deme RNG streams,
         and the ecology columns, rewinds the tick, and truncates stored
         checkpoints newer than the restored boundary.
 
         Args:
-            tick: Target tick.
+            tick: Target tick; only a checkpoint captured exactly at this
+                tick is restorable (there is no nearest-earlier fallback).
 
         Returns:
             The restored tick, or ``None`` when no checkpoint covers it

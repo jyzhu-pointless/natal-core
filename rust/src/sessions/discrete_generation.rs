@@ -423,22 +423,15 @@ impl DiscreteGenerationSession {
         outcome
     }
 
-    /// Capture a memory checkpoint of everything the session owns.
-    ///
-    /// Discrete populations have no sperm storage; see
-    /// ``AgeStructuredSession.snapshot_state`` for the checkpoint semantics
-    /// (RNG continuation via raw state words, ecology-only param rollback).
-    ///
-    /// ## Parameters
-    /// - `individual_count`: Current discrete state array.
-    /// - `tick`: Current tick value.
-    ///
-    /// ## Returns
-    /// ``(tick, ind_flat, rng_words, ecology)``.
     /// Install a full live state (session-owned state; discrete twin).
     ///
+    /// ## Parameters
+    /// - `ind_flat`: Discrete counts in ``[sex, age, ztype]`` row-major order.
+    /// - `tick`: Tick the pushed state starts at.
+    ///
     /// ## Errors
-    /// Returns ``PyValueError`` when the vector has the wrong length.
+    /// Returns ``PyValueError`` when the vector has the wrong length, holds
+    /// NaN/negative counts, or *tick* is negative.
     #[pyo3(signature = (ind_flat, tick))]
     fn set_state(&mut self, ind_flat: Vec<f64>, tick: i64) -> PyResult<()> {
         // Discrete layout: [sex, age, ztype] with two sexes and two ages
@@ -491,6 +484,14 @@ impl DiscreteGenerationSession {
         self.state_tick
     }
 
+    /// Capture a memory checkpoint of everything the session owns.
+    ///
+    /// Discrete populations have no sperm storage; see
+    /// [`AgeStructuredSession::snapshot_state`] for the checkpoint semantics
+    /// (RNG continuation via raw state words, ecology-only param rollback).
+    ///
+    /// ## Returns
+    /// A 4-tuple ``(tick, ind_flat, rng_words, ecology)``.
     fn snapshot_state<'py>(&self, py: Python<'py>) -> PyResult<DiscreteSnapshot<'py>> {
         let ind_flat = PyArray1::from_slice(py, &self.state_ind);
         // Four raw state words let ``restore_state`` continue the exact stream
@@ -504,7 +505,6 @@ impl DiscreteGenerationSession {
     /// [`DiscreteGenerationSession::snapshot_state`].
     ///
     /// ## Parameters
-    /// - `individual_count`: Live state array, overwritten.
     /// - `tick`: Tick value carried by the checkpoint.
     /// - `ind_flat`: Checkpoint individual counts.
     /// - `rng_words`: Four captured RNG state words.
@@ -692,13 +692,19 @@ impl DiscreteGenerationSession {
         self.checkpoints.clear();
     }
 
-    /// Drop checkpoints captured after *retain_until_tick*.
     /// Drop checkpoints older than *from_tick* (history eviction pair).
+    ///
+    /// When the recording plan evicts the oldest history rows, their checkpoints
+    /// stop being restorable and are dropped with them so the store stays bounded.
     fn retain_checkpoints_from(&mut self, from_tick: i64) {
         self.checkpoints
             .retain(|checkpoint| checkpoint.tick >= from_tick);
     }
 
+    /// Drop checkpoints captured after *retain_until_tick*.
+    ///
+    /// Paired with the history truncate after a restore: reruns from the restored
+    /// tick overwrite later ticks, so stale future checkpoints must not survive.
     fn truncate_checkpoints(&mut self, retain_until_tick: i64) {
         // Keep checkpoints at or before the restored tick; a rerun overwrites
         // the later ticks, so their stale checkpoints must not survive.

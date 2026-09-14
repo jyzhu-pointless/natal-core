@@ -174,12 +174,12 @@ class GridTopology:
     def offset_dist_sq(self, dr: NDArray[np.float64], dc: NDArray[np.float64]) -> NDArray[np.float64]:
         """Squared distance between grid coords offset by ``(dr, dc)``.
 
-        Uses the law of cosines with ``_COS_OPPOSITE_ANGLE``::
+        Uses the law of cosines with ``COS_OPPOSITE_ANGLE``::
 
             dist² = dr² + dc² - 2·dr·dc·cos(θ)
 
         For square grids cos(90°) = 0 → Cartesian distance. Subclasses
-        override the class attribute ``_COS_OPPOSITE_ANGLE`` to change the
+        override the class attribute ``COS_OPPOSITE_ANGLE`` to change the
         metric (e.g. hex grids set cos(120°) = -0.5).
         """
         return dr**2 + dc**2 - 2.0 * self.COS_OPPOSITE_ANGLE * dr * dc

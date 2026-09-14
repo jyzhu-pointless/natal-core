@@ -554,7 +554,11 @@ pub fn migrate_csr_deterministic(
                 // (`stay_after`) sends first and keeps the `count - moved`
                 // residual at the source, conserving total mass even with
                 // non-unit row sums; adjacency mode parks `count - outbound`
-                // first and only then distributes.
+                // first and only then distributes, so a row whose sum differs
+                // from one loses (or creates) `outbound * (1 - sum)`.  Folded
+                // adjacency rows always sum to one, so that asymmetry is only
+                // reachable through a raw hand-built CSR — see the
+                // `test_spatial_slice5_adversarial` pins for the legacy numbers.
                 if stay_after {
                     let mut moved_total = 0.0;
                     for entry in row_start..row_end {
@@ -917,9 +921,11 @@ fn sample_outbound(rng: &mut SessionRng, value: f64, rate: f64, continuous_sampl
 /// Distribute outbound migrants among the CSR destinations of one source row.
 ///
 /// The row weights are normalized before the multinomial samplers see them:
-/// kernel-mode CSR rows may intentionally sum to less than one (boundary
-/// demes keep mass at the source), and the discrete multinomial sampler
-/// assumes a probability vector.
+/// the discrete multinomial sampler needs a probability vector, while a CSR row
+/// need not sum to one.  Builder-folded rows always sum to one — the adjacency
+/// path row-normalizes relative outbound weights and the kernel path
+/// renormalizes over valid neighbors — so this normalization is the identity
+/// for every public build path; it only does work for a raw hand-built CSR.
 ///
 /// ## Returns
 /// The total mass assigned to destinations.

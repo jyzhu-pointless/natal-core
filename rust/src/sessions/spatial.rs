@@ -22,25 +22,11 @@ fn map_lifecycle_error(err: String) -> PyErr {
     crate::hooks::transaction::map_error(err)
 }
 
-/// PyO3 session for heterogeneous spatial multi-deme runs.
-///
-/// Variant bank: one shared blueprint, one columnized
-/// ecology set (per-deme ``EcologyParams`` columns), a bank of shared genetics
-/// [`GeneticsTensors`] variants, and a per-deme variant index.  Blueprint,
-/// ecology columns, and genetics are stored exactly once each — no
-/// per-deme contract clones.
-///
-/// Session ownership: the session also owns the stacked counts, sperm
-/// storage, tick, and one persistent RNG stream per deme (``seed ^ deme``,
-/// advancing across ticks instead of being rebuilt per tick).  ``run_tick``
-/// takes control parameters only; lifecycle then migration consume the
-/// same per-deme streams inside one call.  Python reads state back
-/// through snapshots.
-/// One restorable spatial boundary: the full owned runtime (state, sperm,
-/// every per-deme RNG stream, and the ecology columns) plus its tick.
-/// Captured at record-aligned ticks by the Python adapter; restoring
-/// replaces the whole runtime atomically so `restore -> run` replays the
-/// original stochastic trajectory.
+/// One restorable spatial boundary: the full owned runtime (state, sperm, every
+/// per-deme RNG stream, and the ecology columns) plus its tick.  Captured at
+/// record-aligned ticks by the Python adapter; restoring replaces the whole
+/// runtime atomically so `restore -> run` replays the original stochastic
+/// trajectory.
 pub struct SpatialTickCheckpoint {
     /// Lifecycle status and cursor retained by manual snapshots.
     pub execution: crate::sessions::status::ExecutionStatus,
@@ -57,6 +43,18 @@ pub struct SpatialTickCheckpoint {
     pub ecology: EcologyParams,
 }
 
+/// PyO3 session for heterogeneous spatial multi-deme runs.
+///
+/// Variant bank: one shared blueprint, one columnized ecology set (per-deme
+/// ``EcologyParams`` columns), a bank of shared genetics [`GeneticsTensors`]
+/// variants, and a per-deme variant index.  Blueprint, ecology columns, and
+/// genetics are stored exactly once each — no per-deme contract clones.
+///
+/// Session ownership: the session owns the stacked counts, sperm storage, tick,
+/// and one persistent RNG stream per deme (``seed ^ deme``, advancing across
+/// ticks instead of being rebuilt per tick).  ``run_tick`` takes control
+/// parameters only; lifecycle then migration consume the same per-deme streams
+/// inside one call.  Python reads state back through snapshots.
 #[pyclass(name = "HeterogeneousSpatialEngineSession")]
 pub struct SpatialSession {
     blueprint: Blueprint,
@@ -782,7 +780,7 @@ impl SpatialSession {
         self.state_tick
     }
 
-    /// Restore the newest checkpoint at or before *tick*.
+    /// Restore the checkpoint recorded at exactly *tick*.
     ///
     /// Atomically replaces the owned state, all per-deme RNG streams, and
     /// the ecology columns from the checkpoint, rewinds the tick, and
@@ -790,8 +788,8 @@ impl SpatialSession {
     /// Nothing is changed when no checkpoint covers *tick*.
     ///
     /// ## Parameters
-    /// - `tick`: Target tick; the newest checkpoint with
-    ///   ``checkpoint.tick <= tick`` is restored.
+    /// - `tick`: Target tick; only a checkpoint captured exactly at this tick is
+    ///   restorable (there is no nearest-earlier fallback).
     ///
     /// ## Returns
     /// The restored tick, or ``None`` when no checkpoint covers *tick*

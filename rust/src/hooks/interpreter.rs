@@ -170,9 +170,15 @@ pub struct HookProgram {
     /// arrays, and the copies are written back after the call so hook
     /// state mutations take effect.
     pub python_callbacks: Vec<Vec<Py<PyAny>>>,
-    /// Completed spatial callback candidates awaiting stable deme-order merge.
-    /// Stage cursors from demes stopped or failed during this tick.
+    /// Per-deme stage cursors, pushed when a deme's tick stops or fails.  The
+    /// session drains them and takes the minimum, so a partial batch reports the
+    /// earliest stage any deme reached (an empty queue means the batch
+    /// completed and the cursor resets to 0).
     pub phase_marks: std::sync::Mutex<Vec<usize>>,
+    /// Successful callback candidates awaiting the session's stable deme-order
+    /// merge: ``(deme_id, updated ecology, updated genetics)``.  A later
+    /// candidate for the same deme replaces the earlier one, and the merge
+    /// happens before migration consumes the updated rates.
     pub callback_commits: std::sync::Mutex<
         Vec<(
             usize,

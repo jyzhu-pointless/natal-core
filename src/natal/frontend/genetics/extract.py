@@ -34,9 +34,12 @@ def extract_gamete_frequencies(
     their aggregated frequencies across all glab variants.
 
     Args:
-        zygotes_to_gametes_map: The (n_sexes, n_genotypes, n_hg*n_glabs) array.
+        zygotes_to_gametes_map: The ``(n_sexes, n_ztypes, n_hg*n_glabs)``
+            array, where ``n_ztypes = n_genotypes * n_slabs`` (the two axes
+            coincide only when no somatic slab axis is declared).
         sex_idx: Sex index (0, 1, ...).
-        genotype_idx: Diploid genotype index.
+        genotype_idx: ZType index (diploid genotype x somatic slab) on the
+            map's second axis.
         haploid_genotypes: List of all HaploidGenotype objects (aligned with indices).
         n_glabs: Number of gamete-label variants per haplotype (default: 1).
 
@@ -88,9 +91,11 @@ def extract_gamete_frequencies_by_glab(
     entries for each (haplotype, glab) combination.
 
     Args:
-        zygotes_to_gametes_map: The (n_sexes, n_genotypes, n_hg*n_glabs) array.
+        zygotes_to_gametes_map: The ``(n_sexes, n_ztypes, n_hg*n_glabs)``
+            array, where ``n_ztypes = n_genotypes * n_slabs``.
         sex_idx: Sex index (0, 1, ...).
-        genotype_idx: Diploid genotype index.
+        genotype_idx: ZType index (diploid genotype x somatic slab) on the
+            map's second axis.
         haploid_genotypes: List of all HaploidGenotype objects (aligned with indices).
         n_glabs: Number of gamete-label variants per haplotype (default: 1).
 
@@ -135,15 +140,16 @@ def extract_zygote_frequencies(
     from compressed gamete indices to Genotype objects with their frequencies.
 
     Args:
-        gametes_to_zygotes_map: The (n_hg*n_glabs, n_hg*n_glabs, n_genotypes) array.
+        gametes_to_zygotes_map: The ``(n_hg*n_glabs, n_hg*n_glabs, n_ztypes)``
+            array, where ``n_ztypes = n_genotypes * n_slabs``.
         gamete1_compressed_idx: Compressed index of first gamete (maternal).
         gamete2_compressed_idx: Compressed index of second gamete (paternal).
         diploid_genotypes: List of all Genotype objects (aligned with indices).
         n_glabs: Number of gamete-label variants per haplotype (default: 1).
 
     Returns:
-        Dictionary mapping Genotype -> frequency. Only includes genotypes with
-        non-zero frequency.
+        Dictionary mapping Genotype -> frequency, aggregating the slab entries
+        of one genotype.  Only includes genotypes with non-zero frequency.
 
     Examples:
         >>> config = population._config
