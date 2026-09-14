@@ -331,7 +331,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                             )
                         age = age_raw
                         count = float(raw_count)
-                        if age < self.config.n_ages and count > 0:
+                        # Reject out-of-range ages before indexing: NumPy
+                        # accepts negative indices, so without the lower bound
+                        # an age of -1 would silently land on the last age
+                        # class instead of failing (the sperm branch rejects it).
+                        if age < 0 or age >= self.config.n_ages:
+                            raise ValueError(
+                                f"Age {age} out of range [0, {self.config.n_ages})"
+                            )
+                        if count > 0:
                             self._live_state().individual_count[sex_idx, age, z_idx] = (
                                 count
                             )

@@ -89,6 +89,28 @@
   "boundary demes migrate less because they have fewer neighbors" behavior is
   gone — a boundary deme still sends its full quota, just to fewer neighbors, so
   each one receives a larger share.
+- **`collapse_age=True` observation histories can be read back**.
+  `population_observation_history_to_readable_dict` reshaped every history row
+  with the full age axis, but a collapsed recording writes one value per age
+  class, so the conversion raised `ValueError: cannot reshape array of size 2
+  into shape (1, 2, 2)` for any `n_ages > 1`. The row layout now follows the
+  same collapsed/full distinction the recorder uses.
+- **A negative age key in `initial_state` is rejected instead of silently
+  writing the last age class**. The dict branch of the age-structured initial
+  state tested only `age < n_ages`, and NumPy treats `-1` as the last index, so
+  `{-1: 50.0}` landed on the oldest class while the sperm branch already
+  raised. Both branches now require `0 <= age < n_ages`.
+- **Flattened-state parsing validates its length before slicing**.
+  `parse_flattened_state` and `parse_flattened_discrete_state` accepted any
+  1-D buffer and surfaced a truncated or oversized input as a NumPy reshape
+  error (and an empty one as `IndexError`). The declared size is now checked
+  first, so a malformed buffer fails with the expected and actual lengths.
+- **`scripts/perf_freeze.py` runs to completion again**. Its scenario guards
+  asked a `DemeSlice` for a `tick` attribute it does not expose, so the script
+  aborted on the second scenario and the "frozen" performance gate protected
+  nothing. The guard now checks the session tick, and a baseline recorded by a
+  different extension build reports a warning and defers instead of raising a
+  false blocking regression.
 
 ### Documentation
 

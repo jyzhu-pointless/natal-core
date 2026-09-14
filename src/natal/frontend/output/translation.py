@@ -684,9 +684,11 @@ def population_observation_history_to_readable_dict(
     for idx in range(int(history_array.shape[0])):
         row = history_array[idx, :]
         tick = int(row[0])
-        # Reshape assumes a single deme and the full age axis; a collapsed age
-        # axis produces a shorter row that does not fit this layout.
-        observed = row[1:].reshape(n_groups, n_sexes, n_ages)
+        # A collapsed age axis drops that dimension from the row layout, so the
+        # row is shorter than the full-age form.  Reshaping without it raised
+        # for collapse_age=True observations.
+        age_shape = () if obs.collapse_age else (n_ages,)
+        observed = row[1:].reshape(n_groups, n_sexes, *age_shape)
         snapshots.append({
             "tick": tick,
             "state_type": type(state).__name__,

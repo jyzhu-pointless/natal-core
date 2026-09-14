@@ -233,6 +233,37 @@ class DiscretePopulationState(NamedTuple):
         return np.concatenate((tick_arr, self.individual_count.flatten()))
 
 
+def _validate_flat_length(
+    flat_array: NDArray[np.float64],
+    expected: int,
+    *,
+    label: str,
+) -> None:
+    """Reject a flattened state whose length cannot hold the declared layout.
+
+    Checked before any slicing so a truncated or oversized buffer fails with a
+    named length instead of a NumPy reshape error raised somewhere inside the
+    parse.
+
+    Args:
+        flat_array: Candidate flattened state.
+        expected: Exact number of values the layout requires.
+        label: Layout name used in the error message.
+
+    Raises:
+        ValueError: If the array is not 1-D or does not hold exactly
+            *expected* values.
+    """
+    array = np.asarray(flat_array)
+    if array.ndim != 1:
+        raise ValueError(f"{label} must be 1-D, got shape {array.shape}")
+    if array.size != expected:
+        raise ValueError(
+            f"{label} must hold {expected} values "
+            f"(tick plus the declared state), got {array.size}"
+        )
+
+
 def parse_flattened_state(
     flat_array: NDArray[np.float64],
     n_sexes: Union[int, np.integer],
@@ -253,8 +284,18 @@ def parse_flattened_state(
 
     Returns:
         A PopulationState instance.
+
+    Raises:
+        ValueError: If *flat_array* is not 1-D or its length does not match
+            ``1 + n_sexes*n_ages*n_ztypes + n_ages*n_ztypes**2``.
     """
     # Fixed layout [tick | counts | sperm]; end marks the sperm block's start offset.
+    _validate_flat_length(
+        flat_array,
+        1 + int(n_sexes) * int(n_ages) * int(n_ztypes)
+        + int(n_ages) * int(n_ztypes) * int(n_ztypes),
+        label="flattened state",
+    )
     n_tick = int(flat_array[0])
     end = 1 + n_sexes * n_ages * n_ztypes
     individual_count = flat_array[1:end].reshape((n_sexes, n_ages, n_ztypes))
@@ -293,8 +334,17 @@ def parse_flattened_discrete_state(
 
     Returns:
         A DiscretePopulationState instance.
+
+    Raises:
+        ValueError: If *flat_array* is not 1-D or its length does not match
+            ``1 + n_sexes*n_ages*n_ztypes``.
     """
     # Same fixed layout minus the sperm block: tick then the counts.
+    _validate_flat_length(
+        flat_array,
+        1 + int(n_sexes) * int(n_ages) * int(n_ztypes),
+        label="flattened discrete state",
+    )
     n_tick = int(flat_array[0])
     individual_count = flat_array[1:].reshape((n_sexes, n_ages, n_ztypes))
 
