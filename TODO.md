@@ -232,11 +232,12 @@
 - `.venv/bin/python -m pytest -q tests/test_discrete_generation_sex_chromosome_mendelian.py tests/test_wright_fisher.py` → **7 passed**；现有覆盖没有阻止该差异。仅主 agent 调查与复现，未修改实现、未运行完整门禁或独立审查。
 
 > [!NOTE] 历史标注
-> 本文件中所有与 numba 相关的条目（`numba`、`njit_switch`、`NUMBA_ENABLED`、
-> `enable_numba()/disable_numba()`、`.numba_cache`、`NATAL_DISABLE_NUMBA`、
-> `@pytest.mark.numba_off/on` 等）在 ⑥（numba 全拆）完成时已全部过时：
-> 对应机制已移除，相关 backlog 项（#15、#22、#23 等）不再适用。以下保留原文
-> 仅作为历史记录，请不要据此继续实现。
+> 与 numba 相关的 backlog 条目（`.numba_cache`、`NUMBA_ENABLED`、
+> `enable_numba()/disable_numba()`、`@pytest.mark.numba_off/on` 等）在 ⑥（numba
+> 全拆）完成后已全部过时，相关机制已从仓库移除。原 #15（`.numba_cache` 旧 import）、
+> #22（Numba JIT 缓存导致测试排序依赖）、#23（后端选择与测试缓存隔离）三节已删除：
+> 它们描述的 Numba 运行时、缓存目录与后端 seam 都不再存在，保留只会让维护者据此
+> 继续实现。
 
 
 > 最后审计：2026-08-15。已完成事项迁入本地 `TODO.legacy.md`；本文件只保留未完成或部分完成的工作。
@@ -287,11 +288,11 @@ natal-core 不为此保留 `record_observation` shim；两个项目尚未发布�
 
 未来如果允许 Hook 触发记录，必须先解决：
 
-- Hook 运行在 Numba / Python 双路径中，不能直接调用 Python Population 方法。
+- Hook 运行在 Rust session 内，不能直接调用 Python Population 方法。
 - `first`、`early`、`late` 对应不同生命周期阶段，单独使用 tick 无法唯一标识记录。
 - `early` 状态已完成繁殖但尚未完成存活和年龄推进；`late` 状态尚未完成年龄推进。这些状态不是普通 checkpoint，不能从标准 tick 入口恢复。
 - 空间模型还必须明确记录发生在 per-deme 生命周期、全局迁移之前还是之后，并保证跨 deme 一致性。
-- 可能需要 `(tick, phase, occurrence)` 身份、预分配 Numba buffer 和独立的 trace schema。
+- 可能需要 `(tick, phase, occurrence)` 身份、预分配的记录缓冲区和独立的 trace schema。
 - “记录规则”应编译成引擎可执行的信号或条件程序，而不是让 Hook 修改 History 容器。
 
 设计时应优先判断它是否应成为独立的 Trace / Event Record 系统，而不是继续扩张可恢复 History。
@@ -401,17 +402,11 @@ benchmark 或门禁范围。后续只有在 cluster 调度实现准备纳入仓�
 
 ## 🟡 中优先级 — 性能 / 可维护性
 
-### #3 📋 Observation 录制逻辑在模板和 Python 路径中重复
+### #3 ✅ DONE — Observation 录制逻辑重复（已随 Rust-only 重构消失）
 
-**此分支改动**：无。仅在本 TODO 中新增记录为遗留项，零提交触及 observation 录制逻辑。`observation_record.py` 及其辅助函数（`build_observation_row_panmictic`、`build_observation_row_spatial`）与此分支前状态一致。
-
-**优先级理由**：🟡 三条路径（Numba 内核模板、Python dispatch 回退、后处理）的录制逻辑手工重复，一处改漏可能导致数据不一致。虽非紧急正确性 bug，但随着 v0.2.0 发布后用户增多，维护风险上升。
-
-- `RUN_FN_NAME`（4 个模板）中手工构造 `flat_state` + `observation_mask` 聚合 → Numba 内核路径
-- `_run_python_dispatch`（2 个模型）中调用 `create_history_snapshot()` → Python 回退路径
-- `_process_kernel_history` 中将内核 raw array 转为 History 对象 → 后处理
-- 三种路径的 flatten 格式因生命周期类型不同（discrete / structured / spatial compact），但录制时机和条件判断逻辑相同
-- 改善方向：将 `flatten_size` 计算和 `flat_state` 填充抽成 `@njit` 辅助函数，按生命周期类型参数化
+**结论**：本条描述的"三条路径"（Numba 内核模板 / Python dispatch 回退 / 后处理）与
+`observation_record.py`、`RUN_FN_NAME`、`_run_python_dispatch`、`_process_kernel_history`
+均已不存在；现在只有 Rust engine 一条录制路径，重复源已消失。
 
 ### #4 ⚠️ Zygote modifier 矩阵化与稀疏表示
 
@@ -528,10 +523,6 @@ modifier 则是不透明 callable。不同 preset 修改同一行时，目前也
 `docs/{zh,en}/spatial_builder.md` 与 `spatial_configurator.md` 共 8 处
 `hook_executor` 字段说明，与当前运行时结构不一致。
 
-### #15 📋 `.numba_cache/` 缓存模块包含旧 import 路径
-
-`git clean -fdx .numba_cache/` 可解决。缓存模块是运行时生成/覆盖的，不会导致失败，但存在误导性。
-
 ### #16 📋 spatial `deme_id` 合并+过滤机制未在文档中说明
 
 当前文档（`spatial_lifecycle_wrapper.md`、`3_advanced_hooks.md`）描述了 `_collect_effective_compiled_hooks()`（"收集所有 deme 的 hook"）和 Hook 签名接受 `deme_id` 参数，但**未解释两者的因果关系**：
@@ -540,100 +531,15 @@ modifier 则是不透明 callable。不同 preset 修改同一行时，目前也
 - **文档给人的印象**：每个 deme 独立运行自己的 hook 列表，`deme_id` 只是个"我是几号"的上下文。
 - **待补充**：在 `spatial_lifecycle_wrapper.md` 的编译阶段添加一段解释合并+过滤的设计动机（编译一次 vs 编译 N 次）。
 
----
-
-### #22 ⚠️ Numba JIT 缓存冲突导致空间测试排序依赖
-
-**来源**：`feat/ztype-registry` 分支测试调试。`test_discrete_population.py` 先于 `test_spatial_builder_coverage.py` 运行时，空间测试中 30 个离散世代构建场景因 Numba JIT 缓存冲突失败：
-
-```
-RuntimeError: In 'NRT_adapt_ndarray_to_python', 'descr' is NULL
-```
-
-发生在 `run_discrete_survival()` 尝试从 `individual_count` 返回数组时——Numba 的 NRT（Numba Runtime）内部 dtype descriptor 损坏。根本原因：`test_discrete_population` 首先编译 `run_discrete_reproduction`/`run_discrete_survival` Numba 函数，使用更大的 `n_ztypes` 值（3 基因型 × 1 slab = 3）。后续 `test_spatial_builder_coverage` 的某些测试使用不同的 `n_ztypes` 值，Numba 尝试复用缓存的编译产物，但不同的数组形状导致 dtype descriptor 指针误对齐。空间测试单独运行时全部 69 个通过；先于离散测试运行时通过。
-
-**当前措施**：`tests/conftest.py` 将空间构建器测试重新排序到 pytest 收集顺序的前面（第一个运行）。这避免了冲突，但并未解决根本的 Numba 缓存问题。
-
-**优先级理由**：🟡 非生产 bug——仅影响测试套件排序。当前解决方法可行。若要正确修复，需要将 spatial builder 测试中使用的 `n_ztypes` 大小与其他离散世代测试对齐，或调查 Numba 的跨测试缓存失效问题。
-
-**受影响范围**：
-- `tests/test_spatial_builder_coverage.py`：69 个测试中 30 个受影响
-- 触发条件：`test_discrete_population.py`（18 个测试，`n_ztypes=3`）在 `test_spatial_builder_coverage.py`（用 `n_ztypes=1` 的测试）之前运行
-- 非确定性：同一个提交可能通过或失败，取决于 pytest 的收集顺序
-- `main` 分支同样受影响（`143af2c`）：仅因测试文件更少而以有利的收集顺序通过
-
-### #23 ⚠️ 统一 Numba / Python 后端选择与测试缓存隔离
-
-**来源**：`refactor/history-observation` 分支调试。单独运行
-`TestMigrationKernelBank::test_kernel_bank_build_and_run` 时，默认
-`.numba_cache` 会让 Python 进程在 `_run_python_dispatch_tick()` 调用
-`run_spatial_migration()` 时直接以 `SIGABRT`（exit code 134）退出；代码不变，
-仅将 `NUMBA_CACHE_DIR` 指向全新临时目录后测试通过。
-
-**根因与设计问题**：
-
-- Numba 文件缓存不能识别被调用函数在其他文件中的变化，也会保留编译时读取的
-  全局常量；NATAL 的 lifecycle、migration、NamedTuple config 和 codegen 跨多个
-  文件组合，单个源文件时间戳不足以表达真实缓存 ABI。
-- `@njit_switch` 在模块导入时决定返回原始函数还是 `CPUDispatcher`；
-  `numba_disabled()` 只在运行时切换 `NUMBA_ENABLED`，无法把已经导入的
-  `CPUDispatcher` 还原成 Python 函数。因此 `with numba_disabled():` 不保证真正
-  走纯 Python fallback。
-- 测试目前混用四套控制方式：`numba_disabled()` 上下文、
-  `@pytest.mark.numba_off/on`、直接 `enable_numba()/disable_numba()`，以及
-  `NATAL_DISABLE_NUMBA=1` 的独立 pytest 进程。其语义和状态恢复规则不同。
-- `tests/conftest.py` 通过调整测试收集顺序规避缓存冲突，只是 workaround，无法
-  阻止单测、并行 worker、分支切换或 dirty worktree 命中不兼容的 native 缓存。
-
-**近期统一方案（优先实施）**：
-
-1. 后端只允许在进程启动、导入 `natal` 之前选择，统一为
-   `NATAL_BACKEND=python|numba`；Python 模式同时设置官方
-   `NUMBA_DISABLE_JIT=1`，不再把运行时 context manager 当作集成测试后端开关。
-2. 提供单一测试入口（例如 `scripts/test_backend.py`），分别启动 Python 与 Numba
-   两个 pytest 子进程；调用者不再手工组合 marker 和环境变量。
-3. marker 统一为 `python_backend`、`numba_backend`、`backend_parity`。Parity 测试
-   在两个独立进程分别对同一份独立数学期望断言，不在同一进程内切换后端。
-4. 测试运行使用独立缓存：
-   `/tmp/natal-core-tests/<run-id>/<backend>/<worker-id>`。不得读取或写入开发环境的
-   `.numba_cache`；隔离完成后删除 `tests/conftest.py` 的测试排序 workaround。
-5. 禁止集成测试直接调用 `enable_numba()` / `disable_numba()` 或使用
-   `numba_disabled()`；后者只保留给 `njit_switch` 自身的窄单元测试，并修正文档，
-   明确它只能影响后续装饰/分派选择。
-
-**持久缓存修复**：
-
-- 用户运行时仍可使用持久缓存，但目录必须按 Python cache tag、Numba/NumPy
-  版本、CPU 架构、显式 `NATAL_NUMBA_CACHE_ABI_VERSION` 和相关源文件内容 hash
-  分 namespace。
-- 必须 hash 实际文件内容，不能只使用 Git commit；否则 dirty worktree 的 ABI
-  变化无法触发新缓存。
-- fingerprint 变化时直接使用新目录，不尝试原地修复或探测旧 `.nbc`。native
-  缓存错误可能直接 abort/segfault，Python 层没有可靠的恢复机会。
-
-**长期后端 seam**：
-
-建立进程启动后冻结的 `ExecutionBackend`，由 `PythonBackend` 与 `NumbaBackend`
-两个 adapter 统一提供 lifecycle、steps 和 spatial migration 接口。Population 只
-依赖这个 seam；`njit_switch` 与缓存管理退回后端模块内部。完成该 seam 前，不应
-承诺支持导入后的运行时后端切换。
-
-**验收标准**：
-
-- 相同测试按任意顺序运行均不再触发 NRT 错误、SIGABRT 或 segfault。
-- Python backend 进程中的 `@njit` / `@njit_switch` 调用均进入原始 Python 函数。
-- Numba 与 Python parity 测试在独立进程中逐元素满足同一数值不变量。
-- pytest-xdist worker 和连续两次本地测试不共享可写缓存目录。
-- 删除测试排序 workaround 与集成测试中的运行时后端切换后，完整双后端门禁通过。
-
-
 ## 🟢 低优先级 — UX / 远期功能
 
-### #12 📋 Spatial migration kernel 边界效应优化
+### #12 ✅ DONE — Spatial migration kernel 边界效应（由 D3′/D4 定案）
 
-**优先级理由**：🟢 功能优化，不涉及正确性。基础的 `apply_migration_adjacency`、`build_gaussian_kernel` 等已在 `spatial_topology.py` 中可用。
-
-- 优化 migration kernel，处理边界效应（总迁移率不应不变，而应正比于邻居数量；或可不用总迁移率设置，尝试全部设为 1；需要一个优雅的方法）
+**结论**：本条原先设想"总迁出量正比于邻居数"。该行为正是默认拓扑邻接行和 = 度数所
+导致的**凭空造质量**，已在 D3′/D4 修复中废止：builder 把邻接行归一化为相对迁出权重，
+每个 deme 都送出完整的 `migration_rate` 配额，边界 deme 只是把配额分给更少的邻居、
+每个邻居份额更大。需要"少迁移"时用 `migration_rate`，不要再缩小邻接行。
+详见 `CHANGELOG.md` 的 Breaking Changes 与 `docs/{en,zh}/3_spatial_simulation.md`。
 
 ### #13 📋 K 值自动推导路径测试
 
@@ -712,38 +618,15 @@ RuntimeError: In 'NRT_adapt_ndarray_to_python', 'descr' is NULL
 | `genetic_presets.py` | 新增 `PointMutation` 类（~110 行），`__all__` 添加导出 |
 | `test_genetic_presets.py` | 添加单 target / 多 target / 校正公式 / Σr>1 边界测试 |
 
-**不改**：`GameteConversionRuleSet`、`GameteAlleleConversionRule`、`modifiers.py`、任何 Numba 内核。
+**不改**：`GameteConversionRuleSet`、`GameteAlleleConversionRule`、`modifiers.py`、任何 Rust 内核。
 
-### #17 ⚠️ `PopulationConfig._replace()` 导致 0-d ndarray 退化为 Python scalar（3 个测试失败）
+### #17 ✅ DONE — `PopulationConfig._replace()` 的 0-d ndarray 退化（已随引擎重构消失）
 
-**来源**：`NATAL_DISABLE_NUMBA=1 pytest` 发现（2026-06-20）。`test_spatial_population_integration.py` 中 3 个 `@pytest.mark.numba_off` 测试失败。
-
-**根因**：
-
-```python
-# test_spatial_population_integration.py:258
-cfg1 = demes[1].export_config()._replace(low_density_growth_rate=1.7)
-```
-
-`PopulationConfig` 的 `low_density_growth_rate` 字段是 **0-d ndarray**（`np.array(1.0)`），但 `namedtuple._replace(1.7)` 用 Python float 替换了它。随后 `age_structured_simulator.py:289`：
-
-```python
-config.low_density_growth_rate[()]  # 0-d indexing → float[()] → TypeError
-```
-
-**为什么 Numba 路径不出错**：Numba JIT 在编译时已将 config 字段类型固定为 0-d ndarray，运行时可能隐式包装。确切原因待验证。
-
-**修复方向**（三选一）：
-- A) 测试端：`_replace(low_density_growth_rate=np.array(1.7))`
-- B) `import_config()` 内自动包装 scalar → 0-d ndarray
-- C) `age_structured_simulator.py` 的 `[()]` 索引前加 `np.asarray()` 防护
-
-**影响的测试**：
-- `test_spatial_population_run_tick_supports_heterogeneous_deme_configs`
-- `test_spatial_population_heterogeneous_configs_use_python_hook_dispatch`
-- `test_spatial_population_heterogeneous_configs_run_uses_hook_dispatch_each_step`
-
----
+**结论**：本条定位在 `age_structured_simulator.py`（已删除）的 0-d 索引路径上，触发手段
+是 `NATAL_DISABLE_NUMBA=1` 与 `@pytest.mark.numba_off`（均已不存在）。当前配置走 Rust
+engine 的 Rust 侧类型，Python 侧不再有 `[()]` 索引路径，原缺陷与三个测试均不存在。
+遗留的通用约定：`import_config` 仍应拒绝用 Python scalar 替换 0-d ndarray 字段，若将来
+出现同类输入请在此重开条目。
 
 ## v0.3.0 及远期更新
 
@@ -769,7 +652,10 @@ Somatic Label、扁平 ZType/GType 索引、slab-aware fitness/hook/observation�
 
 **优先级理由**：🟡 性能工程。4 个纳入 v0.3.0，2 个推迟。均为纯优化，不改行为。
 
-**已完成**：offspring tensor 已由 `@njit_switch` 的
+> 注：本条写于 Python/Numba 引擎时期，下表 #B–#E 的难度、收益与行数评估针对当时的
+> 实现；Rust engine 接管后这些优化点需要重新评估，不要直接按表中的数字排期。
+
+**已完成**：offspring tensor 由 Rust 侧的
 `compute_offspring_probability_tensor()` 计算，且避免构造 O(G²·HL²) 中间数组。
 
 **仍待评估的优化**：
