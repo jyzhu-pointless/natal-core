@@ -47,7 +47,13 @@ def _build_window_population(name: str, seed: int) -> nt.DiscreteGenerationPopul
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=10.0, sex_ratio=0.5)
-        .competition(carrying_capacity=1e12, low_density_growth_rate=2.0)
+        # Explicit no-competition: this test pins the Poisson lambda window,
+        # not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=1e12,
+            low_density_growth_rate=2.0,
+        )
         .build()
     )._initialize_session(seed=seed)
 

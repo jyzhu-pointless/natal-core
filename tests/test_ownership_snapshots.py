@@ -71,7 +71,13 @@ def _build_discrete(
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        # Explicit no-competition: these snapshot tests pin the steady-state
+        # census, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=100000.0,
+            low_density_growth_rate=2.0,
+        )
     )
     for items, kwargs in hook_calls or []:
         builder = builder.hooks(*items, **kwargs)
@@ -315,7 +321,11 @@ def _build_discrete_raw(name: str) -> nt.DiscreteGenerationPopulation:
         .initial_state(individual_count={"female": {"WT|WT": 10}, "male": {"WT|WT": 10}})
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=100000.0,
+            low_density_growth_rate=2.0,
+        )
         .record_history(mode="raw")
         .build()
     )

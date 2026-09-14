@@ -176,7 +176,7 @@ NATAL Core 提供两种主要的种群类型：
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
 | `competition_strength` | `float` | 老幼体（age=1）的相对竞争因子。 | `5.0` | 幼体密度调节 | 竞争权重按年龄区分：age=0 固定为 `1.0`，age=1 使用 `competition_strength`。 |
-| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 支持 `"logistic"`、`"beverton_holt"`、`"ricker"` 等模式，通常使用 `"logistic"`。 |
+| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"beverton_holt"` | 幼体密度调节 | 支持 `"no_competition"`、`"fixed"`、`"logistic"`（别名 `"linear"`）、`"beverton_holt"`（默认）、`"ricker"`。 |
 
 **密度调节曲线**（`x` = 实际竞争强度 / 期望竞争强度；`s` = 平衡存活率；`r` = 低密度增长率）：
 
@@ -446,8 +446,8 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 常用 `"logistic"`，也可以使用 `"beverton_holt"` 等其他模式。 |
-| `low_density_growth_rate` | `float` | 低密度下的内禀增长倍数。 | `1.0` | 幼体密度调节 | 表示无竞争条件下的增长倍数；取值过大容易导致振荡。 |
+| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"beverton_holt"` | 幼体密度调节 | 默认 `"beverton_holt"`；也可显式使用 `"logistic"`、`"ricker"` 等其他模式。 |
+| `low_density_growth_rate` | `float` | 低密度下的内禀增长倍数。 | `6.0` | 幼体密度调节 | 表示无竞争条件下的增长倍数；取值过大容易导致振荡。 |
 | `carrying_capacity` | `Optional[int]` | 幼体的承载容量。 | `None` | 密度上限 | 如果未设置，系统会尝试自动推导；显式指定的值优先级最高。 |
 
 ### `presets(...)` / `fitness(...)` / `modifiers(...)` / `hooks(...)` / `build()`

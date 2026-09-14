@@ -734,7 +734,13 @@ def _discrete_with_hook(
         )
         .survival(female_age0_survival=0.9, male_age0_survival=0.9)
         .reproduction(eggs_per_female=6, sex_ratio=0.5)
-        .competition(carrying_capacity=100.0, low_density_growth_rate=2.0)
+        # Explicit no-competition: this fixture pins the deferred RNG/census
+        # flush, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=100.0,
+            low_density_growth_rate=2.0,
+        )
     )
     return chain.hooks(hook).build()
 

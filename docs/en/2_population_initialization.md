@@ -179,7 +179,7 @@ Competition parameters take effect during the survival phase of the population.
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
 | `competition_strength` | `float` | Relative competition factor for old juveniles (age=1) | `5.0` | Juvenile density regulation | Competition weights vary by age: age=0 fixed at `1.0`, age=1 uses `competition_strength` |
-| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"logistic"` | Juvenile density regulation | Supports `"logistic"`, `"beverton_holt"`, `"ricker"`, etc.; usually `"logistic"` |
+| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"beverton_holt"` | Juvenile density regulation | Supports `"no_competition"`, `"fixed"`, `"logistic"` (alias `"linear"`), `"beverton_holt"` (default) and `"ricker"` |
 
 **Density-regulation curves** (`x` = actual competition strength / expected competition strength; `s` = expected survival; `r` = low-density growth rate):
 
@@ -451,8 +451,8 @@ Modeling advice:
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"logistic"` | Juvenile density regulation | Commonly `"logistic"`, also supports `"beverton_holt"` and other modes |
-| `low_density_growth_rate` | `float` | Intrinsic growth multiplier at low density | `1.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
+| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"beverton_holt"` | Juvenile density regulation | Defaults to `"beverton_holt"`; `"logistic"`, `"ricker"` and the other modes stay available |
+| `low_density_growth_rate` | `float` | Intrinsic growth multiplier at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
 | `carrying_capacity` | `Optional[int]` | Carrying capacity for juveniles | `None` | Density upper limit | If not set, the system will attempt automatic derivation; explicitly specified values take highest priority |
 
 ### `presets(...)` / `fitness(...)` / `modifiers(...)` / `hooks(...)` / `build()`

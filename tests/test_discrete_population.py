@@ -30,7 +30,13 @@ def _minimal_pop(sp, *, pop_name: str = "DiscPop", stochastic: bool = False):
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=10)
-        .competition(low_density_growth_rate=2.0, carrying_capacity=2000)
+        # Explicit no-competition: these tests pin the linear census
+        # trajectory, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            low_density_growth_rate=2.0,
+            carrying_capacity=2000,
+        )
         .build()
     )
 
@@ -471,7 +477,13 @@ class TestHomingDriveIntegration:
                 })
                 .survival(female_age0_survival=1.0, male_age0_survival=1.0)
                 .reproduction(eggs_per_female=10)
-                .competition(low_density_growth_rate=2.0, carrying_capacity=2000)
+                # Explicit no-competition: this test pins the drive-conversion
+                # trajectory, not the regulation curve.
+                .competition(
+                    growth_mode="no_competition",
+                    low_density_growth_rate=2.0,
+                    carrying_capacity=2000,
+                )
                 .presets(drive)
                 .build()
             )

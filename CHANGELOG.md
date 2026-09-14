@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Breaking Changes
+
+- **Every engine now defaults to Beverton-Holt density regulation**. Omitting
+  `growth_mode` / `juvenile_growth_mode` used to select `NO_COMPETITION` for
+  discrete-generation populations (unbounded growth), `LOGISTIC` for
+  age-structured ones and `LOGISTIC` for spatial discrete ones. All three entry
+  points now default to `BEVERTON_HOLT`. Any model that never set the knob
+  changes behaviour: discrete models stop growing without bound and converge to
+  the carrying capacity, and age-structured models that oscillated under the
+  logistic curve now settle. Set `growth_mode="no_competition"` (or
+  `"logistic"`) explicitly to keep the previous curve — the modes themselves are
+  unchanged. `BEVERTON_HOLT` is `g(x) = r / (1 + (r - 1) x)`: positive for every
+  finite `x`, and `|g'(1)| < 1` for `r > 1`.
+
 ### Documentation
 
 - **Stale root-level plan documents removed**: `lifecycle-tick-unification-design.md`

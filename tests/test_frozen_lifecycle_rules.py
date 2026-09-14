@@ -38,7 +38,13 @@ def _builder(name: str) -> nt.PopulationBuilder:
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        # Explicit no-competition: these lifecycle tests pin the restore /
+        # resume bookkeeping, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=100000.0,
+            low_density_growth_rate=2.0,
+        )
     )
 
 

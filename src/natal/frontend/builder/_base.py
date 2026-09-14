@@ -944,6 +944,7 @@ class PopulationBuilder:
             growth_mode: Regulation function (string or int):
                 ``no_competition``/``fixed``/``linear`` (``logistic``
                 alias)/``beverton_holt``/``ricker`` or the integer.
+                Defaults to ``beverton_holt`` when omitted.
             competition_strength: Larval competition weight.
             expected_num_new_adult_females: Target adult females
                 (Champer model); derived egg override is computed and

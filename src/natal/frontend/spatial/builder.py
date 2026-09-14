@@ -977,7 +977,7 @@ class SpatialPopulationBuilder:
         self,
         # Age-structured params
         competition_strength: float = 5.0,
-        juvenile_growth_mode: Union[int, str, BatchSetting[Any]] = "logistic",
+        juvenile_growth_mode: Union[int, str, BatchSetting[Any]] = "beverton_holt",
         low_density_growth_rate: Union[float, BatchSetting[Any]] = 6.0,
         age_1_carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
         old_juvenile_carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
