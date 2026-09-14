@@ -448,7 +448,9 @@ fn scaling_factor(bp: &Blueprint, eco: &EcologyParams, deme: usize, ind: &[f64])
     // identical growth-mode semantics to the age-structured engine.
     let g = bp.n_ztypes;
     // Only age-0 juveniles compete in the discrete model, so the actual
-    // competition strength is just the total age-0 count (both sexes).
+    // competition strength is just the total age-0 count (both sexes).  The
+    // per-genotype ``(female + male)`` order matches the retired reference; a
+    // grouped sum would differ by at most 1 ulp on the fractional path.
     let total_age_0: f64 = (0..g)
         .map(|z| ind[idx(0, 0, z, g)] + ind[idx(1, 0, z, g)])
         .sum();
@@ -500,6 +502,16 @@ fn recruit_juveniles(rng: &mut SessionRng, bp: &Blueprint, ind: &mut [f64], scal
     let stochastic = bp.stochastic;
     let continuous = bp.continuous_sampling;
     let mut combined = Vec::with_capacity(2 * g);
+    // Accumulation note: the age-structured twin keeps two sums — the grouped
+    // ``female_sum + male_sum`` for ``desired`` and the sequential
+    // ``total_counts`` for the probability normalizer — because the retired
+    // Python reference did and the two round differently in the last ulp.
+    // This discrete version uses one sequential sum for both.  The sums are
+    // exact and equal whenever integer sampling rounds each value first; only
+    // the fractional path (continuous sampling, or deterministic scaling) can
+    // differ, and then by at most 1 ulp of ``desired``.  Accepted deliberately
+    // rather than carrying a second accumulator that the reference's discrete
+    // counterpart never had.
     let mut total = 0.0;
     for sex in 0..2 {
         for z in 0..g {
