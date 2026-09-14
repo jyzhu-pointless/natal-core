@@ -123,8 +123,10 @@
   `value - moved_total` residual. Both modes now use the kernel order, so the
   destination distribution is unchanged but the source keeps whatever was not
   delivered. Builder-folded rows are normalized to one, so models built through
-  the public API are numerically unchanged (the `phase0` spatial baseline stays
-  bit-identical); this only alters hand-built CSR input. `stay_after_send`
+  the public API are unchanged apart from last-ulp rounding of the source
+  residual (`value - outbound` vs `value - Σ outbound·wᵢ`); the `phase0` spatial
+  baseline stays bit-identical. The mass change itself only affects hand-built
+  CSR input. `stay_after_send`
   remains on the CSR for the frozen wire contract but no longer changes the
   numbers, and the retired "adjacency math reproduces the legacy Python order
   bitwise" claim is gone.

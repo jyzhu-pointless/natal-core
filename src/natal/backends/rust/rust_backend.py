@@ -956,8 +956,10 @@ class RustHeterogeneousSpatialLifecycleBackend:
             tick: The authoritative starting tick.
             model: ``"age_structured"`` or ``"discrete_generation"`` —
                 which lifecycle the per-deme kernel runs.
-            stay_after_send: Deterministic-migration bookkeeping order
-                mirrored from the frozen migration CSR.
+            stay_after_send: Historical migration bookkeeping flag mirrored
+                from the frozen migration CSR.  It records which mode folded
+                the CSR but no longer changes the numbers (the deterministic
+                kernel uses one order for both).
             hook_program: Optional shared declarative CSR hook program.
             seed: Base seed; deme *d* uses ``seed ^ d`` for its persistent
                 stream.
@@ -1508,8 +1510,9 @@ def rust_migrate_csr_deterministic(
         dest_idx: CSR destination index per entry.
         weights: CSR normalized outbound weight per entry.
         rate: ``(n_demes, 2, n_ages)`` migration-rate column (flat float64).
-        stay_after: Deterministic bookkeeping order (kernel mode uses
-            ``True``).
+        stay_after: Historical bookkeeping flag retained for the wire
+            contract (``True`` when kernel mode folded the CSR).  It no
+            longer changes the numbers.
 
     Returns:
         ``(individual_count_all, sperm_storage_all)`` after migration.

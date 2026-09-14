@@ -240,7 +240,9 @@ impl SpatialSession {
     /// - `sperm_storage_all`: Stacked initial sperm
     ///   ``(n_demes, n_ages, n_ztypes, n_ztypes)``.
     /// - `tick`: The authoritative starting tick.
-    /// - `stay_after_send`: Deterministic-migration bookkeeping order.
+    /// - `stay_after_send`: Historical migration bookkeeping flag (``True``
+    ///   when kernel mode folded the CSR); retained for the wire contract but
+    ///   no longer changes the deterministic numbers.
     /// - `seed`: Base RNG seed; deme *d* streams from ``seed ^ d``.
     ///
     /// ## Returns

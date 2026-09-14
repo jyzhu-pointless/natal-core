@@ -290,12 +290,12 @@ def _reconstruct_kernel_rows(
 
 
 # ---------------------------------------------------------------------------
-# 1. CSR fold equivalence (bitwise, both bookkeeping orders)
+# 1. CSR fold equivalence (bitwise, single unified bookkeeping order)
 # ---------------------------------------------------------------------------
 
 
 class TestAdjacencyFoldEquivalence:
-    """Adjacency mode: stay-first order, raw weights, no renormalization."""
+    """Adjacency mode: raw weights, no renormalization, unified order."""
 
     def test_engine_bitwise_matches_manual_dense_application(self) -> None:
         """Topology adjacency + varied rate column == manual application, bit-for-bit."""
