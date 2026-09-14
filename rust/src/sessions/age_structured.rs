@@ -89,10 +89,17 @@ impl AgeStructuredSession {
     /// Execute an explicit event on the same native state and RNG stream.
     #[pyo3(signature = (event, deme_id=0))]
     fn trigger_event(&mut self, event: usize, deme_id: i64) -> PyResult<i32> {
+        // Event ids index the four fixed hook slots (first/early/late/finish);
+        // reject unknown ids before touching any session state.
         if event >= 4 {
             return Err(PyValueError::new_err("unknown hook event"));
         }
+        // Live ECO scratch for set_param: hooks write scalars here and
+        // ``commit`` folds them into the single panmictic ecology column.
         let mut values = self.params.eco_values_row(0);
+        // The phase cursor mirrors the lifecycle slot numbering (``event * 2``
+        // is the boundary before that event); the journal collects audited
+        // writes for this event.
         let mut ctx = Some(crate::kernels::age_structured::EcoCtx {
             bp: &self.blueprint,
             params: &mut self.params,
@@ -104,6 +111,9 @@ impl AgeStructuredSession {
             journal: Vec::new(),
         });
         let mut result = 0;
+        // Execute the event and commit its set_param writes as one fallible
+        // unit; string errors are funnelled out so the journal and any
+        // validated genetics candidate are still flushed before returning.
         let operation = (|| -> Result<(), String> {
             result = self.hooks.execute_event(
                 &mut self.rng,
@@ -125,6 +135,9 @@ impl AgeStructuredSession {
             }
             Ok(())
         })();
+        // Route audit rows: a bound HistoryStore owns the shared parameter
+        // log, while unbound callers accumulate into ``eco_journal`` for
+        // ``drain_eco_journal``.
         if let Some(context) = ctx.as_mut() {
             if let Some(shared) = &self.history_store {
                 let store = shared.lock().unwrap();
@@ -145,6 +158,8 @@ impl AgeStructuredSession {
                 self.eco_journal.append(&mut context.journal);
             }
         }
+        // A callback may have produced a validated genetics candidate; take it
+        // out of the borrowed context and move it into the session.
         let genetics = ctx
             .as_mut()
             .and_then(|context| context.updated_genetics.take());
@@ -152,6 +167,8 @@ impl AgeStructuredSession {
         if let Some(genetics) = genetics {
             self.genetics = genetics;
         }
+        // A failed event marks the session Failed; a nonzero hook result marks
+        // it Stopped but keeps the mutated state and the advanced RNG.
         if let Err(error) = operation {
             self.execution = crate::sessions::status::ExecutionStatus::Failed;
             return Err(map_lifecycle_error(error));
@@ -190,6 +207,8 @@ impl AgeStructuredSession {
         params: &Bound<'_, PyAny>,
         seed: u64,
     ) -> PyResult<Self> {
+        // Freeze the blueprint and split the contract into session-owned
+        // pieces; all three are validated before any state is seeded.
         let bp = Blueprint::from_python(blueprint)?;
         // Panmictic sessions carry one deme: length-1 ecology columns and
         // the session-owned genetics tables split out of the contract.
@@ -203,6 +222,9 @@ impl AgeStructuredSession {
         // with set_state carrying the live Python state, so this is
         // the safe default rather than the authority.
         let state_ind = bp.initial_individual_count.to_vec();
+        // Sperm layout is n_ages x n_ztypes x n_ztypes: the layout, not the
+        // blueprint vector, is authoritative, so a missing/mis-sized frozen
+        // storage starts from an empty buffer.
         let state_sperm = {
             let want = bp.n_ages * bp.n_ztypes * bp.n_ztypes;
             if bp.initial_sperm_storage.len() == want {
@@ -305,6 +327,8 @@ impl AgeStructuredSession {
         fixed_egg_count: bool,
         extreme_speed_mode: i64,
     ) -> PyResult<()> {
+        // ``extreme_speed_mode`` selects a fixed enum (0..=3); reject an
+        // out-of-range value before mutating the frozen blueprint.
         if !(0..=3).contains(&extreme_speed_mode) {
             return Err(PyValueError::new_err(
                 "extreme_speed_mode must be between 0 and 3",
@@ -354,6 +378,8 @@ impl AgeStructuredSession {
         late: Vec<Py<PyAny>>,
         finish: Option<Vec<Py<PyAny>>>,
     ) {
+        // Four callback lists in event order; ``None`` for finish installs an
+        // empty finish slot rather than clearing the other lists.
         self.hooks
             .install_callback_lists(vec![first, early, late, finish.unwrap_or_default()]);
     }
@@ -381,6 +407,9 @@ impl AgeStructuredSession {
     /// ## Returns
     /// A list of ``(tick, param_id, old, new)`` tuples.
     fn drain_eco_journal(&mut self) -> Vec<(i64, usize, f64, f64)> {
+        // ``mem::take`` leaves the session store empty (drain semantics); the
+        // phase element is dropped because the Python contract carries only
+        // tick/param/old/new.
         std::mem::take(&mut self.eco_journal)
             .into_iter()
             .map(|(tick, id, old, new, _)| (tick, id, old, new))
@@ -435,23 +464,25 @@ impl AgeStructuredSession {
 
     /// Run one complete age-structured tick with declarative hooks.
     ///
-    /// Returns ``0`` (continue) or ``1`` (a hook requested a stop).  The tick
-    /// value is *not* advanced here; the Python adapter owns tick bookkeeping
-    /// exactly like ``natal.engine.lifecycle``.
+    /// Returns ``0`` (continue) or ``1`` (a hook requested a stop).  The session
+    /// owns the tick cursor: a completed tick increments ``state_tick``, while a
+    /// hook stop freezes it so a retry re-runs the same tick.
     ///
     /// ## Parameters
-    /// - `ind`: Mutable individual-count array.
-    /// - `sperm`: Mutable sperm-storage array.
-    /// - `tick`: Current tick.
     /// - `deme_id`: Current deme id.
     ///
     /// ## Returns
     /// ``0`` or ``1``.
     #[pyo3(signature = (deme_id))]
     fn tick(&mut self, deme_id: i64) -> PyResult<i32> {
+        // Status gate first: ``begin`` refuses anything but Ready, so a
+        // Stopped/Failed session cannot silently re-run without a restore.
         self.execution.begin()?;
         let tick = self.state_tick;
         let result = self.run_with_eco(tick, deme_id);
+        // A completed tick returns Ready with the phase cursor reset; a hook
+        // stop freezes as Stopped; an error marks Failed.  The state and RNG
+        // are left exactly as the kernels produced them.
         self.execution = match &result {
             Ok(0) => {
                 self.phase = 0;
@@ -507,6 +538,8 @@ impl AgeStructuredSession {
                 self.genetics = genetics;
             }
         }
+        // Batch status mirrors ``tick``: stop → Stopped, a clean batch → Ready
+        // with the phase cursor reset, error → Failed.
         self.execution = match &outcome {
             Ok(value) if value.2 => crate::sessions::status::ExecutionStatus::Stopped,
             Ok(_) => {
@@ -534,6 +567,9 @@ impl AgeStructuredSession {
     /// Returns ``PyValueError`` when either vector has the wrong length.
     #[pyo3(signature = (ind_flat, sperm_flat, tick))]
     fn set_state(&mut self, ind_flat: Vec<f64>, sperm_flat: Vec<f64>, tick: i64) -> PyResult<()> {
+        // Age-structured layout: counts are [sex, age, ztype] flattened and
+        // sperm is [age, ztype, ztype]; a mismatch means the caller disagrees
+        // with the blueprint, so reject before adopting anything.
         let want_ind = 2 * self.blueprint.n_ages * self.blueprint.n_ztypes;
         let want_sperm = self.blueprint.n_ages * self.blueprint.n_ztypes * self.blueprint.n_ztypes;
         if ind_flat.len() != want_ind {
@@ -548,6 +584,9 @@ impl AgeStructuredSession {
                 sperm_flat.len()
             )));
         }
+        // Reject NaN/negative counts and negative ticks up front, then move
+        // the buffers into the session (which owns them) and reset the
+        // lifecycle to Ready because Python pushed a fresh, un-run state.
         crate::model::validation::validate_state_values(&ind_flat, &sperm_flat, tick)?;
         self.state_ind = ind_flat;
         self.state_sperm = sperm_flat;
@@ -566,6 +605,8 @@ impl AgeStructuredSession {
         &self,
         py: Python<'py>,
     ) -> (i64, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>) {
+        // ``from_slice`` copies out, so callers may mutate the returned arrays
+        // freely without reaching the session-owned buffers.
         (
             self.state_tick,
             PyArray1::from_slice(py, &self.state_ind),
@@ -580,6 +621,8 @@ impl AgeStructuredSession {
     /// ``individual_count.sum()`` reductions over the same state (the
     /// reduction replicates NumPy's pairwise summation order).
     fn counts(&self) -> (f64, f64, f64) {
+        // Flattened state puts the sex plane outermost: [female | male] blocks
+        // of n_ages * n_ztypes, so the two sex halves are contiguous slices.
         let plane = self.blueprint.n_ages * self.blueprint.n_ztypes;
         let female = crate::kernels::state_reduce::numpy_pairwise_sum(&self.state_ind[..plane]);
         let male =
@@ -605,6 +648,8 @@ impl AgeStructuredSession {
     /// ``individual_count[sex, new_adult_age:, :].sum()`` (``total`` kept
     /// the ``f.sum() + m.sum()`` evaluation order).
     fn adult_counts(&self) -> (f64, f64, f64) {
+        // Within each sex plane, the adult age maps to a flat offset by
+        // multiplying by n_ztypes; the clamp below then keeps the slice valid.
         let z = self.blueprint.n_ztypes;
         let plane = self.blueprint.n_ages * z;
         // A declared adult start at or above the last age leaves an empty
@@ -621,20 +666,14 @@ impl AgeStructuredSession {
 
     /// Capture a memory checkpoint of everything the session owns.
     ///
-    /// The state arrays are Python-owned, so they are passed in and returned
-    /// as flat copies; the RNG state is captured as four raw state words so
-    /// ``restore -> run`` *continues* the exact stream (continuation, not a
-    /// reseed).  The ecology section of the params is copied; the genetics
-    /// section is never rolled back (a checkpoint is a save, not an
-    /// uninstallation of genetic mods).
-    ///
-    /// ## Parameters
-    /// - `individual_count`: Current state array.
-    /// - `sperm_storage`: Current sperm array.
-    /// - `tick`: Current tick value.
+    /// The state arrays are session-owned and exported as fresh flat copies; the
+    /// RNG state is captured as four raw state words so ``restore -> run``
+    /// *continues* the exact stream (continuation, not a reseed).  The ecology
+    /// section of the params is copied; the genetics section is never rolled back
+    /// (a checkpoint is a save, not an uninstallation of genetic mods).
     ///
     /// ## Returns
-    /// ``(tick, ind_flat, sperm_flat, rng_words, ecology)``.
+    /// A 5-tuple ``(tick, ind_flat, sperm_flat, rng_words, ecology)``.
     fn snapshot_state<'py>(&self, py: Python<'py>) -> PyResult<AgeSnapshot<'py>> {
         let ind_flat = PyArray1::from_slice(py, &self.state_ind);
         let sperm_flat = PyArray1::from_slice(py, &self.state_sperm);
@@ -643,14 +682,13 @@ impl AgeStructuredSession {
         Ok((self.state_tick, ind_flat, sperm_flat, rng_words, ecology))
     }
 
-    /// Restore a memory checkpoint produced by [`AgeStructuredSession::snapshot_state`].    ///
+    /// Restore a memory checkpoint produced by [`AgeStructuredSession::snapshot_state`].
+    ///
     /// Writes the state arrays back in place, rebuilds the RNG from the
     /// captured state words (exact continuation), and restores the ecology
     /// params section.  The genetics section is untouched.
     ///
     /// ## Parameters
-    /// - `individual_count`: Live state array, overwritten.
-    /// - `sperm_storage`: Live sperm array, overwritten.
     /// - `tick`: Tick value carried by the checkpoint.
     /// - `ind_flat`: Checkpoint individual counts.
     /// - `sperm_flat`: Checkpoint sperm storage.
@@ -672,6 +710,7 @@ impl AgeStructuredSession {
         rng_words: Vec<u64>,
         ecology: &Bound<'_, PyAny>,
     ) -> PyResult<i64> {
+        // A checkpoint always carries exactly the four Xoshiro256++ words.
         if rng_words.len() != 4 {
             return Err(PyValueError::new_err(format!(
                 "rng_words must contain 4 state words, got {}",
@@ -690,8 +729,13 @@ impl AgeStructuredSession {
             ));
         }
         crate::model::validation::validate_state_values(ind_src, sperm_src, tick)?;
+        // Restore the ecology section into a clone so a malformed checkpoint
+        // aborts before the live params are touched.
         let mut params = self.params.clone();
         restore_ecology(&mut params, &self.blueprint, ecology)?;
+        // Overwrite the owned buffers in place, drop back to Ready, then
+        // rebuild the generator from the captured words (exact continuation)
+        // and commit the validated params last.
         self.state_ind.copy_from_slice(ind_src);
         self.state_sperm.copy_from_slice(sperm_src);
         self.state_tick = tick;
@@ -714,9 +758,8 @@ impl AgeStructuredSession {
     /// uninstallation of genetic mods).
     ///
     /// ## Parameters
-    /// - `individual_count`: Live state array, overwritten.
-    /// - `sperm_storage`: Live sperm array, overwritten.
-    /// - `tick`: The recorded tick to roll back to.
+    /// - `tick`: The recorded tick to roll back to; the newest checkpoint with
+    ///   exactly this tick is restored (no nearest-earlier fallback).
     ///
     /// ## Returns
     /// ``Some((tick, ecology))`` with the restored ecology dict (for the
@@ -742,11 +785,15 @@ impl AgeStructuredSession {
         let Some(cp) = found else {
             return Ok(None);
         };
+        // A checkpoint captured under a different blueprint shape cannot be
+        // folded into this state, so refuse instead of truncating.
         if cp.ind.len() != self.state_ind.len() || cp.sperm.len() != self.state_sperm.len() {
             return Err(PyValueError::new_err(
                 "checkpoint arrays do not match the live state size",
             ));
         }
+        // Rewind the bound history timeline (rows, cursors, and logs) to the
+        // restored tick so a rerun can re-record the future ticks.
         if let Some(store) = &self.history_store {
             store.lock().unwrap().restore_timeline(tick)?;
         }
@@ -756,6 +803,8 @@ impl AgeStructuredSession {
         self.state_tick = cp.tick;
         self.execution = cp.execution;
         self.phase = cp.phase;
+        // Bulk-restore the ecology from wire words that were captured from this
+        // same blueprint; per-field validation still runs inside.
         self.rng = SessionRng::from_state_words(cp.rng_words);
         self.params
             .ecology_restore_words(&self.blueprint, &cp.eco_scalars, &cp.eco_vectors)?;
@@ -771,6 +820,8 @@ impl AgeStructuredSession {
         collapse_age: bool,
         aggregate: bool,
     ) -> PyResult<(i64, Bound<'py, PyArray1<f64>>)> {
+        // Dimensions follow the [sex, age, ztype] flat layout; ``project``
+        // applies the compiled observation mask and returns an owned vector.
         let values = crate::output::observation::project(
             &self.state_ind,
             mask.as_slice()?,
@@ -789,6 +840,8 @@ impl AgeStructuredSession {
 
     /// Attach the same native history object used by the public query adapter.
     fn bind_history(&mut self, history: PyRef<'_, HistoryStore>) {
+        // Share ownership of the row store with the Python HistoryStore; the
+        // session only records into it, it never owns or frees the log.
         self.history_store = Some(std::sync::Arc::clone(&history.data));
     }
 
@@ -799,6 +852,9 @@ impl AgeStructuredSession {
             .as_ref()
             .ok_or_else(|| PyValueError::new_err("History is not initialized"))?;
         let mut history = shared.lock().unwrap();
+        // ``record`` returns false when the exact boundary is already the
+        // latest row (idempotent continuation); stamping then targets the
+        // existing boundary with the current phase and status.
         let added = history.record(
             self.state_tick,
             &self.state_ind,
@@ -811,6 +867,9 @@ impl AgeStructuredSession {
                 boundary.2 = self.execution.name().to_owned();
             }
         }
+        // Raw-mode recording pairs every row with a full checkpoint (state,
+        // RNG words, ecology, custom slots) so ``restore_checkpoint`` can roll
+        // the whole session back, not just the counts.
         if added && history.raw {
             let (eco_scalars, eco_vectors) = self.params.ecology_snapshot_words()?;
             self.checkpoints
@@ -826,6 +885,8 @@ impl AgeStructuredSession {
                     custom_slots: self.params.custom_slots[0].clone(),
                 });
         }
+        // Restorable ticks must be a subset of retained history rows: drop
+        // checkpoints whose row was evicted by the bounded store.
         if let Some(row) = history.rows.front() {
             self.checkpoints.retain(|cp| cp.tick >= row[0] as i64);
         }
@@ -837,11 +898,6 @@ impl AgeStructuredSession {
         self.checkpoints.clear();
     }
 
-    /// Drop checkpoints captured after *retain_until_tick*.
-    ///
-    /// Paired with the history truncate after a restore: reruns from the
-    /// restored tick overwrite later ticks, so stale future checkpoints
-    /// must not survive.
     /// Drop checkpoints older than *from_tick* (history eviction pair).
     ///
     /// When the recording plan evicts the oldest history rows, their
@@ -852,7 +908,14 @@ impl AgeStructuredSession {
             .retain(|checkpoint| checkpoint.tick >= from_tick);
     }
 
+    /// Drop checkpoints captured after *retain_until_tick*.
+    ///
+    /// Paired with the history truncate after a restore: reruns from the
+    /// restored tick overwrite later ticks, so stale future checkpoints must not
+    /// survive.
     fn truncate_checkpoints(&mut self, retain_until_tick: i64) {
+        // Keep checkpoints at or before the restored tick; a rerun overwrites
+        // the later ticks, so their stale checkpoints must not survive.
         self.checkpoints.retain(|cp| cp.tick <= retain_until_tick);
     }
 }
@@ -866,6 +929,8 @@ impl AgeStructuredSession {
     /// ## Returns
     /// A length-``N_ECO_PARAMS`` array in ``ECO_PARAM_COLUMNS`` order.
     fn eco_values(&self, deme: usize) -> [f64; crate::hooks::interpreter::N_ECO_PARAMS] {
+        // Flatten one deme's ecology into the canonical ``ECO_PARAM_COLUMNS``
+        // order the CSR interpreter indexes by id.
         let mut values = [0.0; crate::hooks::interpreter::N_ECO_PARAMS];
         for (id, slot) in values.iter_mut().enumerate() {
             *slot = self.params.eco_value(id, deme);
@@ -894,6 +959,8 @@ impl AgeStructuredSession {
             eco_journal,
             ..
         } = self;
+        // Panmictic sessions carry a single ecology column; ``deme_id`` is
+        // still forwarded for hook selectors and journal tagging.
         let deme = 0;
         let mut eco_values = params.eco_values_row(deme);
         let mut ctx = Some(crate::kernels::age_structured::EcoCtx {
@@ -906,6 +973,9 @@ impl AgeStructuredSession {
             tick,
             journal: Vec::new(),
         });
+        // Run the full ordered tick (first hook -> reproduction -> early hook
+        // -> survival -> late hook -> aging); the context commits set_param
+        // writes at each boundary so later stages see them in the same tick.
         let result = crate::kernels::age_structured::run_tick(
             rng,
             blueprint,
@@ -918,15 +988,22 @@ impl AgeStructuredSession {
             &mut ctx,
             None,
         );
+        // Harvest the tick's audit rows and its final phase cursor before the
+        // context borrow is released.
         if let Some(ctx) = ctx.as_mut() {
             eco_journal.append(&mut ctx.journal);
             self.phase = ctx.phase;
         }
+        // Move a validated callback genetics candidate into the session; it
+        // must leave the borrowed context before that context is dropped.
         let updated = ctx.as_mut().and_then(|ctx| ctx.updated_genetics.take());
         drop(ctx);
         if let Some(updated) = updated {
             self.genetics = updated;
         }
+        // ``tick`` never drains the batch commit queue (``run`` does), so
+        // clear it here to keep a later run or trigger_event from replaying
+        // this tick's stale candidates.
         self.hooks
             .callback_commits
             .lock()
@@ -947,6 +1024,7 @@ impl AgeStructuredSession {
 fn extract_i64_array(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<i64>> {
     use numpy::PyReadonlyArray1;
     let value = obj.getattr(name)?;
+    // Accept int64 first, then int32; both are widened to the interpreter's i64.
     if let Ok(array) = value.extract::<PyReadonlyArray1<'_, i64>>() {
         return Ok(array.as_slice()?.to_vec());
     }
@@ -983,6 +1061,8 @@ fn extract_f64_array(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<f64>> {
 fn extract_bool_array(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<bool>> {
     use numpy::PyReadonlyArray1;
     let value = obj.getattr(name)?;
+    // Bool arrays are preferred; float64 is accepted for programs that stored
+    // the mask as 0.0/1.0 values.
     if let Ok(array) = value.extract::<PyReadonlyArray1<'_, bool>>() {
         return Ok(array.as_slice()?.to_vec());
     }
@@ -1007,6 +1087,7 @@ fn extract_i64_scalar(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
     if let Ok(scalar) = value.extract::<i64>() {
         return Ok(scalar);
     }
+    // Scalars often arrive as 0-d NumPy arrays; ``.item()`` unwraps them.
     value.call_method0("item")?.extract::<i64>()
 }
 
@@ -1033,6 +1114,9 @@ impl HookProgram {
     pub(crate) fn from_python(program: &Bound<'_, PyAny>) -> PyResult<Self> {
         let n_hooks = extract_i64_scalar(program, "n_hooks")?;
         let op_types = extract_i64_array(program, "op_types_data")?;
+        // Re-derive the flag from the op table as well: a program containing
+        // set_param ops must take the write-back path even if the Python flag
+        // is stale.
         let has_set_param = extract_bool_scalar(program, "has_set_param")?
             || op_types.contains(&crate::hooks::interpreter::OP_SET_PARAM_PUBLIC);
         // The callback slot column drives cross-type priority interleaving.
@@ -1048,10 +1132,27 @@ impl HookProgram {
                 ));
             }
         };
+        // Exactly one callback-slot marker per hook keeps the interleaving
+        // aligned with the CSR slot order.
         if python_callback_slots.len() != n_hooks as usize {
             return Err(PyValueError::new_err(format!(
                 "python_callback_slots has {} entries but n_hooks is {n_hooks}",
                 python_callback_slots.len()
+            )));
+        }
+        // Copy every flat CSR column out of the Python program; the
+        // interpreter indexes these by the offsets/offsets_data pairs, so any
+        // change to the Python-side layout must be mirrored here.
+        // The hook compiler enforces a positive firing period, but HookProgram
+        // is a half-public wire type whose fields are pub, so a hand-built
+        // program can carry zero; the interpreter's ``% every`` would then
+        // divide by zero.  Reject it here, where the error can be reported.
+        let sp_every = extract_i64_array(program, "sp_every")?;
+        if let Some((op_index, &every)) =
+            sp_every.iter().enumerate().find(|(_, &period)| period <= 0)
+        {
+            return Err(PyValueError::new_err(format!(
+                "sp_every must be positive, got {every} at operation {op_index}"
             )));
         }
         Ok(Self {
@@ -1073,7 +1174,7 @@ impl HookProgram {
             deme_selector_offsets: extract_i64_array(program, "deme_selector_offsets")?,
             deme_selector_data: extract_i64_array(program, "deme_selector_data")?,
             sp_param_ids: extract_i64_array(program, "sp_param_ids")?,
-            sp_every: extract_i64_array(program, "sp_every")?,
+            sp_every,
             sp_start: extract_i64_array(program, "sp_start")?,
             rpn_offsets: extract_i64_array(program, "rpn_offsets")?,
             rpn_kinds: extract_i64_array(program, "rpn_kinds")?,
@@ -1101,6 +1202,8 @@ impl AgeStructuredSession {
         // copy the flattened history into a NumPy 2-D array.  The lifecycle
         // kernels read the owned contracts at every stage boundary; Python
         // passes control parameters only (the session owns counts and tick).
+        // Copy the mask into a Vec: the transient history store may outlive
+        // the borrow of the Python array.
         let mask_vec = match observation_mask {
             Some(mask) => Some(
                 mask.as_slice()
@@ -1125,6 +1228,9 @@ impl AgeStructuredSession {
             journal: Vec::new(),
         });
 
+        // ``bound`` means the Python adapter already owns the row store (with
+        // raw/observation mode configured); unbound calls get a transient
+        // store sized for either full raw rows or a projected slice.
         let bound = self.history_store.is_some();
         let shared = if let Some(shared) = self.history_store.as_ref().map(std::sync::Arc::clone) {
             shared
@@ -1145,11 +1251,19 @@ impl AgeStructuredSession {
             }
             shared
         };
+        // Record-then-step loop: the top of iteration ``step`` records the
+        // current tick, so a run of n_ticks emits boundaries for the starting
+        // tick through ``start + n_ticks`` (the pre-run state is always one of
+        // them), and a hook stop freezes the tick.  ``max(0)`` clamps a
+        // negative request to a no-op run.
         let mut current_tick = self.state_tick;
         let mut stopped = false;
         for step in 0..=n_ticks.max(0) {
             {
                 let mut store = shared.lock().unwrap();
+                // Bound mode flushes the previous tick's set_param journal into
+                // the shared log under the store lock; unbound mode keeps the
+                // rows in ``eco_journal`` and drains them after the run.
                 if bound {
                     if let Some(ctx) = eco_ctx.as_mut() {
                         let mut log = store.log.lock().unwrap();
@@ -1170,9 +1284,14 @@ impl AgeStructuredSession {
                         ctx.journal.clear();
                     }
                 }
+                // Record only while running and only on aligned ticks;
+                // ``record`` also dedups the exact continuation boundary.
                 if !stopped && record_interval > 0 && current_tick % record_interval == 0 {
                     let added =
                         store.record(current_tick, &self.state_ind, &self.state_sperm, bound)?;
+                    // Bound raw runs checkpoint every recorded tick; unbound
+                    // runs checkpoint every ``checkpoint_every`` ticks (0
+                    // disables).  ``capture_checkpoint`` ignores repeats.
                     if added
                         && ((bound && store.raw)
                             || (!bound
@@ -1189,6 +1308,8 @@ impl AgeStructuredSession {
                         )
                         .map_err(map_lifecycle_error)?;
                     }
+                    // Restorable checkpoints must track the bounded history:
+                    // drop any whose row was evicted from the store.
                     if bound {
                         if let Some(row) = store.rows.front() {
                             self.checkpoints.retain(|cp| cp.tick >= row[0] as i64);
@@ -1196,9 +1317,13 @@ impl AgeStructuredSession {
                     }
                 }
             }
+            // The terminal iteration only records; a hook stop also leaves the
+            // state frozen at the stopping tick, already recorded above.
             if step == n_ticks.max(0) || stopped {
                 break;
             }
+            // One kernel tick advances the whole stage pipeline and the RNG
+            // stream; a nonzero result means a hook requested stop.
             let result = crate::kernels::age_structured::run_tick(
                 &mut self.rng,
                 &self.blueprint,
@@ -1218,6 +1343,8 @@ impl AgeStructuredSession {
                 }
                 map_lifecycle_error(err)
             })?;
+            // Publish the within-tick phase cursor so ``execution_state`` can
+            // describe a partial (stopped/failed) tick.
             if let Some(ctx) = eco_ctx.as_ref() {
                 self.phase = ctx.phase;
             }
@@ -1227,6 +1354,9 @@ impl AgeStructuredSession {
                 current_tick += 1;
             }
         }
+        // Publish the final tick (frozen at the stopping tick when stopped),
+        // drain the remaining journal for unbound callers, and adopt any
+        // leftover genetics candidate from the last event.
         self.state_tick = current_tick;
         if let Some(ctx) = eco_ctx.as_mut() {
             if !bound {
@@ -1236,6 +1366,8 @@ impl AgeStructuredSession {
                 self.genetics = genetics;
             }
         }
+        // Bound callers read rows from the shared store, so the legacy 2-D
+        // export is empty.
         if bound {
             return Ok((
                 current_tick,
@@ -1243,6 +1375,8 @@ impl AgeStructuredSession {
                 stopped,
             ));
         }
+        // Materialize the retained rows as a dense [n_rows, n_cols] array;
+        // ``checked_div`` yields 0 columns for an empty store.
         let (flat_history, n_rows) = shared.lock().unwrap().flat_rows();
         let n_cols = flat_history.len().checked_div(n_rows).unwrap_or(0);
         let history = PyArray2::<f64>::zeros(py, [n_rows, n_cols], false);

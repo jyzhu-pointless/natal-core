@@ -1,6 +1,7 @@
 # 自定义 Juvenile Density Regulation Curve 方案
 
-> 状态：方案设计，暂不实现。
+> 状态：方案设计，暂不实现（`juvenile_growth_mode >= 5` 目前是预留槽位，没有注册表，
+> 传入 `>= 5` 会按未知模式报错；见 `rust/src/kernels/density_regulation.rs`）。
 > 目标：支持用户通过 Python lambda 定义任意 juvenile density regulation curve，并在 Rust 后端中以 C ABI 机器码方式直接调用。
 
 ---
@@ -31,7 +32,11 @@ pop = (
   - `int`：保留现有 0/1/2/3
   - `str`：保留现有 `"logistic"` / `"fixed"` 等
   - `Callable[[float], float]`：自定义 curve
-- 传入 callable 时，内部使用一个保留 mode 值（例如 `CUSTOM_CURVE = 100`），并把 callable 单独保存在 Python 侧，不塞进 `PopulationConfig` NamedTuple。
+- 传入 callable 时，内部需要一个预留 mode 值。预留区间以代码为准：`0-4` 为内建模式，
+  `>= 5` 为预留槽位（`rust/src/kernels/density_regulation.rs` 的 docstring 与错误信息、
+  `src/natal/parameters.jsonc` 的 `bounds: [0, 4]`）。本方案早期草稿写的
+  `CUSTOM_CURVE = 100` 与代码不一致，统一以 `>= 5` 为准。callable 单独保存在 Python 侧，
+  不塞进 `PopulationConfig` NamedTuple。
 
 ---
 

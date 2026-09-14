@@ -530,7 +530,12 @@ def _build_spatial(name: str) -> SpatialPopulation:
                 }
             )
             .reproduction(eggs_per_female=3.0)
-            .competition(carrying_capacity=1_000)
+            # Explicit no-competition: this test pins the aggregate census
+            # broadcast, not the regulation curve.
+            .competition(
+                growth_mode="no_competition",
+                carrying_capacity=1_000,
+            )
             .build()
         )
 

@@ -175,8 +175,8 @@ NATAL Core 提供两种主要的种群类型：
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | 老幼体（age=1）的相对竞争因子。 | `5.0` | 幼体密度调节 | 竞争权重按年龄区分：age=0 固定为 `1.0`，age=1 使用 `competition_strength`。 |
-| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 支持 `"logistic"`、`"beverton_holt"`、`"ricker"` 等模式，通常使用 `"logistic"`。 |
+| `competition_strength` | `float` | 第二个幼体龄（age=1）的竞争权重。 | `1.0` | 幼体密度调节 | age=0 固定为 `1.0`；不设置时 age=1 与 age=0 同权重。仅当 `new_adult_age >= 2` 时有效；模型只有 age 0 这个幼体龄时，显式传入会报错而不是被忽略。 |
+| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"beverton_holt"` | 幼体密度调节 | 支持 `"no_competition"`、`"fixed"`、`"logistic"`（别名 `"linear"`）、`"beverton_holt"`（默认）、`"ricker"`。 |
 
 **密度调节曲线**（`x` = 实际竞争强度 / 期望竞争强度；`s` = 平衡存活率；`r` = 低密度增长率）：
 
@@ -189,6 +189,8 @@ NATAL Core 提供两种主要的种群类型：
 | `ricker` | 4 | `r^(1-x) · s` | 指数过度补偿；`r > e` 时出现振荡 |
 
 三条验收底线：① 平衡点 x=1 时所有曲线收敛到 `s`（g(1)=s）；② 低密度 x→0 时 g(0)=r·s（三条曲线在同一平衡点共享数值）；③ 确定性模拟下曲线缩放逐位可复现。
+
+第四条规则处理"参考点不可用"：当期望竞争强度 `C*` 为 0 时（承载容量为 0，或声明的均衡分布中幼体条目全为 0），补偿型模式 2–4 的招募量为 0（缩放为 `0`），而不再回退到"不调节"的缩放 `1.0`；当 `new_adult_age == 1` 时，`eggs_per_female == 0` 也会触发该规则，因为此时 0 龄是唯一的竞争年龄。`fixed`（模式 1）以承载容量而非 `C*` 为基准，因此 `K` 为正时仍按 `K` 截断。`no_competition`（模式 0）仍是表达"不做密度调节"的方式，包括个体只来自 hook 投放的模型。
 | `low_density_growth_rate` | `float` | 低密度下的内禀增长率。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；取值过大容易导致种群振荡。 |
 | `age_1_carrying_capacity` | `Optional[int]` | age=1 阶段的种群承载容量。 | `None` | 幼体密度调节 | 如果显式指定，会优先使用该值（优先级最高）。 |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | 与 `age_1_carrying_capacity` 功能相同的遗留参数名（已弃用）。 | `None` | 幼体密度调节 | 推荐使用 `age_1_carrying_capacity`，两者同时设置时以 `age_1_carrying_capacity` 为准。 |
@@ -446,8 +448,8 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"logistic"` | 幼体密度调节 | 常用 `"logistic"`，也可以使用 `"beverton_holt"` 等其他模式。 |
-| `low_density_growth_rate` | `float` | 低密度下的内禀增长倍数。 | `1.0` | 幼体密度调节 | 表示无竞争条件下的增长倍数；取值过大容易导致振荡。 |
+| `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"beverton_holt"` | 幼体密度调节 | 默认 `"beverton_holt"`；也可显式使用 `"logistic"`、`"ricker"` 等其他模式。 |
+| `low_density_growth_rate` | `float` | 低密度下的内禀增长倍数。 | `6.0` | 幼体密度调节 | 表示无竞争条件下的增长倍数；取值过大容易导致振荡。 |
 | `carrying_capacity` | `Optional[int]` | 幼体的承载容量。 | `None` | 密度上限 | 如果未设置，系统会尝试自动推导；显式指定的值优先级最高。 |
 
 ### `presets(...)` / `fitness(...)` / `modifiers(...)` / `hooks(...)` / `build()`

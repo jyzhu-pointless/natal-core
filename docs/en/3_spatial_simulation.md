@@ -80,10 +80,10 @@ The `SpatialPopulation` constructor supports these most commonly used parameters
 - `migration_kernel`: Migration kernel, used when following the kernel path.
 - `kernel_bank`: Optional collection of kernels, used when different source demes use different kernels.
 - `deme_kernel_ids`: Optional per-deme kernel ids, indexing into `kernel_bank`.
-- `migration_rate`: Proportion of individuals migrating per step. A scalar applies only to adult ages (>= `new_adult_age` from config); juveniles default to 0. Pass a `(n_ages,)` array for explicit per-age rates.
+- `migration_rate`: Per-deme proportion of individuals migrating per step. A scalar applies only to adult ages (>= `new_adult_age` from config); juveniles default to 0. A `(n_ages,)` array sets explicit per-age rates, an `(n_sexes, n_ages)` table or a per-sex mapping sets rates per sex, and an `(n_demes, n_sexes, n_ages)` column (or `(n_demes, n_ages)`, broadcast across sexes) sets each deme directly. `batch_setting` gives one declaration per deme.
 - `migration_strategy`: `auto`, `adjacency`, `kernel`, or `hybrid`; default is `auto`.
 - `kernel_include_center`: Whether to include the center cell as a migration target in the kernel path, default `False`.
-- `adjust_migration_on_edge`: Whether to adjust migration volume at boundaries (see "migration_rate and Boundary Effects" section), default `False`.
+- `adjust_migration_on_edge`: Legacy bit-parity flag, default `False`. It does not change the destination distribution (up to ~1 ulp of floating-point rounding): outbound rows are normalized to relative weights either way, so the denominator it selects cancels (see "migration_rate and Boundary Effects").
 
 The most important rules:
 
@@ -131,13 +131,13 @@ Detailed parameter descriptions for each method can be found in [Population Init
 ```python
 .migration(
     kernel=None,                     # [B] NDArray: odd-dimension migration kernel
-    migration_rate=0.0,             # float | NDArray | Sequence: migration proportion (scalar broadcasts to all ages)
+    migration_rate=0.0,             # [B] float | NDArray | Sequence | dict: per-deme migration proportion
     strategy="auto",                # "auto" | "adjacency" | "kernel" | "hybrid"
-    adjacency=None,                 # Explicit adjacency matrix
+    adjacency=None,                 # Relative outbound weights (rows are normalized)
     kernel_bank=None,               # Heterogeneous kernel collection
     deme_kernel_ids=None,           # Per-deme kernel index
     kernel_include_center=False,    # Whether to include the center cell
-    adjust_migration_on_edge=False, # Whether to adjust migration at boundaries
+    adjust_migration_on_edge=False, # Legacy bit-parity no-op
 )
 ```
 
@@ -161,6 +161,7 @@ See the "Migration Paths" and "migration_rate and Boundary Effects" sections for
 | `presets` | positional arguments | preset object |
 | `fitness` | `viability` / `fecundity` / `sexual_selection` / `zygote_viability` | dict |
 | `migration` | `kernel` | NDArray |
+| `migration` | `migration_rate` | float / NDArray / mapping |
 
 The following parameters do **not** accept `batch_setting`:
 - **hooks**: Per-deme selective execution is achieved via `.hooks(..., deme=...)`.
@@ -518,10 +519,17 @@ If a deme triggers a termination condition first (e.g., population extinction), 
 
 ### migration_rate
 
-`migration_rate` controls the proportion of mass involved in cross-deme flow per step. Two forms are supported:
+`migration_rate` is the per-deme outbound quota: the proportion of a deme's mass involved in cross-deme flow per step. The following forms are accepted:
 
 - **Scalar** (`float`): Only adult ages (>= population's `new_adult_age`) receive the rate; juveniles default to 0. In discrete-generation populations the single age class receives the full rate.
 - **Age-specific array** (`NDArray[np.float64]` or `Sequence[float]`, shape `(n_ages,)`): Each age is set explicitly.
+- **Per-sex table or mapping** (`(n_sexes, n_ages)` array, or `{"F": 0.2, "M": 0.05}`): The scalar/vector rules are applied per sex.
+- **Per-deme column** (`(n_demes, n_sexes, n_ages)`, or `(n_demes, n_ages)` broadcast across sexes): Each deme receives its own rate.
+- **`batch_setting([...])`** (builder only): One declaration per deme; each element accepts any of the forms above.
+
+Every form lands on `pop.params.migration_rate` with shape `(n_demes, n_sexes, n_ages)` — the same column the runtime `params.tensor_write("migration_rate", ...)` channel writes.
+
+A 2-D declaration whose shape is exactly `(n_sexes, n_ages)` is read as the shared per-sex table; only another 2-D shape means per-deme age vectors. When `n_demes == n_sexes` those shapes are indistinguishable, so pass the explicit 3-D column for per-deme rates.
 
 ```python
 # Scalar — juveniles age < new_adult_age emigrate 0%, adults emigrate 10%
@@ -529,6 +537,14 @@ spatial = SpatialPopulation(demes, migration_rate=0.1)
 
 # Age-specific — explicit per-age (default new_adult_age=2)
 spatial = SpatialPopulation(demes, migration_rate=[0.0, 0.0, 0.3, 0.1])
+
+# Per-deme — the middle deme of a 3-deme chain emigrates four times as much
+spatial = (
+    SpatialPopulation.builder(species, n_demes=3, topology=topo)
+    .migration(migration_rate=batch_setting([0.1, 0.4, 0.1]))
+    # ... remaining chainable calls ...
+    .build()
+)
 
 # Runtime update
 spatial.migration_rate = 0.2                 # adult ages only
@@ -538,51 +554,41 @@ spatial.migration_rate = [0.0, 0.0, 0.3, 0.1]  # per-age
 - `0.0`: No migration (all ages).
 - `0.1`: Adult ages (>= new_adult_age) emigrate 10% per step; discrete-generation populations emigrate 10% overall.
 
-### Boundary Effect and adjust_migration_on_edge
+### Outbound Weights and Boundary Effects
 
-When `topology.wrap=False`, boundary demes have fewer effective neighbors than interior demes. `adjust_migration_on_edge` controls how this difference is handled:
+The migration CSR stores **relative outbound weights**, not probabilities. The builder row-normalizes every non-empty row to a probability vector before folding it, so a row-stochastic input, a sub-stochastic input (row sum < 1) and a super-stochastic input (row sum > 1) all describe the same outbound distribution and migration conserves mass. "Migrate less" is expressed through `migration_rate`, never by shrinking a row; an all-zero row (an isolated deme) is kept as is, so that deme holds its mass.
 
-| `adjust_migration_on_edge` | Behavior |
-|---|---|
-| `False` (default) | Boundary demes naturally emigrate less. Each neighbor's migration probability = `weight / kernel_total_sum`, total migration is proportional to the number of effective neighbors |
-| `True` | All demes emigrate the same total amount. Each neighbor's migration probability = `weight / effective_sum` (normalized to 1.0) |
+When `topology.wrap=False`, boundary demes have fewer valid neighbors. They still send their full `migration_rate` quota — the offsets that fall outside the grid are dropped and their share is redistributed over the remaining neighbors. A boundary deme therefore sends a **larger share to each** neighbor, not a smaller total.
 
-Where `kernel_total_sum` is the sum of all positive weights in the kernel, serving as the unified scaling reference.
+`adjust_migration_on_edge` is retained as a legacy bit-parity flag: both values produce the same destination distribution (up to ~1 ulp of rounding), because the denominator it selects is cancelled by the row normalization.
 
 **Practical impact**:
 
 ```python
-# 3x3 kernel, center weight 0, surrounding weights 1.0
-# kernel_total_sum = 8.0
-
-# Default behavior (adjust_migration_on_edge=False):
-#   Interior deme (8 neighbors): each neighbor probability = 1.0/8.0 = 0.125, total migration = rate * 1.0
-#   Corner deme (3 neighbors): each neighbor probability = 1.0/8.0 = 0.125, total migration = rate * 0.375
-#   -> Boundary emigrates less, more biologically intuitive
-
-# Adjusted behavior (adjust_migration_on_edge=True):
-#   Interior deme (8 neighbors): each neighbor probability = 1.0/8.0 = 0.125, total migration = rate * 1.0
-#   Corner deme (3 neighbors): each neighbor probability = 1.0/3.0 ≈ 0.333, total migration = rate * 1.0
-#   -> All demes emigrate the same total amount, boundary effect is artificially smoothed
+# 3x3 von Neumann kernel (4 neighbors), migration_rate = r
+# Interior deme (4 neighbors): each neighbor receives r / 4, total migration = r
+# Corner deme   (2 valid neighbors): each neighbor receives r / 2, total migration = r
+#   -> Every deme emigrates the same total amount; a boundary deme simply
+#      splits its quota among fewer destinations
 ```
 
-**Special case**: When `topology.wrap=True`, all demes have the same number of effective neighbors, and both modes behave identically.
+**Special case**: When `topology.wrap=True`, every deme has the same number of valid neighbors, so all demes normalize over the same neighbor set and the boundary distinction disappears.
 
 ### Non-Uniform Weight Kernels
 
-When weights in the kernel are not all 1 (e.g., Gaussian kernel), `kernel_total_sum` preserves the relative weight structure of the kernel:
+When kernel weights are not all 1 (e.g. a Gaussian kernel), the relative weight structure is preserved: each neighbor's share is its weight divided by the sum of the source's valid weights.
 
 ```python
 # 5x5 Gaussian kernel: center weights high, edge weights low
-# kernel_total_sum is the sum of all weights
 #
-# Interior deme (all 25 neighbors effective):
-#   Each neighbor probability = weight / kernel_total_sum
-#   Total migration rate = rate * (effective_sum / kernel_total_sum) = rate * 1.0
+# Interior deme (all 25 neighbors valid):
+#   Each neighbor share = weight / valid_weight_sum
+#   Total migration rate = rate * 1.0
 #
-# Boundary deme (e.g., 15 effective neighbors):
-#   Each neighbor probability = weight / kernel_total_sum  (relative weights unchanged)
-#   Total migration rate = rate * (effective_sum / kernel_total_sum) ≈ rate * 0.6
+# Boundary deme (e.g. 15 valid neighbors):
+#   Each neighbor share = weight / valid_weight_sum  (relative weights unchanged)
+#   Total migration rate = rate * 1.0 — the dropped offsets redistribute their
+#   share over the valid neighbors instead of leaving mass behind
 ```
 
 ### Kernel Implementation
@@ -595,13 +601,13 @@ A migration kernel $K$ is an odd-dimension matrix, centered at $(\lfloor R/2 \rf
 
 $$(r_d, c_d) = (r_s + (i - i_c),\; c_s + (j - j_c))$$
 
-where $(i_c, j_c)$ are the matrix coordinates of the kernel center. Coordinates that fall within the grid become effective neighbors; coordinates outside the grid are discarded when `wrap=False` or wrapped by modulo when `wrap=True`.
+where $(i_c, j_c)$ are the matrix coordinates of the kernel center. Coordinates that fall within the grid become valid neighbors; coordinates outside the grid are discarded when `wrap=False` or wrapped by modulo when `wrap=True`.
 
-The probability of a source deme migrating to neighbor $n$ is determined by `adjust_migration_on_edge`:
+Each source deme's outbound distribution is proportional to the kernel weights and normalized over its valid neighbors:
 
-$$p_n = \frac{w_n}{S_{\text{ref}}}, \quad S_{\text{ref}} = \begin{cases} \sum_{m} w_m & \text{(adjust=True, normalized by effective neighbors)} \\ \sum_{i,j} K_{i,j} & \text{(adjust=False, scaled by kernel sum)} \end{cases}$$
+$$p_n = \frac{w_n}{\sum_m w_m}$$
 
-where $\sum_{i,j} K_{i,j}$ is the sum of all kernel weights (denoted `kernel_total_sum`), and $\sum_m w_m$ is the sum of weights for the current deme's actually effective neighbors. Under `adjust=False`, the total emigration from a boundary deme is $r \cdot \frac{\sum_m w_m}{\sum_{i,j} K_{i,j}}$, naturally smaller than that of interior demes.
+where $\sum_m w_m$ sums the weights of the source deme's valid neighbors (the coordinates kept above). Every deme therefore emigrates its full quota $r$; a boundary deme's dropped offsets redistribute their share over the valid neighbors, so each of them receives a larger share. The `adjust_migration_on_edge` denominator (kernel total vs. valid-row total) is cancelled by this normalization up to ~1 ulp of rounding, so the flag does not change the destination distribution.
 
 ### Constructing Common Kernels
 
@@ -705,7 +711,7 @@ With **wrap=True**, coordinates wrap by modulo, giving $N_{\text{eff}}(r, c) = N
 | Richer local connectivity | `SquareGrid` + `moore` |
 | Isotropic diffusion, large-scale spatial simulation | `HexGrid` |
 | Eliminating boundary artifacts | Any topology + `wrap=True` |
-| Preserving natural boundary effects + boundary-aware migration | Any topology + `wrap=False` + `adjust_migration_on_edge=False` |
+| Preserving natural boundary effects (fewer, larger shares at the edge) | Any topology + `wrap=False` |
 
 ### Complete Example: SquareGrid
 
@@ -799,7 +805,7 @@ The practical usage order of SpatialPopulation can be remembered in four steps:
 
 1. Start chain construction with `SpatialPopulation.builder(...)`.
 2. Heterogeneous deme configs (`batch_setting`) can be used, but migration sampling mode must be consistent across all demes.
-3. Choose between adjacency or migration_kernel; use `adjust_migration_on_edge` for boundary-aware migration.
+3. Choose between adjacency or migration_kernel; set each deme's outbound quota with `migration_rate` (the legacy `adjust_migration_on_edge` flag changes nothing).
 4. Debug with `run_tick()`, run batch experiments with `run(...)`.
 
 ---

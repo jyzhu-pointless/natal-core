@@ -8,7 +8,7 @@ Core components for genetic simulation: structures, entities, and population mod
 import importlib
 from typing import Any, Dict
 
-__version__ = "0.3.0b0"
+__version__ = "0.3.0b1"
 
 # Maps exported symbol names to the module that defines them.
 #
@@ -104,7 +104,7 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     ],
     "frontend.model": [
         "ModelDefinition", "ModelDraft", "NO_COMPETITION", "FIXED", "LOGISTIC",
-        "LINEAR", "BEVERTON_HOLT", "build_population_config",
+        "LINEAR", "BEVERTON_HOLT", "RICKER", "build_population_config",
         "build_discrete_engine_config", "build_custom_slots", "compress_config",
     ],
     "frontend.modifiers": [
@@ -141,7 +141,8 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "BasePopulation", "AgeStructuredPopulation", "DiscreteGenerationPopulation",
     ],
     "frontend.presets": [
-        "GeneticPreset", "HomingDrive", "ToxinAntidoteDrive", "CytoplasmicPreset",
+        "GeneticPreset", "HomingDrive", "ToxinAntidoteDrive", "PointMutation",
+        "CytoplasmicPreset",
         "Wolbachia", "TransgenicBackground", "apply_preset_fitness_patch",
         "PresetFitnessPatch", "count_allele_copies",
         "GameteConversionRuleSet", "ZygoteConversionRuleSet",

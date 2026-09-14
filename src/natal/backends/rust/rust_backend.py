@@ -47,12 +47,17 @@ def config_snapshot_from_session(session: _ConfigReadSession, draft: ModelDraft)
     from natal.frontend.builder._writers import contract_to_draft_field
 
     fields: dict[str, object] = {"custom": session.get_custom_slots()}
+    # Walk the contract Params fields so every runtime-mutable value is re-read
+    # from the session instead of being taken from the draft.
     for field in dataclass_fields(Params):
         name = field.name
         target = contract_to_draft_field(name)
+        # Skip the already-read custom channel and fields this declaration lacks.
         if name == "custom_slots" or not hasattr(draft, target):
             continue
         current: object = getattr(draft, target)
+        # Declared equilibrium distribution: an empty native read means derive
+        # mode (None on the draft), otherwise it is the (2, n_ages) tensor.
         if name == "equilibrium_distribution":
             values = session.get_tensor(name)
             if not values.size:
@@ -65,6 +70,7 @@ def config_snapshot_from_session(session: _ConfigReadSession, draft: ModelDraft)
                         f"'{name}': expected {expected} elements, got {values.size}"
                     )
                 fields[target] = values.reshape(2, int(draft.n_ages))
+        # Tensor field: adopt the draft's declared shape onto the fresh native values.
         elif isinstance(current, np.ndarray):
             values = session.get_tensor(name)
             if values.size != current.size:
@@ -79,6 +85,8 @@ def config_snapshot_from_session(session: _ConfigReadSession, draft: ModelDraft)
                 cast(NDArray[np.float64], current).shape
             )
         else:
+            # Scalar field: the native -1 sentinel marks an undeclared external
+            # eggs override, which the draft represents as None.
             value = session.get_scalar(name)
             fields[target] = None if name == "external_expected_eggs" and value < 0 else value
     # Native reads already return detached buffers. Only declaration metadata
@@ -423,6 +431,8 @@ class RustLifecycleBackend:
         Raises:
             ValueError: When either array has the wrong size.
         """
+        # Flatten row-major so the contiguous bytes match Rust's state layout;
+        # PyO3 then copies the vectors into the session (no shared ownership).
         _session_call(
             lambda: self._session.set_state(
                 np.ascontiguousarray(state.individual_count, dtype=np.float64).reshape(
@@ -460,6 +470,7 @@ class RustLifecycleBackend:
         Returns:
             Current tick and independently owned flattened observations.
         """
+        # Rust projects the mask as a flat contiguous slice; the result is a fresh array.
         return self._session.observe_current(np.ascontiguousarray(mask).ravel(), selected, collapse_age, aggregate)
 
     def execution_state(self) -> tuple[str, int]:
@@ -521,6 +532,8 @@ class RustLifecycleBackend:
                 bounds gate (non-finite or outside the jsonc bounds); the
                 message names the parameter, tick, and value.
         """
+        # Rust reads the mask as one flat contiguous buffer, so normalize
+        # strides and dtype before crossing the FFI boundary.
         if observation_mask is not None:
             observation_mask = np.ascontiguousarray(observation_mask, dtype=np.float64)
         final_tick, history_rows, was_stopped = _session_call(
@@ -542,6 +555,7 @@ class RustLifecycleBackend:
             since the previous drain, in commit order.  Values were already
             bounds-validated on the Rust side.
         """
+        # Rust journals compact parameter ids; resolve them to contract names here.
         return [
             (int(tick), ECO_PARAM_NAMES[param_id], float(old), float(new))
             for tick, param_id, old, new in self._session.drain_eco_journal()
@@ -586,6 +600,8 @@ class RustDiscreteLifecycleBackend:
                 "natal._engine_rs is not available; build it with `maturin develop` "
                 "and re-run."
             ) from err
+        # extreme_speed_mode > 0 selects the fused Wright-Fisher tick; the flag
+        # is cached here and passed to every run call.
         self._wf = int(getattr(config, "extreme_speed_mode", 0)) > 0
         contracts: Materialized = materialize(config)
         # PyO3 #[new]: the class constructor *is* from_parts(bp, params, seed).
@@ -798,6 +814,7 @@ class RustDiscreteLifecycleBackend:
         Returns:
             Current tick and independently owned flattened observations.
         """
+        # Rust projects the mask as a flat contiguous slice; the result is a fresh array.
         return self._session.observe_current(np.ascontiguousarray(mask).ravel(), selected, collapse_age, aggregate)
 
     def execution_state(self) -> tuple[str, int]:
@@ -850,6 +867,7 @@ class RustDiscreteLifecycleBackend:
             ValueError: When an in-run ``Op.set_param`` value fails the Rust
                 bounds gate (non-finite or outside the jsonc bounds).
         """
+        # Rust reads the mask as one flat contiguous buffer.
         if observation_mask is not None:
             observation_mask = np.ascontiguousarray(observation_mask, dtype=np.float64)
         final_tick, history_rows, was_stopped = _session_call(
@@ -872,6 +890,7 @@ class RustDiscreteLifecycleBackend:
             since the previous drain, in commit order.  Values were already
             bounds-validated on the Rust side.
         """
+        # Rust journals compact parameter ids; resolve them to contract names here.
         return [
             (int(tick), ECO_PARAM_NAMES[param_id], float(old), float(new))
             for tick, param_id, old, new in self._session.drain_eco_journal()
@@ -937,8 +956,10 @@ class RustHeterogeneousSpatialLifecycleBackend:
             tick: The authoritative starting tick.
             model: ``"age_structured"`` or ``"discrete_generation"`` —
                 which lifecycle the per-deme kernel runs.
-            stay_after_send: Deterministic-migration bookkeeping order
-                mirrored from the frozen migration CSR.
+            stay_after_send: Historical migration bookkeeping flag mirrored
+                from the frozen migration CSR.  It records which mode folded
+                the CSR but no longer changes the numbers (the deterministic
+                kernel uses one order for both).
             hook_program: Optional shared declarative CSR hook program.
             seed: Base seed; deme *d* uses ``seed ^ d`` for its persistent
                 stream.
@@ -960,6 +981,8 @@ class RustHeterogeneousSpatialLifecycleBackend:
             )
             for name, column in ecology_columns.items()
         }
+        # Every boundary array is forced C-contiguous so PyO3 can read it as a
+        # flat slice; the session copies the stacked initial state and tick.
         self._session = _engine_rs.HeterogeneousSpatialEngineSession(
             blueprint,
             boundary_columns,
@@ -1144,6 +1167,7 @@ class RustHeterogeneousSpatialLifecycleBackend:
         Returns:
             Current tick and independently owned flattened observations.
         """
+        # Rust projects the mask as a flat contiguous slice; the result is a fresh array.
         return self._session.observe_current(np.ascontiguousarray(mask).ravel(), selected, collapse_age, aggregate)
 
     def execution_state(self) -> tuple[str, int]:
@@ -1181,19 +1205,21 @@ class RustHeterogeneousSpatialLifecycleBackend:
         return int(_session_call(self._session.capture_checkpoint))
 
     def restore_from_checkpoint(self, tick: int) -> int | None:
-        """Restore the newest checkpoint at or before *tick*.
+        """Restore the checkpoint recorded at exactly *tick*.
 
         Atomically replaces the owned state, all per-deme RNG streams,
         and the ecology columns, rewinds the tick, and truncates stored
         checkpoints newer than the restored boundary.
 
         Args:
-            tick: Target tick.
+            tick: Target tick; only a checkpoint captured exactly at this
+                tick is restorable (there is no nearest-earlier fallback).
 
         Returns:
             The restored tick, or ``None`` when no checkpoint covers it
             (the runtime is untouched in that case).
         """
+        # None means no checkpoint covers the tick; the native runtime is untouched.
         restored = _session_call(lambda: self._session.restore_from_checkpoint(int(tick)))
         return None if restored is None else int(restored)
 
@@ -1225,6 +1251,7 @@ class RustHeterogeneousSpatialLifecycleBackend:
             ``equilibrium_declared`` int64, all other columns float64).
         """
         columns: dict[str, NDArray[np.float64] | NDArray[np.int64]] = {}
+        # Native columns are already fresh copies; np.asarray only retypes them.
         for name, values in self._session.ecology_columns_snapshot():
             columns[name] = np.asarray(values)
         return columns
@@ -1356,11 +1383,14 @@ def ecology_columns_from_drafts(
     """
     n_demes = len(drafts)
     columns: dict[str, NDArray[np.float64] | NDArray[np.int64]] = {}
+    # Every scalar field becomes one (n_demes,) float64 column.
     for contract_name, draft_field, _default in _ECOLOGY_SCALAR_SOURCES:
         columns[contract_name] = np.array(
             [float(getattr(draft, draft_field)) for draft in drafts],
             dtype=np.float64,
         )
+    # None has no float representation, so -1.0 is the wire sentinel for
+    # "external eggs not declared" at this deme.
     external = np.array(
         [
             float(draft.external_expected_eggs)
@@ -1371,9 +1401,12 @@ def ecology_columns_from_drafts(
         dtype=np.float64,
     )
     columns["external_expected_eggs"] = external
+    # growth_mode is an enum column; the Rust boundary reads it as int64.
     columns["growth_mode"] = np.array(
         [int(draft.juvenile_growth_mode) for draft in drafts], dtype=np.int64
     )
+    # Vector fields are tiled into a flat (n_demes, per-deme extent) row-major
+    # column: the first draft fixes the extent, then each deme fills its segment.
     for draft_field, contract_name in _ECOLOGY_VECTOR_SOURCES:
         first = np.asarray(getattr(drafts[0], draft_field), dtype=np.float64)
         stacked = np.empty((n_demes,) + first.shape, dtype=np.float64)
@@ -1427,6 +1460,9 @@ def genetics_variant_bank(
     by_identity: dict[tuple[int, ...], int] = {}
     ids = np.zeros(len(drafts), dtype=np.int64)
     for index, draft in enumerate(drafts):
+        # Two-level dedup: the object-identity digest cheaply reuses an entry when
+        # _replace shells share tensor buffers, and the byte digest then catches
+        # equal arrays held by distinct objects.
         identity = tuple(
             id(getattr(draft, field)) for field, _ in _GENETICS_CONTRACT_FIELDS
         )
@@ -1436,12 +1472,14 @@ def genetics_variant_bank(
                 contract: np.array(getattr(draft, field), dtype=np.float64).ravel()
                 for field, contract in _GENETICS_CONTRACT_FIELDS
             }
+            # Sort by contract name so the digest ignores mapping insertion order.
             content = b"".join(
                 np.ascontiguousarray(tensors[contract], dtype=np.float64).tobytes()
                 for contract, _ in sorted(tensors.items())
             )
             cached = by_content.get(content)
             if cached is None:
+                # First appearance takes the next bank index, keeping ids deterministic.
                 cached = len(bank)
                 bank.append(tensors)
                 by_content[content] = cached
@@ -1472,8 +1510,9 @@ def rust_migrate_csr_deterministic(
         dest_idx: CSR destination index per entry.
         weights: CSR normalized outbound weight per entry.
         rate: ``(n_demes, 2, n_ages)`` migration-rate column (flat float64).
-        stay_after: Deterministic bookkeeping order (kernel mode uses
-            ``True``).
+        stay_after: Historical bookkeeping flag retained for the wire
+            contract (``True`` when kernel mode folded the CSR).  It no
+            longer changes the numbers.
 
     Returns:
         ``(individual_count_all, sperm_storage_all)`` after migration.
@@ -1485,6 +1524,8 @@ def rust_migrate_csr_deterministic(
             "natal._engine_rs is not available; build it with `maturin develop` "
             "before enabling the Rust backend."
         ) from err
+    # Normalize every array to a C-contiguous dtype so PyO3 can borrow a flat
+    # slice; the Rust kernel returns new arrays and never mutates the inputs.
     ind = np.ascontiguousarray(individual_count_all, dtype=np.float64)
     sperm = np.ascontiguousarray(sperm_storage_all, dtype=np.float64)
     return _engine_rs.migrate_csr_deterministic(
@@ -1533,6 +1574,7 @@ def rust_migrate_csr_stochastic(
             "natal._engine_rs is not available; build it with `maturin develop` "
             "before enabling the Rust backend."
         ) from err
+    # Same contiguous-normalization contract as the deterministic wrapper.
     ind = np.ascontiguousarray(individual_count_all, dtype=np.float64)
     sperm = np.ascontiguousarray(sperm_storage_all, dtype=np.float64)
     return _engine_rs.migrate_csr_stochastic(
@@ -1577,7 +1619,9 @@ class RustDemeParameters:
 
     def trigger_event(self, event: int) -> int:
         """Execute an explicit event on this deme's native state and RNG."""
+        # Refresh a stale session/program and bind history before the explicit event.
         self._refresh_program()
+        # Invalidate the Python snapshot even on failure: native state may have moved.
         try:
             return self._session.trigger_deme_event(self._deme, event)
         finally:
@@ -1593,6 +1637,7 @@ class RustDemeParameters:
 
     def config_snapshot(self, draft: ModelDraft) -> ModelDraft:
         """Project current native values onto detached model metadata."""
+        # self satisfies the read protocol against this deme's native columns.
         return config_snapshot_from_session(self, draft)
 
     def refresh_params(self, fields: list[str], params_obj: Params) -> None:

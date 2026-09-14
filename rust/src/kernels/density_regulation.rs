@@ -9,8 +9,10 @@
 //! ``g(0) == r``.
 //!
 //! Growth-mode ids: 0 = no regulation, 1 = ``fixed``, 2 = ``linear``
-//! (alias ``logistic``), 3 = ``beverton_holt``, 4 = ``ricker``,
-//! ``>= 5`` = user-registered custom slot.
+//! (alias ``logistic``), 3 = ``beverton_holt``, 4 = ``ricker``.  Ids
+//! ``>= 5`` are *reserved* for a future custom-curve mechanism: no registry
+//! exists, so any such id is rejected as an unknown mode (see
+//! ``DENSITY_CURVE_PLAN.md``).
 
 use pyo3::exceptions::{PyValueError, PyZeroDivisionError};
 use pyo3::prelude::*;
@@ -30,6 +32,7 @@ pub type GrowthRate = f64;
 /// The survival factor.
 #[must_use]
 pub fn g_fixed(x: f64) -> f64 {
+    // Empty/zero juvenile pool: no competition, so no culling (also avoids 1/0).
     if x <= 0.0 {
         1.0
     } else {
@@ -104,6 +107,8 @@ pub fn check_curve_contract(g: &impl Fn(f64) -> f64) -> PyResult<()> {
         )));
     }
     // 2. Monotone non-increasing + 3. non-negative and bounded, sampled.
+    // Sample [0, 3] on a fixed grid; the +1e-12 tolerance absorbs rounding.
+    // The exact g(1) == 1 check above remains the authoritative fixed-point test.
     let mut prev = g(0.0);
     if !(prev.is_finite() && prev >= 0.0) {
         return Err(PyValueError::new_err(format!(
@@ -142,6 +147,7 @@ pub fn check_curve_contract(g: &impl Fn(f64) -> f64) -> PyResult<()> {
 /// ## Errors
 /// Returns ``PyValueError`` for unknown mode ids.
 pub fn scaling_factor(mode: i64, x: f64, r: f64) -> PyResult<f64> {
+    // Mode 0 is the identity (no regulation); modes 1-4 dispatch to the curves.
     Ok(match mode {
         1 => g_fixed(x),
         2 => g_linear(x, r),
@@ -150,7 +156,7 @@ pub fn scaling_factor(mode: i64, x: f64, r: f64) -> PyResult<f64> {
         0 => 1.0,
         other => {
             return Err(PyValueError::new_err(format!(
-                "unrecognized growth mode {other} (built-ins: 0-4; custom slots via the curve registry)"
+                "unrecognized growth mode {other} (built-ins are 0-4; ids >= 5 are reserved and have no registry)"
             )))
         }
     })
@@ -172,6 +178,15 @@ pub fn scaling_factor(mode: i64, x: f64, r: f64) -> PyResult<f64> {
 ///   equilibrium survival rate afterwards, matching
 ///   ``actual_growth_rate * expected_survival_rate``.
 /// - ricker (mode 4): same shape, no Python precedent.
+///
+/// One case deliberately diverges from the retired reference.  When C* is
+/// zero — a carrying capacity of zero, or a declared equilibrium with no
+/// reproducing females — the reference guarded the ratio to 1.0 (the neutral
+/// point of every compensatory curve) and the survival rate to 1.0, which
+/// multiplied out to a scaling of exactly 1.0 and silently disabled
+/// regulation: a population with no habitat grew without bound instead of
+/// going extinct.  Modes 2..=4 now collapse recruitment to zero there, which
+/// is what FIXED mode already did.
 ///
 /// ## Parameters
 /// - `mode`: Growth-mode id (0 none, 1 fixed, 2 linear, 3 beverton_holt,
@@ -197,16 +212,28 @@ pub fn regulation_scaling(
     match mode {
         0 => Ok(1.0),
         1 => Ok(if actual > 0.0 {
+            // Fixed mode divides equilibrium by the raw actual strength in a
+            // single rounding step, deliberately not via 1/(actual/equilibrium).
             (equilibrium / actual).min(1.0)
         } else {
             1.0
         }),
         2..=4 => {
+            // A zero equilibrium means the habitat supports nobody: there is
+            // no reference competition strength to evaluate the curve at, and
+            // the ratio/survival guards would otherwise multiply out to a
+            // scaling of exactly 1.0, silently switching regulation off.
+            // NaN is treated the same way: it is not a usable reference point.
+            if equilibrium <= 0.0 || equilibrium.is_nan() {
+                return Ok(0.0);
+            }
+            // Curves carrying the equilibrium survival factor: evaluate g at the
+            // guarded competition ratio, then scale by s* afterwards.
             let ratio = competition_ratio(actual, equilibrium);
             Ok(scaling_factor(mode, ratio, r)? * survival_rate)
         }
         other => Err(PyValueError::new_err(format!(
-            "unrecognized growth mode {other} (built-ins: 0-4; custom slots via the curve registry)"
+            "unrecognized growth mode {other} (built-ins are 0-4; ids >= 5 are reserved and have no registry)"
         ))),
     }
 }
@@ -221,6 +248,7 @@ pub fn regulation_scaling(
 /// ``actual / expected``, or 1.0 when the equilibrium is zero.
 #[must_use]
 pub fn competition_ratio(actual: f64, expected: f64) -> f64 {
+    // A zero expected strength has no meaningful ratio; treat it as equilibrium.
     if expected > 0.0 {
         actual / expected
     } else {

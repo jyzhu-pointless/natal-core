@@ -10,9 +10,11 @@ use crate::generated::ecology_parameters::ECO_PARAM_COLUMNS;
 
 /// Validate externally supplied state values before an owner commits a boundary.
 pub(crate) fn validate_state_values(ind: &[f64], sperm: &[f64], tick: i64) -> PyResult<()> {
+    // Tick is an iteration counter; a negative value indicates a caller bug.
     if tick < 0 {
         return Err(PyValueError::new_err("tick must be nonnegative"));
     }
+    // Individual and sperm-storage entries are counts: finite and nonnegative.
     if ind
         .iter()
         .chain(sperm)
@@ -27,10 +29,13 @@ pub(crate) fn validate_state_values(ind: &[f64], sperm: &[f64], tick: i64) -> Py
 
 /// Check numerical domains before any native mutation.
 pub(crate) fn validate_scalar_value(name: &str, value: f64) -> PyResult<()> {
+    // Canonical ECO columns delegate to the generated per-id bound table.
     if let Some(id) = ECO_PARAM_COLUMNS.iter().position(|field| *field == name) {
         return crate::hooks::interpreter::validate_eco_param(id, value)
             .map_err(PyValueError::new_err);
     }
+    // Field-specific domains: growth_mode is an integer enum 0..=4, while
+    // external_expected_eggs uses -1 as the "unused" sentinel.
     let valid = value.is_finite()
         && match name {
             "growth_mode" => value.fract() == 0.0 && (0.0..=4.0).contains(&value),
@@ -46,6 +51,7 @@ pub(crate) fn validate_scalar_value(name: &str, value: f64) -> PyResult<()> {
 }
 
 pub(crate) fn validate_tensor_values(name: &str, values: &[f64]) -> PyResult<()> {
+    // Tensors hold counts/rates: reject NaN, infinity, and negative entries.
     if values
         .iter()
         .any(|value| !value.is_finite() || *value < 0.0)

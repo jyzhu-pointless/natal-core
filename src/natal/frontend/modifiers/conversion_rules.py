@@ -71,6 +71,8 @@ def _validate_rate(rate: object) -> float:
         ValueError: If *rate* is not a finite number in ``[0, 1]``.
     """
     value = float(rate)  # type: ignore[arg-call-overload]  # runtime boundary: floats from JSON/user objects
+    # Reject non-finite and out-of-range values at declaration time, so the
+    # compiler can treat `rate` as a probability without re-checking.
     if not math.isfinite(value):
         raise ValueError(f"rate must be finite, got {rate!r}")
     if not 0 <= value <= 1:
@@ -97,6 +99,8 @@ def _validate_filters(
             f"got {type(filters).__name__}"
         )
     pairs: list[tuple[str, str]] = []
+    # Pairs keep declaration order (cascade order matters); unknown keys and
+    # empty patterns fail here, since stage support is known statically.
     mapping = cast("Mapping[object, object]", filters)
     items = list(mapping.items())  # runtime boundary
     for key, pattern in items:
@@ -147,6 +151,8 @@ def _parse_target(target: object, stage: str) -> tuple[str, str]:
             "with both parts explicit"
         )
     genotype_part, label_part = target.rsplit("@", 1)
+    # Both parts must be explicit; "*" is resolved at compile time to mean
+    # "keep the input's corresponding part".
     if not genotype_part or not label_part:
         raise ValueError(
             f"{stage} rule target {target!r} must be '[genotype or *]@[label or *]' "
@@ -171,6 +177,8 @@ class _RuleBase:
         stage: str,
     ) -> None:
         """Run the shared declaration checks (call from ``__init__``)."""
+        # Structural validation only; allele/label resolution against a species
+        # is deferred to compile time, when a host and registry exist.
         self.rate = _validate_rate(rate)
         self.filters = filters
         self.name = name
@@ -219,6 +227,8 @@ class GameteGtypeConversionRule(GameteStageRule):
                 malformed.
         """
         self.to: str = _parse_target_str(to, "gamete gtype conversion")
+        # Shape checked here; the genotype/label names are resolved against the
+        # species and registry only when the owning rule set compiles.
         self.target_parts = _parse_target(self.to, "gamete gtype conversion")
         self._init_common(rate, filters, name, GAMETE_FILTER_KEYS, "gamete")
 
@@ -360,6 +370,8 @@ class ZygoteAlleleConversionRule(ZygoteStageRule):
             raise ValueError(
                 f"side must be one of {list(SIDES)}, got {side!r}"
             )
+        # `side` selects which zygotic copies are eligible to convert; each
+        # selected copy later converts independently at `rate`.
         self.from_allele: str = from_allele
         self.to_allele: str = to_allele
         self.side: str = side
@@ -394,12 +406,16 @@ def replace_allele_in_haploid(
 
     species = hg.species
 
+    # A locus belongs to exactly one chromosome, so the first matching gene is
+    # the unique source copy in this haploid genome.
     for hap_idx, haplotype in enumerate(hg.haplotypes):
         for gene in haplotype.genes:
             if gene.name != from_allele:
                 continue
 
             locus = gene.locus
+            # Locate the same-locus target; the compile step already verified it
+            # is registered, so a miss here means "not this locus".
             target_gene = None
             for registered in locus.all_entities:
                 if registered.name == to_allele:
@@ -407,6 +423,7 @@ def replace_allele_in_haploid(
                     break
 
             if target_gene is None:
+                # No convertible target at this locus: skip and keep scanning.
                 continue
 
             new_genes = [
@@ -422,6 +439,8 @@ def replace_allele_in_haploid(
                 new_haplotype if i == hap_idx else h
                 for i, h in enumerate(hg.haplotypes)
             ]
+            # Only the affected haplotype is rebuilt; the rest are reused, and
+            # the HaploidGenotype constructor returns a cached instance.
             return HaploidGenotype(species=species, haplotypes=new_haplotypes)
 
     return None
@@ -451,6 +470,8 @@ def validate_pattern_alleles(
     import re
 
     tokens = sorted(set(re.findall(r"[A-Za-z0-9_]+", base_pattern)))
+    # Every identifier token must be a registered allele: a typo would otherwise
+    # compile into a matcher that silently never fires (forbidden by CR-1).
     for token in tokens:
         if species.get_gene(token) is None:
             raise ValueError(
@@ -472,6 +493,8 @@ def validate_filter_pattern(
     from natal.frontend.patterns.elements.atom import LabPattern
 
     base = pattern
+    # At most one '@'; both sides must be non-empty, and every named label must
+    # exist even when negated, so a typo cannot broaden or disable the rule.
     if "@" in pattern:
         if pattern.count("@") != 1:
             raise ValueError(f"{context}: filter must contain at most one @ separator")
@@ -483,6 +506,8 @@ def validate_filter_pattern(
         except Exception as exc:
             raise ValueError(f"{context}: invalid filter label {suffix!r}") from exc
         names = lab.lab_set or ({lab.lab} if lab.lab is not None else set())
+        # LabPattern exposes either an explicit label or a set (which may encode
+        # negations); collect the named labels for the existence check.
         unknown = names - set(labels or ["default"])
         if unknown:
             raise ValueError(f"{context}: unknown filter labels {sorted(unknown)!r}")

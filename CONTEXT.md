@@ -1,11 +1,11 @@
 # NATAL Core — 领域与架构上下文
 
-> 本文件记录项目的领域术语（Ubiquitous Language）和模块架构设计决策。
-> 不含实现细节、不含代码示例。纯粹的概念地图。
+> 本文件记录当前领域术语、模块职责和架构边界，不维护重构进度或临时任务清单。
 >
-> **状态**：模块重组已完成（2026-07-03），15 个子包全部就位。
-
----
+> **核对基线**：2026-09-14，提交 `71b18c4`。下述路径均相对于仓库根目录。
+> 授权与协作遵循 [AGENTS.md](./AGENTS.md)，质量要求遵循
+> [quality_checks_spec.md](./quality_checks_spec.md)，文档与类型格式遵循
+> [docstring_spec.md](./docstring_spec.md)。本文件不另设文件行数或质量门禁。
 
 ## 领域术语
 
@@ -24,153 +24,94 @@
 | 遗传预设 | GeneticPreset | 预定义的遗传修饰规则组合（如基因驱动 HomingDrive） |
 | 修饰器 | Modifier | 改变配子或合子生成频率的规则（GameteModifier / ZygoteModifier） |
 | 适应度 | Fitness | 基因型的生存/繁殖优势（viability、fecundity、sexual_selection、zygote_viability） |
-| 模型草稿 | ModelDraft | 构建期声明草稿（不可变结构），编译为 Rust 会话的 Blueprint/Params/遗传表 |
+| 模型声明 | ModelDefinition | 保存声明顺序和规范化编译输入的冻结快照，用于重新编译；派生遗传矩阵不是声明状态 |
+| 模型草稿 | ModelDraft | 构建期中间数据；采用 NamedTuple 容器，但内部数组不因此自动不可变，不是运行时权威状态 |
 | 种群状态 | PopulationState | 状态快照（数组容器）；Rust 会话拥有权威运行状态，读取返回独立拷贝 |
-| 配置器 | Configurator | 用户链式 DSL；将声明编译为会话输入并支持运行时更新 |
-| Rust 会话 | EngineSession / SpatialEngineSession 变体 | 唯一运行时权威：拥有计数、tick、生态、遗传、随机流、历史与检查点 |
+| 种群构建器 | PopulationBuilder / SpatialPopulationBuilder | 构建期链式声明入口，将模型声明编译并构建为种群 |
+| 运行时更新器 | RuntimeUpdater | 由种群或 Hook 上下文提供的更新句柄，将修改提交到会话或事件事务，不负责构建种群 |
+| 结构蓝图 | Blueprint | 固定维度、名称目录、掩码、初始状态及迁移结构等契约数据 |
+| 参数载荷 | Params | 承载可更新的生态参数和遗传张量；物化时拥有独立数组，用于向运行时传递数据 |
+| Rust 会话 | AgeStructuredSession / DiscreteGenerationSession / SpatialSession | 唯一运行时权威：拥有计数、tick、生态、遗传、随机流、历史与检查点 |
 | 索引注册表 | IndexRegistry | 将基因型/单倍型映射为引擎使用的整数索引 |
 | Hook | Hook | 模拟过程中的事件干预点（first / early / late / finish） |
 | 种群 | Population | 具体的种群模型实例（年龄结构型 / 离散代型 / 空间型） |
-| 空间拓扑 | SpatialTopology | 空间种群的区域布局（六边形网格、方形网格等） |
+| 空间拓扑 | GridTopology / SquareGrid / HexGrid | 空间种群的区域布局（六边形网格、方形网格等） |
 | 迁移 | Migration | 空间种群中个体在区域间的移动 |
-| 观测 | Observation | 模拟过程中对特定基因型频率的记录和过滤规则 |
+| 观测 | Observation | 将种群状态按个体选择条件分组、汇总为观测结果的规则 |
+| 历史 | History / HistoryStore | Python 提供带 schema 的只读查询和独立数组导出，Rust 存储并维护运行历史 |
 | 区域 | Deme | 空间种群中的一个局部子种群 |
 
----
 
-## 目录结构
+## 当前目录与职责
 
-> `_` 前缀 = 内部模块，不通过 `__init__.py` 暴露
-> 顶层只有三个实体包树：`frontend/`、`backends/`、`contracts/`。
-> 垫片目录（`natal.data`、`natal.hooks` …）与 numba 后端已在 ⑥ 全部移除；
-> 顶层惰性导出按规则扫描这三个包树中声明了字面量 `__all__` 的子包。
+Python 包位于 `src/natal/`，顶层实体包树为 `frontend/`、`backends/` 和 `contracts/`。
+仓库根目录的 `frontend/` 是 Vue 应用源码，与 Python 的 `src/natal/frontend/` 不同。
 
-```
-src/natal/
-│
-├── __init__.py                # 惰性加载入口（AST 扫描 frontend/backends/contracts 的 __all__）
-├── __init__.pyi               # 生成器产物（scripts/generate_init_pyi.py）
-├── parameters.jsonc           # 参数注册表（ParamDescriptor 的数据源）
-├── _engine_rs.*               # Rust 原生扩展（maturin 构建）
-│
-├── frontend/                  # 🖥️ 用户面 ✅
-│   ├── genetics/              # 遗传结构/实体（structures/, entities/ + __init__）
-│   ├── patterns/              # 基因型模式匹配（elements/, parser, selector）
-│   ├── registry/              # IndexRegistry
-│   ├── configurator/          # Configurator 链式 API（_base/_factory/_params/_routes/_writers/...）
-│   ├── data/                  # ModelDraft + PopulationState/DiscretePopulationState（NamedTuple）
-│   ├── utils/                 # Sex/Age/GameteLabel 类型、helpers、参数注册表 loader
-│   ├── population/            # BasePopulation/AgeStructuredPopulation/DiscreteGenerationPopulation
-│   ├── spatial/               # SpatialPopulation/DemeSlice/SpatialParamsView/topology/migration(CSR 折叠)
-│   ├── modifiers/             # 配子/合子转换规则（conditions/gamete_conversion/zygote_conversion）
-│   ├── presets/               # HomingDrive/ToxinAntidoteDrive/Wolbachia/...（_base/_types/cytoplasmic/...）
-│   ├── fitness/               # 适应度补丁（_patch/_writer/_types）
-│   ├── hooks/                 # @hook + Op（entry/、compile/（CSR 容器）、runtime/、tick_context.py、types.py）
-│   ├── output/                # History/Observation/record/translation
-│   └── ui/                    # Dashboard/可视化（依赖 matplotlib 等，可选导入）
-│
-├── backends/                  # 🔌 引擎适配层
-│   └── rust/                  # Rust 原生扩展适配（rust_backend.py：会话桥 + 检查点/错误转换；唯一执行引擎）
-│
-├── contracts/                 # 前后端契约（blueprint/params/state/materialize 等）
-│
-└── py.typed
-```
+| 路径 | 职责 |
+|---|---|
+| `src/natal/__init__.py` | `_PUBLIC_EXPORTS` 显式声明顶层公开符号，首次访问时惰性导入所属模块 |
+| `src/natal/__init__.pyi` | 由 `scripts/generate_init_pyi.py` 根据显式导出生成的类型 stub |
+| `src/natal/_engine_rs.pyi` | Rust 原生扩展的 Python 类型接口 |
+| `src/natal/parameters.jsonc` | 参数注册表数据源 |
+| `src/natal/frontend/genetics/` | 物种、染色体、位点和基因型结构；遗传编译、矩阵构建及频率提取 |
+| `src/natal/frontend/patterns/` | 基因型、配子型、合子型模式解析和个体选择器 |
+| `src/natal/frontend/registry/` | 遗传实体到整数索引的映射 |
+| `src/natal/frontend/model/` | 模型声明、草稿装配、声明编译、初始状态解析及编译产物发布 |
+| `src/natal/frontend/builder/` | 构建期链式 API、参数路由和写入，以及独立的 RuntimeUpdater |
+| `src/natal/frontend/data/` | 状态快照容器及扁平状态解析，不存放 ModelDraft |
+| `src/natal/frontend/population/` | 年龄结构与离散代种群的 Python 入口、运行调度和会话访问 |
+| `src/natal/frontend/spatial/` | 空间构建器、种群、网格拓扑、迁移 CSR 生成和区域访问 |
+| `src/natal/frontend/modifiers/` | 配子与合子的转换规则 |
+| `src/natal/frontend/presets/` | 基因驱动、细胞质等预设规则组合 |
+| `src/natal/frontend/fitness/` | 适应度补丁和模式解析写入 |
+| `src/natal/frontend/hooks/` | Hook 声明、编译、TickContext 及事件事务接口 |
+| `src/natal/frontend/output/` | 记录计划、历史查询、观测和结果转换 |
+| `src/natal/frontend/utils/` | 共享类型、参数描述和辅助函数 |
+| `src/natal/frontend/webui/` | FastAPI 服务、REST/WebSocket 通道及面向 Vue 的结果序列化 |
+| `src/natal/backends/rust/` | Python 与 Rust 会话之间的适配、检查点和错误转换 |
+| `src/natal/contracts/` | Blueprint、Params 及从草稿物化契约数据的边界 |
+| `frontend/` | Vue/Vite 仪表盘；构建产物由 Python Web 服务提供 |
 
-> 注意：`natal.frontend.spatial.migration` 中的 migration CSR 折叠与
-> `natal.contracts` 的契约层共同构成 slice-5 数据面；
-> `natal.backends.reference` / `natal.engine` / `natal.numba` 等旧路径已不存在。
+Rust 执行层位于 `rust/src/`：
 
-## 依赖方向
+| 路径 | 职责 |
+|---|---|
+| `rust/src/lib.rs`、`rust/src/python.rs` | 原生扩展注册与 Python 可调用函数 |
+| `rust/src/model/` | 蓝图、生态参数、遗传张量、自定义字段及输入校验 |
+| `rust/src/sessions/` | 年龄结构、离散代和空间会话，以及执行状态转换 |
+| `rust/src/kernels/` | 生命周期阶段、后代生成、密度调节、平衡态、随机采样、迁移和状态归约 |
+| `rust/src/hooks/` | 声明式 Hook 解释和回调事务 |
+| `rust/src/output/` | 原生历史存储、参数日志和观测投影 |
+| `rust/src/generated/` | 生成的生态参数定义 |
 
-```
-utils → genetics → patterns → presets → modifiers
-                                    ↘ fitness
-genetics + patterns → registry → data
-data → configurator → population → spatial → output → ui
-hooks → engine → population
-```
+## 构建与执行关系
 
-## 关键设计决策
+下面描述数据流和职责分工，不代表逐模块 import 依赖图。
 
-1. **`data/` 独立于 `configurator/`**：config 和 state 是面向引擎的纯数据结构，不依赖配置器自身。
-2. **`patterns/` 与 `genetics/` 平行**：patterns 被 hooks、configurator、modifiers 等多个模块依赖，不是 genetics 的子概念。
-3. **`registry/` 独立顶层**：IndexRegistry 是遗传领域到引擎整数空间的桥梁。
-4. **`fitness/` 已激活**：fitness 逻辑已从 presets 和 configurator 提取到独立的 `fitness/` 子包，使用 `FitnessPopulationView` Protocol 作为统一接口，`_patch.py` 为唯一写入层，`_writer.py` 为 DSL 解析层。
-5. **`modifiers/` 独立**：修饰器是连接 presets 和引擎的独立抽象层。
-6. **500 行单模块上限**：每个 `.py` 文件不超过 500 行，超限需拆分。
-7. **执行引擎只有一个**：`backends.rust`（原生扩展 `natal._engine_rs`）；引擎会话拥有运行状态，`backends.reference` 与 `auto` 选择器已删除。
-8. **旧 Builder 已废弃**：`population_builder.py` 中的 Builder 类已删除，统一使用 Configurator API。
-9. **旧模块导入路径已全部更新**：`genetic_structures`、`genetic_entities`、`genetic_patterns`、`population_config`、`population_state` 等旧路径不再存在。
+1. **声明与编译**：构建器接收物种、参数、规则和记录要求；`ModelDefinition` 保存声明，`model/definition_compiler.py` 编译派生数据，遗传实体和 `IndexRegistry` 提供类型目录与索引。
+2. **发布与物化**：`model/publication.py` 将编译产物转换为运行时产物，处理完整类型目录到运行时索引的投影；`contracts/materialize.py` 生成 Blueprint 和 Params，并隔离草稿数组。
+3. **会话执行**：Python 种群通过 `backends/rust/rust_backend.py` 连接 Rust 会话。会话维护运行状态并调用 kernels 完成生命周期计算。
+4. **运行时干预**：RuntimeUpdater 将更新送往会话或 Hook 事件事务。声明式 Hook 由 Rust 解释执行；Python 回调通过有生命周期约束的 TickContext 和事务候选数据交互。
+5. **结果访问**：Rust 维护历史存储，Python 提供状态快照、History 和 Observation 查询；Web UI 通过服务接口消费这些结果。
 
-## 后续重构（待办）
+空间构建另外负责拓扑解析、迁移权重归一化和 CSR（压缩稀疏行格式）生成，再把结构及区域参数交给空间会话。迁移的实际数值计算在 Rust 内核中执行。
 
-### ✅ 已完成
+## 关键架构边界
 
-#### `fitness/` — 适应度系统已激活
+- **唯一执行引擎是 Rust**：年龄结构、离散代（含 Wright–Fisher）和空间模拟使用对应 Rust 会话。Python 负责声明、编译、适配和结果访问。
+- **构建与运行时更新分开**：PopulationBuilder 和 SpatialPopulationBuilder 构建种群；RuntimeUpdater 更新既有运行时。当前接口不再以 Configurator 为统一入口。
+- **声明、草稿与运行状态分开**：ModelDefinition 保存可重新编译的输入，ModelDraft 承载构建期中间数据，Rust 会话拥有权威运行状态。不能用修改声明或草稿代替会话更新。
+- **数据隔离具有明确边界**：契约物化会复制数组；状态和历史的公开数组读取提供独立数据。ModelDefinition 隔离其拥有的容器和数组，但用户提供的 recipe、回调等不透明资源保留身份，不能把“冻结声明”理解为递归复制所有对象。
+- **类型目录与运行时索引分开**：`IndexProjection` 记录完整目录到运行时顺序的映射。压缩后的合子型、配子型索引不能直接当作完整目录索引使用。
+- **Hook 更新通过事件事务进行**：回调操作候选状态、参数和随机流，并接受校验和生命周期约束；它不是长期持有会话可变数组的入口。
+- **历史存储归 Rust 所有**：Python History 保留维度、标签及 schema，提供查询与导出；Python 中存在 HistoryBatch 类型不意味着 Python 拥有运行历史的写入权。
+- **顶层导出是显式契约**：仅向子模块 `__all__` 添加符号不会自动发布到 `natal` 顶层；需同步 `_PUBLIC_EXPORTS` 和生成的 stub。`tests/test_phase0_shims.py` 检查相关一致性。
+- **Web UI 使用 Vue 与 FastAPI**：发布 wheel 包含包内静态资源，源码环境也可使用 `frontend/dist` 或 Vite 开发服务；具体资源选择逻辑位于 `src/natal/frontend/webui/app.py`。
 
-fitness 逻辑已从 presets 和 configurator 提取到独立的 `fitness/` 子包。实现内容：
+## 历史路径与维护范围
 
-- `fitness/_types.py`：`FitnessPopulationView` Protocol（`config` + `species` + `index_registry`）
-- `fitness/_patch.py`：唯一写入层，`apply_preset_fitness_patch` 及 9 个 `_apply_*_scaling` 函数
-- `fitness/_writer.py`：DSL 解析层，`write_fitness_field` 解析 pattern → 委托 `_patch.py` 统一写入
-- `modifiers/gamete_conversion.py` + `modifiers/zygote_conversion.py`：从 `presets/` 迁入，原名不变
-- `presets/__init__.py`、`configurator/_fitness.py`：保留向后兼容的 shim
+旧的 `frontend/configurator/`、`frontend/ui/`、`population/_mixins/` 和 Python `engine/simulation/` 不属于当前目录结构。`natal.backends.reference`、`natal.engine`、`natal.numba` 及旧顶层转发包也不应作为新增代码的依赖。
 
-#### `output/` — History / Observation 重构（2026-07-15）
+此前记录的拆分完成情况、文件行数、UI 类型检查待办和覆盖率判断已移除：它们不能作为当前实现或质量状况的证据。项目另有 [TODO.md](./TODO.md)，其中任务状态仍需结合当前代码和验证结果核对。
 
-重构观测和历史记录的数据模型与生命周期。核心变更：
-
-- `patterns/individual_selector.py`：从 Observation 中提取独立的个体选择器，供 Hook、Preset 等复用
-- `output/_recording.py`：RecordingPlan，在构建期冻结 schema + mask + meta
-- `output/history.py`：History / HistorySchema / HistoryBatch 自描述存储，支持 `max_rows` 环形缓冲
-- `output/observation.py`：ObservationResult 结构化结果、auto-identity observation
-- `configurator/_base.py` + `spatial/configurator.py`：`record_history()` 构建期配置入口
-- `population/base.py`：`pop.observation` / `pop.observe()` / `pop.record_snapshot()` / `pop.restore_checkpoint()`
-- `population/_mixins/`：ObservationMixin + OutputMixin（记录写入与 checkpoint）
-
-#### `population/base.py` — BasePopulation mixin 拆分
-
-BasePopulation 从 1743 行拆分为一组 mixin + 532 行核心 ABC：
-
-- `HookManagerMixin`：Hook 程序构建、编译缓存管理
-- `ModifierPresetMixin`：修饰器和预设集合管理
-- `ObservationMixin`：Observation 属性访问
-- `OutputMixin`：历史记录写入、snapshot / checkpoint
-
-### 🔴 高优先级
-
-（当前无高优先级待办）
-
-### 🟡 中优先级
-
-#### `spatial/population.py`（2,041 行）+ `spatial/configurator.py`（1,678 行）
-
-超大文件，需拆分为子模块。PRD #28 中标记为 Out of Scope。
-
-#### `engine/simulation/age_structured.py`（1,342 行）
-
-按生命周期阶段拆分。PRD #28 中标记为 Out of Scope。
-
-### 🟢 低优先级
-
-#### UI 类型检查修复
-
-`ui/` 下多个文件使用全文件 `# type: ignore`，需恢复逐行类型检查。
-
-#### 测试覆盖率提升
-
-核心模块间集成测试覆盖不足，优先补充 fitness 和 modifier 的路径测试。
-
-### ✅ 已确认不变更
-
-以下文件超过 500 行但经评估不适合拆分——类的边界即自然边界：
-
-| 文件 | 行数 | 理由 |
-|---|---|---|
-| `configurator/_base.py` | 1,164 | Configurator 是完整 DSL 类，内聚性高 |
-| `configurator/_base.py` | （见上） | Configurator 是完整 DSL 类，内聚性高 |
-| `genetics/entities/genotype.py` | 649 | 基因型构造 + 重组逻辑，单一职责 |
-| `patterns/parser.py` | 613 | GenotypePatternParser 是递归下降解析器 |
-| `frontend/modifiers/gamete_conversion.py` | 675 | 配子转换规则集，内聚性高（从 presets/ 迁入） |
-| `frontend/modifiers/zygote_conversion.py` | 654 | 合子转换规则集，内聚性高（从 presets/ 迁入） |
+本文件只维护稳定的领域与架构事实。模块迁移、公开入口或数据所有权发生变化时，应同步对应描述；科学公式与关键计算分支的详细解释应放在相关实现附近，较长推导放在对应科学文档中。

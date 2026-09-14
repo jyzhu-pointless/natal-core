@@ -178,8 +178,8 @@ Competition parameters take effect during the survival phase of the population.
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | Relative competition factor for old juveniles (age=1) | `5.0` | Juvenile density regulation | Competition weights vary by age: age=0 fixed at `1.0`, age=1 uses `competition_strength` |
-| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"logistic"` | Juvenile density regulation | Supports `"logistic"`, `"beverton_holt"`, `"ricker"`, etc.; usually `"logistic"` |
+| `competition_strength` | `float` | Competition weight of the second juvenile age class (age=1) | `1.0` | Juvenile density regulation | Age 0 is fixed at `1.0`; leaving it unset keeps age 1 at the same weight. Needs `new_adult_age >= 2` — a model whose only juvenile age is age 0 rejects an explicit value instead of ignoring it |
+| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"beverton_holt"` | Juvenile density regulation | Supports `"no_competition"`, `"fixed"`, `"logistic"` (alias `"linear"`), `"beverton_holt"` (default) and `"ricker"` |
 
 **Density-regulation curves** (`x` = actual competition strength / expected competition strength; `s` = expected survival; `r` = low-density growth rate):
 
@@ -192,6 +192,8 @@ Competition parameters take effect during the survival phase of the population.
 | `ricker` | 4 | `r^(1-x) · s` | exponential overcompensation; oscillates for `r > e` |
 
 Three acceptance bottom lines: (1) at the equilibrium point x=1 all curves converge to `s` (g(1)=s); (2) at low density x->0, g(0)=r·s (the curves share values at the joint equilibrium point); (3) deterministic simulations produce bitwise-reproducible curve scaling.
+
+A fourth rule covers an unusable reference: when the expected competition strength `C*` is zero — a carrying capacity of zero, or a declared equilibrium distribution whose juvenile entries are all zero — the compensatory modes 2–4 recruit nothing (scaling `0`) instead of falling back to an unregulated scaling of `1.0`. A zero `eggs_per_female` is another trigger while `new_adult_age == 1`, because age 0 is then the only competing age. `fixed` (mode 1) is evaluated against the carrying capacity rather than `C*`, so a positive `K` still clamps at `K`. `no_competition` (mode 0) remains the way to say "do not regulate", including for models whose only recruitment comes from hooks.
 | `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
 | `age_1_carrying_capacity` | `Optional[int]` | Carrying capacity at the age=1 stage | `None` | Juvenile density regulation | If explicitly specified, takes highest priority |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | Legacy parameter name (deprecated) with same function as `age_1_carrying_capacity` | `None` | Juvenile density regulation | `age_1_carrying_capacity` recommended; when both are set, `age_1_carrying_capacity` takes precedence |
@@ -451,8 +453,8 @@ Modeling advice:
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"logistic"` | Juvenile density regulation | Commonly `"logistic"`, also supports `"beverton_holt"` and other modes |
-| `low_density_growth_rate` | `float` | Intrinsic growth multiplier at low density | `1.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
+| `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"beverton_holt"` | Juvenile density regulation | Defaults to `"beverton_holt"`; `"logistic"`, `"ricker"` and the other modes stay available |
+| `low_density_growth_rate` | `float` | Intrinsic growth multiplier at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
 | `carrying_capacity` | `Optional[int]` | Carrying capacity for juveniles | `None` | Density upper limit | If not set, the system will attempt automatic derivation; explicitly specified values take highest priority |
 
 ### `presets(...)` / `fitness(...)` / `modifiers(...)` / `hooks(...)` / `build()`

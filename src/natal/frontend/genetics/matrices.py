@@ -45,12 +45,18 @@ def _rust_offspring_kernel(
     Returns:
         The flat kernel result reshaped to ``(n_ztypes,)*3``.
     """
+    # Import the compiled kernel at call time; the Rust side validates the
+    # (2, n_ztypes, n_gtypes) and (n_gtypes, n_gtypes, n_ztypes) layouts.
     from natal._engine_rs import compute_offspring_tensor as rust_kernel
 
+    # The kernel reads C-contiguous float64 buffers, so normalize both inputs
+    # before they cross the FFI boundary.
     flat = rust_kernel(
         np.ascontiguousarray(meiosis, dtype=np.float64),
         np.ascontiguousarray(fusion, dtype=np.float64),
     )
+    # meiosis.shape[1] is n_ztypes; the kernel returns row-major (gf, gm, go),
+    # so the flat buffer reshapes directly back to (z, z, z).
     z = int(meiosis.shape[1])
     return np.asarray(flat, dtype=np.float64).reshape(z, z, z)
 
@@ -71,6 +77,8 @@ def recompute_offspring_tensor(
     Returns:
         The recomputed offspring tensor ``(n_ztypes, n_ztypes, n_ztypes)``.
     """
+    # Normalize dtype/contiguity once here so every caller feeds the kernel the
+    # same layout; the kernel owns the f64 summation order.
     meiosis = np.ascontiguousarray(meiosis, dtype=np.float64)
     fusion = np.ascontiguousarray(fusion, dtype=np.float64)
     return _rust_offspring_kernel(meiosis, fusion)
@@ -90,7 +98,10 @@ def validate_meiosis_table(candidate: NDArray[np.float64]) -> None:
             contains a negative entry — meiosis always produces
             exactly one gamete with non-negative probability.
     """
+    # The last axis is the gamete axis: every (sex, ztype) row is the
+    # distribution over the gametes that ztype produces during meiosis.
     row_sums = candidate.sum(axis=-1)
+    # Compare to 1.0 with a small tolerance for accumulated float rounding.
     ok = np.isclose(row_sums, 1.0, rtol=1e-9, atol=1e-12)
     if not ok.all():
         bad = int(np.count_nonzero(~ok))
@@ -98,6 +109,8 @@ def validate_meiosis_table(candidate: NDArray[np.float64]) -> None:
             "meiosis_map rows must be probability distributions "
             f"(each (sex, ztype) row sums to 1); {bad} row(s) violate this"
         )
+    # Checked separately so a negative entry cannot hide behind a
+    # compensating row sum.
     if (candidate < 0.0).any():
         bad = int(np.count_nonzero(candidate < 0.0))
         raise ValueError(
@@ -141,6 +154,8 @@ def initialize_zygote_map(
     Returns:
         Array of shape ``(n_gtypes, n_gtypes, n_genotypes * n_slabs)``.
     """
+    # Zygote axis = genotype catalog x slab variants; the two gamete axes are
+    # haplotype x gamete label (the compressed HL layout).
     n_hg = len(haploid_genotypes)
     n_genotypes = len(diploid_genotypes)
     n_ztypes = n_genotypes * n_slabs
@@ -152,15 +167,22 @@ def initialize_zygote_map(
     if n_glabs <= 0:
         raise ValueError("n_glabs must be positive")
 
+    # Dense baseline: only haplotype pairs that form a declared diploid
+    # genotype are filled in; everything else stays impossible (zero).
     gametes_to_zygotes_map: NDArray[np.float64] = np.zeros(
         (n_gtypes, n_gtypes, n_ztypes),
         dtype=np.float64,
     )
 
+    # Compressed GType layout, haplotype-major and label-minor: the same
+    # formula as compress_hl and the axis order the Rust gtype tables use.
     _gtype_index: dict[tuple[int, int], int] = {
         (hi, gi): hi * n_glabs + gi for hi in range(n_hg) for gi in range(n_glabs)
     }
 
+    # Enumerate every ordered haplotype pair as a candidate maternal/paternal
+    # gamete combination; unordered species canonicalize first, collapsing
+    # (hg1, hg2) and (hg2, hg1) onto one genotype.
     for idx_hg1, hg1 in enumerate(haploid_genotypes):
         for idx_hg2, hg2 in enumerate(haploid_genotypes):
             if unordered:
@@ -172,17 +194,24 @@ def initialize_zygote_map(
                     paternal=hg2,
                 )
 
+            # Off-catalog pairs stay all zero: that fusion cannot occur.
             if zygote_gt in diploid_genotypes:
                 idx_gt = diploid_genotypes.index(zygote_gt)
+                # Baseline fusion lands in the default slab (index 0 of the
+                # group); zygote modifiers later redirect mass to other slabs.
                 ztype_idx = idx_gt * n_slabs
                 for glab1 in range(n_glabs):
                     for glab2 in range(n_glabs):
+                        # Every gamete-label combination of the pair is a
+                        # certain birth of this genotype: baseline labels do
+                        # not alter Mendelian fusion.
                         compressed_idx1 = _gtype_index[(idx_hg1, glab1)]
                         compressed_idx2 = _gtype_index[(idx_hg2, glab2)]
                         gametes_to_zygotes_map[
                             compressed_idx1, compressed_idx2, ztype_idx
                         ] = 1.0
 
+    # Modifiers run only after the complete Mendelian baseline exists.
     if zygote_modifiers:
         for modifier in zygote_modifiers:
             gametes_to_zygotes_map = modifier(gametes_to_zygotes_map)
@@ -232,6 +261,8 @@ def initialize_gamete_map(
     if n_glabs <= 0:
         raise ValueError("n_glabs must be positive")
 
+    # Output is (sex, ztype, compressed gtype): meiosis differs by sex under
+    # sex chromosomes, and the ztype axis carries genotype x slab.
     n_sexes = max(int(s.value) for s in Sex) + 1
     n_gtypes = n_hg * n_glabs
 
@@ -239,12 +270,17 @@ def initialize_gamete_map(
         (n_sexes, n_ztypes, n_gtypes),
         dtype=np.float64,
     )
+    # Reverse lookup used to compress each produced gamete back to its row.
     haplo_to_idx = {hg: idx for idx, hg in enumerate(haploid_genotypes)}
 
+    # Same compressed layout as initialize_zygote_map / compress_hl.
     _gtype_index: dict[tuple[int, int], int] = {
         (hi, gi): hi * n_glabs + gi for hi in range(n_hg) for gi in range(n_glabs)
     }
 
+    # Sex chromosomes limit which haplotypes each sex can transmit (e.g. only
+    # X-bearing eggs, X- or Y-bearing sperm). For autosome-only species both
+    # sets cover every haplotype, so the filter below keeps everything.
     allowed_haplotypes_by_sex: dict[int, set[HaploidGenotype]] = {}
     if haploid_genotypes:
         species = haploid_genotypes[0].species
@@ -256,12 +292,17 @@ def initialize_gamete_map(
             if male_allowed:
                 allowed_haplotypes_by_sex[int(Sex.MALE)] = male_allowed
         except Exception:
+            # Treat an unresolvable sex-specific set as "no constraint"
+            # instead of aborting the whole baseline build.
             allowed_haplotypes_by_sex = {}
 
+    # Per diploid genotype: take its Mendelian gamete production, then filter
+    # and renormalize per sex.
     for idx_genotype, genotype in enumerate(diploid_genotypes):
         base_gametes = genotype.produce_gametes()
         for sex_idx in range(n_sexes):
             allowed = allowed_haplotypes_by_sex.get(sex_idx)
+            # No declared set for this sex means the full production is legal.
             if allowed is None:
                 filtered_gametes = base_gametes
             else:
@@ -271,6 +312,9 @@ def initialize_gamete_map(
                     if gamete in allowed
                 }
 
+            # Dropping forbidden gametes removes probability mass, so
+            # renormalize over what this sex can actually transmit; a
+            # genotype producing none leaves the row all zeros.
             total_freq = float(sum(filtered_gametes.values()))
             if total_freq <= 0.0:
                 continue
@@ -278,16 +322,22 @@ def initialize_gamete_map(
             inv_total = 1.0 / total_freq
             for gamete, freq in filtered_gametes.items():
                 idx_hg = haplo_to_idx.get(gamete)
+                # Gametes outside the haplotype catalog cannot be addressed.
                 if idx_hg is None:
                     continue
                 compressed_idx = _gtype_index[(idx_hg, 0)]
+                # Baseline gametes carry label 0 only; gamete modifiers may
+                # move mass onto other labels afterwards.
                 baseline_freq = float(freq) * inv_total
+                # Mendelian production is not slab-dependent, so replicate it
+                # to every slab variant of this genotype group.
                 for slab_idx in range(n_slabs):
                     ztype_idx = idx_genotype * n_slabs + slab_idx
                     zygotes_to_gametes_map[sex_idx, ztype_idx, compressed_idx] = (
                         baseline_freq
                     )
 
+    # Modifiers run on the complete table, after slab replication.
     if gamete_modifiers:
         for modifier in gamete_modifiers:
             zygotes_to_gametes_map = modifier(zygotes_to_gametes_map)
@@ -317,6 +367,7 @@ def compress_hl(hg_idx: int, glab_idx: int, n_glabs: int) -> int:
     Returns:
         int: The flat combined index.
     """
+    # int() coercion also accepts numpy integer scalars as indices.
     return int(hg_idx) * int(n_glabs) + int(glab_idx)
 
 

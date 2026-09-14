@@ -8,21 +8,22 @@ implementation lives.  This shim will be removed in a future clean-up.
 
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
+from natal.frontend.presets._types import AlleleScalingMode as _AlleleScalingMode
+from natal.frontend.presets._types import (
+    FecundityScalingConfig as _FecundityScalingConfig,
+)
+
 # make_fitness_patch_given_allele_scaling stays here — it's a
 # pure dict-construction helper with no population dependency.
 from natal.frontend.presets._types import PresetFitnessPatch
-from natal.frontend.presets._types import _AlleleScalingMode as _AlleleScalingMode
 from natal.frontend.presets._types import (
-    _FecundityScalingConfig as _FecundityScalingConfig,
+    SexualSelectionScalingConfig as _SexualSelectionScalingConfig,
 )
 from natal.frontend.presets._types import (
-    _SexualSelectionScalingConfig as _SexualSelectionScalingConfig,
+    ViabilityScalingConfig as _ViabilityScalingConfig,
 )
 from natal.frontend.presets._types import (
-    _ViabilityScalingConfig as _ViabilityScalingConfig,
-)
-from natal.frontend.presets._types import (
-    _ZygoteViabilityScalingConfig as _ZygoteViabilityScalingConfig,
+    ZygoteViabilityScalingConfig as _ZygoteViabilityScalingConfig,
 )
 
 # The ``fitness._patch`` re-exports below are deferred through module-level

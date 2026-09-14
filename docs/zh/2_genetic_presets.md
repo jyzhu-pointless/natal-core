@@ -109,31 +109,78 @@ ta_drive_with_mating_cost = ToxinAntidoteDrive(
 )
 ```
 
+### PointMutation - 自发点突变
+
+`PointMutation` 建模源等位基因自发突变为一个或多个目标等位基因。突变发生在每一个携带源等位基因的配子中，不依赖亲本基因型；每个目标都拿到你声明的速率——多目标之间是"同时竞争"，而不是互相吃掉份额：
+
+```python
+from natal.frontend.presets import PointMutation
+
+# 单目标
+mutation = PointMutation(
+    "A2B",
+    source_allele="A",
+    target_allele="B",
+    mutation_rate=1e-5,          # 1e-5 的源配子变成 B
+    viability_scaling=0.98,      # 可选：目标等位基因的轻微适应度代价
+)
+
+# 多目标：声明的是有效速率，而不是级联份额
+multi = PointMutation(
+    "MultiMut",
+    source_allele="A",
+    target_alleles=["B", "C", "D"],
+    mutation_rates=[1e-7, 5e-6, 1e-5],
+)
+
+population.apply_preset(mutation)
+```
+
+参数说明：
+
+1. `source_allele`：发生突变的等位基因。所有携带它的配子都会转换，规则不带亲本基因型过滤（点突变是自发的）
+2. `target_allele` / `mutation_rate` 与 `target_alleles` / `mutation_rates`：单目标与多目标两种声明形式；每个速率支持 `float`、`(female, male)` 二元组或按性别字典，缺失的性别键表示该性别不发生转换
+3. `rate_mode`：`"strict"`（默认）把速率当作概率，和超过 1 时报错；`"proportional"` 把速率当作比例并缩放到和为 1，因此 `[2, 3, 5]` 与 `[0.2, 0.3, 0.5]` 是同一个模型
+4. `viability_scaling` / `fecundity_scaling` / `sexual_selection_scaling` / `zygote_viability_scaling`（以及对应的 `*_mode`）：作用于整个目标等位基因组的适应度效应，默认中性
+
+突变只发生在生殖系（减数分裂产生配子时，受精之前）；预设不注册任何合子期修饰器。胚胎期通道已刻意暂缓（TODO.md #14），因此 `zygote_modifier()` 始终返回 `None`。
+
+同一个 ruleset 内的转换规则按级联执行：每条规则只能看到前一条规则剩下的源等位基因份额。若直接透传用户速率，`[0.3, 0.5, 0.1]` 中第二个目标的有效份额会变成 `0.5 × 0.7 = 0.35`。`PointMutation` 内部按 `r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)` 做补偿，因此 `A|A` 亲本的配子分布恰好是：
+
+| 目标 | 声明速率 | 传给级联的速率 | 实际份额 |
+|---|---|---|---|
+| B | 0.3 | 0.3 | 0.3 |
+| C | 0.5 | 0.5 / 0.7 ≈ 0.714 | 0.5 |
+| D | 0.1 | 0.1 / 0.2 = 0.5 | 0.1 |
+| A（未突变） | — | — | 0.1 |
+
+这种"同时竞争"语义正是单个多目标 `PointMutation` 与叠加多个单目标预设的区别：后者的规则按注册顺序级联（先声明先得）。补偿按性别分别计算，因此按性别的速率在各自性别内独立竞争。
+
 ## 实用示例
 
 ### 简单点突变
 
 ```python
 import natal as nt
-from natal.frontend.presets import HomingDrive
+from natal.frontend.presets import PointMutation
 
-# 创建基因驱动
-drive = HomingDrive(
-    name="DemoDrive",
-    drive_allele="Drive",
-    target_allele="WT",
-    drive_conversion_rate=0.95
+# 野生型等位基因 A 以 1e-4 的速率突变为 R
+mutation = PointMutation(
+    name="A2R",
+    source_allele="A",
+    target_allele="R",
+    mutation_rate=1e-4,
 )
 
 # 构建种群并应用预设
-species = nt.Species.from_dict("TestSpecies", {
-    "chr1": {"GeneA": ["WT", "Drive"]}
+species = nt.Species.from_dict("PointMutationSpecies", {
+    "chr1": {"GeneA": ["A", "R"]}
 })
 
-pop = (nt.AgeStructuredPopulation.setup(species, name="DriveTest", stochastic=False)
+pop = (nt.AgeStructuredPopulation.setup(species, name="MutationTest", stochastic=False)
        .age_structure(n_ages=5, new_adult_age=2)
-       .initial_state({"female": {"WT|WT": [0, 0, 100, 0, 0]}})
-       .presets(drive)
+       .initial_state({"female": {"A|A": [0, 0, 100, 0, 0]}})
+       .presets(mutation)
        .build())
 
 # 运行模拟

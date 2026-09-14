@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Literal, Optional, Protocol
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.frontend.data.state import state_axes
+
 if TYPE_CHECKING:
     from natal.frontend.output.history import HistorySchema
     from natal.frontend.output.observation import Observation
@@ -93,11 +95,13 @@ def compile_recording_plan(
 
     state = population.state
     ind = state.individual_count
-    n_sexes = int(ind.shape[0])
-    n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1
-    n_ztypes = int(ind.shape[-1])
+    # Counts always carry an age axis; a rank-2 tensor has a degenerate one.
+    n_sexes, n_ages, n_ztypes = state_axes(ind)
+    # Canonical sex labels, truncated to the axis count.
     sex_labels = ("female", "male")[:n_sexes]
 
+    # Layout plus schema are the immutable contract shared with the Rust writer;
+    # from_population re-derives the ZType labels from the registry.
     layout = PopulationLayout.from_population(
         kind=kind,  # type: ignore[arg-type]  # kind is validated by caller
         n_demes=n_demes,
@@ -109,8 +113,11 @@ def compile_recording_plan(
         registry=population.index_registry,  # type: ignore[union-attr]  # duck-typed
     )
 
+    # Raw mode stores full state and needs neither metadata nor mask.
     obs_meta = None
     observation_mask = None
+    # Freeze the canonical Observation's projection metadata and bake the 4-D
+    # binary selector mask (groups, sexes, ages, ztypes).
     if mode == "observation":
         obs_meta = ObservationMetadata(
             labels=observation.labels,
@@ -123,6 +130,9 @@ def compile_recording_plan(
         )
 
     if mode == "observation":
+        # Row width = 1 tick + groups × stored demes × sexes × stored ages: a
+        # collapsed age axis contributes one column and an aggregated deme axis
+        # contributes one deme slot. This must match the native writer exactly.
         age_width = 1 if observation.collapse_age else n_ages
         observed_demes = (
             len(observation.deme_indices)
@@ -139,11 +149,15 @@ def compile_recording_plan(
         )
         mode = "observation"
     else:
+        # Raw rows keep every deme's full state: all count blocks first, then all
+        # sperm blocks (sperm is absent for discrete generations).
         ind_size = n_sexes * n_ages * n_ztypes
         sperm_size = n_ages * n_ztypes * n_ztypes if has_sperm_storage else 0
         row_size = 1 + ind_size * n_demes + sperm_size * n_demes
         mode = "raw"
 
+    # Schema validates that row_size and mode agree; the mask is attached only in
+    # observation mode, so raw plans carry None.
     schema = HistorySchema(
         mode=mode,
         population=layout,

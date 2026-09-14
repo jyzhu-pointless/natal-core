@@ -17,7 +17,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 from numpy.typing import NDArray
 
-from .constants import LOGISTIC
+from .constants import BEVERTON_HOLT
 from .draft import ModelDraft
 
 # Compatibility-gate tolerance: the same 1e-10 threshold the numeric
@@ -265,6 +265,24 @@ def build_config_maps(
                 else:
                     female_only_by_sex_chrom[g_off] = f_ok and not m_ok
                     male_only_by_sex_chrom[g_off] = m_ok and not f_ok
+            # The compatibility heuristic cannot distinguish homogametic from
+            # heterogametic pairs when every baseline map row sums to 1, which
+            # is the common case: it then yields no sex-fixed genotype at all.
+            # Sex would silently fall back to the compatibility ratio, sending
+            # about half of every sex-fixed genotype's mass to the wrong sex
+            # axis.  A species that declares sex chromosomes must determine sex
+            # structurally, so fail loudly instead.
+            if not (
+                female_only_by_sex_chrom.any() or male_only_by_sex_chrom.any()
+            ):
+                raise ValueError(
+                    "has_sex_chromosomes is set but no genotype is sex-fixed: "
+                    "the compatibility heuristic found neither a female-only "
+                    "nor a male-only genotype, so sex would be assigned from "
+                    "compatibility weights instead of from the genotype. Pass "
+                    "female_only_by_sex_chrom / male_only_by_sex_chrom taken "
+                    "from Species.get_config_blueprint()."
+                )
 
     # Publication derives this tensor once, after the complete model has
     # been projected onto its final runtime axes.  Keeping an empty marker
@@ -358,7 +376,7 @@ def build_population_config(
     carrying_capacity: Optional[float] = None,
     sex_ratio: float = 0.5,
     low_density_growth_rate: float = 6.0,
-    juvenile_growth_mode: int = LOGISTIC,
+    juvenile_growth_mode: int = BEVERTON_HOLT,
     generation_time: Optional[float] = None,
     has_sex_chromosomes: bool = False,
     female_only_by_sex_chrom: Optional[NDArray[np.bool_]] = None,
@@ -413,7 +431,8 @@ def build_population_config(
         carrying_capacity: Optional explicit carrying capacity (scaled later).
         sex_ratio: Proportion of newborns that are female.
         low_density_growth_rate: Intrinsic growth rate at low density.
-        juvenile_growth_mode: Growth mode (see constants).
+        juvenile_growth_mode: Growth mode (see constants); defaults to
+            ``BEVERTON_HOLT``.
         generation_time: Optional pre‑computed generation time; if None, computed.
         has_sex_chromosomes: Whether the species has sex‑chromosome constraints.
             If True, offspring sex is determined by genotype compatibility;
@@ -595,7 +614,7 @@ def build_discrete_engine_config(
         carrying_capacity=carrying_capacity or 1000.0,
         sex_ratio=float(kwargs.pop("sex_ratio", 0.5)),
         low_density_growth_rate=float(kwargs.pop("low_density_growth_rate", 6.0)),
-        juvenile_growth_mode=int(kwargs.pop("juvenile_growth_mode", 0)),  # LOGISTIC
+        juvenile_growth_mode=int(kwargs.pop("juvenile_growth_mode", BEVERTON_HOLT)),
         has_sex_chromosomes=has_sex_chromosomes,
         zygotes_to_gametes_map=zygotes_to_gametes_map,
         gametes_to_zygotes_map=gametes_to_zygotes_map,

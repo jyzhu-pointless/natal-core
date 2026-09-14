@@ -876,11 +876,18 @@ class PopulationBuilder:
             n_hg_orig = bp["n_gtypes"]
             z2g_bp = bp["zygotes_to_gametes_map"]
             g2z_bp = bp["gametes_to_zygotes_map"]
+            # Structure-derived sex masks, in the *unexpanded* genotype axis
+            # that build_population_config expects (the draft's own copies are
+            # already slab-expanded and cannot be forwarded here).
+            female_only_bp = bp["female_only_by_sex_chrom"]
+            male_only_bp = bp["male_only_by_sex_chrom"]
         else:
             n_g_orig = old.n_ztypes
             n_hg_orig = old.n_gtypes
             z2g_bp = old.zygotes_to_gametes_map
             g2z_bp = old.gametes_to_zygotes_map
+            female_only_bp = None
+            male_only_bp = None
 
         self._config = build_population_config(
             n_genotypes=n_g_orig,
@@ -898,6 +905,8 @@ class PopulationBuilder:
             continuous_sampling=bool(old.continuous_sampling),
             fixed_egg_count=bool(old.fixed_egg_count),
             has_sex_chromosomes=old.has_sex_chromosomes,
+            female_only_by_sex_chrom=female_only_bp,
+            male_only_by_sex_chrom=male_only_bp,
         )
         from natal.frontend.model.definition_compiler import FITNESS_FIELDS
 
@@ -935,6 +944,7 @@ class PopulationBuilder:
             growth_mode: Regulation function (string or int):
                 ``no_competition``/``fixed``/``linear`` (``logistic``
                 alias)/``beverton_holt``/``ricker`` or the integer.
+                Defaults to ``beverton_holt`` when omitted.
             competition_strength: Larval competition weight.
             expected_num_new_adult_females: Target adult females
                 (Champer model); derived egg override is computed and

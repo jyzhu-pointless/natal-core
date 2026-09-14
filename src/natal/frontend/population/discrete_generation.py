@@ -80,6 +80,8 @@ def _require_discrete_config(config: object) -> ModelDraft:
             f"ModelDraft, got {type(config).__name__}. Build one via "
             f"PopulationBuilder.for_discrete() or build_discrete_engine_config()."
         )
+    # Shape invariants: the native discrete engine hardcodes a 2-age
+    # lifecycle (age 0 = offspring, age 1 = reproducing adult).
     if config.n_ages != 2 or config.new_adult_age != 1:
         raise ValueError(
             f"The discrete-generation draft must satisfy the "
@@ -88,6 +90,8 @@ def _require_discrete_config(config: object) -> ModelDraft:
             f"new_adult_age={config.new_adult_age}. "
             f"The discrete engine hardcodes a 2-age lifecycle."
         )
+    # adult_ages must be exactly [1]; a same-length but different list would
+    # silently change which ages reproduce.
     expected_adult_ages = np.array([1], dtype=np.int64)
     if not np.array_equal(config.adult_ages, expected_adult_ages):
         raise ValueError(
@@ -170,6 +174,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         self._initialize_registry()
 
+        # Pull blueprint dimensions once; DiscretePopulationState.create
+        # asserts against them and the native session shares the same layout.
         n_sexes = self._config.n_sexes
         n_ztypes = self._config.n_ztypes
         n_ages = self._config.n_ages
@@ -241,6 +247,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         """
         from natal.frontend.builder import PopulationBuilder
 
+        # Normalize the deprecated alias before delegating so the builder sees
+        # exactly one declared-zygote-types argument.
         if declared_genotypes is not None:
             if declared_zygote_types is not None:
                 raise ValueError(
@@ -278,6 +286,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         """
         if isinstance(age_data, (int, float)):
             return 0.0, float(age_data)
+        # Dense list form: positions map to ages 0 and 1; a length-1 list is
+        # accepted as the age-1 count for convenience.
         if isinstance(age_data, list):
             if len(age_data) == 0:
                 return 0.0, 0.0
@@ -288,6 +298,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             raise ValueError(
                 f"Discrete initial list must have length <= 2, got {len(age_data)}"
             )
+        # Sparse dict form: only ages 0 and 1 exist, so any other key is
+        # rejected rather than silently dropped.
         unsupported_keys = [k for k in age_data.keys() if k not in (0, 1)]
         if unsupported_keys:
             raise ValueError(
@@ -310,7 +322,10 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         Raises:
             ValueError: If sex key is not ``"female"`` or ``"male"``.
         """
+        # Absolute write: clear first so an omitted (sex, genotype) pair stays
+        # at zero instead of inheriting the config default.
         self._live_state().individual_count.fill(0.0)
+        # Sex keys are case-insensitive aliases of the two population sexes.
         for sex_key, genotype_dist in distribution.items():
             sex_key_norm = sex_key.lower().strip()
             if sex_key_norm == "female":
@@ -320,9 +335,14 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             else:
                 raise ValueError(f"Sex must be 'female' or 'male', got '{sex_key}'")
             for genotype_key, age_data in genotype_dist.items():
+                # Resolve through the registry's identity maps (no string round
+                # trip) so a sex-chromosome genotype cannot land on the
+                # opposite-sex ztype.
                 z_idx = resolve_genotype_key_ztype_index(
                     genotype_key, self.species, self.registry
                 )
+                # Both age rows are written explicitly; a value the spec omits
+                # resolves to 0.0 in _resolve_age_distribution.
                 age0_count, age1_count = self._resolve_age_distribution(age_data)
                 self._live_state().individual_count[sex_idx, 0, z_idx] = age0_count
                 self._live_state().individual_count[sex_idx, 1, z_idx] = age1_count
@@ -370,6 +390,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             hook_program,
             seed=seed,
         )
+        # Bridge single-parameter Python callbacks through the session's
+        # python_callbacks channel (fired at event boundaries).
         self._register_rust_callbacks(backend)
         # Capture the state BEFORE the field switch: under a structural
         # rebuild the lazy pull must read the OLD session, not the freshly
@@ -394,6 +416,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         if backend is None:
             raise RuntimeError("The population session has not been initialized.")
         config = self.config
+        # Rebinds only the hook program and execution flags; session state,
+        # checkpoints, and the RNG stream survive (value changes travel through
+        # the writers instead).
         backend.configure_program(self._hook_program, config)
         self._register_rust_callbacks(backend)
         self._rust_needs_rebuild = False
@@ -436,6 +461,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             # pruner bind once per (population, History); later runs skip.
             self._bind_history_recording(backend)
 
+        # While the native run holds the session borrow, Python-side writes must
+        # not touch it; the run boundary flushes pending draft writes.
         self._rust_run_active = True
         try:
             _final_tick, _history_new, was_stopped = backend.run(
@@ -489,6 +516,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 created by ``build()`` or lazily at the first run).
         """
         self._require_standalone_owner("run")
+        # Guards, in order: re-entrancy, then failed, then finished — each
+        # branch names the exact precondition that blocks the run.
         if getattr(self, "_running", False):
             raise RuntimeError("Nested run is forbidden")
         if self.is_failed:
@@ -500,6 +529,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         self._running = True
         try:
+            # None means "use the population default"; 0 stays a real value
+            # (record nothing).
             record_every_resolved = (
                 record_every if record_every is not None else self.record_every
             )
@@ -531,6 +562,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         """Reset tick, history, and population state to initial values."""
         self._require_standalone_owner("reset")
         self._tick = 0
+        # Drop history before rebuilding state so no row refers to the
+        # pre-reset timeline.
         if self._history_obj is not None:
             self._history_obj.clear()
         # Guard against calls before __init__ finishes (e.g. during
@@ -568,6 +601,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
     def get_total_count(self) -> int:
         """Return the total number of individuals across all categories."""
+        # The discrete API is integer-valued: round the float reduction that
+        # both the native path and the NumPy fallback return.
         counts = self._native_counts()
         if counts is not None:
             return int(round(counts[0]))
@@ -647,6 +682,8 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         """
         self._require_standalone_owner("import_state")
         # ── Phase 1: parse and validate all inputs ──
+        # Nothing below mutates the population; a rejected parse or shape/value
+        # check leaves the current state and history untouched.
         if isinstance(state, np.ndarray):
             state_obj = parse_flattened_discrete_state(
                 state,
@@ -693,6 +730,9 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             return
         tick, ind_flat = backend.state_snapshot()
         n_ztypes = int(self.config.n_ztypes)
+        # Reshape mirrors the Rust row-major (sex, age, ztype) layout; the
+        # hardcoded 2, 2 are the two-sex, two-age discrete blueprint, and
+        # .copy() isolates the cache from the session buffer.
         self._state = DiscretePopulationState(
             n_tick=int(tick),
             individual_count=ind_flat.reshape(2, 2, n_ztypes).copy(),

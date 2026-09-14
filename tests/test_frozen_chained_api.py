@@ -1,7 +1,7 @@
 """Frozen user-surface contract samples: the chained configuration API.
 
-RUST_ONLY_REFACTOR_PLAN.md section 2.1 freezes the user-facing chained
-syntax: configuration method names, parameter names, chaining, and
+The frozen contracts in ``CHANGELOG.md`` ("Frozen contracts") freeze the
+user-facing chained syntax: configuration method names, parameter names, chaining, and
 build expressions must stay available while the execution backend
 becomes Rust-only.  Each test here is an executable sample of that
 surface, built only from the public ``natal`` namespace and pinned with
@@ -122,7 +122,13 @@ def test_discrete_generation_chain_reproduces_exactly() -> None:
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        # Explicit no-competition: this test pins the exact discrete
+        # replacement point, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=100000.0,
+            low_density_growth_rate=2.0,
+        )
         .build()
     )
 
@@ -328,7 +334,13 @@ def _fixed_point_builder(
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        # Explicit no-competition: this fixture pins the exact replacement
+        # point, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=100000.0,
+            low_density_growth_rate=2.0,
+        )
     )
 
 
@@ -385,7 +397,13 @@ def test_build_time_modifiers_chain_full_conversion() -> None:
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        # Explicit no-competition: this test pins the meiosis conversion
+        # outcome, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=100000.0,
+            low_density_growth_rate=2.0,
+        )
         .modifiers(gamete_modifiers=[full_conversion])
         .build()
     )

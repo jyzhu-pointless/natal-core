@@ -32,6 +32,7 @@ use crate::model::validation::{validate_scalar_value, validate_tensor_values};
 /// Whether a contract field name denotes an ecology tensor (vector) field
 /// owned by [`EcologyParams`].  Genetics tensors are *not* ecology tensors.
 fn is_ecology_tensor(name: &str) -> bool {
+    // The seven columnized vector fields; genetics tensors are checked separately.
     matches!(name, |"survival_rates"| "mating_rates"
         | "reproduction_rates"
         | "fertility"
@@ -118,6 +119,8 @@ impl EcologyParams {
 
     /// Tile a per-deme vector into a columnized ``(n_demes, ...)`` vector.
     pub(crate) fn tile_vec(values: &[f64], n_demes: usize) -> Vec<f64> {
+        // Repeat the per-deme vector n_demes times (row-major tiling), preserving
+        // element order within each deme.
         let mut out = Vec::with_capacity(values.len() * n_demes);
         for _ in 0..n_demes {
             out.extend_from_slice(values);
@@ -131,6 +134,8 @@ impl EcologyParams {
     /// migration) stay empty; the per-deme extent is inferred from the
     /// deme count.
     fn cut_deme_segment(column: &[f64], n_demes: usize, deme: usize) -> Vec<f64> {
+        // Empty sentinel columns stay empty (nothing to cut); otherwise each deme
+        // owns an equal-length slice of the flat row-major column.
         if column.is_empty() || n_demes == 0 {
             return Vec::new();
         }
@@ -138,28 +143,24 @@ impl EcologyParams {
         column[deme * per..(deme + 1) * per].to_vec()
     }
 
-    /// Extract one deme's ecology into a fresh single-deme ``EcologyParams``.
+    /// Merge a validated single-deme candidate without touching sibling columns.
     ///
-    /// Spatial parallel ticks need a per-deme mutable write target for
-    /// ``Op.set_param`` commits, but the session's ecology columns cannot
-    /// be borrowed ``&mut`` by several demes at once.  Each deme therefore
-    /// ticks against this private single-column copy; the lifecycle kernels
-    /// read position 0, whose contents are exactly the values the source
-    /// column held at this deme (so a local-copy tick is numerically
-    /// identical to reading the session's per-deme segment).  Genetics are
-    /// *not* carried — the caller shares the immutable [`GeneticsTensors`].
+    /// Counterpart of [`EcologyParams::single_deme`]: a spatial tick mutates a
+    /// private single-deme copy and writes it back through this method, so only
+    /// the targeted deme's scalars and vector segments change.  Lazy columns
+    /// (declared equilibrium distribution, migration rate) are widened on the
+    /// first declaring deme and the sentinel is restored when the last declaring
+    /// deme drops back to derive mode.
     ///
     /// ## Parameters
-    /// - `deme`: Deme whose column entries and vector segments are copied.
-    ///
-    /// ## Returns
-    /// A ``EcologyParams`` with ``n_demes == 1`` holding only that deme's ecology
-    /// (scalar custom slots are shared by clone).
+    /// - `deme`: Destination column index; *candidate* must describe exactly
+    ///   that one deme (``n_demes == 1``).
+    /// - `candidate`: Single-deme values to merge in.
     ///
     /// ## Panics
     /// Panics when *deme* is out of range for the scalar columns.
-    /// Merge a validated single-deme candidate without touching sibling columns.
     pub fn replace_deme(&mut self, deme: usize, candidate: &EcologyParams) {
+        // Scalars are one entry per deme: read the candidate's single column entry.
         self.carrying_capacity[deme] = candidate.carrying_capacity[0];
         self.eggs_per_female[deme] = candidate.eggs_per_female[0];
         self.sex_ratio[deme] = candidate.sex_ratio[0];
@@ -187,6 +188,8 @@ impl EcologyParams {
         self.competition_weights[deme * width..(deme + 1) * width]
             .copy_from_slice(&candidate.competition_weights);
         self.equilibrium_declared[deme] = candidate.equilibrium_declared[0];
+        // Lazily widen the distribution column on the first declared deme; the
+        // candidate's declared distribution overwrites only this deme's segment.
         if candidate.equilibrium_declared[0] {
             let width = candidate.equilibrium_distribution.len();
             if self.equilibrium_distribution.is_empty() {
@@ -195,9 +198,12 @@ impl EcologyParams {
             self.equilibrium_distribution[deme * width..(deme + 1) * width]
                 .copy_from_slice(&candidate.equilibrium_distribution);
         }
+        // Last declaring deme replaced by a derive-mode candidate: drop back to
+        // the empty sentinel so equilibrium_metrics derives the distribution.
         if !self.equilibrium_declared.iter().any(|declared| *declared) {
             self.equilibrium_distribution.clear();
         }
+        // Migration is lazily widened the same way; undeclared demes keep zero rate.
         if !candidate.migration_rate.is_empty() {
             let width = candidate.migration_rate.len();
             if self.migration_rate.is_empty() {
@@ -209,7 +215,29 @@ impl EcologyParams {
         self.custom_slots[deme] = candidate.custom_slots[0].clone();
     }
 
+    /// Extract one deme's ecology into a fresh single-deme ``EcologyParams``.
+    ///
+    /// Spatial parallel ticks need a per-deme mutable write target for
+    /// ``Op.set_param`` commits, but the session's ecology columns cannot be
+    /// borrowed ``&mut`` by several demes at once.  Each deme therefore ticks
+    /// against this private single-column copy; the lifecycle kernels read
+    /// position 0, whose contents are exactly the values the source column held
+    /// at this deme (so a local-copy tick is numerically identical to reading
+    /// the session's per-deme segment).  Genetics are *not* carried — the
+    /// caller shares the immutable genetics tensors instead.
+    ///
+    /// ## Parameters
+    /// - `deme`: Deme whose column entries and vector segments are copied.
+    ///
+    /// ## Returns
+    /// An ``EcologyParams`` with ``n_demes == 1`` holding only that deme's
+    /// ecology (scalar custom slots are cloned, not shared).
+    ///
+    /// ## Panics
+    /// Panics when *deme* is out of range for the scalar columns.
     pub fn single_deme(&self, deme: usize) -> EcologyParams {
+        // Private n_demes == 1 copy: every kernel reads position 0, so the cut
+        // contents must equal the session's per-deme entries bit-for-bit.
         EcologyParams {
             n_demes: 1,
             carrying_capacity: vec![self.carrying_capacity[deme]],
@@ -233,6 +261,7 @@ impl EcologyParams {
                 deme,
             ),
             equilibrium_distribution: if self.equilibrium_declared[deme] {
+                // Derive mode yields the empty sentinel, never a zero-filled column.
                 Self::cut_deme_segment(&self.equilibrium_distribution, self.n_demes, deme)
             } else {
                 Vec::new()
@@ -265,6 +294,9 @@ impl EcologyParams {
     /// Returns ``PyValueError`` when attributes are missing or of the wrong
     /// type, or ``PyTypeError`` for unsupported custom-slot values.
     pub fn from_python(obj: &Bound<'_, PyAny>, n_demes: usize) -> PyResult<Self> {
+        // The Python contract carries per-deme-0 values: scalars are repeated into
+        // n_demes columns and vectors are tiled once per deme.  migration_rate is
+        // the exception -- the contract already holds its full per-deme extent.
         let survival = extract_f64_vec(obj, "survival_rates")?;
         let mating = extract_f64_vec(obj, "mating_rates")?;
         let reproduction = extract_f64_vec(obj, "reproduction_rates")?;
@@ -286,6 +318,8 @@ impl EcologyParams {
             fertility: Self::tile_vec(&fertility, n_demes),
             competition_weights: Self::tile_vec(&competition, n_demes),
             equilibrium_declared: vec![!equilibrium.is_empty(); n_demes],
+            // An empty equilibrium_distribution is the derive-mode sentinel and must
+            // stay empty (it cannot be tiled into a real column).
             equilibrium_distribution: if equilibrium.is_empty() {
                 Vec::new()
             } else {
@@ -309,6 +343,10 @@ impl EcologyParams {
     /// a column length disagrees with ``n_demes`` or a value is not a
     /// float64/int64 array.
     pub fn from_columns(obj: &Bound<'_, PyAny>, n_demes: usize) -> PyResult<Self> {
+        // Start from the schema defaults, including the sentinel values: an empty
+        // equilibrium/migration column ("not declared"), sex_ratio 0.5, and
+        // external_expected_eggs = -1 ("unused").  Each key in the mapping
+        // overwrites only its own field.
         let mut params = Self {
             n_demes,
             carrying_capacity: vec![0.0; n_demes],
@@ -329,6 +367,8 @@ impl EcologyParams {
             custom_slots: vec![HashMap::new(); n_demes],
         };
         let dict = obj.downcast::<PyDict>()?;
+        // Tracks the explicit 0/1 declaration column; it is applied after the loop
+        // so it wins regardless of dict iteration order.
         let mut declared_override = None;
         let mut seen = std::collections::HashSet::new();
         for (key, value) in dict.iter() {
@@ -339,6 +379,8 @@ impl EcologyParams {
                 )));
             }
             if key == "equilibrium_declared" {
+                // Explicit presence flags (i64 0/1) override the declaration that
+                // would otherwise be inferred from an empty distribution column.
                 let values = value
                     .extract::<PyReadonlyArrayDyn<'_, i64>>()?
                     .as_slice()?
@@ -353,6 +395,7 @@ impl EcologyParams {
                 continue;
             }
             if key == "growth_mode" {
+                // growth_mode is an int64 selector column, not a float64 tensor.
                 let values = value
                     .extract::<PyReadonlyArrayDyn<'_, i64>>()?
                     .as_slice()?
@@ -365,12 +408,15 @@ impl EcologyParams {
                 .extract::<PyReadonlyArrayDyn<'_, f64>>()?
                 .as_slice()?
                 .to_vec();
+            // Scalar columns hold exactly one entry per deme.
             if ECOLOGY_SCALAR_COLUMNS.contains(&key.as_str()) {
                 Self::expect_column_len(&key, values.len(), n_demes)?;
                 let column = params.scalar_column_mut(&key)?;
                 *column = values;
             } else if ECOLOGY_TENSOR_COLUMNS.contains(&key.as_str()) {
                 let is_sentinel = key == "equilibrium_distribution" || key == "migration_rate";
+                // Empty equilibrium/migration columns are legal "not declared"
+                // sentinels and are left at their default (empty) value.
                 if values.is_empty() && is_sentinel {
                     continue;
                 }
@@ -449,7 +495,9 @@ impl EcologyParams {
     /// The column value, or 0.0 when out of range (defensive: ids come
     /// from the validated CSR program).
     pub fn eco_value(&self, id: usize, deme: usize) -> f64 {
+        // Ids come from the validated CSR program; clamp defensively anyway.
         let name = ECO_PARAM_COLUMNS[id.min(ECO_PARAM_COLUMNS.len() - 1)];
+        // Wire-order dispatch: only the five ECO_PARAM_COLUMNS names are reachable.
         let column = match name {
             "carrying_capacity" => &self.carrying_capacity,
             "eggs_per_female" => &self.eggs_per_female,
@@ -467,6 +515,8 @@ impl EcologyParams {
     /// - `deme`: Deme column to write.
     /// - `value`: New value.
     pub fn set_eco_value(&mut self, id: usize, deme: usize, value: f64) {
+        // Same wire-order dispatch as eco_value; out-of-range demes are ignored
+        // (the getter falls back to 0.0).
         let name = ECO_PARAM_COLUMNS[id.min(ECO_PARAM_COLUMNS.len() - 1)];
         let column = match name {
             "carrying_capacity" => &mut self.carrying_capacity,
@@ -486,6 +536,7 @@ impl EcologyParams {
     /// Returns ``PyKeyError`` for unknown or non-scalar fields and
     /// ``PyValueError`` when the deme index is out of range.
     fn scalar_ref(&mut self, name: &str, deme: usize) -> PyResult<ScalarRef<'_>> {
+        // Bounds-check the deme before indexing any column.
         if deme >= self.n_demes {
             return Err(PyValueError::new_err(format!(
                 "deme {deme} out of range for {} ecology columns",
@@ -501,6 +552,7 @@ impl EcologyParams {
             "growth_mode" => ScalarRef::I64(&mut self.growth_mode[deme]),
             "external_expected_eggs" => ScalarRef::F64(&mut self.external_expected_eggs[deme]),
             other => {
+                // Point tensor callers at tensor_write instead of accepting a scalar.
                 if is_ecology_tensor(other) || is_genetics_tensor(other) {
                     return Err(PyValueError::new_err(format!(
                         "{other:?} is a tensor field; use tensor_write"
@@ -515,6 +567,7 @@ impl EcologyParams {
 
     /// Per-deme flat length of an ecology vector field.
     fn per_deme_len(&self, bp: &Blueprint, name: &str) -> PyResult<usize> {
+        // Per-deme flat extents: two-sex rows are (2, A); age-only vectors are (A,).
         let a = bp.n_ages;
         Ok(match name {
             "survival_rates" | "mating_rates" => 2 * a,
@@ -546,6 +599,7 @@ impl EcologyParams {
         deme: usize,
         values: &[f64],
     ) -> PyResult<()> {
+        // Genetics tensors never live in this struct; route them to the bank.
         if is_genetics_tensor(name) {
             return Err(PyKeyError::new_err(format!(
                 "{name:?} is a genetics tensor; route it to the session genetics bank"
@@ -563,6 +617,7 @@ impl EcologyParams {
                 values.len()
             )));
         }
+        // Full column width = per-deme extent times the deme count.
         let total = per * self.n_demes;
         let column: &mut Vec<f64> = match name {
             "survival_rates" => &mut self.survival_rates,
@@ -575,6 +630,7 @@ impl EcologyParams {
             _ => unreachable!("name matched the ecology tensor list"),
         };
         if column.len() == total {
+            // Normal case: overwrite this deme's segment in the full column.
             let offset = deme * per;
             column[offset..offset + per].copy_from_slice(values);
         } else if column.is_empty() && self.n_demes == 1 {
@@ -588,6 +644,7 @@ impl EcologyParams {
                 column.len()
             )));
         }
+        // A written distribution marks this deme as declared.
         if name == "equilibrium_distribution" {
             self.equilibrium_declared[deme] = true;
         }
@@ -630,12 +687,16 @@ impl EcologyParams {
         let mut pending_scalars: Vec<(String, f64)> = Vec::with_capacity(fields.len());
         let mut pending_tensors: Vec<(String, Vec<f64>)> = Vec::with_capacity(fields.len());
         let mut pending_genetics: Vec<(String, Vec<f64>)> = Vec::with_capacity(fields.len());
+        // Pass 1: resolve every name and size-check every tensor, buffering copies
+        // so a later failure cannot leave a half-applied pull behind.
         for field in fields {
             if field == "custom_slots" {
                 wants_custom_slots = true;
                 continue;
             }
             if is_genetics_tensor(field) {
+                // Genetics tables go to the caller-provided sink (variant bank);
+                // without one this channel cannot carry them.
                 if genetics.is_none() {
                     return Err(PyKeyError::new_err(format!(
                         "{field:?} is a genetics tensor; this channel carries ecology only"
@@ -658,6 +719,8 @@ impl EcologyParams {
             // names through the deme-segment channel.  Unknown names fail
             // here before any write happens.
             if is_ecology_tensor(field) {
+                // Vector fields are per-deme extents; the empty equilibrium/migration
+                // sentinel is the one legal exception to the length requirement.
                 let array = source
                     .getattr(field.as_str())?
                     .extract::<PyReadonlyArrayDyn<'_, f64>>()?;
@@ -673,15 +736,20 @@ impl EcologyParams {
                 }
                 pending_tensors.push((field.clone(), extract_f64_vec(source, field)?));
             } else {
+                // scalar_ref doubles as the name check, so an unknown scalar fails
+                // here before anything is staged.
                 self.scalar_ref(field, deme)?;
                 pending_scalars.push((field.clone(), extract_f64(source, field)?));
             }
         }
+        // Custom slots are read only when explicitly requested; their values are
+        // validated by the extractor.
         let pending_custom = if wants_custom_slots {
             Some(extract_custom_slots(source)?)
         } else {
             None
         };
+        // Pass 2: domain-validate every staged scalar and tensor before any write.
         for (name, value) in &pending_scalars {
             validate_scalar_value(name, *value)?;
         }
@@ -697,6 +765,8 @@ impl EcologyParams {
         }
         for (field, values) in &pending_tensors {
             if values.is_empty() {
+                // Empty equilibrium flips this deme back to derive mode and drops
+                // the whole column once no deme declares one any more.
                 if field == "equilibrium_distribution" {
                     self.equilibrium_declared[deme] = false;
                     if !self.equilibrium_declared.iter().any(|declared| *declared) {
@@ -713,6 +783,7 @@ impl EcologyParams {
             }
         }
         if let Some(slots) = pending_custom {
+            // Commit custom slots last, only when they were requested.
             self.custom_slots[deme] = slots;
         }
         Ok(())
@@ -745,6 +816,8 @@ impl EcologyParams {
     /// ## Errors
     /// Returns ``PyValueError`` on the first size mismatch.
     pub fn validate(&self, bp: &Blueprint) -> PyResult<()> {
+        // Derive mode is encoded as an empty column plus all-false flags: the flags
+        // must count one per deme, and any true flag requires non-empty contents.
         if self.equilibrium_declared.len() != self.n_demes
             || (self.equilibrium_distribution.is_empty()
                 && self.equilibrium_declared.iter().any(|value| *value))
@@ -754,6 +827,7 @@ impl EcologyParams {
             ));
         }
         if self.custom_slots.len() != self.n_demes {
+            // Exactly one custom-slot map per deme column.
             return Err(PyValueError::new_err(
                 "custom-slot column must have one entry per deme",
             ));
@@ -787,6 +861,7 @@ impl EcologyParams {
         for name in ECOLOGY_TENSOR_COLUMNS {
             let got = self.stored_len(name)?;
             let expected = self.expected_len(bp, name)?;
+            // Only equilibrium/migration may be empty (derive / not declared).
             let is_empty_sentinel =
                 (name == "equilibrium_distribution" || name == "migration_rate") && got == 0;
             if got != expected && !is_empty_sentinel {
@@ -815,6 +890,8 @@ impl EcologyParams {
             validate_scalar_value(name, *value)?;
         }
         for (name, value) in writes {
+            // Commit pass: growth_mode arrives as f64 and is written through the
+            // i64 channel (truncating cast); other fields keep their float value.
             match self.scalar_ref(&name, 0)? {
                 ScalarRef::F64(target) => *target = value,
                 ScalarRef::I64(target) => *target = value as i64,
@@ -845,6 +922,8 @@ impl EcologyParams {
         // it, and any other size is rejected.
         let keeps_empty_sentinel = (name == "equilibrium_distribution" && values.is_empty())
             || (name == "migration_rate" && {
+                // migration_rate accepts an empty write only while the column is
+                // still undeclared; it has no per-deme declaration flag to flip.
                 let current_empty = match name {
                     "equilibrium_distribution" => self.equilibrium_distribution.is_empty(),
                     _ => self.migration_rate.is_empty(),
@@ -857,6 +936,7 @@ impl EcologyParams {
                 values.len()
             )));
         }
+        // Whole-column assignment (no per-deme segments in this channel).
         match name {
             "survival_rates" => self.survival_rates = values,
             "mating_rates" => self.mating_rates = values,
@@ -864,6 +944,8 @@ impl EcologyParams {
             "fertility" => self.fertility = values,
             "competition_weights" => self.competition_weights = values,
             "equilibrium_distribution" => {
+                // Declaration flags follow the content: all-true for a real
+                // distribution, all-false when the empty derive sentinel is written.
                 self.equilibrium_declared.fill(!values.is_empty());
                 self.equilibrium_distribution = values;
             }
@@ -884,6 +966,7 @@ impl EcologyParams {
     /// ## Errors
     /// Returns ``PyKeyError`` for unknown or non-scalar fields.
     pub fn get_scalar(&self, name: &str) -> PyResult<f64> {
+        // Deme-0 read channel: an empty column is an error, never a silent 0.0.
         let deme0 = |column: &Vec<f64>| -> PyResult<f64> {
             column
                 .first()
@@ -916,6 +999,8 @@ impl EcologyParams {
         deme: usize,
     ) -> [f64; crate::hooks::interpreter::N_ECO_PARAMS] {
         let mut values = [0.0; crate::hooks::interpreter::N_ECO_PARAMS];
+        // Canonical wire order (ECO_PARAM ids) so the interpreter's scratch row
+        // lines up with its opcode operands.
         for (id, slot) in values.iter_mut().enumerate() {
             *slot = self.eco_value(id, deme);
         }
@@ -963,24 +1048,30 @@ impl EcologyParams {
 
     /// Restore the ecology section from parallel word vectors.
     ///
-    /// Companion of [`EcologyParams::ecology_snapshot_words`]: per-field
-    /// validation through ``apply`` / ``tensor_write`` keeps prior contents
-    /// on failure, exactly like the dict-based ``restore_ecology``.
+    /// Companion of [`EcologyParams::ecology_snapshot_words`].  Every field is
+    /// validated through ``apply`` / ``tensor_write`` into a clone, which is
+    /// committed in one assignment only once the whole section is accepted —
+    /// the same clone-and-commit guarantee as the dict-based
+    /// ``restore_ecology``.  Writing field by field into ``self`` would leave
+    /// the first fields overwritten when a later one is rejected.
     pub(crate) fn ecology_restore_words(
         &mut self,
         bp: &Blueprint,
         scalars: &[f64],
         vectors: &[Vec<f64>],
     ) -> PyResult<()> {
+        let mut candidate = self.clone();
         for (name, value) in crate::generated::ecology_parameters::ECOLOGY_SCALARS
             .iter()
             .zip(scalars.iter())
         {
-            self.apply(HashMap::from([(name.to_string(), *value)]))?;
+            candidate.apply(HashMap::from([(name.to_string(), *value)]))?;
         }
         for (name, values) in ECOLOGY_VECTORS.iter().zip(vectors.iter()) {
-            self.tensor_write(bp, name, values.clone())?;
+            candidate.tensor_write(bp, name, values.clone())?;
         }
+        // Commit only after every field validated.
+        *self = candidate;
         Ok(())
     }
 
@@ -1012,6 +1103,8 @@ impl EcologyParams {
                 )))
             }
         };
+        // from_slice copies, so Python receives an independent array that cannot
+        // alias the Rust-owned column.
         Ok(PyArray1::from_slice(py, v))
     }
 }

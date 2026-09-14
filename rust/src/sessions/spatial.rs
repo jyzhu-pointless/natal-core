@@ -22,25 +22,11 @@ fn map_lifecycle_error(err: String) -> PyErr {
     crate::hooks::transaction::map_error(err)
 }
 
-/// PyO3 session for heterogeneous spatial multi-deme runs.
-///
-/// Variant bank: one shared blueprint, one columnized
-/// ecology set (per-deme ``EcologyParams`` columns), a bank of shared genetics
-/// [`GeneticsTensors`] variants, and a per-deme variant index.  Blueprint,
-/// ecology columns, and genetics are stored exactly once each — no
-/// per-deme contract clones.
-///
-/// Session ownership: the session also owns the stacked counts, sperm
-/// storage, tick, and one persistent RNG stream per deme (``seed ^ deme``,
-/// advancing across ticks instead of being rebuilt per tick).  ``run_tick``
-/// takes control parameters only; lifecycle then migration consume the
-/// same per-deme streams inside one call.  Python reads state back
-/// through snapshots.
-/// One restorable spatial boundary: the full owned runtime (state, sperm,
-/// every per-deme RNG stream, and the ecology columns) plus its tick.
-/// Captured at record-aligned ticks by the Python adapter; restoring
-/// replaces the whole runtime atomically so `restore -> run` replays the
-/// original stochastic trajectory.
+/// One restorable spatial boundary: the full owned runtime (state, sperm, every
+/// per-deme RNG stream, and the ecology columns) plus its tick.  Captured at
+/// record-aligned ticks by the Python adapter; restoring replaces the whole
+/// runtime atomically so `restore -> run` replays the original stochastic
+/// trajectory.
 pub struct SpatialTickCheckpoint {
     /// Lifecycle status and cursor retained by manual snapshots.
     pub execution: crate::sessions::status::ExecutionStatus,
@@ -57,6 +43,18 @@ pub struct SpatialTickCheckpoint {
     pub ecology: EcologyParams,
 }
 
+/// PyO3 session for heterogeneous spatial multi-deme runs.
+///
+/// Variant bank: one shared blueprint, one columnized ecology set (per-deme
+/// ``EcologyParams`` columns), a bank of shared genetics [`GeneticsTensors`]
+/// variants, and a per-deme variant index.  Blueprint, ecology columns, and
+/// genetics are stored exactly once each — no per-deme contract clones.
+///
+/// Session ownership: the session owns the stacked counts, sperm storage, tick,
+/// and one persistent RNG stream per deme (``seed ^ deme``, advancing across
+/// ticks instead of being rebuilt per tick).  ``run_tick`` takes control
+/// parameters only; lifecycle then migration consume the same per-deme streams
+/// inside one call.  Python reads state back through snapshots.
 #[pyclass(name = "HeterogeneousSpatialEngineSession")]
 pub struct SpatialSession {
     blueprint: Blueprint,
@@ -91,9 +89,13 @@ pub struct SpatialSession {
 impl SpatialSession {
     /// Execute one explicit event against a managed deme's native state.
     fn trigger_deme_event(&mut self, deme: usize, event: usize) -> PyResult<i32> {
+        // Four lifecycle events (first, early, late, finish) index the hook
+        // program; anything else is out of contract.
         if deme >= self.deme_variants.len() || event >= 4 {
             return Err(PyValueError::new_err("unknown deme or hook event"));
         }
+        // Work on a private single-deme column and this deme's state slices;
+        // the column is folded back into the session after the event.
         let mut params = self.ecology.single_deme(deme);
         let mut values = params.eco_values_row(0);
         let n_ages = self.blueprint.n_ages;
@@ -102,6 +104,9 @@ impl SpatialSession {
         let sperm_stride = n_ages * z * z;
         let ind = &mut self.state_ind[deme * ind_stride..(deme + 1) * ind_stride];
         let sperm = &mut self.state_sperm[deme * sperm_stride..(deme + 1) * sperm_stride];
+        // `phase = event * 2` maps events 0/1/2 (first/early/late) onto the
+        // lifecycle event phases 0/2/4; event 3 (finish) becomes phase 6,
+        // past the aging phase (5) that ends a normal tick.
         let mut ctx = Some(crate::kernels::age_structured::EcoCtx {
             bp: &self.blueprint,
             params: &mut params,
@@ -112,6 +117,8 @@ impl SpatialSession {
             tick: self.state_tick,
             journal: Vec::new(),
         });
+        // Propagate errors out of the event so cleanup and the write-back
+        // below still run.
         let mut result = 0;
         let outcome = (|| -> Result<(), String> {
             result = self.hooks.execute_event(
@@ -134,6 +141,8 @@ impl SpatialSession {
             }
             Ok(())
         })();
+        // Route audit rows to the bound history store, else buffer them for
+        // the Python adapter's drain.
         if let Some(context) = ctx.as_mut() {
             if let Some(shared) = &self.history_store {
                 let store = shared.lock().unwrap();
@@ -163,10 +172,14 @@ impl SpatialSession {
                 );
             }
         }
+        // Intern a callback-produced genetics table: an equal table is
+        // shared rather than appended, keeping the bank minimal.
         let genetics = ctx
             .as_mut()
             .and_then(|context| context.updated_genetics.take());
         drop(ctx);
+        // Publish the private column (its committed values, or the
+        // unchanged copy when the event errored).
         self.ecology.replace_deme(deme, &params);
         if let Some(genetics) = genetics {
             let variant = self
@@ -179,11 +192,14 @@ impl SpatialSession {
                 });
             self.deme_variants[deme] = variant;
         }
+        // Out-of-band events bypass the batch merge; drop queued candidates
+        // so they cannot leak into the next run_tick.
         self.hooks
             .callback_commits
             .lock()
             .expect("callback queue poisoned")
             .clear();
+        // Report the outcome last, after state and journals have settled.
         if let Err(error) = outcome {
             self.execution = crate::sessions::status::ExecutionStatus::Failed;
             return Err(map_lifecycle_error(error));
@@ -224,7 +240,9 @@ impl SpatialSession {
     /// - `sperm_storage_all`: Stacked initial sperm
     ///   ``(n_demes, n_ages, n_ztypes, n_ztypes)``.
     /// - `tick`: The authoritative starting tick.
-    /// - `stay_after_send`: Deterministic-migration bookkeeping order.
+    /// - `stay_after_send`: Historical migration bookkeeping flag (``True``
+    ///   when kernel mode folded the CSR); retained for the wire contract but
+    ///   no longer changes the deterministic numbers.
     /// - `seed`: Base RNG seed; deme *d* streams from ``seed ^ d``.
     ///
     /// ## Returns
@@ -250,11 +268,15 @@ impl SpatialSession {
         stay_after_send: bool,
         seed: u64,
     ) -> PyResult<Self> {
+        // Validate every contract piece before owning anything, so a
+        // rejected construction leaves no partial session behind.
         validate_state_tick(tick)?;
         let bp = Blueprint::from_python(blueprint)?;
         bp.validate()?;
         let ecology = EcologyParams::from_columns(ecology_columns, bp.n_demes)?;
         ecology.validate(&bp)?;
+        // Build the shared genetics bank; each variant is validated against
+        // the same blueprint.
         let mut variants = Vec::new();
         for entry in tensor_bank.try_iter()? {
             let tensors = GeneticsTensors::from_dict(&entry?)?;
@@ -272,6 +294,7 @@ impl SpatialSession {
             .iter()
             .map(|&value| value as usize)
             .collect::<Vec<usize>>();
+        // Every per-deme index must resolve inside the bank.
         for (deme, &variant) in deme_variants.iter().enumerate() {
             if variant >= variants.len() {
                 return Err(PyValueError::new_err(format!(
@@ -280,6 +303,7 @@ impl SpatialSession {
                 )));
             }
         }
+        // The model string selects which lifecycle kernel the session ticks.
         let discrete = match model.as_str() {
             "age_structured" => false,
             "discrete_generation" => true,
@@ -289,6 +313,9 @@ impl SpatialSession {
                 )))
             }
         };
+        // Import the one-time stacked initial state; the validators enforce
+        // (n_demes, 2, n_ages, n_ztypes) and (n_demes, n_ages, z, z), finite
+        // and nonnegative.
         let state_ind = validate_stacked_ind(individual_count_all, &bp, deme_variants.len())?;
         let state_sperm = validate_stacked_sperm(sperm_storage_all, &bp, deme_variants.len())?;
         // Validate the model's normalized shape once at construction (the
@@ -308,6 +335,8 @@ impl SpatialSession {
                 )));
             }
         }
+        // One persistent stream per deme from `seed ^ deme`, advancing
+        // across ticks instead of being rebuilt each tick.
         let rngs = (0..deme_variants.len())
             .map(|deme| new_rng(crate::kernels::rng::stream_seed(seed, deme as i64)))
             .collect();
@@ -403,6 +432,8 @@ impl SpatialSession {
         if deme >= self.deme_variants.len() {
             return Err(PyValueError::new_err("deme out of range"));
         }
+        // Pull into private candidates and swap only on success, so a
+        // rejected field cannot partially write the live column.
         let mut params = self.ecology.single_deme(deme);
         let mut genetics = self.variants[self.deme_variants[deme]].clone();
         params.pull_fields(&self.blueprint, 0, &fields, source, Some(&mut genetics))?;
@@ -476,6 +507,8 @@ impl SpatialSession {
         if deme >= self.deme_variants.len() {
             return Err(PyValueError::new_err("deme out of range"));
         }
+        // Copy -> apply -> swap: a validation failure leaves the live column
+        // untouched.
         let mut candidate = self.ecology.single_deme(deme);
         candidate.apply(writes)?;
         self.ecology.replace_deme(deme, &candidate);
@@ -487,6 +520,8 @@ impl SpatialSession {
         if deme >= self.deme_variants.len() {
             return Err(PyValueError::new_err("deme out of range"));
         }
+        // Same copy-validate-swap pattern as the scalar writer; the tensor
+        // write may also fork this deme's genetics table.
         let mut params = self.ecology.single_deme(deme);
         let mut genetics = self.variants[self.deme_variants[deme]].clone();
         crate::model::ecology::session_tensor_write(
@@ -536,6 +571,8 @@ impl SpatialSession {
                 self.deme_variants.len()
             )));
         }
+        // Clone-and-append gives this deme a private table while every other
+        // deme keeps sharing the original bank entry.
         let current = self.deme_variants[deme];
         let cloned = self.variants[current].clone();
         self.variants.push(cloned);
@@ -588,6 +625,8 @@ impl SpatialSession {
     /// ## Parameters
     /// - `seed`: New base seed; deme *d* restarts from ``seed ^ d``.
     fn reseed(&mut self, seed: u64) {
+        // Rebuild every stream from the new base (`seed ^ deme`): this
+        // resets the trajectory rather than continuing the old streams.
         self.seed = seed;
         self.rngs = (0..self.deme_variants.len())
             .map(|deme| new_rng(crate::kernels::rng::stream_seed(seed, deme as i64)))
@@ -600,6 +639,7 @@ impl SpatialSession {
     /// A list of ``(deme, tick, param_id, old, new)`` tuples (change-only
     /// rows, commit order), cleared by the drain.
     fn drain_eco_journal(&mut self) -> Vec<(usize, i64, usize, f64, f64)> {
+        // Drop the phase cursor: the Python journal shape is the 5-tuple.
         std::mem::take(&mut self.eco_journal)
             .into_iter()
             .map(|(deme, tick, id, old, new, _)| (deme, tick, id, old, new))
@@ -620,6 +660,8 @@ impl SpatialSession {
     /// Returns ``PyValueError`` when the length does not match the
     /// spatial extent; the column is left untouched.
     fn set_migration_rate(&mut self, values: PyReadonlyArray1<'_, f64>) -> PyResult<()> {
+        // Length-check before assigning: a wrong-sized column must not
+        // replace the session's authoritative rate vector.
         let want = self.ecology.n_demes * 2 * self.blueprint.n_ages;
         let slice = values
             .as_slice()
@@ -652,10 +694,16 @@ impl SpatialSession {
     /// ``PyValueError`` when an in-run ``Op.set_param`` value fails the
     /// bounds gate.
     fn run_tick(&mut self) -> PyResult<i64> {
+        // begin() rejects a nested call and marks the session Running.
         self.execution.begin()?;
         let before_tick = self.state_tick;
+        // Remember the journal cursor so only this tick's rows are mirrored
+        // into history below.
         let journal_start = self.eco_journal.len();
+        // State, RNG streams, and journals advance in place.
         let outcome = self.run_inner();
+        // Mirror this tick's set_param transitions into the per-deme history
+        // logs when a native store is bound.
         if let Some(shared) = &self.history_store {
             let store = shared.lock().unwrap();
             for (deme, tick, parameter, old, new, phase) in self.eco_journal.drain(journal_start..)
@@ -677,6 +725,8 @@ impl SpatialSession {
                 }
             }
         }
+        // Classify by the clock: unchanged tick = stopped, error = failed,
+        // any advance returns to Ready.
         self.execution = match &outcome {
             Ok(value) if value == &before_tick => crate::sessions::status::ExecutionStatus::Stopped,
             Ok(_) => {
@@ -693,10 +743,14 @@ impl SpatialSession {
         if n_ticks < 0 {
             return Err(PyValueError::new_err("n_steps must be >= 0"));
         }
+        // Record the starting boundary when it is record-aligned; the loop
+        // then records after every tick that lands on a multiple.
         if record_interval > 0 && self.state_tick % record_interval == 0 {
             self.record_history(true)?;
         }
         for _ in 0..n_ticks {
+            // A frozen clock means a hook stopped the run; report stopped
+            // and leave the remaining steps to the caller.
             let previous = self.state_tick;
             self.run_tick()?;
             if self.state_tick == previous {
@@ -728,7 +782,7 @@ impl SpatialSession {
         self.state_tick
     }
 
-    /// Restore the newest checkpoint at or before *tick*.
+    /// Restore the checkpoint recorded at exactly *tick*.
     ///
     /// Atomically replaces the owned state, all per-deme RNG streams, and
     /// the ecology columns from the checkpoint, rewinds the tick, and
@@ -736,14 +790,16 @@ impl SpatialSession {
     /// Nothing is changed when no checkpoint covers *tick*.
     ///
     /// ## Parameters
-    /// - `tick`: Target tick; the newest checkpoint with
-    ///   ``checkpoint.tick <= tick`` is restored.
+    /// - `tick`: Target tick; only a checkpoint captured exactly at this tick is
+    ///   restorable (there is no nearest-earlier fallback).
     ///
     /// ## Returns
     /// The restored tick, or ``None`` when no checkpoint covers *tick*
     /// (the caller falls back to its own restore path); on ``None`` the
     /// runtime is untouched.
     fn restore_from_checkpoint(&mut self, tick: i64) -> PyResult<Option<i64>> {
+        // Only an exact retained tick is restorable; a miss leaves the
+        // runtime untouched and the caller falls back.
         let Some(index) = self
             .checkpoints
             .iter()
@@ -751,9 +807,12 @@ impl SpatialSession {
         else {
             return Ok(None);
         };
+        // Rewind history before mutating runtime state so a failed timeline
+        // restore cannot desync the two.
         if let Some(store) = &self.history_store {
             store.lock().unwrap().restore_timeline(tick)?;
         }
+        // Replace state, per-deme RNG streams, and ecology together.
         let checkpoint = &self.checkpoints[index];
         self.state_ind = checkpoint.ind.clone();
         self.state_sperm = checkpoint.sperm.clone();
@@ -798,6 +857,8 @@ impl SpatialSession {
 
     /// Bind the native store owned by the public History adapter.
     fn bind_history(&mut self, history: PyRef<'_, HistoryStore>) {
+        // Share the adapter's Arc so native recording and the Python view
+        // observe the same store.
         self.history_store = Some(std::sync::Arc::clone(&history.data));
     }
 
@@ -808,14 +869,19 @@ impl SpatialSession {
             .as_ref()
             .ok_or_else(|| PyValueError::new_err("History is not initialized"))?
             .clone();
+        // One lock scope: `added` says a row was kept, `raw` whether raw
+        // checkpoints are retained, `earliest` the oldest surviving row.
         let (added, raw, earliest) = {
             let mut history = shared.lock().unwrap();
+            // Discrete demes carry no sperm plane; record an empty slice.
             let sperm = if self.discrete {
                 &[][..]
             } else {
                 &self.state_sperm[..]
             };
             let added = history.record(self.state_tick, &self.state_ind, sperm, continuation)?;
+            // Stamp the boundary with the phase/status cursor so a restored
+            // partial tick reports the same state.
             if added {
                 if let Some(boundary) = history.boundaries.back_mut() {
                     boundary.1 = self.phase;
@@ -828,9 +894,11 @@ impl SpatialSession {
                 history.rows.front().map(|row| row[0] as i64),
             )
         };
+        // Only raw history keeps a restorable checkpoint per row.
         if added && raw {
             self.capture_checkpoint();
         }
+        // Keep checkpoint eviction paired with history eviction.
         if let Some(tick) = earliest {
             self.checkpoints.retain(|cp| cp.tick >= tick);
         }
@@ -875,6 +943,8 @@ impl SpatialSession {
                 array.into_pyobject(py).unwrap().unbind().into_any(),
             ));
         }
+        // Rebuild the exact column layout `from_columns` consumed, so a
+        // Python-side rollback round-trips every field.
         let mut columns: Vec<(String, Py<PyAny>)> = Vec::new();
         push_f64(
             &mut columns,
@@ -901,6 +971,8 @@ impl SpatialSession {
             &self.ecology.low_density_growth_rate,
             py,
         );
+        // Integer columns keep the build-time wire type (int64) so the
+        // snapshot can be re-imported unchanged.
         let growth: Vec<i64> = self.ecology.growth_mode.clone();
         columns.push((
             "growth_mode".to_string(),
@@ -1022,6 +1094,8 @@ impl SpatialSession {
         }
         let z = self.blueprint.n_ztypes;
         let plane = self.blueprint.n_ages * z;
+        // The deme slice is [female plane, male plane]; `total` sums the
+        // whole slice (not female + male) to keep NumPy's pairwise order.
         let slice = &self.state_ind[deme * 2 * plane..(deme + 1) * 2 * plane];
         let female = crate::kernels::state_reduce::numpy_pairwise_sum(&slice[..plane]);
         let male = crate::kernels::state_reduce::numpy_pairwise_sum(&slice[plane..2 * plane]);
@@ -1054,6 +1128,7 @@ impl SpatialSession {
         let n_demes = self.deme_variants.len();
         let ind = validate_stacked_ind(individual_count_all, &self.blueprint, n_demes)?;
         let sperm = validate_stacked_sperm(sperm_storage_all, &self.blueprint, n_demes)?;
+        // Both planes are validated, so commit them with the clock together.
         self.state_ind = ind;
         self.state_sperm = sperm;
         self.state_tick = tick;
@@ -1077,6 +1152,7 @@ fn validate_stacked_ind(
     bp: &Blueprint,
     n_demes: usize,
 ) -> PyResult<Vec<f64>> {
+    // Shape first, then flattenability, then the finite/nonnegative gate.
     let shape = array.shape();
     if shape != [n_demes, 2, bp.n_ages, bp.n_ztypes] {
         return Err(PyValueError::new_err(format!(
@@ -1104,6 +1180,7 @@ fn validate_stacked_sperm(
     bp: &Blueprint,
     n_demes: usize,
 ) -> PyResult<Vec<f64>> {
+    // Same validation order as the individual-count import.
     let shape = array.shape();
     let want = [n_demes, bp.n_ages, bp.n_ztypes, bp.n_ztypes];
     if shape != want {
@@ -1140,6 +1217,8 @@ impl SpatialSession {
         let tick = self.state_tick;
         // The lifecycle kernels read each deme's ecology column segment and
         // its shared genetics variant directly — no per-deme snapshot build.
+        // Dispatch on the model; both kernels share the same scheduler, stop
+        // contract, and per-deme RNG bank.
         let code = if self.discrete {
             crate::kernels::spatial::run_spatial_tick_discrete(
                 &self.hooks,
@@ -1168,6 +1247,8 @@ impl SpatialSession {
                 &mut self.eco_journal,
             )
         };
+        // Take the earliest stage any deme stopped at; an empty queue means
+        // the batch completed and the cursor resets to 0.
         self.phase = self
             .hooks
             .phase_marks
@@ -1176,6 +1257,8 @@ impl SpatialSession {
             .drain(..)
             .min()
             .unwrap_or(0);
+        // Publish the scratch rows back into the columns unless the kernel
+        // errored outright; a stopped batch keeps its boundary writes.
         if code.is_ok() {
             for deme in 0..n_demes {
                 for id in 0..crate::hooks::interpreter::N_ECO_PARAMS {
@@ -1207,6 +1290,7 @@ impl SpatialSession {
                 });
             self.deme_variants[deme] = variant;
         }
+        // Translate the internal error string into a Python exception.
         let code = code.map_err(map_lifecycle_error)?;
         if code != 0 {
             // A stop keeps the modifications up to the boundary and
@@ -1220,6 +1304,8 @@ impl SpatialSession {
         // every female and no extra RNG draws are consumed.
         let all_zero = self.ecology.migration_rate.iter().all(|&rate| rate <= 0.0);
         if !all_zero {
+            // Stochastic draws outbound and destinations from the per-deme
+            // streams; deterministic replays the frozen float order.
             let (ind, sperm) = if self.blueprint.stochastic {
                 crate::kernels::spatial::migrate_csr_stochastic_rngs(
                     &mut self.rngs,
@@ -1249,9 +1335,11 @@ impl SpatialSession {
                 )
             }
             .map_err(map_lifecycle_error)?;
+            // The kernels are out-of-place: swap the migrated planes in.
             self.state_ind = ind;
             self.state_sperm = sperm;
         }
+        // Only a completed tick advances the clock.
         self.state_tick += 1;
         Ok(self.state_tick)
     }

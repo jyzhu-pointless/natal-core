@@ -32,10 +32,13 @@ At build time `fold_migration_csr()` folds the migration configuration into the
 CSR (`indptr` / `dest_idx` / `weights` / `stay_after_send`); at runtime it is just
 `outbound * weight`:
 
-- **adjacency mode**: each source row stores the raw adjacency values in
-  destination-ascending order and is **not row-normalized**; a row's outbound
-  total depends on the adjacency matrix itself (`build_adjacency_matrix(...)`
-  defaults to `row_normalize=False`).
+- **adjacency mode**: each source row stores the adjacency values in
+  destination-ascending order. The builder row-normalizes every non-empty row to
+  a probability vector first, so an adjacency holds **relative outbound
+  weights**: row-stochastic, sub-stochastic and super-stochastic inputs describe
+  the same outbound distribution and migration conserves mass. An all-zero row
+  (isolated deme) is kept, so that deme holds its mass. "Migrate less" is
+  expressed through `migration_rate`, not by shrinking a row.
 - **kernel mode**: the per-source historical row builder is reproduced in kernel
   row-major visit order; invalid (out-of-grid) offsets are dropped or wrapped;
   each emitted entry is scaled by the reciprocal of the kernel total -- or of
@@ -45,9 +48,11 @@ CSR (`indptr` / `dest_idx` / `weights` / `stay_after_send`); at runtime it is ju
   like interior demes. The `adjust_on_edge` switch exists for historical
   bit-exact parity with the old pipeline, not to change the destination
   distribution.
-- `stay_after_send` distinguishes the bookkeeping order: `False` for adjacency
-  mode (deduct then send) and `True` for kernel mode (send then deduct), keeping
-  each path's deterministic operation order.
+- `stay_after_send` records which mode folded the CSR (`False` = adjacency,
+  `True` = kernel) and is retained for the frozen wire contract, but it no
+  longer changes the numbers: the deterministic runtime uses one bookkeeping
+  order for both — distribute first, then keep `value - moved_total` at the
+  source, so any row sum conserves mass.
 - Migration rate and CSR are separate: the runtime `migration_rate` is a
   `(n_demes, S, A)` column (write-protected view); actual outflow =
   rate x weight.

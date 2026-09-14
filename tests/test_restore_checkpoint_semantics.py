@@ -31,7 +31,9 @@ def _build_discrete(
     *,
     stochastic: bool = False,
     init: int = 10,
-    growth_mode: int | None = None,
+    # Explicit no-competition: this fixture pins deterministic discrete
+    # rollback/replay, not the regulation curve.
+    growth_mode: int | None = nt.NO_COMPETITION,
     hook_calls: list | None = None,
     carrying_capacity: float = 100000.0,
 ) -> nt.DiscreteGenerationPopulation:
@@ -41,8 +43,8 @@ def _build_discrete(
         name: Population/species name.
         stochastic: Whether stochastic sampling drives the ticks.
         init: Initial WT|WT count per sex (isolation tests vary it).
-        growth_mode: Optional ``juvenile_growth_mode`` override; ``None``
-            keeps the build default.
+        growth_mode: Optional ``juvenile_growth_mode`` override; defaults
+            to ``NO_COMPETITION`` so the linear census is pinned.
         carrying_capacity: Density-regulation capacity K.
         hook_calls: Optional ``(items, kwargs)`` pairs declared through
             ``.hooks()`` in the build chain.

@@ -4,10 +4,10 @@ Every assertion here proves a numerical invariant against an independently
 written reference, not against the implementation's own readout:
 
 - **CSR fold equivalence** — the deterministic engines reproduce a manual
-  application of the folded routing entries bit-for-bit, for both
-  bookkeeping orders (``stay_after_send`` False = stay-first adjacency
-  order, True = send-first kernel order), including the wrapping narrow
-  grid where one CSR row emits the same destination twice.
+  application of the folded routing entries bit-for-bit, including the
+  wrapping narrow grid where one CSR row emits the same destination twice.
+  ``stay_after_send`` is retained on the CSR for the frozen wire contract but
+  no longer changes the numbers: both modes send first and keep the residual.
 - **Sugar rules** — ``normalize_migration_rate`` produces the exact
   documented column for every declaration shape, and rejects malformed
   ones.
@@ -147,14 +147,12 @@ def _apply_reference(
     sperm: NDArray[np.float64],
     rows: Sequence[tuple[NDArray[np.int64], NDArray[np.float64]]],
     rate: NDArray[np.float64],
-    stay_after_send: bool,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Independent deterministic migration in the engine's entry order.
 
-    Reproduces the two historical bookkeeping orders bit-for-bit:
-    ``stay_after_send=False`` keeps ``value - outbound`` at the source
-    before distributing, ``True`` distributes first and keeps the
-    ``value - moved_total`` residual last.
+    Reproduces the engine's single bookkeeping order: distribute first, then
+    keep the ``value - moved_total`` residual at the source, which conserves
+    mass for any row sum.
     """
     out_ind = np.zeros_like(ind)
     out_sperm = np.zeros_like(sperm)
@@ -176,47 +174,26 @@ def _apply_reference(
                 female_rate = rate[src, 0, age]
                 if nnz > 0:
                     outbound = virgin * female_rate
-                    if stay_after_send:
-                        moved_total = 0.0
-                        for pos in range(nnz):
-                            moved = outbound * weights[pos]
-                            out_ind[int(dests[pos]), 0, age, female_z] += moved
-                            moved_total += moved
-                        out_ind[src, 0, age, female_z] += virgin - moved_total
-                    else:
-                        stay = virgin - outbound
-                        out_ind[src, 0, age, female_z] += stay
-                        for pos in range(nnz):
-                            out_ind[int(dests[pos]), 0, age, female_z] += (
-                                outbound * weights[pos]
-                            )
+                    moved_total = 0.0
+                    for pos in range(nnz):
+                        moved = outbound * weights[pos]
+                        out_ind[int(dests[pos]), 0, age, female_z] += moved
+                        moved_total += moved
+                    out_ind[src, 0, age, female_z] += virgin - moved_total
                 else:
                     out_ind[src, 0, age, female_z] += virgin
                 for male_z in range(n_ztypes):
                     value = sperm[src, age, female_z, male_z]
                     if nnz > 0:
                         outbound = value * female_rate
-                        if stay_after_send:
-                            moved_total = 0.0
-                            for pos in range(nnz):
-                                moved = outbound * weights[pos]
-                                out_sperm[
-                                    int(dests[pos]), age, female_z, male_z
-                                ] += moved
-                                out_ind[int(dests[pos]), 0, age, female_z] += moved
-                                moved_total += moved
-                            out_sperm[src, age, female_z, male_z] += value - moved_total
-                            out_ind[src, 0, age, female_z] += value - moved_total
-                        else:
-                            stay = value - outbound
-                            out_sperm[src, age, female_z, male_z] += stay
-                            out_ind[src, 0, age, female_z] += stay
-                            for pos in range(nnz):
-                                moved = outbound * weights[pos]
-                                out_sperm[
-                                    int(dests[pos]), age, female_z, male_z
-                                ] += moved
-                                out_ind[int(dests[pos]), 0, age, female_z] += moved
+                        moved_total = 0.0
+                        for pos in range(nnz):
+                            moved = outbound * weights[pos]
+                            out_sperm[int(dests[pos]), age, female_z, male_z] += moved
+                            out_ind[int(dests[pos]), 0, age, female_z] += moved
+                            moved_total += moved
+                        out_sperm[src, age, female_z, male_z] += value - moved_total
+                        out_ind[src, 0, age, female_z] += value - moved_total
                     else:
                         out_sperm[src, age, female_z, male_z] += value
                         out_ind[src, 0, age, female_z] += value
@@ -227,20 +204,12 @@ def _apply_reference(
                     bucket_rate = rate[src, sex, age]
                     if nnz > 0:
                         outbound = value * bucket_rate
-                        if stay_after_send:
-                            moved_total = 0.0
-                            for pos in range(nnz):
-                                moved = outbound * weights[pos]
-                                out_ind[int(dests[pos]), sex, age, ztype] += moved
-                                moved_total += moved
-                            out_ind[src, sex, age, ztype] += value - moved_total
-                        else:
-                            stay = value - outbound
-                            out_ind[src, sex, age, ztype] += stay
-                            for pos in range(nnz):
-                                out_ind[int(dests[pos]), sex, age, ztype] += (
-                                    outbound * weights[pos]
-                                )
+                        moved_total = 0.0
+                        for pos in range(nnz):
+                            moved = outbound * weights[pos]
+                            out_ind[int(dests[pos]), sex, age, ztype] += moved
+                            moved_total += moved
+                        out_ind[src, sex, age, ztype] += value - moved_total
                     else:
                         out_ind[src, sex, age, ztype] += value
     return out_ind, out_sperm
@@ -321,12 +290,12 @@ def _reconstruct_kernel_rows(
 
 
 # ---------------------------------------------------------------------------
-# 1. CSR fold equivalence (bitwise, both bookkeeping orders)
+# 1. CSR fold equivalence (bitwise, single unified bookkeeping order)
 # ---------------------------------------------------------------------------
 
 
 class TestAdjacencyFoldEquivalence:
-    """Adjacency mode: stay-first order, raw weights, no renormalization."""
+    """Adjacency mode: raw weights, no renormalization, unified order."""
 
     def test_engine_bitwise_matches_manual_dense_application(self) -> None:
         """Topology adjacency + varied rate column == manual application, bit-for-bit."""
@@ -342,7 +311,7 @@ class TestAdjacencyFoldEquivalence:
         rate[3, :, :] = 0.0  # one fully non-migrating deme
 
         expected_ind, expected_sperm = _apply_reference(
-            ind, sperm, _csr_rows(csr), rate, stay_after_send=False
+            ind, sperm, _csr_rows(csr), rate
         )
         got_ind, got_sperm = _run_engine(ind, sperm, csr, rate)
         assert np.array_equal(got_ind, expected_ind)
@@ -355,12 +324,14 @@ class TestAdjacencyFoldEquivalence:
             atol=1e-9,
         )
 
-    def test_raw_weights_keep_residual_at_source(self) -> None:
-        """A non-row-stochastic adjacency moves only ``rate * row_sum`` of mass.
+    def test_raw_weights_conserve_the_undelivered_share(self) -> None:
+        """A raw non-row-stochastic adjacency keeps the undelivered share.
 
-        The deterministic adjacency order computes ``stay = value -
-        outbound`` from the full outbound, so a row summing to 0.3 leaves
-        the undelivered share at the source instead of renormalizing.
+        The deterministic order distributes ``outbound * weight`` and parks
+        ``value - moved_total`` at the source, so a row summing to 0.3 moves
+        30% of the outbound mass and leaves the rest where it was; the total
+        is conserved.  The builder row-normalizes adjacency before folding,
+        so this only needs to hold for a hand-built CSR.
         """
         adjacency = np.array([[0.0, 0.3], [0.0, 0.0]])
         csr = _fold_adjacency(adjacency)
@@ -372,10 +343,13 @@ class TestAdjacencyFoldEquivalence:
         got_ind, got_sperm = _run_engine(ind, sperm, csr, rate)
         # Same expression order as the engine, written out per bucket.
         for age, value in ((0, 1000.0), (1, 2000.0)):
-            assert got_ind[1, 1, age, 0] == (value * 0.5) * 0.3
-            assert got_ind[0, 1, age, 0] == value - value * 0.5
+            moved = (value * 0.5) * 0.3
+            assert got_ind[1, 1, age, 0] == moved
+            assert got_ind[0, 1, age, 0] == value - moved
             assert got_ind[1, 0, age, 0] == 0.0
         assert got_sperm.sum() == 0.0
+        # Row sum != 1 no longer means mass is created or destroyed.
+        assert got_ind.sum() == ind.sum()
 
     def test_tiny_negative_virgin_drift_is_clamped(self) -> None:
         """A ``|virgin| < 1e-9`` negative drift must not migrate negative mass."""
@@ -431,7 +405,7 @@ class TestKernelFoldEquivalence:
         rate = np.full((6, 2, 2), 0.2)
         rate[0, 1, :] = 0.35
         expected_ind, expected_sperm = _apply_reference(
-            ind, sperm, expected_rows, rate, stay_after_send=True
+            ind, sperm, expected_rows, rate
         )
         got_ind, got_sperm = _run_engine(ind, sperm, csr, rate)
         assert np.array_equal(got_ind, expected_ind)
@@ -464,7 +438,7 @@ class TestKernelFoldEquivalence:
         ind, sperm = _valid_state(n_demes=6, n_ages=2, n_ztypes=2, seed=303)
         rate = np.full((6, 2, 2), 0.25)
         expected_ind, expected_sperm = _apply_reference(
-            ind, sperm, expected_rows, rate, stay_after_send=True
+            ind, sperm, expected_rows, rate
         )
         got_ind, got_sperm = _run_engine(ind, sperm, csr, rate)
         assert np.array_equal(got_ind, expected_ind)
@@ -524,13 +498,13 @@ class TestKernelFoldEquivalence:
         assert np.array_equal(csr.dest_idx, np.array([1, 0, 2, 1], dtype=np.int64))
         assert np.array_equal(csr.weights, np.array([1.0, 0.5, 0.5, 1.0]))
 
-    def test_bookkeeping_orders_are_distinguishable(self) -> None:
-        """The two ``stay_after_send`` orders produce different, each-exact results.
+    def test_bookkeeping_orders_agree_and_conserve(self) -> None:
+        """Both ``stay_after_send`` values now give the same conserved result.
 
-        With one raw weight of 0.3, stay-first keeps ``value - outbound``
-        at the source (row sum < 1, undelivered share withheld) while
-        send-first keeps ``value - moved_total`` (conserved).  The engine
-        must switch between exactly these two arithmetic orders.
+        The old adjacency order parked ``value - outbound`` at the source and
+        lost the undelivered share of a sub-stochastic row.  Both orders now
+        send first and keep ``value - moved_total``, so the flag no longer
+        changes the numbers and the total is conserved either way.
         """
         ind = np.zeros((2, 2, 1, 1))
         ind[0, 1, 0, 0] = 1000.0
@@ -548,14 +522,12 @@ class TestKernelFoldEquivalence:
             ind.copy(), sperm.copy(), indptr, dest_idx, weights, rate,
             True,
         )
-        # Stay-first: the full outbound leaves, only rate*weight arrives.
-        assert stay_ind[0, 1, 0, 0] == 1000.0 - 1000.0 * 0.5
-        assert stay_ind[1, 1, 0, 0] == (1000.0 * 0.5) * 0.3
-        # Send-first: moved_total decides the source residual.
-        assert send_ind[1, 1, 0, 0] == (1000.0 * 0.5) * 0.3
-        assert send_ind[0, 1, 0, 0] == 1000.0 - (1000.0 * 0.5) * 0.3
-        # The two orders genuinely differ at the source bucket.
-        assert stay_ind[0, 1, 0, 0] != send_ind[0, 1, 0, 0]
+        # Both orders: the source keeps value - moved_total and conserves.
+        for out in (stay_ind, send_ind):
+            assert out[1, 1, 0, 0] == (1000.0 * 0.5) * 0.3
+            assert out[0, 1, 0, 0] == 1000.0 - (1000.0 * 0.5) * 0.3
+            assert out.sum() == ind.sum()
+        np.testing.assert_array_equal(stay_ind, send_ind)
         assert stay_sperm.sum() == 0.0 and send_sperm.sum() == 0.0
 
     def test_csr_dense_row_accumulates_duplicates(self) -> None:
@@ -844,7 +816,7 @@ class TestEngineMatchesManualCsr:
         )
         rows = _csr_rows(csr)
         expected_ind, expected_sperm = _apply_reference(
-            ind, sperm, rows, rate, stay_after_send=csr.stay_after_send
+            ind, sperm, rows, rate
         )
         rs_ind, rs_sperm = rust_migrate_csr_deterministic(
             ind, sperm, csr.indptr, csr.dest_idx, csr.weights, rate,

@@ -60,6 +60,7 @@ __all__ = [
 
 def _default_sex_labels(n_sexes: int) -> List[str]:
     """Return canonical sex labels for a given number of sexes."""
+    # Female/male cover the first two axes; any extra axes get generic names.
     base = ["female", "male"]
     if n_sexes <= len(base):
         return base[:n_sexes]
@@ -75,6 +76,8 @@ def _resolve_labels(
     if labels is None:
         return [f"{default_prefix}_{idx}" for idx in range(count)]
 
+    # Coerce labels to str so they are valid JSON keys, then verify the count
+    # against the axis length (a mismatch would shift every axis label).
     resolved = [str(item) for item in labels]
     if len(resolved) != count:
         raise ValueError(
@@ -91,6 +94,8 @@ def _genotype_labels_from_registry(
     if registry is None:
         return _resolve_labels(n_ztypes, None, "genotype")
 
+    # The registry is the source of truth for the ZType axis; a mismatch means
+    # the caller's shape is stale and would mislabel genotypes.
     if len(registry.index_to_genotype) != n_ztypes:
         raise ValueError(
             "Registry genotype count does not match state shape: "
@@ -117,6 +122,8 @@ def _build_individual_count_payload(
         Nested dict ``{sex: {age: {genotype: count}}}`` with only non-zero
         entries when ``include_zero_counts`` is ``False``.
     """
+    # The state tensor is laid out (n_sexes, n_ages, n_ztypes); mirror it as
+    # {sex: {age: {genotype: count}}} so callers can address axes by name.
     payload: Dict[str, Dict[str, Dict[str, float]]] = {}
     n_ages = int(individual_count.shape[1])
 
@@ -127,8 +134,10 @@ def _build_individual_count_payload(
             geno_block: Dict[str, float] = {}
             for ztype_idx, genotype_name in enumerate(genotype_labels):
                 value = float(individual_count[sex_idx, age_idx, ztype_idx])
+                # Zeros are dropped by default so sparse snapshots stay small.
                 if include_zero_counts or value != 0.0:
                     geno_block[genotype_name] = value
+            # Drop the age entry entirely when every genotype was filtered out.
             if include_zero_counts or geno_block:
                 sex_block[age_key] = geno_block
         payload[sex_name] = sex_block
@@ -152,6 +161,8 @@ def _build_sperm_storage_payload(
     Returns:
         Nested dict ``{age: {female_genotype: {male_genotype: count}}}``.
     """
+    # Sperm rows are (n_ages, female_ztype, male_ztype): the genotype label list
+    # is reused for both parents because both axes index the same ZType space.
     payload: Dict[str, Dict[str, Dict[str, float]]] = {}
     n_ages = int(sperm_storage.shape[0])
 
@@ -161,6 +172,7 @@ def _build_sperm_storage_payload(
         for female_idx, female_name in enumerate(genotype_labels):
             male_block: Dict[str, float] = {}
             for male_idx, male_name in enumerate(genotype_labels):
+                # Same compact-output rule as the individual-count payload.
                 value = float(sperm_storage[age_idx, female_idx, male_idx])
                 if include_zero_counts or value != 0.0:
                     male_block[male_name] = value
@@ -194,6 +206,8 @@ def population_state_to_dict(
     """
     n_sexes, n_ages, n_ztypes = state.individual_count.shape
     labels_genotype = _resolve_labels(n_ztypes, genotype_labels, "genotype")
+    # Caller labels take precedence; otherwise canonical defaults are expanded to
+    # the state's axis lengths and validated by _resolve_labels.
     labels_sex = _resolve_labels(n_sexes, sex_labels or _default_sex_labels(n_sexes), "sex")
 
     result: Dict[str, Any] = {  # Any: JSON-serializable
@@ -339,9 +353,13 @@ def population_to_readable_dict(
         TypeError: If the population state type is unsupported.
     """
     state = population.state
+    # Pull genotype strings from the registry so output keys are names, not
+    # ztype indices.
     n_ztypes = int(state.individual_count.shape[2])
     genotype_labels = _genotype_labels_from_registry(population.index_registry, n_ztypes)
 
+    # Age-structured states also carry sperm storage, discrete states do not, so
+    # each dispatches to its own payload builder.
     if isinstance(state, PopulationState):
         return population_state_to_dict(
             state=state,
@@ -406,6 +424,8 @@ def population_history_to_readable_dict(
     n_sexes, n_ages, n_ztypes = state.individual_count.shape
     genotype_labels = _genotype_labels_from_registry(population.index_registry, int(n_ztypes))
 
+    # Default to the population's own flattened history; explicit input is coerced
+    # to float64 so both paths share the fixed row layout.
     history_array: np.ndarray
     if history is None:
         history_array = cast(np.ndarray, population.history._to_numpy())  # pyright: ignore[reportPrivateUsage]  # internal flatten seam
@@ -417,6 +437,9 @@ def population_history_to_readable_dict(
             f"history must be a 2D array, got shape {history_array.shape}"
         )
 
+    # Each row is one snapshot laid out [tick, counts, (sperm)]. Parsing copies,
+    # so snapshots never alias the history buffer, and rows are decoded with the
+    # live state's dimensions, so the recorded layout must match the population.
     snapshots: List[Dict[str, Any]] = []  # Any: JSON-serializable
     if isinstance(state, PopulationState):
         for idx in range(int(history_array.shape[0])):
@@ -514,6 +537,8 @@ def _build_observation_payload(
     """
     payload: Dict[str, Any] = {}  # Any: JSON-serializable
 
+    # Rank 3 keeps the age axis; rank 2 is an age-collapsed projection. The group
+    # axis is first in both layouts.
     if observed.ndim == 3:
         n_ages = int(observed.shape[2])
         for group_idx, group_name in enumerate(labels):
@@ -539,6 +564,7 @@ def _build_observation_payload(
             payload[group_name] = sex_value_block
         return payload
 
+    # Any other rank means the projection or its mask was configured inconsistently.
     raise ValueError(f"Unsupported observed array ndim: {observed.ndim}")
 
 
@@ -572,6 +598,8 @@ def _get_population_observation_payload(
     n_sexes = int(state.individual_count.shape[0])
     sex_labels = _default_sex_labels(n_sexes)
 
+    # No compiled rule supplied: build one from the group specs against the
+    # population registry (legacy dict specs normalize inside the filter).
     if observation is None and groups is not None:
         from natal.frontend.output.observation import ObservationFilter
         observation = ObservationFilter(population.index_registry).build_filter(
@@ -579,7 +607,10 @@ def _get_population_observation_payload(
             groups=groups,
             collapse_age=collapse_age,
         )
+    # Fall back to the population's canonical Observation so current-state output
+    # always reflects the rule the population was built with.
     resolved_observation = observation or population.observation
+    # Native group-first projection of the raw (sex, age, ztype) counts.
     observed = resolved_observation.apply(state.individual_count)
 
     return {
@@ -601,6 +632,8 @@ def _get_history_array(
     history: Optional[np.ndarray],
 ) -> np.ndarray:
     """Fetch history from the population or return a caller-supplied array."""
+    # Default source is the population's own flattened history; a caller-supplied
+    # array is copied to float64. Rank validation is left to the callers.
     if history is None:
         return cast(np.ndarray, population.history._to_numpy())  # pyright: ignore[reportPrivateUsage]  # internal flatten seam
 
@@ -635,6 +668,8 @@ def population_observation_history_to_readable_dict(
     obs = population.observation
     state = cast(PopulationState | DiscretePopulationState, population.state)
 
+    # Rows carry no shape metadata: dimensions come from the live state and the
+    # group count from the canonical Observation.
     n_sexes = int(state.individual_count.shape[0])
     n_ages = int(state.individual_count.shape[1])
     sex_labels = _default_sex_labels(n_sexes)
@@ -649,7 +684,11 @@ def population_observation_history_to_readable_dict(
     for idx in range(int(history_array.shape[0])):
         row = history_array[idx, :]
         tick = int(row[0])
-        observed = row[1:].reshape(n_groups, n_sexes, n_ages)
+        # A collapsed age axis drops that dimension from the row layout, so the
+        # row is shorter than the full-age form.  Reshaping without it raised
+        # for collapse_age=True observations.
+        age_shape = () if obs.collapse_age else (n_ages,)
+        observed = row[1:].reshape(n_groups, n_sexes, *age_shape)
         snapshots.append({
             "tick": tick,
             "state_type": type(state).__name__,
@@ -702,6 +741,8 @@ def spatial_population_to_readable_dict(
     Returns:
         Dictionary containing per-deme readable payloads and one aggregate state.
     """
+    # All demes share one species/registry, so labels from deme 0 also label the
+    # aggregate state.
     aggregate_state = spatial_population.aggregate_state()
     n_ztypes = int(aggregate_state.individual_count.shape[2])
     genotype_labels = _genotype_labels_from_registry(
@@ -768,6 +809,8 @@ def spatial_population_to_observation_dict(
     """
     from natal.frontend.output.observation import ObservationFilter
 
+    # Observe each deme with its own registry; the shared group specs are
+    # recompiled per deme.
     per_deme_payload: Dict[str, Any] = {}  # Any: JSON-serializable  # Any: JSON-serializable
     for deme_idx in range(spatial_population.n_demes):
         per_deme_payload[f"deme_{deme_idx}"] = _get_population_observation_payload(
@@ -778,6 +821,8 @@ def spatial_population_to_observation_dict(
             include_zero_counts=include_zero_counts,
         )
 
+    # The aggregate runs the same rule once on the summed deme counts, using deme
+    # 0's registry (all demes must share a layout).
     aggregate_state = spatial_population.aggregate_state()
     n_sexes = int(aggregate_state.individual_count.shape[0])
     sex_labels = _default_sex_labels(n_sexes)
@@ -890,6 +935,8 @@ def spatial_population_history_to_readable_dict(
     ind_per_deme = n_sexes * n_ages * n_ztypes
     sperm_per_deme = n_ages * n_ztypes * n_ztypes
 
+    # Discrete rows stop after the count blocks; only age-structured rows have
+    # sperm storage.
     is_discrete = isinstance(state, DiscretePopulationState)
 
     snapshots: List[Dict[str, Any]] = []  # Any: JSON-serializable
@@ -899,6 +946,7 @@ def spatial_population_history_to_readable_dict(
 
         per_deme: Dict[str, Any] = {}  # Any: JSON-serializable
         for d in range(n_demes):
+            # Counts block for deme d: skip the tick column, then d whole blocks.
             d_ind_start = 1 + d * ind_per_deme
             d_ind_end = 1 + (d + 1) * ind_per_deme
             deme_ind = row[d_ind_start:d_ind_end].reshape(
@@ -916,6 +964,8 @@ def spatial_population_history_to_readable_dict(
                     include_zero_counts=include_zero_counts,
                 )
             else:
+                # Sperm blocks follow every deme's count block, so skip all count
+                # blocks plus d sperm blocks.
                 d_sp_start = 1 + n_demes * ind_per_deme + d * sperm_per_deme
                 d_sp_end = 1 + n_demes * ind_per_deme + (d + 1) * sperm_per_deme
                 deme_sperm = row[d_sp_start:d_sp_end].reshape(
@@ -997,12 +1047,17 @@ def spatial_population_observation_history_to_readable_dict(
         tick = int(row[0])
 
         per_deme: Dict[str, Any] = {}  # Any: JSON-serializable
+        # Preserve mode stores the selected demes in `demes` order; a non-spatial
+        # rule selects none and falls back to every deme.
         selected_demes = (
             obs.deme_indices
             if obs.deme_indices is not None
             else tuple(range(n_demes))
         )
+        # A collapsed age axis removes that dimension from the row layout.
         age_shape = () if obs.collapse_age else (n_ages,)
+        # Aggregate rows store one summed block; preserve rows store one block per
+        # selected deme.
         if obs.deme_mode == "aggregate":
             agg_arr = row[1:].reshape(n_groups, n_sexes, *age_shape)
             per_deme["aggregate"] = _build_observation_payload(
@@ -1012,12 +1067,14 @@ def spatial_population_observation_history_to_readable_dict(
                 include_zero_counts=include_zero_counts,
             )
         else:
+            # Rank 4/3 row layout: group × selected deme × sex (× age).
             observed = row[1:].reshape(
                 n_groups,
                 len(selected_demes),
                 n_sexes,
                 *age_shape,
             )
+            # `position` indexes the row's deme slot, `deme_index` is the deme id.
             for position, deme_index in enumerate(selected_demes):
                 per_deme[f"deme_{deme_index}"] = _build_observation_payload(
                     observed=observed[:, position],
@@ -1025,8 +1082,12 @@ def spatial_population_observation_history_to_readable_dict(
                     sex_labels=sex_labels,
                     include_zero_counts=include_zero_counts,
                 )
+            # Aggregate over the selected demes only, matching the "aggregate"
+            # projection of the same selection.
             agg_arr = observed.sum(axis=1)
 
+        # Both branches feed the aggregate through the same payload helper so
+        # aggregate and per-deme shapes stay consistent.
         aggregate_payload = _build_observation_payload(
             observed=agg_arr, labels=labels,
             sex_labels=sex_labels, include_zero_counts=include_zero_counts,

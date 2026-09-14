@@ -200,7 +200,7 @@ pop = (nt.DiscreteGenerationPopulation
 
 ### Using Other Presets
 
-The current preset system includes [HomingDrive](api/presets.md#natal.frontend.presets.HomingDrive) and [ToxinAntidoteDrive](api/presets.md#natal.frontend.presets.ToxinAntidoteDrive), with more preset types being continuously expanded in the future.
+The current preset system includes [HomingDrive](api/presets.md#natal.frontend.presets.HomingDrive), [ToxinAntidoteDrive](api/presets.md#natal.frontend.presets.ToxinAntidoteDrive) and [PointMutation](api/presets.md#natal.frontend.presets.PointMutation), with more preset types being continuously expanded in the future.
 
 You can also define custom presets; see [Design Your Own Presets](3_custom_presets.md) for details.
 

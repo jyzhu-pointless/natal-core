@@ -207,14 +207,21 @@ class GameteConversionRuleSet:
             from natal.frontend.builder._registry_builder import build_registry
 
             registry = build_registry(species)
+        # Rules compile against the complete species registry, so their indices
+        # never depend on a later compressed runtime axis.
         compiled = self._compile(species, registry)
 
         from natal.frontend.genetics.compile import project_mendelian_maps
 
+        # Meiosis baseline of shape (2, n_ztypes, n_gtypes); the cascade rewrites
+        # each (sex, ztype) row's gamete distribution in place.
         meiosis, _fertilization = project_mendelian_maps(species, registry)
 
         from .module import CompiledRuleModifier
 
+        # rows_for re-derives each row on any entering tensor of the baseline
+        # shape, so the (sex, ztype, gtype) axes must stay registry-aligned with
+        # the meiosis table the Rust offspring kernel consumes.
         return CompiledRuleModifier(
             meiosis, lambda row, first, second: _cascade_row(row, first, second, compiled)
         )
@@ -234,12 +241,15 @@ class GameteConversionRuleSet:
         parser = GenotypePatternParser(species)
         compiled: List[_CompiledGtypeRule] = []
 
+        # Resolve each declaration once into match/convert closures, so per-row
+        # evaluation costs only integer lookups and pattern tests.
         for rule in self.rules:
             sex_idx: Optional[int] = None
             parent_pattern: Optional[ZygoteTypePattern] = None
             current_pattern: Optional[HaploidGenomePattern] = None
             current_lab: Optional[LabPattern] = None
 
+            # Filter keys are AND-ed; omitted keys leave the rule unrestricted.
             for key, pattern in rule.filter_pairs:
                 if key == "parent_sex":
                     if pattern == "both":
@@ -267,6 +277,8 @@ class GameteConversionRuleSet:
 
             if isinstance(rule, GameteGtypeConversionRule):
                 genotype_part, label_part = rule.target_parts
+                # `*` keeps the branch's own part, so "*@*" is the identity and
+                # "*@tag" only retags without touching the haploid genotype.
                 target_hg: Optional[HaploidGenotype] = None
                 if genotype_part != "*":
                     try:
@@ -285,6 +297,8 @@ class GameteConversionRuleSet:
                         )
                     target_glab = label_part
 
+                # Default arguments freeze this iteration's target, since the
+                # enclosing loop rebinds the locals on the next rule.
                 def convert(
                     gidx: int,
                     _thg: Optional[HaploidGenotype] = target_hg,
@@ -312,6 +326,8 @@ class GameteConversionRuleSet:
                     _to: str = rule.to_allele,
                 ) -> int:
                     hg, glab = registry.index_to_gtype[gidx]
+                    # Only copies carrying the source allele change; the gamete
+                    # label (glab) is preserved.
                     replaced = replace_allele_in_haploid(hg, _from, _to)
                     if replaced is None:
                         return gidx  # source allele absent: branch stays
@@ -319,6 +335,8 @@ class GameteConversionRuleSet:
 
                 convert_fn = convert_allele
 
+            # Filters combine as AND: sex gate, producer's diploid pattern, then
+            # the entering gamete's haploid pattern and label.
             def matches(
                 sex: int,
                 ztype_idx: int,
@@ -364,6 +382,8 @@ def _require_same_locus(
             "is not registered in the species"
         )
     target = species.get_gene(rule.to_allele)
+    # The locus is located through the source allele; requiring the target at the
+    # same locus keeps a conversion from moving a gene to another chromosome.
     if target is None or target.locus is not source.locus:
         raise ValueError(
             f"{rs_name}: rule {rule!r} target allele {rule.to_allele!r} "
@@ -388,6 +408,8 @@ def _compile_gamete_pattern(
     """
     lab: Optional[LabPattern]
     base = pattern
+    # Split the optional label qualifier off the genotype pattern; each part is
+    # validated separately against the species catalog and label set.
     if "@" in pattern:
         base, suffix = pattern.rsplit("@", 1)
         if suffix and suffix != "*":
@@ -430,16 +452,22 @@ def _cascade_row(
         when the row is empty).
     """
     branches: Dict[int, float] = {}
+    # Sparse branch map: only positive-mass gamete states are carried forward.
     for gidx, prob in enumerate(row):
         if prob > 0.0:
             branches[gidx] = float(prob)
 
+    # Cascade in declaration order, with no priority or first-match stop: each
+    # rule sees the branches produced by the previous rule.
     for step in compiled:
         # A zero-rate event has no target branch; that state may be pruned.
         if step.rule.rate == 0.0:
             continue
         if not branches:
             break
+        # Each matching branch splits into target (rate) and kept (1 - rate)
+        # mass. Accumulating per state with `+=` preserves every row's total,
+        # so the distributions stay normalized without a later renormalization.
         next_branches: Dict[int, float] = {}
         for gidx, prob in branches.items():
             if not step.matches(sex_idx, ztype_idx, gidx):
@@ -464,4 +492,6 @@ def _cascade_row(
                 )
         branches = next_branches
 
+    # Drop numerical dust below 1e-15; the retained mass may fall short of 1 by
+    # at most that tolerance.
     return {g: p for g, p in branches.items() if p > 1e-15}

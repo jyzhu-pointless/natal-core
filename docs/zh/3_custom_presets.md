@@ -228,6 +228,8 @@ class PointMutation(GeneticPreset):
         }
 ```
 
+> **注意**：NATAL 已内置覆盖该行为的 `PointMutation` 预设（并额外支持多目标竞争与按性别速率），详见[遗传预设](2_genetic_presets.md)。上面的类只是最小化的自定义预设练习，并非内置 API。
+
 #### 双向突变平衡
 
 ```python

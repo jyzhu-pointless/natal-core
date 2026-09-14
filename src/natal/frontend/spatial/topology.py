@@ -85,6 +85,7 @@ class GridTopology:
             Flattened deme index in row-major order.
         """
         row, col = coord
+        # Row-major flattening; the exact inverse of from_index.
         return row * self.cols + col
 
     def from_index(self, index: int) -> Coord:
@@ -96,6 +97,7 @@ class GridTopology:
         Returns:
             Grid coordinate as ``(row, col)``.
         """
+        # Inverse row-major flattening (integer division and modulo).
         row = index // self.cols
         col = index % self.cols
         return (row, col)
@@ -113,8 +115,12 @@ class GridTopology:
             non-wrapping topology. With ``wrap=True``, the result is computed as
             ``(row % rows, col % cols)``, so opposite edges are connected.
         """
+        # Periodic boundary: fold an out-of-range coordinate back by modulo,
+        # which connects opposite edges.
         if self.wrap:
             return (row % self.rows, col % self.cols)
+        # Hard boundary: report the coordinate as invalid; every caller then
+        # drops the offending neighbor offset.
         if row < 0 or row >= self.rows or col < 0 or col >= self.cols:
             return None
         return (row, col)
@@ -158,6 +164,8 @@ class GridTopology:
         """
         x0, y0 = self.to_xy(coord)
         vectors: List[Tuple[float, float]] = []
+        # Displacements are measured in embedding space (x = column,
+        # y = row), not in flat index space.
         for n_coord in self.neighbor_coords(coord):
             x1, y1 = self.to_xy(n_coord)
             vectors.append((x1 - x0, y1 - y0))
@@ -166,12 +174,12 @@ class GridTopology:
     def offset_dist_sq(self, dr: NDArray[np.float64], dc: NDArray[np.float64]) -> NDArray[np.float64]:
         """Squared distance between grid coords offset by ``(dr, dc)``.
 
-        Uses the law of cosines with ``_COS_OPPOSITE_ANGLE``::
+        Uses the law of cosines with ``COS_OPPOSITE_ANGLE``::
 
             dist² = dr² + dc² - 2·dr·dc·cos(θ)
 
         For square grids cos(90°) = 0 → Cartesian distance. Subclasses
-        override the class attribute ``_COS_OPPOSITE_ANGLE`` to change the
+        override the class attribute ``COS_OPPOSITE_ANGLE`` to change the
         metric (e.g. hex grids set cos(120°) = -0.5).
         """
         return dr**2 + dc**2 - 2.0 * self.COS_OPPOSITE_ANGLE * dr * dc
@@ -185,6 +193,8 @@ class GridTopology:
         Returns:
             Neighbor deme indices in the same order as ``neighbor_coords``.
         """
+        # Preserve neighbor_coords order; callers rely on a deterministic
+        # enumeration (adjacency construction, geometric helpers).
         return [self.to_index(coord) for coord in self.neighbor_coords(self.from_index(index))]
 
 
@@ -224,6 +234,8 @@ class SquareGrid(GridTopology):
             ValueError: If ``neighborhood`` is not supported.
         """
         row, col = coord
+        # Fixed offset tables define the neighborhood enumeration order that
+        # neighbor_coords/neighbors return.
         if self.neighborhood == "von_neumann":
             offsets: Iterable[Coord] = [(-1, 0), (1, 0), (0, -1), (0, 1)]
         elif self.neighborhood == "moore":
@@ -241,6 +253,8 @@ class SquareGrid(GridTopology):
             raise ValueError(f"Unsupported neighborhood: {self.neighborhood}")
 
         result: List[Coord] = []
+        # Each offset is normalized independently: a non-wrapping grid drops
+        # the ones that leave the rectangle, a wrapping one folds them back.
         for dr, dc in offsets:
             normalized = self.normalize_coord(row + dr, col + dc)
             if normalized is not None:
@@ -332,6 +346,8 @@ class HexGrid(GridTopology):
             (1, -1),  # up-right
         )
         result: List[Coord] = []
+        # Offsets live in the same parallelogram frame as the coordinates, so
+        # they can be added directly; normalize_coord then wraps or drops.
         for di, dj in parallelogram_offsets:
             # Compute neighbors directly in parallelogram space
             normalized = self.normalize_coord(i + di, j + dj)
@@ -395,10 +411,15 @@ def build_gaussian_kernel(
             "specify one or neither, not both"
         )
     if mean_dispersal is not None:
+        # 2D isotropic Gaussian: the displacement magnitude is Rayleigh with
+        # mean sigma*sqrt(pi/2), so invert that relation for sigma.
         sigma = mean_dispersal / math.sqrt(math.pi / 2.0)
     elif sigma is None:
+        # Neither parameter given: fall back to unit width.
         sigma = 1.0
 
+    # String shorthands resolve to a topology class; only its
+    # COS_OPPOSITE_ANGLE metric is used below.
     if isinstance(topology_cls, str):
         if topology_cls == "hex":
             topology_cls = HexGrid
@@ -413,11 +434,17 @@ def build_gaussian_kernel(
         raise ValueError(f"kernel size must be odd, got {size}")
 
     center = (size - 1) / 2.0
+    # Integer grid indices turned into offsets around the center, using the
+    # same (dr, dc) convention as the migration fold.
     y_idx, x_idx = np.indices((size, size), dtype=np.float64)
     dr = y_idx - center
     dc = x_idx - center
     cos_opposite = topology_cls.COS_OPPOSITE_ANGLE
+    # Law-of-cosines squared distance under this topology's metric; the hex
+    # cross term dr*dc comes from cos(120°) = -0.5.
     dist_sq = dr**2 + dc**2 - 2.0 * cos_opposite * dr * dc
+    # Isotropic Gaussian weight exp(-dist² / (2·sigma²)), normalized so the
+    # kernel is a valid dispersal distribution.
     kernel = np.exp(-dist_sq / (2.0 * sigma**2)).astype(np.float64, copy=False)
     kernel /= np.sum(kernel)
     return kernel
@@ -449,10 +476,15 @@ def build_adjacency_matrix(
         neighbors = topology.neighbors(i)
         if include_self:
             neighbors = neighbors + [i]
+        # Outbound convention A[i, j] = source i to destination j.  Later
+        # duplicates overwrite the same 1.0, so row entries depend only on the
+        # neighbor set.
         for j in neighbors:
             adj[i, j] = 1.0
 
     if row_normalize:
+        # Normalize only rows that have outbound edges; an isolated deme's
+        # all-zero row is left untouched.
         row_sum = adj.sum(axis=1, keepdims=True)
         nonzero = row_sum[:, 0] > 0.0
         adj[nonzero] = adj[nonzero] / row_sum[nonzero]
@@ -487,8 +519,13 @@ def apply_migration_adjacency(state: np.ndarray, adjacency: np.ndarray, rate: fl
             f"adjacency shape mismatch: expected ({n_demes}, {n_demes}), got {adjacency.shape}"
         )
 
+    # Migration acts on the deme axis only; every other axis is flattened.
     flat = state.reshape(n_demes, -1)
+    # The transpose turns outbound rows into inbound columns, so each
+    # destination accumulates the mass arriving from all sources.
     migrated_in = adjacency.T @ flat
+    # Convex blend: (1 - rate) stays and rate migrates.  Mass is conserved
+    # when active rows sum to one.
     out = (1.0 - rate) * flat + rate * migrated_in
     return out.reshape(state.shape)
 
@@ -536,11 +573,15 @@ def apply_migration_convolution(
         )
 
     flat = state.reshape(n_demes, -1)
+    # Each deme keeps (1 - rate) of its own mass; the copy means the caller's
+    # state array is never written through.
     out = (1.0 - rate) * flat.copy()
 
     kr = kernel.shape[0] // 2
     kc = kernel.shape[1] // 2
 
+    # Per source: collect the reachable destinations and their weights, then
+    # distribute that source's migrating share over them.
     for src in range(n_demes):
         src_coord = topology.from_index(src)
         targets: List[int] = []
@@ -565,6 +606,8 @@ def apply_migration_convolution(
                 weights.append(w)
 
         if not targets:
+            # Nothing reachable: return the migrating share to the source so
+            # the deme (and total mass) is unchanged.
             out[src] += rate * flat[src]
             continue
 

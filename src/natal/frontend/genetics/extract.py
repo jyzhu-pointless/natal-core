@@ -34,9 +34,12 @@ def extract_gamete_frequencies(
     their aggregated frequencies across all glab variants.
 
     Args:
-        zygotes_to_gametes_map: The (n_sexes, n_genotypes, n_hg*n_glabs) array.
+        zygotes_to_gametes_map: The ``(n_sexes, n_ztypes, n_hg*n_glabs)``
+            array, where ``n_ztypes = n_genotypes * n_slabs`` (the two axes
+            coincide only when no somatic slab axis is declared).
         sex_idx: Sex index (0, 1, ...).
-        genotype_idx: Diploid genotype index.
+        genotype_idx: ZType index (diploid genotype x somatic slab) on the
+            map's second axis.
         haploid_genotypes: List of all HaploidGenotype objects (aligned with indices).
         n_glabs: Number of gamete-label variants per haplotype (default: 1).
 
@@ -59,9 +62,13 @@ def extract_gamete_frequencies(
     gamete_freqs_array = zygotes_to_gametes_map[sex_idx, genotype_idx, :]
     result: dict[HaploidGenotype, float] = {}
 
+    # Walk the compressed HL axis and fold every glab variant of one haplotype
+    # into a single aggregated frequency.
     for compressed_idx, freq in enumerate(gamete_freqs_array):
         if freq > 0:  # Only include non-zero frequencies
+            # Inverse of compress_hl: floor-divide away the label index.
             hg_idx = compressed_idx // n_glabs
+            # Slots beyond the provided catalog are dropped, not raised.
             if hg_idx < len(haploid_genotypes):
                 hg = haploid_genotypes[hg_idx]
                 # Aggregate frequencies across all glab variants
@@ -84,9 +91,11 @@ def extract_gamete_frequencies_by_glab(
     entries for each (haplotype, glab) combination.
 
     Args:
-        zygotes_to_gametes_map: The (n_sexes, n_genotypes, n_hg*n_glabs) array.
+        zygotes_to_gametes_map: The ``(n_sexes, n_ztypes, n_hg*n_glabs)``
+            array, where ``n_ztypes = n_genotypes * n_slabs``.
         sex_idx: Sex index (0, 1, ...).
-        genotype_idx: Diploid genotype index.
+        genotype_idx: ZType index (diploid genotype x somatic slab) on the
+            map's second axis.
         haploid_genotypes: List of all HaploidGenotype objects (aligned with indices).
         n_glabs: Number of gamete-label variants per haplotype (default: 1).
 
@@ -103,10 +112,14 @@ def extract_gamete_frequencies_by_glab(
     gamete_freqs_array = zygotes_to_gametes_map[sex_idx, genotype_idx, :]
     result: dict[tuple[HaploidGenotype, int], float] = {}
 
+    # Same walk as extract_gamete_frequencies, but the label index is kept:
+    # keys stay (haplotype, glab) pairs instead of being summed away.
     for compressed_idx, freq in enumerate(gamete_freqs_array):
         if freq > 0:
+            # Inverse of compress_hl: // selects the haplotype, % the label.
             hg_idx = compressed_idx // n_glabs
             glab_idx = compressed_idx % n_glabs
+            # Slots beyond the provided catalog are dropped, not raised.
             if hg_idx < len(haploid_genotypes):
                 hg = haploid_genotypes[hg_idx]
                 result[(hg, glab_idx)] = freq
@@ -127,15 +140,16 @@ def extract_zygote_frequencies(
     from compressed gamete indices to Genotype objects with their frequencies.
 
     Args:
-        gametes_to_zygotes_map: The (n_hg*n_glabs, n_hg*n_glabs, n_genotypes) array.
+        gametes_to_zygotes_map: The ``(n_hg*n_glabs, n_hg*n_glabs, n_ztypes)``
+            array, where ``n_ztypes = n_genotypes * n_slabs``.
         gamete1_compressed_idx: Compressed index of first gamete (maternal).
         gamete2_compressed_idx: Compressed index of second gamete (paternal).
         diploid_genotypes: List of all Genotype objects (aligned with indices).
         n_glabs: Number of gamete-label variants per haplotype (default: 1).
 
     Returns:
-        Dictionary mapping Genotype -> frequency. Only includes genotypes with
-        non-zero frequency.
+        Dictionary mapping Genotype -> frequency, aggregating the slab entries
+        of one genotype.  Only includes genotypes with non-zero frequency.
 
     Examples:
         >>> config = population._config
@@ -149,13 +163,17 @@ def extract_zygote_frequencies(
         ... )
         >>> # zygote_freqs = {genotype1: 1.0 or {genotype2: 0.5, genotype3: 0.5}, etc}
     """
+    # Slice the fused zygote plane for this ordered gamete pair; the last axis
+    # is the ZType axis (genotype x slab).
     zygote_freqs_array = gametes_to_zygotes_map[gamete1_compressed_idx, gamete2_compressed_idx, :]
     result: dict[Genotype, float] = {}
 
     for genotype_idx, freq in enumerate(zygote_freqs_array):
         if freq > 0:  # Only include non-zero frequencies
+            # Indices beyond the provided catalog are dropped, not raised.
             if genotype_idx < len(diploid_genotypes):
                 genotype = diploid_genotypes[genotype_idx]
+                # Accumulate (not overwrite) when the list repeats an object.
                 result[genotype] = result.get(genotype, 0.0) + freq
 
     return result

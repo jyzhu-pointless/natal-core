@@ -58,6 +58,8 @@ impl GeneticsTensors {
     /// Returns ``PyValueError`` when an attribute is missing or of the
     /// wrong type.
     pub fn from_python(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        // Flat row-major copies of the eight genotype-indexed tables; their sizes
+        // are checked by validate() against the blueprint.
         Ok(Self {
             viability_fitness: extract_f64_vec(obj, "viability_fitness")?,
             fecundity_fitness: extract_f64_vec(obj, "fecundity_fitness")?,
@@ -77,6 +79,8 @@ impl GeneticsTensors {
     /// Returns ``PyValueError`` when a name is unknown or a value is not a
     /// float64 array.
     pub fn from_dict(obj: &Bound<'_, PyAny>) -> PyResult<Self> {
+        // Partial bank: start from empty tables and overwrite only the names
+        // present; tensor_field_len doubles as the name check.
         let dict = obj.downcast::<PyDict>()?;
         let mut set = Self::default();
         for (key, value) in dict.iter() {
@@ -107,6 +111,7 @@ impl GeneticsTensors {
     /// ## Errors
     /// Returns ``PyValueError`` on the first size mismatch.
     pub fn validate(&self, bp: &Blueprint) -> PyResult<()> {
+        // Compare every table's stored flat length with the blueprint-derived one.
         for name in GENETICS_TENSORS {
             let expected = Self::expected_len(bp, name)?;
             let got = self.stored_len(name)?;
@@ -146,6 +151,9 @@ impl GeneticsTensors {
     /// ## Errors
     /// Returns ``PyKeyError`` for unknown names.
     pub fn expected_len(bp: &Blueprint, name: &str) -> PyResult<usize> {
+        // Flat lengths of the genotype-indexed tables: (2, A, Z) -> 2*a*z,
+        // (2, Z) -> 2*z, (Z, Z) -> z*z, (Z, Z, Z) -> z*z*z, (2, Z, G) -> 2*z*g,
+        // and the two compatibility vectors -> z.
         let (a, z, g) = (bp.n_ages, bp.n_ztypes, bp.n_gtypes);
         Ok(match name {
             "viability_fitness" => 2 * a * z,
@@ -197,6 +205,8 @@ impl GeneticsTensors {
         source: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let mut pending: Vec<(String, Vec<f64>)> = Vec::with_capacity(fields.len());
+        // Pass 1: check each name and size, buffering copies so no field is written
+        // until every field has passed validation.
         for field in fields {
             if !is_genetics_tensor(field) {
                 return Err(PyKeyError::new_err(format!(
@@ -216,9 +226,11 @@ impl GeneticsTensors {
             pending.push((field.clone(), extract_f64_vec(source, field)?));
         }
         for (field, values) in &pending {
+            // Pass 2: domain-validate all staged tables.
             validate_tensor_values(field, values)?;
         }
         for (field, values) in pending {
+            // Pass 3: commit; reaching here means every earlier check succeeded.
             *self.tensor_mut(&field)? = values;
         }
         Ok(())
@@ -230,6 +242,7 @@ impl GeneticsTensors {
     /// Returns ``PyKeyError`` for unknown names and ``PyValueError`` on
     /// size mismatch; the previous contents are preserved on failure.
     pub fn tensor_write(&mut self, bp: &Blueprint, name: &str, values: Vec<f64>) -> PyResult<()> {
+        // Domain check first, then exact size; the previous table survives any failure.
         validate_tensor_values(name, &values)?;
         let expected = Self::expected_len(bp, name)?;
         if values.len() != expected {

@@ -106,16 +106,23 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         super().__init__(species, name, hook_descriptors=hook_descriptors)
 
+        # A builder-injected registry (possibly index-compressed) replaces the
+        # fresh one; _initialize_registry below keeps it instead of overwriting.
         if index_registry is not None:
             self._index_registry = index_registry
 
         self._config = population_config
 
+        # Cache the species catalogs and materialize the registry before any
+        # genotype string is resolved to a ztype index.
         self._genotypes_list = species.get_all_genotypes()
         self._haploid_genotypes_list = species.get_all_haploid_genotypes()
 
         self._initialize_registry()
 
+        # Blueprint dimensions fix the Python array shapes; the Rust session
+        # uses the same row-major layout: (sex, age, ztype) counts and
+        # (age, female_ztype, male_ztype) sperm storage.
         self._state = PopulationState.create(
             n_ztypes=population_config.n_ztypes,
             n_sexes=population_config.n_sexes,
@@ -124,6 +131,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         # Initialize from builder-injected config arrays if available.
         cfg_init_ind = population_config.initial_individual_count
+        # Shape equality is the admissibility test: a mismatched config table
+        # means "nothing to install", never a silent reshape.
         if cfg_init_ind.shape == self._live_state().individual_count.shape:
             self._live_state().individual_count[:] = cfg_init_ind
         cfg_init_sperm = population_config.initial_sperm_storage
@@ -139,6 +148,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         # session through the writers and the run-boundary ecology flush.
         self._rust_needs_rebuild: bool = False
 
+        # An explicit distribution replaces the config default rather than
+        # adding to it (the helper writes absolute counts).
         if initial_individual_count is not None:
             self._live_state().individual_count.fill(0.0)
             self._distribute_initial_population(initial_individual_count)
@@ -147,12 +158,16 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             # TODO: add population_config.use_sperm_storage
             self._distribute_initial_sperm_storage(species, initial_sperm_storage)
 
+        # Pristine copies (not views) so reset() can restore without aliasing
+        # the live arrays; the third slot is unused by this model.
         self._initial_population_snapshot = (
             self._live_state().individual_count.copy(),
             self._live_state().sperm_storage.copy(),
             None,
         )
 
+        # Idempotent: _initialize_registry returns early when a registry exists,
+        # so this second call cannot reset the indices chosen above.
         self._initialize_registry()
 
         # Build self-describing history schema (frozen at construction).
@@ -233,6 +248,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 "discrete-generation engine; the age-structured "
                 f"engine ignores it (got {extreme_speed_mode!r})"
             )
+        # Normalize the deprecated alias before delegating so the builder sees
+        # exactly one declared-zygote-types argument.
         if declared_genotypes is not None:
             if declared_zygote_types is not None:
                 raise ValueError(
@@ -263,7 +280,10 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             ValueError: If sex key is invalid.
             TypeError: If age data is not a list or dict.
         """
+        # Absolute write: clear first so a sex/genotype absent from the mapping
+        # stays at zero instead of inheriting the config default.
         self._live_state().individual_count.fill(0.0)
+        # Sex keys are case-insensitive aliases of the two population sexes.
         for sex_key, genotype_dist in distribution.items():
             sex_key_norm = sex_key.lower().strip()
             if sex_key_norm == "female":
@@ -274,10 +294,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 raise ValueError(f"Sex must be 'female' or 'male', got '{sex_key}'")
 
             for genotype_key, age_data in genotype_dist.items():
+                # Resolve through the registry's identity maps (no string round
+                # trip) so a sex-chromosome genotype cannot land on the
+                # opposite-sex ztype.
                 z_idx = resolve_genotype_key_ztype_index(
                     genotype_key, self.species, self.registry
                 )
 
+                # Dense list form: position i is age i. Out-of-range ages and
+                # non-positive counts are dropped rather than raising.
                 if isinstance(age_data, list):
                     for age, raw_count in enumerate(cast(List[object], age_data)):
                         if not isinstance(raw_count, (int, float)) or isinstance(
@@ -291,6 +316,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                             self._live_state().individual_count[sex_idx, age, z_idx] = (
                                 count
                             )
+                # Sparse dict form {age: count}; keys must be int instances.
                 elif isinstance(age_data, dict):
                     for age_raw, raw_count in cast(
                         Dict[object, object], age_data
@@ -305,7 +331,15 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                             )
                         age = age_raw
                         count = float(raw_count)
-                        if age < self.config.n_ages and count > 0:
+                        # Reject out-of-range ages before indexing: NumPy
+                        # accepts negative indices, so without the lower bound
+                        # an age of -1 would silently land on the last age
+                        # class instead of failing (the sperm branch rejects it).
+                        if age < 0 or age >= self.config.n_ages:
+                            raise ValueError(
+                                f"Age {age} out of range [0, {self.config.n_ages})"
+                            )
+                        if count > 0:
                             self._live_state().individual_count[sex_idx, age, z_idx] = (
                                 count
                             )
@@ -341,8 +375,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             TypeError: If genotype keys or age data have incorrect types.
             ValueError: If sperm counts or ages are out of range.
         """
+        # Absolute write: clear the storage so omitted (female, male) pairs
+        # stay empty.
         self._live_state().sperm_storage.fill(0.0)
 
+        # Type-check keys before resolution so a malformed mapping fails with a
+        # clear message rather than a registry lookup error.
         for female_key, male_dict in sperm_storage_dist.items():
             assert isinstance(female_key, (str, Genotype)), (
                 f"Female genotype key must be Genotype or str, got {type(female_key)}"
@@ -428,6 +466,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
                 else:
                     # Scalar format: apply to all adult ages
+                    # Storage only exists per adult female age, so the range
+                    # starts at new_adult_age, not 0.
                     if age_data < 0:
                         raise ValueError(
                             f"Sperm count must be non-negative, got {age_data}"
@@ -451,6 +491,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         tick, ind_flat, sperm_flat = backend.state_snapshot()
         n_ages = int(self.config.n_ages)
         n_ztypes = int(self.config.n_ztypes)
+        # Reshape mirrors the Rust row-major flattening order (sex, age, ztype)
+        # and (age, female_z, male_z); .copy() isolates the cache from the
+        # session-owned buffers.
         self._state = PopulationState(
             n_tick=int(tick),
             individual_count=ind_flat.reshape(2, n_ages, n_ztypes).copy(),
@@ -480,8 +523,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """
         self._require_standalone_owner("reset")
         self._tick = 0
+        # Drop history before rebuilding state so no row refers to the
+        # pre-reset timeline.
         if self._history_obj is not None:
             self._history_obj.clear()
+        # Rebuild from the pristine snapshot copies, never from the live arrays.
         if hasattr(self, "_initial_population_snapshot"):
             ind_copy, sperm_copy, _ = self._initial_population_snapshot
             assert sperm_copy is not None
@@ -533,6 +579,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         Returns:
             float: Grand total across all sexes, ages, and genotypes.
         """
+        # Prefer the session's native reduction (bitwise-identical to the NumPy
+        # sum) and fall back to the local container before a session exists.
         counts = self._native_counts()
         if counts is not None:
             return counts[0]
@@ -589,6 +637,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         if sex not in ("female", "male", "both", "F", "M"):
             raise ValueError(f"sex must be 'female', 'male', or 'both', got '{sex}'")
 
+        # Native path first; otherwise fall back to summing the local
+        # container's slices below.
         counts = self._native_adult_counts()
         if counts is not None:
             if sex in ("female", "F"):
@@ -597,6 +647,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 return int(counts[2])
             return int(counts[0])
 
+        # Fallback: sum ages >= new_adult_age over the local container's
+        # per-sex slices.
         total = 0
 
         if sex in ("female", "F", "both"):
@@ -811,6 +863,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             hook_program,
             seed=seed,
         )
+        # Bridge single-parameter Python callbacks through the session's
+        # python_callbacks channel (fired at event boundaries).
         self._register_rust_callbacks(backend)
         # Capture the state BEFORE the field switch: under a structural
         # rebuild the lazy pull must read the OLD session, not the freshly
@@ -835,6 +889,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         if backend is None:
             raise RuntimeError("The population session has not been initialized.")
         config = self.config
+        # Rebinds only the hook program and execution flags; session state,
+        # checkpoints, and the RNG stream survive (value changes travel through
+        # the writers instead).
         backend.configure_program(self._hook_program, config)
         self._register_rust_callbacks(backend)
         self._rust_needs_rebuild = False
@@ -877,6 +934,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             # pruner bind once per (population, History); later runs skip.
             self._bind_history_recording(backend)
 
+        # While the native run holds the session borrow, Python-side writes must
+        # not touch it; the run boundary flushes pending draft writes.
         self._rust_run_active = True
         try:
             _final_tick, _history_new, was_stopped = backend.run(
@@ -931,6 +990,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
                 first run).
         """
         self._require_standalone_owner("run")
+        # Guards, in order: re-entrancy, then failed, then finished — each
+        # branch names the exact precondition that blocks the run.
         if getattr(self, "_running", False):
             raise RuntimeError("Nested run is forbidden")
         if self.is_failed:
@@ -943,6 +1004,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
 
         self._running = True
         try:
+            # None means "use the population default"; 0 stays a real value
+            # (record nothing).
             if record_every is None:
                 record_every = self.record_every
 
@@ -991,6 +1054,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             raise ValueError(f"sex must be 'female', 'male', or 'both', got '{sex}'")
 
         # Access directly from PopulationState
+        # Female/male rows are (age, ztype); 'both' collapses the sex and
+        # ztype axes.
         if sex in ("female", "F"):
             return (
                 self._live_state().individual_count[Sex.FEMALE.value, :, :].sum(axis=1)
@@ -1038,6 +1103,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             stacklevel=2,
         )
         present: Set[Genotype] = set()
+        # Scan in registry index order; a ztype counts as present iff its total
+        # over sex and age is positive.
         for z_idx, (genotype, _slab) in enumerate(self.registry.index_to_ztype):
             total_count = self._live_state().individual_count[:, :, z_idx].sum()
             if total_count > 0:

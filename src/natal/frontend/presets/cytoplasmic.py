@@ -54,6 +54,41 @@ class CytoplasmicPreset(GeneticPreset):
 
     _maternal_map: dict[str, str] = {}  # {slab_name: glab_name}
 
+    def _active_maternal_map(self, glab_names: List[str] | tuple[str, ...]) -> dict[str, str]:
+        """Return the ``{slab: glab}`` pairs whose glab the species declares.
+
+        Filtering silently would disable maternal inheritance without any
+        signal: the preset keeps applying its fitness patch, so the
+        population still builds and runs while transmission never happens.
+        A non-empty ``_maternal_map`` with no matching label is therefore a
+        configuration error, reported here.
+
+        Args:
+            glab_names: Gamete labels the species actually registers.
+
+        Returns:
+            The subset of ``_maternal_map`` whose glab is registered.
+
+        Raises:
+            ValueError: If ``_maternal_map`` names a gamete label that the
+                species does not declare.
+        """
+        available = set(glab_names)
+        active = {
+            slab: glab for slab, glab in self._maternal_map.items()
+            if glab in available
+        }
+        if self._maternal_map and not active:
+            missing = sorted(set(self._maternal_map.values()) - available)
+            raise ValueError(
+                f"Preset '{self.name}' requires gamete label(s) {missing}, but "
+                f"the species only declares {sorted(available)}.  Add them via "
+                "Species.from_dict(..., gamete_labels=[...]); without them the "
+                "preset would silently inherit nothing while still applying its "
+                "fitness patch."
+            )
+        return active
+
     def gamete_modifier(self, host: "RecipeHost") -> Optional[GameteModifier]:
         """Tag maternal gametes: default-glab → *glab_name* for matching slabs.
 
@@ -66,13 +101,8 @@ class CytoplasmicPreset(GeneticPreset):
             return None
 
         glab_to_idx = host.index_registry.glab_to_index
-        # Filter: only keep slab→glab pairs where the glab is registered
-        active_map = {
-            slab: glab for slab, glab in self._maternal_map.items()
-            if glab in glab_to_idx
-        }
-        if not active_map:
-            return None
+        # A missing label is a configuration error, not a silent no-op.
+        active_map = self._active_maternal_map(list(glab_to_idx))
 
         ruleset = GameteConversionRuleSet()
         for slab_name, glab_name in active_map.items():
@@ -100,13 +130,8 @@ class CytoplasmicPreset(GeneticPreset):
             return None
 
         glab_to_idx = host.index_registry.glab_to_index
-        # Filter: only keep slab→glab pairs where the glab is registered
-        active_map = {
-            slab: glab for slab, glab in self._maternal_map.items()
-            if glab in glab_to_idx
-        }
-        if not active_map:
-            return None
+        # A missing label is a configuration error, not a silent no-op.
+        active_map = self._active_maternal_map(list(glab_to_idx))
 
         registry = host.registry
         g2z = host.config.gametes_to_zygotes_map

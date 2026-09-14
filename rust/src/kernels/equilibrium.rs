@@ -41,6 +41,8 @@ pub fn equilibrium_metrics(bp: &Blueprint, params: &EcologyParams, deme: usize) 
     // Panmictic single-deme params (length-1 columns) and per-deme segments
     // read through the same accessors; entry 0 == the pre-columnization
     // scalar, so single-population arithmetic is bit-identical.
+    // Defensive clamp: an out-of-range deme reads the last column instead of
+    // panicking.
     let deme_idx = deme.min(params.n_demes.saturating_sub(1));
     let carrying_capacity = params.carrying_capacity[deme_idx];
     let eggs_per_female = params.eggs_per_female[deme_idx];
@@ -49,11 +51,15 @@ pub fn equilibrium_metrics(bp: &Blueprint, params: &EcologyParams, deme: usize) 
     // Python falls back to the female mating-rate row when the reproduction
     // vector is not supplied; the contract always carries one, so the
     // fallback branch is unreachable here by construction.
+    // Flat row-major per-deme segments: `a` entries for the (A,) vectors and
+    // `2*a` for the two-sex matrices; the base offset is `deme * extent`.
     let a = n_ages;
     let reproduce_rates: &[f64] = &params.reproduction_rates[deme_idx * a..(deme_idx + 1) * a];
     let fertility: &[f64] = &params.fertility[deme_idx * a..(deme_idx + 1) * a];
     let competition_weights: &[f64] = &params.competition_weights[deme_idx * a..(deme_idx + 1) * a];
     let survival_rates: &[f64] = &params.survival_rates[deme_idx * 2 * a..(deme_idx + 1) * 2 * a];
+    // Derive-mode sentinel: an undeclared deme passes an empty slice so the
+    // core falls back to the carrying-capacity derivation.
     let declared: &[f64] = if !params.equilibrium_declared[deme_idx] {
         &[]
     } else {
@@ -113,11 +119,16 @@ pub fn equilibrium_metrics_core(
     new_adult_age: usize,
     n_ages: usize,
 ) -> (f64, f64) {
+    // Reproduction participation is a probability; clamp to [0, 1].  Only ages
+    // >= new_adult_age can reproduce, so juvenile entries stay exactly 0.
     let mut p_reproducing = vec![0.0_f64; n_ages];
     for age in new_adult_age..n_ages {
         p_reproducing[age] = clamp01(reproduce_rates[age]);
     }
 
+    // produced_age_0 accumulates the egg production
+    // Σ N_f[age] * P_reproducing[age] * fertility[age] * eggs_per_female;
+    // total_age_1 is the age-1 head count that the survival-rate ratio solves for.
     let expected_distribution: Vec<f64>;
     let total_age_1: f64;
     let mut produced_age_0 = 0.0_f64;
@@ -147,6 +158,8 @@ pub fn equilibrium_metrics_core(
             dist[age] = dist[age - 1] * survival_rates[age - 1];
             dist[n_ages + age] = dist[n_ages + age - 1] * survival_rates[n_ages + age - 1];
         }
+        // Same egg-production sum as the declared branch, now over the derived
+        // female distribution.
         for age in new_adult_age..n_ages {
             let n_f = dist[age];
             produced_age_0 += n_f * p_reproducing[age] * fertility[age] * eggs_per_female;
@@ -175,6 +188,8 @@ pub fn equilibrium_metrics_core(
         external_expected_eggs
     };
 
+    // Zero (or negligible) egg production, or negligible age-0 survival, has no
+    // scale to solve for; fall back to unit survival instead of dividing by zero.
     let expected_survival_rate = if survival_eggs > 0.0 && s_0_avg > 1e-10 {
         total_age_1 / (survival_eggs * s_0_avg)
     } else {

@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 
 /// Extract an int scalar, accepting Python ints and 0-d NumPy arrays.
 pub(crate) fn extract_i64(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
+    // Fast path for real Python ints; 0-d NumPy integer arrays need .item().
     let value = obj.getattr(name)?;
     if let Ok(scalar) = value.extract::<i64>() {
         return Ok(scalar);
@@ -18,6 +19,7 @@ pub(crate) fn extract_i64(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<i64> {
 
 /// Extract a float scalar, accepting Python floats and 0-d NumPy arrays.
 pub(crate) fn extract_f64(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<f64> {
+    // Same shape as extract_i64: Python floats first, then 0-d NumPy via .item().
     let value = obj.getattr(name)?;
     if let Ok(scalar) = value.extract::<f64>() {
         return Ok(scalar);
@@ -35,6 +37,8 @@ pub(crate) fn extract_bool(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<bool>
 /// Dimension-agnostic: blueprint/params arrays range from 1-D vectors to
 /// the 3-D initial population; all are copied in row-major order.
 pub(crate) fn extract_f64_vec(obj: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<f64>> {
+    // Dimension-agnostic; as_slice() requires a C-contiguous float64 array, so a
+    // non-contiguous or strided view is rejected rather than silently reordered.
     let array = obj
         .getattr(name)?
         .extract::<PyReadonlyArrayDyn<'_, f64>>()?;

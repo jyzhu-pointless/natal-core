@@ -40,6 +40,9 @@ pub type SpatialEcoJournalRow = (usize, i64, usize, f64, f64, usize);
 /// lifecycle has always had.  Programs without set_param get ``None``
 /// (zero overhead, identical numerics).
 fn local_params(hooks: &HookProgram, params: &EcologyParams, deme: usize) -> Option<EcologyParams> {
+    // A private column is cut when the program might write this deme's
+    // ecology: any installed hook, a set_param op, or a Python callback.
+    // Hook-free programs get None and read the shared columns directly.
     if hooks.n_hooks > 0
         || hooks.has_set_param
         || hooks
@@ -95,11 +98,14 @@ where
         ) -> (Result<i32, String>, Vec<SpatialEcoJournalRow>)
         + Sync,
 {
+    // Split the stacked planes into per-deme contiguous chunks; chunk d is
+    // deme d's slice, so no two deme bodies can alias the same memory.
     let mut ind_chunks: Vec<&mut [f64]> = ind_all.chunks_mut(ind_stride).collect();
     let mut sperm_chunks: Vec<&mut [f64]> = sperm_all.chunks_mut(sperm_stride).collect();
     let mut eco_chunks: Vec<&mut [f64]> = eco_all
         .chunks_mut(crate::hooks::interpreter::N_ECO_PARAMS)
         .collect();
+    // Fail loudly on a layout mismatch rather than ticking a partial set.
     if ind_chunks.len() != n_demes || sperm_chunks.len() != n_demes || rngs.len() != n_demes {
         return Err(format!(
             "stacked state length mismatch: expected {n_demes} demes, got ind={} sperm={} rngs={}",
@@ -117,6 +123,9 @@ where
         .iter()
         .any(|callbacks| !callbacks.is_empty());
 
+    // Same tick body in both arms; only the scheduler differs. Demes are
+    // independent (disjoint state, own RNG stream, own eco row), so the
+    // parallel arm cannot change any deme's draws.
     let results: Vec<(Result<i32, String>, Vec<SpatialEcoJournalRow>)> = if sequential {
         ind_chunks
             .iter_mut()
@@ -137,6 +146,8 @@ where
             .collect()
     };
 
+    // Merge in deme order (rayon's collect preserves iterator order), so
+    // journal rows stay deterministic even when ticks ran in parallel.
     let mut stopped = false;
     for (result, rows) in results {
         journal.extend(rows);
@@ -192,6 +203,8 @@ fn tick_hetero_deme(
     } else {
         Some((params, genetics, deme_id))
     };
+    // Run this deme's full lifecycle on its own chunk; callback candidates
+    // and stop marks are queued for the session to merge after the batch.
     let result = age_structured::run_tick(
         rng,
         bp,
@@ -219,6 +232,8 @@ fn tick_hetero_deme(
                 .expect("successful callback has a queued deme candidate");
             *previous = update;
         }
+        // Record where this deme stopped; the session takes the minimum
+        // mark so a partial tick reports the earliest stage among demes.
         if !matches!(result, Ok(0)) {
             hooks
                 .phase_marks
@@ -281,6 +296,7 @@ pub fn run_spatial_tick_heterogeneous(
     let n_demes = deme_variants.len();
     let n_ages = bp.n_ages;
     let n_ztypes = bp.n_ztypes;
+    // Zero demes and mismatched column/stream counts are contract errors.
     if n_demes == 0 {
         return Err("heterogeneous spatial run requires at least one deme".to_string());
     }
@@ -292,6 +308,8 @@ pub fn run_spatial_tick_heterogeneous(
             rngs.len()
         ));
     }
+    // Strides are the flattened deme planes: (sexes, ages, ztypes) for the
+    // individual counts and (ages, female_ztype, male_ztype) for sperm.
     schedule_deme_ticks(
         hooks,
         rngs,
@@ -372,6 +390,8 @@ fn tick_discrete_deme(
                 .expect("successful callback has a queued deme candidate");
             *previous = update;
         }
+        // Record where this deme stopped; the session takes the minimum
+        // mark so a partial tick reports the earliest stage among demes.
         if !matches!(result, Ok(0)) {
             hooks
                 .phase_marks
@@ -465,7 +485,9 @@ pub fn migrate_csr_deterministic(
     dest_idx: &[i64],
     weights: &[f64],
     rate: &[f64],
-    stay_after: bool,
+    // Retained for the frozen CSR/session contract; it no longer changes the
+    // deterministic result (both orders send first and keep the residual).
+    _stay_after: bool,
     n_demes: usize,
     n_ages: usize,
     n_ztypes: usize,
@@ -474,6 +496,8 @@ pub fn migrate_csr_deterministic(
     // per-deme/per-sex/per-age migration rate, then distribute them along
     // the CSR entries in stored order.  Males and stored sperm are handled
     // separately from female virgins.
+    // Individual plane layout is (deme, sex, age, ztype); the CSR row
+    // pointers and the rate column must both cover the declared extent.
     let ind_stride = 2 * n_ages * n_ztypes;
     if indptr.len() != n_demes + 1 {
         return Err(format!(
@@ -489,10 +513,16 @@ pub fn migrate_csr_deterministic(
             n_demes * 2 * n_ages
         ));
     }
+    // Out-of-place outputs: every source scatters into destinations, so
+    // accumulating into fresh zeroed arrays is required (and matches the
+    // Python kernel's thread-local buffers merged by addition).
     let mut out_ind = vec![0.0; ind_all.len()];
     let mut out_sperm = vec![0.0; sperm_all.len()];
 
+    // Sources are independent; stable deme order fixes the float addition
+    // order, so the result is bit-reproducible.
     for src in 0..n_demes {
+        // CSR row slice: this source's destinations and outbound weights.
         let row_start = indptr[src] as usize;
         let row_end = indptr[src + 1] as usize;
 
@@ -501,6 +531,9 @@ pub fn migrate_csr_deterministic(
             // female rate so the virgin/stored bookkeeping stays consistent.
             let female_rate = rate[src * 2 * n_ages + age];
             for female_ztype in 0..n_ztypes {
+                // Virgin females = the female tally minus the sperm they
+                // already carry (stored sperm sums over the male z index);
+                // only virgins are candidates for dispersal.
                 let mut stored_total = 0.0;
                 for male_ztype in 0..n_ztypes {
                     stored_total += sperm_all[(src * n_ages + age) * n_ztypes * n_ztypes
@@ -509,13 +542,25 @@ pub fn migrate_csr_deterministic(
                 }
                 let female_total = ind_all[src * ind_stride + age * n_ztypes + female_ztype];
                 let mut virgin_count = female_total - stored_total;
+                // Float subtraction can leave a tiny negative drift; clamp
+                // only within 1e-9, anything larger is a real inconsistency.
                 if virgin_count < 0.0 && virgin_count.abs() < 1e-9 {
                     virgin_count = 0.0;
                 }
 
+                // Deterministic outbound mass = count x rate; the loop below
+                // only splits that mass across the CSR destinations.
                 let outbound = virgin_count * female_rate;
                 let src_ind_idx = src * ind_stride + age * n_ztypes + female_ztype;
-                if stay_after {
+                // Send first, then keep the `count - moved` residual at the
+                // source.  This conserves total mass for any row sum; the old
+                // adjacency order (park `count - outbound` first) under-counted
+                // sub-stochastic rows, so it is gone.
+                if row_start == row_end {
+                    // Empty CSR row (isolated deme): nothing leaves, matching
+                    // the Python reference's keep-all branch.
+                    out_ind[src_ind_idx] += virgin_count;
+                } else {
                     let mut moved_total = 0.0;
                     for entry in row_start..row_end {
                         let dst = dest_idx[entry] as usize;
@@ -524,28 +569,23 @@ pub fn migrate_csr_deterministic(
                         moved_total += moved;
                     }
                     out_ind[src_ind_idx] += virgin_count - moved_total;
-                } else if row_start == row_end {
-                    // Empty CSR row (isolated deme): nothing leaves, matching
-                    // the Python reference's keep-all branch.
-                    out_ind[src_ind_idx] += virgin_count;
-                } else {
-                    let stay = virgin_count - outbound;
-                    out_ind[src_ind_idx] += stay;
-                    for entry in row_start..row_end {
-                        let dst = dest_idx[entry] as usize;
-                        let prob = weights[entry];
-                        out_ind[dst * ind_stride + age * n_ztypes + female_ztype] +=
-                            outbound * prob;
-                    }
                 }
 
+                // Stored sperm travels with its carrier female at the female
+                // rate; each moved amount is added both to the destination's
+                // sperm slot and to that destination's female tally, keeping
+                // the virgin residual consistent at both ends.
                 for male_ztype in 0..n_ztypes {
                     let sperm_idx = (src * n_ages + age) * n_ztypes * n_ztypes
                         + female_ztype * n_ztypes
                         + male_ztype;
                     let value = sperm_all[sperm_idx];
                     let outbound_sperm = value * female_rate;
-                    if stay_after {
+                    if row_start == row_end {
+                        // Empty CSR row: keep everything at the source.
+                        out_sperm[sperm_idx] += value;
+                        out_ind[src_ind_idx] += value;
+                    } else {
                         let mut moved_total = 0.0;
                         for entry in row_start..row_end {
                             let dst = dest_idx[entry] as usize;
@@ -559,24 +599,6 @@ pub fn migrate_csr_deterministic(
                         }
                         out_sperm[sperm_idx] += value - moved_total;
                         out_ind[src_ind_idx] += value - moved_total;
-                    } else if row_start == row_end {
-                        // Empty CSR row: keep everything at the source.
-                        out_sperm[sperm_idx] += value;
-                        out_ind[src_ind_idx] += value;
-                    } else {
-                        let stay_sperm = value - outbound_sperm;
-                        out_sperm[sperm_idx] += stay_sperm;
-                        out_ind[src_ind_idx] += stay_sperm;
-                        for entry in row_start..row_end {
-                            let dst = dest_idx[entry] as usize;
-                            let prob = weights[entry];
-                            let moved = outbound_sperm * prob;
-                            let dst_sperm_idx = (dst * n_ages + age) * n_ztypes * n_ztypes
-                                + female_ztype * n_ztypes
-                                + male_ztype;
-                            out_sperm[dst_sperm_idx] += moved;
-                            out_ind[dst * ind_stride + age * n_ztypes + female_ztype] += moved;
-                        }
                     }
                 }
             }
@@ -589,7 +611,10 @@ pub fn migrate_csr_deterministic(
                 let src_idx = src * ind_stride + (n_ages + age) * n_ztypes + ztype;
                 let value = ind_all[src_idx];
                 let outbound = value * male_rate;
-                if stay_after {
+                if row_start == row_end {
+                    // Empty CSR row: keep everything at the source.
+                    out_ind[src_idx] += value;
+                } else {
                     let mut moved_total = 0.0;
                     for entry in row_start..row_end {
                         let dst = dest_idx[entry] as usize;
@@ -598,18 +623,6 @@ pub fn migrate_csr_deterministic(
                         moved_total += moved;
                     }
                     out_ind[src_idx] += value - moved_total;
-                } else if row_start == row_end {
-                    // Empty CSR row: keep everything at the source.
-                    out_ind[src_idx] += value;
-                } else {
-                    let stay = value - outbound;
-                    out_ind[src_idx] += stay;
-                    for entry in row_start..row_end {
-                        let dst = dest_idx[entry] as usize;
-                        let prob = weights[entry];
-                        out_ind[dst * ind_stride + (n_ages + age) * n_ztypes + ztype] +=
-                            outbound * prob;
-                    }
                 }
             }
         }
@@ -644,6 +657,7 @@ pub fn migrate_csr_stochastic_rngs(
     // multinomially distribute them among the destinations.  Sources are
     // visited in stable deme order; each consumes only its own stream, so
     // thread count and scheduling cannot change the assignment.
+    // Same layout/contract checks as the deterministic twin.
     let ind_stride = 2 * n_ages * n_ztypes;
     if indptr.len() != n_demes + 1 {
         return Err(format!(
@@ -659,12 +673,16 @@ pub fn migrate_csr_stochastic_rngs(
             n_demes * 2 * n_ages
         ));
     }
+    // One stream per source deme: source s consumes only rngs[s], so the
+    // draw assignment cannot depend on scheduling.
     if rngs.len() != n_demes {
         return Err(format!(
             "migration requires {n_demes} per-deme RNG streams, got {}",
             rngs.len()
         ));
     }
+    // Size the reusable scratch buffers to the widest CSR row so the hot
+    // loop allocates nothing.
     let mut max_row = 1usize;
     for pair in indptr.windows(2) {
         let len = (pair[1] - pair[0]).max(0) as usize;
@@ -674,11 +692,16 @@ pub fn migrate_csr_stochastic_rngs(
     }
     let mut out_ind = vec![0.0; ind_all.len()];
     let mut out_sperm = vec![0.0; sperm_all.len()];
+    // `distributed` and `probs` are reused per bucket; each call rewrites
+    // them fully, so no stale destination value can leak.
     let mut distributed = vec![0.0; max_row];
     let mut probs = vec![0.0; max_row];
 
+    // Stable deme order plus per-deme streams: thread count cannot shift a
+    // draw. Within a bucket, outbound is sampled before destinations.
     for src in 0..n_demes {
         let rng = &mut rngs[src];
+        // CSR row slice: this source's destinations and outbound weights.
         let row_start = indptr[src] as usize;
         let row_end = indptr[src + 1] as usize;
         let row_len = row_end - row_start;
@@ -694,11 +717,17 @@ pub fn migrate_csr_stochastic_rngs(
                         + male_ztype];
                 }
                 let female_total = ind_all[src * ind_stride + age * n_ztypes + female_ztype];
+                // Virgin females = female tally minus stored sperm; clamp a
+                // tiny negative float drift within 1e-9 so no negative mass
+                // can migrate.
                 let mut virgin_count = female_total - stored_total;
                 if virgin_count < 0.0 && virgin_count.abs() < 1e-9 {
                     virgin_count = 0.0;
                 }
 
+                // Draw the outbound count first, then the destinations, on
+                // this deme's stream; that pair order is part of the
+                // trajectory contract.
                 let outbound = sample_outbound(rng, virgin_count, female_rate, continuous_sampling);
                 let moved_total = distribute_csr_outbound(
                     rng,
@@ -721,6 +750,9 @@ pub fn migrate_csr_stochastic_rngs(
                     let sperm_idx = (src * n_ages + age) * n_ztypes * n_ztypes
                         + female_ztype * n_ztypes
                         + male_ztype;
+                    // Each stored-sperm bucket draws outbound then
+                    // destinations; moved mass is mirrored into the female
+                    // tally at both ends.
                     let value = sperm_all[sperm_idx];
                     let outbound_sperm =
                         sample_outbound(rng, value, female_rate, continuous_sampling);
@@ -801,6 +833,8 @@ pub fn migrate_csr_stochastic(
     n_ages: usize,
     n_ztypes: usize,
 ) -> Result<(Vec<f64>, Vec<f64>), String> {
+    // One-shot reproducibility contract: rebuild a fresh `seed ^ deme`
+    // stream per source instead of reusing a session's persistent bank.
     let mut rngs: Vec<SessionRng> = (0..n_demes)
         .map(|deme| new_rng(crate::kernels::rng::stream_seed(seed, deme as i64)))
         .collect();
@@ -832,12 +866,17 @@ pub fn migrate_csr_stochastic(
 fn sample_outbound(rng: &mut SessionRng, value: f64, rate: f64, continuous_sampling: bool) -> f64 {
     // Sample how many individuals leave: deterministic rate, continuous
     // binomial, or discrete binomial.
+    // Guard before any draw: an empty bucket returns without consuming
+    // randomness, which keeps the stream aligned for later buckets.
     if value <= 0.0 || rate <= 0.0 {
         return 0.0;
     }
+    // A rate at or above one moves the whole bucket; likewise no draw.
     if rate >= 1.0 {
         return value;
     }
+    // Continuous sampling keeps fractional counts; the discrete binomial
+    // rounds the count to an integer first.
     if continuous_sampling {
         return crate::kernels::rng::continuous_binomial(rng, value, rate);
     }
@@ -847,9 +886,11 @@ fn sample_outbound(rng: &mut SessionRng, value: f64, rate: f64, continuous_sampl
 /// Distribute outbound migrants among the CSR destinations of one source row.
 ///
 /// The row weights are normalized before the multinomial samplers see them:
-/// kernel-mode CSR rows may intentionally sum to less than one (boundary
-/// demes keep mass at the source), and the discrete multinomial sampler
-/// assumes a probability vector.
+/// the discrete multinomial sampler needs a probability vector, while a CSR row
+/// need not sum to one.  Builder-folded rows always sum to one — the adjacency
+/// path row-normalizes relative outbound weights and the kernel path
+/// renormalizes over valid neighbors — so this normalization is the identity
+/// for every public build path; it only does work for a raw hand-built CSR.
 ///
 /// ## Returns
 /// The total mass assigned to destinations.
@@ -864,9 +905,12 @@ fn distribute_csr_outbound(
     probs: &mut [f64],
 ) -> f64 {
     // Clear scratch buffers, collect the row weights, normalize, sample.
+    // Reset the scratch row before the early exits so the caller can read
+    // it even when nothing is distributed.
     for slot in distributed.iter_mut() {
         *slot = 0.0;
     }
+    // No mass or no destinations: nothing to draw.
     if outbound <= 0.0 || row_len == 0 {
         return 0.0;
     }
@@ -876,13 +920,18 @@ fn distribute_csr_outbound(
         probs[pos] = weight;
         total += weight;
     }
+    // All-zero weights carry no destination probability.
     if total <= 0.0 {
         return 0.0;
     }
+    // Normalize into a probability vector: the discrete multinomial sampler
+    // requires one, while folded rows (raw adjacency values) need not sum to
+    // one. A single reciprocal multiply preserves the fold's float order.
     let inv_total = 1.0 / total;
     for pos in 0..row_len {
         probs[pos] *= inv_total;
     }
+    // Continuous keeps fractional outbound mass; discrete rounds the count.
     if continuous_sampling {
         crate::kernels::rng::continuous_multinomial(rng, outbound, &probs[..row_len], distributed);
     } else {

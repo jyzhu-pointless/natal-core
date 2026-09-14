@@ -166,6 +166,23 @@ def test_direct_age_constructor_rejects_invalid_individual_distribution(value: o
         AgeStructuredPopulation(template.species, template.config, initial_individual_count={"female": {"WT|WT": value}})
 
 
+def test_direct_age_constructor_rejects_a_negative_age_key() -> None:
+    """A negative age key must not resolve to the last age class.
+
+    NumPy accepts negative indices, so the dict branch used to write the count
+    into the final age class silently while the sperm branch rejected the same
+    key outright.
+    """
+    from natal import AgeStructuredPopulation
+    template = _population("NegativeAgeKey", "age", stochastic=False)
+    with pytest.raises(ValueError, match="out of range"):
+        AgeStructuredPopulation(
+            template.species,
+            template.config,
+            initial_individual_count={"female": {"WT|WT": {-1: 50.0}}},
+        )
+
+
 def test_direct_age_constructor_tuple_sperm_and_lazy_session() -> None:
     """Constructor inputs fill exact age buckets and lazily initialize a session."""
     from natal import AgeStructuredPopulation

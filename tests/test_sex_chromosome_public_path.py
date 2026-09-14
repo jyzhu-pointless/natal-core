@@ -51,7 +51,13 @@ def _build_xy(
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=1, sex_ratio=sex_ratio)
-        .competition(carrying_capacity=1e12, low_density_growth_rate=2.0)
+        # Explicit no-competition: these tests pin offspring sex/type
+        # conservation, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=1e12,
+            low_density_growth_rate=2.0,
+        )
         .build()
     )
 
@@ -212,7 +218,13 @@ def test_zw_public_builder_offspring_sex_and_types_are_exact() -> None:
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=1, sex_ratio=0.5)
-        .competition(carrying_capacity=1e12, low_density_growth_rate=2.0)
+        # Explicit no-competition: this test pins offspring sex/type
+        # conservation, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=1e12,
+            low_density_growth_rate=2.0,
+        )
         .build()
     )
     pop.run(1)

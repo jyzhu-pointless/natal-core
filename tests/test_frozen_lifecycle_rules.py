@@ -1,9 +1,9 @@
 """Frozen contract samples: event / stop / reset / import / restore rules.
 
-RUST_ONLY_REFACTOR_PLAN.md section 7.4 keeps the accepted stop
-short-circuit behavior and the rule that a stopped population needs
-``reset()`` before it can run again; section 9 pins restore semantics
-and section 8.3 history lifecycle.  These tests record the current
+The frozen contracts in ``CHANGELOG.md`` ("Frozen contracts") keep the
+accepted stop short-circuit behavior and the rule that a stopped
+population needs ``reset()`` before it can run again, and pin restore
+semantics and the history lifecycle.  These tests record the current
 actual rules as executable samples on deterministic dynamics.
 """
 
@@ -38,7 +38,13 @@ def _builder(name: str) -> nt.PopulationBuilder:
         )
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        # Explicit no-competition: these lifecycle tests pin the restore /
+        # resume bookkeeping, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=100000.0,
+            low_density_growth_rate=2.0,
+        )
     )
 
 

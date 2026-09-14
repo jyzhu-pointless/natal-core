@@ -57,6 +57,12 @@ def _build(
         )
         .reproduction(eggs_per_female=0.0, sex_ratio=0.5)
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+        # eggs_per_female=0 here is a hook-isolation device, not a habitat
+        # statement: production is 0, so the derived equilibrium competition
+        # strength is 0 and the default curve would clear every age-0
+        # individual the hooks install.  Pin the pre-fix no-competition
+        # behaviour explicitly.
+        .competition(growth_mode="no_competition")
     )
     for hook in hooks or []:
         chain = chain.hooks(hook)

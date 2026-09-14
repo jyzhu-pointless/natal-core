@@ -1,8 +1,9 @@
 """Genetic presets subpackage.
 
 Provides genetic modification presets including gene drives (HomingDrive,
-ToxinAntidoteDrive), cytoplasmic inheritance (Wolbachia), allele conversion
-systems, and the GeneticPreset base class.
+ToxinAntidoteDrive), spontaneous point mutation (PointMutation), cytoplasmic
+inheritance (Wolbachia), allele conversion systems, and the GeneticPreset base
+class.
 """
 
 from typing import TYPE_CHECKING
@@ -18,6 +19,7 @@ from ._base import GeneticPreset
 from ._types import PresetFitnessPatch, count_allele_copies
 from .cytoplasmic import CytoplasmicPreset, TransgenicBackground, Wolbachia
 from .homing import HomingDrive
+from .point_mutation import PointMutation
 from .toxin_antidote import ToxinAntidoteDrive
 
 if TYPE_CHECKING:
@@ -46,6 +48,7 @@ __all__ = [
     "GeneticPreset",
     "HomingDrive",
     "ToxinAntidoteDrive",
+    "PointMutation",
     "CytoplasmicPreset",
     "Wolbachia",
     "TransgenicBackground",

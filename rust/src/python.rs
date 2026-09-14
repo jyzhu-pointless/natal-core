@@ -39,6 +39,8 @@ pub(crate) fn migrate_csr_deterministic<'py>(
     stay_after: bool,
 ) -> PyResult<(Bound<'py, PyArray4<f64>>, Bound<'py, PyArray4<f64>>)> {
     let ind_shape = individual_count_all.shape();
+    // State layout is (n_demes, 2, n_ages, n_ztypes): the sex axis is fixed at
+    // 2, matching the row-major (sex, age, ztype) plane Python serializes.
     if ind_shape.len() != 4 || ind_shape[1] != 2 {
         return Err(PyValueError::new_err(format!(
             "individual_count_all must have shape (n_demes, 2, n_ages, n_ztypes), got {ind_shape:?}"
@@ -48,11 +50,15 @@ pub(crate) fn migrate_csr_deterministic<'py>(
     let n_ages = ind_shape[2];
     let n_ztypes = ind_shape[3];
     let sperm_shape = sperm_storage_all.shape();
+    // Sperm storage pairs each age with a (female_ztype, male_ztype) matrix;
+    // any other shape cannot be indexed by the kernel's flat layout.
     if sperm_shape != [n_demes, n_ages, n_ztypes, n_ztypes] {
         return Err(PyValueError::new_err(format!(
             "sperm_storage_all must have shape ({n_demes}, {n_ages}, {n_ztypes}, {n_ztypes}), got {sperm_shape:?}"
         )));
     }
+    // as_slice() requires C-contiguous buffers and rejects non-contiguous
+    // views rather than silently reordering the kernel's flat indexing.
     let ind_in = individual_count_all
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -72,12 +78,16 @@ pub(crate) fn migrate_csr_deterministic<'py>(
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
+    // Share the spatial kernel with the session path; it returns owned flat
+    // vectors in the same layout, which the outputs above copy.
     let (out_ind, out_sperm) = crate::kernels::spatial::migrate_csr_deterministic(
         ind_in, sperm_in, indptr_in, dest_in, weights_in, rate_in, stay_after, n_demes, n_ages,
         n_ztypes,
     )
     .map_err(PyRuntimeError::new_err)?;
 
+    // Materialize fresh C-order NumPy outputs and copy the kernel-owned
+    // vectors in, so Python never aliases kernel buffers.
     let ind_out = PyArray4::<f64>::zeros(py, [n_demes, 2, n_ages, n_ztypes], false);
     ind_out
         .readwrite()
@@ -122,6 +132,8 @@ pub(crate) fn migrate_csr_stochastic<'py>(
     continuous_sampling: bool,
 ) -> PyResult<(Bound<'py, PyArray4<f64>>, Bound<'py, PyArray4<f64>>)> {
     let ind_shape = individual_count_all.shape();
+    // State layout is (n_demes, 2, n_ages, n_ztypes): the sex axis is fixed at
+    // 2, matching the row-major (sex, age, ztype) plane Python serializes.
     if ind_shape.len() != 4 || ind_shape[1] != 2 {
         return Err(PyValueError::new_err(format!(
             "individual_count_all must have shape (n_demes, 2, n_ages, n_ztypes), got {ind_shape:?}"
@@ -131,11 +143,15 @@ pub(crate) fn migrate_csr_stochastic<'py>(
     let n_ages = ind_shape[2];
     let n_ztypes = ind_shape[3];
     let sperm_shape = sperm_storage_all.shape();
+    // Sperm storage pairs each age with a (female_ztype, male_ztype) matrix;
+    // any other shape cannot be indexed by the kernel's flat layout.
     if sperm_shape != [n_demes, n_ages, n_ztypes, n_ztypes] {
         return Err(PyValueError::new_err(format!(
             "sperm_storage_all must have shape ({n_demes}, {n_ages}, {n_ztypes}, {n_ztypes}), got {sperm_shape:?}"
         )));
     }
+    // as_slice() requires C-contiguous buffers and rejects non-contiguous
+    // views rather than silently reordering the kernel's flat indexing.
     let ind_in = individual_count_all
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -155,6 +171,9 @@ pub(crate) fn migrate_csr_stochastic<'py>(
         .as_slice()
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
+    // `seed` reseeds the kernel's own stream and `continuous_sampling` selects
+    // the continuous mode, keeping the Python entry bit-identical to the
+    // session path for a given seed.
     let (out_ind, out_sperm) = crate::kernels::spatial::migrate_csr_stochastic(
         ind_in,
         sperm_in,
@@ -170,6 +189,8 @@ pub(crate) fn migrate_csr_stochastic<'py>(
     )
     .map_err(PyRuntimeError::new_err)?;
 
+    // Materialize fresh C-order NumPy outputs and copy the kernel-owned
+    // vectors in, so Python never aliases kernel buffers.
     let ind_out = PyArray4::<f64>::zeros(py, [n_demes, 2, n_ages, n_ztypes], false);
     ind_out
         .readwrite()
@@ -246,11 +267,15 @@ pub(crate) fn equilibrium_metrics_flat(
     external_expected_eggs: Option<f64>,
 ) -> PyResult<(f64, f64)> {
     let s_shape = survival_rates.shape();
+    // Survival enters as the flat (2, n_ages) row-major matrix the core loops
+    // index directly.
     if s_shape != [2, n_ages] {
         return Err(PyValueError::new_err(format!(
             "survival_rates shape must be (2, {n_ages}), got {s_shape:?}"
         )));
     }
+    // The per-age vectors must share the same length as the survival rows,
+    // otherwise the core would index past their ends.
     for (name, arr, len) in [
         ("reproduction_rates", reproduction_rates.shape()[0], n_ages),
         ("fertility", fertility.shape()[0], n_ages),
@@ -266,6 +291,8 @@ pub(crate) fn equilibrium_metrics_flat(
             )));
         }
     }
+    // Each as_slice() rejects non-contiguous input; the core consumes these as
+    // flat row-major slices.
     let s_view = survival_rates.as_array();
     let survival = s_view
         .as_slice()
@@ -282,6 +309,8 @@ pub(crate) fn equilibrium_metrics_flat(
     let comp = c_view
         .as_slice()
         .ok_or_else(|| PyValueError::new_err("competition_weights must be C-contiguous"))?;
+    // When supplied, the borrowed declared distribution is copied into
+    // `declared_storage` so both match arms yield one `&[f64]` type.
     let declared_storage: Vec<f64>;
     let declared: &[f64] = match declared_distribution {
         // The draft's derivation-mode sentinel is an empty (0, 0) array,

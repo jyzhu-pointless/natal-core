@@ -1,7 +1,7 @@
 """Frozen user-surface contract samples: preset registration semantics.
 
-RUST_ONLY_REFACTOR_PLAN.md sections 2.1 and 5.3 freeze the preset
-rules: species binding, idempotent registration by object identity,
+The frozen contracts in ``CHANGELOG.md`` ("Frozen contracts", plan
+sections 2.1 and 5.3) freeze the preset rules: species binding, idempotent registration by object identity,
 priority ordering, manual-modifier ordering, fitness composition, and
 the existing reconfiguration semantics (including the fact that a
 preset reconfiguration rebuilds fitness and thereby overwrites manual

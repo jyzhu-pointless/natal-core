@@ -402,3 +402,28 @@ fn single_deme_local_assembly_matches_per_deme_config() {
         vec![0.01, 0.02, 0.01, 0.02]
     );
 }
+
+/// The word-vector restore is clone-and-commit, like ``restore_ecology``.
+///
+/// A rejected field must leave the whole section untouched.  Writing field by
+/// field into ``self`` would keep the scalar that was already accepted before
+/// the failing vector.
+#[test]
+fn ecology_restore_words_rolls_back_every_field_on_failure() {
+    let (bp, mut params, _) = fixture();
+    let (mut scalars, mut vectors) = params.ecology_snapshot_words().unwrap();
+    let before = params.ecology_snapshot_words().unwrap();
+
+    // A valid scalar change followed by a wrong-size vector: the scalar must
+    // not survive the failure.
+    scalars[0] += 1.0;
+    let last = vectors.len() - 1;
+    vectors[last] = vec![1.0; 3];
+
+    assert!(params
+        .ecology_restore_words(&bp, &scalars, &vectors)
+        .is_err());
+    let after = params.ecology_snapshot_words().unwrap();
+    assert_eq!(after.0, before.0, "scalars must roll back");
+    assert_eq!(after.1, before.1, "vectors must roll back");
+}

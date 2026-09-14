@@ -289,8 +289,9 @@ class TestFoldSemantics:
         assert csr.stay_after_send is True
         for src in range(6):
             start, end = int(csr.indptr[src]), int(csr.indptr[src + 1])
-            # Border demes keep mass at source: rows sum below one but the
-            # emitted entries are normalized over valid neighbors.
+            # Border demes drop invalid offsets, then the emitted row is
+            # renormalized over the valid neighbors, so it sums to one and
+            # nothing is left at the source.
             assert np.isclose(csr.weights[start:end].sum(), 1.0)
         # The corner deme 0 has 3 valid von-Neumann neighbors.
         assert int(csr.indptr[1] - csr.indptr[0]) == 3

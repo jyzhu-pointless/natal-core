@@ -183,3 +183,46 @@ class TestPopulationStateFlatten:
         assert restored.sperm_storage[1, 2, 3] == 20.0
         assert restored.individual_count.dtype == np.float64
         assert restored.sperm_storage.dtype == np.float64
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Malformed flattened input is rejected by length, not by a reshape error
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestFlattenedParseValidation:
+    """Wrong-length buffers must name the layout instead of failing in NumPy."""
+
+    def test_discrete_state_length_is_checked(self):
+        n_sexes, n_ages, n_ztypes = 2, 3, 4
+        expected = 1 + n_sexes * n_ages * n_ztypes
+        for length in (expected - 1, expected + 1, 0, n_sexes * n_ages * n_ztypes):
+            with pytest.raises(ValueError, match="flattened discrete state"):
+                parse_flattened_discrete_state(
+                    np.zeros(length), n_sexes=n_sexes, n_ages=n_ages, n_ztypes=n_ztypes
+                )
+
+    def test_full_state_length_is_checked(self):
+        n_sexes, n_ages, n_ztypes = 2, 3, 4
+        expected = 1 + n_sexes * n_ages * n_ztypes + n_ages * n_ztypes * n_ztypes
+        for length in (expected - 1, expected + 1, 0, 1 + n_sexes * n_ages * n_ztypes):
+            with pytest.raises(ValueError, match="flattened state"):
+                parse_flattened_state(
+                    np.zeros(length), n_sexes=n_sexes, n_ages=n_ages, n_ztypes=n_ztypes
+                )
+
+    def test_rank_two_input_is_rejected(self):
+        with pytest.raises(ValueError, match="must be 1-D"):
+            parse_flattened_state(
+                np.zeros((2, 3)), n_sexes=2, n_ages=3, n_ztypes=4
+            )
+
+    def test_the_declared_length_still_parses(self):
+        n_sexes, n_ages, n_ztypes = 2, 3, 4
+        flat = np.zeros(1 + n_sexes * n_ages * n_ztypes + n_ages * n_ztypes * n_ztypes)
+        assert (
+            parse_flattened_state(
+                flat, n_sexes=n_sexes, n_ages=n_ages, n_ztypes=n_ztypes
+            ).n_tick
+            == 0
+        )

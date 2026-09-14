@@ -442,7 +442,13 @@ class TestGenoTensorShape:
             )
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=2, sex_ratio=0.5)
-            .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+            # Explicit no-competition: this test pins the meiosis-derived
+            # offspring genotype, not the regulation curve.
+            .competition(
+                growth_mode="no_competition",
+                carrying_capacity=100000.0,
+                low_density_growth_rate=2.0,
+            )
             .build()
         )
         biased = pop.params.meiosis_map.array
@@ -510,7 +516,13 @@ def _biased_meiosis_pop(species_name: str, initial: dict[str, dict[str, float]])
         .initial_state(individual_count=initial)
         .survival(female_age0_survival=1.0, male_age0_survival=1.0)
         .reproduction(eggs_per_female=2, sex_ratio=0.5)
-        .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+        # Explicit no-competition: these tests pin the meiosis-derived
+        # offspring tensor, not the regulation curve.
+        .competition(
+            growth_mode="no_competition",
+            carrying_capacity=100000.0,
+            low_density_growth_rate=2.0,
+        )
         .build()
     )
 
@@ -585,7 +597,13 @@ class TestMeiosisDerivedRecompute:
             )
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .reproduction(eggs_per_female=2, sex_ratio=0.5)
-            .competition(carrying_capacity=100000.0, low_density_growth_rate=2.0)
+            # Explicit no-competition: this test pins the compressed
+            # meiosis-derived tensor, not the regulation curve.
+            .competition(
+                growth_mode="no_competition",
+                carrying_capacity=100000.0,
+                low_density_growth_rate=2.0,
+            )
             .build()
         )
         # From B|C only {B, C} gametes and {B|B, B|C, C|C} zygotes stay:

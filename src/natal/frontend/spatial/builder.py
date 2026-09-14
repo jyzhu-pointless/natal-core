@@ -55,7 +55,10 @@ from natal.frontend.model.initial_state import (
 from natal.frontend.patterns import IndividualSelector
 from natal.frontend.population.age_structured import AgeStructuredPopulation
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
-from natal.frontend.spatial.migration import RateDeclaration
+from natal.frontend.spatial.migration import (
+    RateColumnDeclaration,
+    normalize_migration_rate,
+)
 from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import GridTopology
 
@@ -597,10 +600,13 @@ class SpatialPopulationBuilder:
         # entry is written for the same declaration.
         self._declaration_log: List[tuple[str, Dict[str, Any]]] = []
 
-        # Spatial migration parameters.
+        # Spatial migration parameters.  ``migration_rate`` keeps the raw
+        # declaration: a plain rate form is normalized by the container,
+        # while a ``BatchSetting`` is expanded to a per-deme column at
+        # build time (see ``_resolved_migration_rate``).
         self._migration_kernel: Optional[NDArray[np.float64]] = None
         self._migration_kernel_batch: Optional[BatchSetting[Any]] = None
-        self._migration_rate: RateDeclaration = 0.0
+        self._migration_rate: RateColumnDeclaration | BatchSetting[Any] = 0.0
         self._migration_strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = (
             "auto"
         )
@@ -976,8 +982,8 @@ class SpatialPopulationBuilder:
     def competition(
         self,
         # Age-structured params
-        competition_strength: float = 5.0,
-        juvenile_growth_mode: Union[int, str, BatchSetting[Any]] = "logistic",
+        competition_strength: float | None = None,
+        juvenile_growth_mode: Union[int, str, BatchSetting[Any]] = "beverton_holt",
         low_density_growth_rate: Union[float, BatchSetting[Any]] = 6.0,
         age_1_carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
         old_juvenile_carrying_capacity: Union[int, None, BatchSetting[Any]] = None,
@@ -991,8 +997,11 @@ class SpatialPopulationBuilder:
         """Configure competition and density-dependence.
 
         Args:
-            competition_strength: Relative competition factor for age-1 juveniles
-                (age-structured only).
+            competition_strength: Competition weight of the second juvenile
+                age class (age-structured only).  Defaults to ``1.0`` — the
+                same weight as age 0, so leaving it unset adds no special
+                weighting.  Passing it to a model whose only juvenile age is
+                age 0 is rejected.
             juvenile_growth_mode: Growth model identifier. Accepts ``BatchSetting``.
             low_density_growth_rate: Growth rate at low density. Accepts ``BatchSetting``.
             age_1_carrying_capacity: Carrying capacity at age=1 (age-structured).
@@ -1013,6 +1022,10 @@ class SpatialPopulationBuilder:
             if resolved_cc is None:
                 resolved_cc = carrying_capacity
 
+            # Unspecified means "no special weighting": the model default is
+            # 1.0 for every juvenile age, so nothing is written.  An explicit
+            # value on a model with only one juvenile age is rejected
+            # downstream instead of silently doing nothing.
             return self._detect_and_delegate(
                 "competition",
                 {
@@ -1280,7 +1293,7 @@ class SpatialPopulationBuilder:
     def migration(
         self,
         kernel: Optional[NDArray[np.float64]] = None,
-        migration_rate: float = 0.0,
+        migration_rate: Union[RateColumnDeclaration, BatchSetting[Any]] = 0.0,
         strategy: Literal["auto", "adjacency", "kernel", "hybrid"] = "auto",
         adjacency: Optional[
             object
@@ -1294,17 +1307,41 @@ class SpatialPopulationBuilder:
 
         Args:
             kernel: Odd-shaped 2D migration kernel.
-            migration_rate: Fraction of each deme that migrates.
+            migration_rate: Fraction of each deme's adults that migrates
+                each tick.  Four sugar forms share the build-time rules:
+                a scalar (adult ages only, juveniles 0), an ``(n_ages,)``
+                age vector, an ``(S, A)`` sex x age table, and a per-sex
+                mapping such as ``{"F": 0.2, "M": 0.05}``.  A full
+                ``(n_demes, S, A)`` column sets each deme directly, and an
+                ``(n_demes, n_ages)`` table broadcasts each deme's age
+                vector across sexes — except that a 2-D shape of exactly
+                ``(S, A)`` keeps its shared per-sex reading, so when
+                ``n_demes == n_sexes`` the two 2-D shapes collide and the
+                per-deme reading is unavailable: pass the 3-D column or a
+                ``BatchSetting`` there.  A ``BatchSetting`` gives one rate
+                declaration per deme (each element follows the same
+                sugar), so ``batch_setting([0.1, 0.4, 0.1])`` on a 3-deme
+                chain sends the middle deme four times as much as its
+                neighbors.
             strategy: Migration strategy (``"auto"``, ``"adjacency"``,
                 ``"kernel"``, ``"hybrid"``).
-            adjacency: Explicit adjacency matrix.
+            adjacency: Explicit adjacency matrix.  Rows are relative
+                outbound weights: the container row-normalizes every
+                non-empty row, so sub- and super-stochastic inputs mean
+                the same distribution.  Control the amount migrated with
+                ``migration_rate``, not by shrinking a row.
             kernel_bank: Optional heterogeneous kernel bank.
             deme_kernel_ids: Per-deme kernel ids into ``kernel_bank``.
             kernel_include_center: Whether kernel includes center cell.
-            adjust_migration_on_edge: Whether to adjust migration rates on
-                boundaries. When False (default), boundary demes migrate less
-                due to fewer valid neighbors. When True, all demes have the
-                same total migration rate regardless of position.
+            adjust_migration_on_edge: Legacy bit-parity flag, kept for
+                compatibility.  It does not change the destination
+                distribution: the fold renormalizes every emitted row
+                (and every non-empty adjacency row) to a total weight of
+                1, so the denominator it selects cancels up to
+                floating-point rounding (~1 ulp).  Boundary demes merely
+                have fewer neighbors and therefore send a larger share to
+                each; their total outbound quota equals an interior
+                deme's.  Use ``migration_rate`` for per-deme quotas.
 
         Returns:
             Self for chaining.
@@ -1323,8 +1360,10 @@ class SpatialPopulationBuilder:
             self._migration_kernel_batch = kernel
         elif kernel is not None:
             self._migration_kernel = np.asarray(kernel, dtype=np.float64)
-        # Keep the raw declaration: scalar / vector / per-sex mapping are
-        # normalized once by the SpatialPopulation constructor.
+        # Keep the raw declaration: scalar / vector / per-sex sugar and the
+        # explicit per-deme columns are normalized once by the
+        # SpatialPopulation constructor.  A BatchSetting stays deferred and
+        # is expanded to a (n_demes, S, A) column at build time.
         self._migration_rate = migration_rate
         self._migration_strategy = strategy
         if adjacency is not None:
@@ -1412,6 +1451,48 @@ class SpatialPopulationBuilder:
                 unique.append(arr)
             ids.append(kernel_map[key])
         return tuple(unique), np.array(ids, dtype=np.int64)
+
+    def _resolved_migration_rate(
+        self, definition: ModelDefinition
+    ) -> RateColumnDeclaration:
+        """Expand a per-deme ``BatchSetting`` rate into a concrete column.
+
+        A plain declaration is returned unchanged and normalized by the
+        container; a ``BatchSetting`` expands to one element per deme, each
+        normalized with the same sugar rules as a homogeneous declaration,
+        and stacked into the ``(n_demes, S, A)`` contract column.  The
+        frozen draft supplies the rate axes so the expansion never depends
+        on the mutable builder.
+
+        Args:
+            definition: Frozen declaration whose draft supplies the axes.
+
+        Returns:
+            The per-deme ``(n_demes, S, A)`` column, or the raw declaration
+            when it is not batched.
+
+        Raises:
+            ValueError: If the batch has the wrong length for the deme
+                count, or the frozen declaration carries no draft.
+        """
+        if not isinstance(self._migration_rate, BatchSetting):
+            return self._migration_rate
+        draft = definition.draft
+        if draft is None:
+            raise ValueError(
+                "a batched migration_rate requires a normalized declaration draft"
+            )
+        per_deme = self._migration_rate.expand(self._n_demes, self._topology)
+        rows = [
+            normalize_migration_rate(
+                value,
+                int(draft.n_sexes),
+                int(draft.n_ages),
+                int(draft.new_adult_age),
+            )
+            for value in per_deme
+        ]
+        return np.stack(rows, axis=0)
 
     def build(self) -> SpatialPopulation:
         """Build and return the configured ``SpatialPopulation``.
@@ -1564,7 +1645,7 @@ class SpatialPopulationBuilder:
             kernel_bank=kernel_bank,
             deme_kernel_ids=deme_kernel_ids,
             kernel_include_center=self._kernel_include_center,
-            migration_rate=self._migration_rate,
+            migration_rate=self._resolved_migration_rate(definition),
             adjust_migration_on_edge=self._adjust_migration_on_edge,
             name=self._spatial_name,
         )

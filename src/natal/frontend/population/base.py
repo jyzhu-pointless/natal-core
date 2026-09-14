@@ -34,6 +34,7 @@ from natal.frontend.data import (
     DiscretePopulationState,
     PopulationState,
 )
+from natal.frontend.data.state import state_axes
 from natal.frontend.genetics import Genotype, HaploidGenotype, Species
 from natal.frontend.hooks._compile import build_hook_program
 from natal.frontend.hooks.types import (
@@ -1402,9 +1403,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
         state = self._live_state()
         ind = state.individual_count
-        n_sexes = int(ind.shape[0])
-        n_ages = int(ind.shape[1]) if ind.ndim == 3 else 1
-        n_ztypes = int(ind.shape[-1])
+        n_sexes, n_ages, n_ztypes = state_axes(ind)
 
         sex_labels = ("female", "male")[:n_sexes]
 

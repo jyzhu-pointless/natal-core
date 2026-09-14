@@ -87,6 +87,9 @@ class Genotype:
             mat, pat = canonical_haploid_pair(species, maternal, paternal)
         else:
             mat, pat = maternal, paternal
+        # Canonical name from each chromosome's maternal|paternal allele chains,
+        # so the key is stable across equal-but-distinct haplotype objects and
+        # matches the instance `name`/`__str__` form.
         canon_parts: list[str] = []
         for chrom in species.chromosomes:
             try:
@@ -98,6 +101,8 @@ class Genotype:
             except ValueError:
                 p = None
             if m is None and p is None:
+                # Chromosomes absent from both sides (e.g. Y in an XX genome)
+                # contribute no segment.
                 continue
             def gs(h: Haplotype | None) -> str: return "/".join(g.name for g in h.genes) if h else ""
             canon_parts.append(f"{gs(m)}|{gs(p)}")
@@ -106,6 +111,8 @@ class Genotype:
 
         # Check if this genotype is already cached
         if cache_key in cls._cache[species]:
+            # Identity reuse keeps `is` comparisons (homozygosity, entity
+            # lookups) valid for callers.
             return cls._cache[species][cache_key]
 
         # Create a new instance (do NOT cache here - cache in __init__ after success)
@@ -245,6 +252,8 @@ class Genotype:
         ) -> Optional[Haplotype]:
             """Return the unique haplotype from a sex-chromosome group, if present."""
             found: Optional[Haplotype] = None
+            # A haploid genome carries at most one chromosome per group; absence
+            # is legal (e.g. Y in an X-bearing gamete), a second one is malformed.
             for group_chromosome in group_chromosomes:
                 try:
                     current = haploid.get_haplotype_for_chromosome(group_chromosome)
@@ -263,6 +272,8 @@ class Genotype:
         if callable(get_groups):
             sex_groups = cast(Optional[Dict[str, List[Chromosome]]], get_groups())
 
+        # Sex-chromosome members are segregated by group so X/Y (or Z/W) are not
+        # treated as independent autosomes; the groups are handled separately below.
         sex_chromosomes: set[Chromosome] = set()
         if sex_groups:
             for group in sex_groups.values():
@@ -287,6 +298,7 @@ class Genotype:
                     )
                     chromosome_gamete_frequencies.append(frequencies)
                 else:
+                    # No linkage: the two parental homologs segregate 1:1.
                     chromosome_gamete_frequencies.append({
                         mat_haplotype: 0.5,
                         pat_haplotype: 0.5,
@@ -302,6 +314,8 @@ class Genotype:
                 if mat_haplotype is None and pat_haplotype is None:
                     continue
                 if mat_haplotype is None or pat_haplotype is None:
+                    # One-sided absence means the group is partially carried,
+                    # which no valid diploid genome allows.
                     raise ValueError(
                         f"Incomplete sex chromosome pair in group '{group_name}' for genotype '{self}'."
                     )
@@ -326,6 +340,8 @@ class Genotype:
                     })
 
         if not chromosome_gamete_frequencies:
+            # No usable chromosome contribution means no gamete can be formed;
+            # fail loudly instead of returning an empty distribution.
             raise ValueError("Cannot produce gametes: no chromosome haplotypes available in genotype.")
 
         # Combine chromosome gametes using the multiplication rule
@@ -347,6 +363,8 @@ class Genotype:
             haploid_genotype = HaploidGenotype(species=self.species, haplotypes=haplotypes)
 
             if haploid_genotype in gamete_freqs:
+                # Several haplotype combinations can produce the same haploid
+                # genotype; accumulate so no probability mass is lost.
                 gamete_freqs[haploid_genotype] += frequency
             else:
                 gamete_freqs[haploid_genotype] = frequency
@@ -368,6 +386,8 @@ class Genotype:
         species = self.species
 
         def hap_allele_str(hap: Optional[Haplotype], loci: List[Locus]) -> str:
+            # One side's alleles in locus order, joined with '/'; a missing gene
+            # renders empty so positions stay aligned for the parser.
             if hap is None:
                 return ""
             names: List[str] = []
@@ -388,6 +408,8 @@ class Genotype:
                 grouped.update(group_chromosomes)
 
         segments: List[str] = []
+        # Autosomes first, in species declaration order, so the string round-trips
+        # through Species.get_genotype_from_str.
         for chrom in species.chromosomes:
             if chrom in grouped:
                 continue
@@ -399,6 +421,8 @@ class Genotype:
             )
 
         if sex_groups:
+            # Sex-group segments follow the autosomes, mirroring the segment
+            # order used to build the cache key in __new__.
             for group_chromosomes in sex_groups.values():
                 mat_hap = self._find_group_haplotype(self.maternal, group_chromosomes)
                 pat_hap = self._find_group_haplotype(self.paternal, group_chromosomes)
@@ -501,6 +525,8 @@ class Genotype:
             return {mat_haplotype: 0.5, pat_haplotype: 0.5}
 
         n_loci = len(chromosome.loci)
+        # recomb_rates[i] is the crossover probability between adjacent loci i and
+        # i+1, so the array length is n_loci - 1 as the pattern helper expects.
         recomb_rates = np.array(recomb_map, dtype=np.float64)
 
         # Compute patterns with selected implementation
@@ -511,6 +537,8 @@ class Genotype:
         from .haplotype import Haplotype
 
         # Convert patterns to actual Haplotype objects
+        # Each pattern row assigns every locus to a homolog (0 = maternal copy,
+        # 1 = paternal copy); pick the gene from the indicated homolog per locus.
         result: Dict[Haplotype, float] = {}
         for pattern_idx, pattern in enumerate(patterns):
             genes: List[Gene] = []
@@ -598,11 +626,14 @@ def compute_recombinant_haplotypes(
         raise ValueError("n_loci must be >= 1")
 
     if n_loci == 1:
+        # A single locus has no boundary: the only outcome is the starting homolog.
         patterns = np.array([[int(not start_maternal)]], dtype=np.int64)
         frequencies = np.array([1.0], dtype=np.float64)
         return patterns, frequencies
 
     n_boundaries = n_loci - 1
+    # One bit per inter-locus boundary (crossover yes/no) enumerates every
+    # pattern; pattern_idx's bit b selects the crossover at boundary b.
     n_patterns = 2 ** n_boundaries
 
     patterns = np.zeros((n_patterns, n_loci), dtype=np.int64)
@@ -618,6 +649,8 @@ def compute_recombinant_haplotypes(
             recomb_rate = recombination_rates[boundary_idx]
 
             if has_crossover:
+                # Crossover at this boundary multiplies by its rate and toggles
+                # the chain for every downstream locus (cumulative switching).
                 frequency *= recomb_rate
                 current_chain = 1 - current_chain
             else:
@@ -658,6 +691,8 @@ def _compute_both_homolog_patterns(
         n_loci, recombination_rates, start_maternal=False
     )
     patterns = np.vstack((mat_patterns, pat_patterns))
+    # Each start family carries prior weight 0.5, so the combined rows sum to 1;
+    # duplicated rows across families are intentional (callers must accumulate).
     frequencies = 0.5 * np.concatenate((mat_frequencies, pat_frequencies))
     return patterns, frequencies
 
@@ -698,6 +733,8 @@ def compute_recombinant_haplotypes_with_alleles(
     # Convert patterns to haplotype strings, accumulating duplicates
     result: Dict[str, float] = {}
     for pattern_idx, pattern in enumerate(patterns):
+        # Locus-ordered allele chain joined with '/', matching the species'
+        # haplotype string syntax.
         alleles = [
             maternal_alleles[i] if chain == 0 else paternal_alleles[i]
             for i, chain in enumerate(pattern)

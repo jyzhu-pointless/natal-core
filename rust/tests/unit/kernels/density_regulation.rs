@@ -130,11 +130,17 @@ fn regulation_scaling_matches_python_reference_exactly() {
         regulation_scaling(3, actual, expected_c, r, s).unwrap(),
         python_bh
     );
-    // Zero-equilibrium guards fall back to ratio 1.0 like Python.
-    assert_eq!(
-        regulation_scaling(2, actual, 0.0, r, s).unwrap(),
-        0.0_f64.max(-1.0 * (r - 1.0) + r) * s
-    );
+    // A zero equilibrium deliberately diverges from the retired reference:
+    // its ratio and survival guards multiplied out to an exact scaling of
+    // 1.0, silently disabling regulation for a habitat that supports nobody.
+    // Every compensatory mode now collapses recruitment, like FIXED does.
+    for mode in 2..=4 {
+        assert_eq!(
+            regulation_scaling(mode, actual, 0.0, r, s).unwrap(),
+            0.0,
+            "mode {mode} must not fall back to an unregulated scaling"
+        );
+    }
     // Ricker has no Python precedent; check the closed form and dispatch.
     assert_eq!(
         regulation_scaling(4, actual, expected_c, r, s).unwrap(),

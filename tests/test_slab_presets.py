@@ -7,6 +7,9 @@ from natal.frontend import presets
 def _make_species_with_slabs():
     return nt.Species.from_dict(
         "slab_test", {"c1": {"l1": ["WT", "Dr"]}},
+        # "wolbachia" is the tag the Wolbachia preset inherits through;
+        # omitting it is now a configuration error rather than a silent no-op.
+        gamete_labels=["default", "wolbachia"],
         somatic_labels=["normal", "infected", "TG_bg"],
     )
 
@@ -75,6 +78,7 @@ class TestWolbachiaEndToEnd:
     def test_fitness_slab_applied(self):
         """Wolbachia viability_per_slab modifies the correct ZType index."""
         sp = nt.Species.from_dict("w_e2e", {"c1": {"l1": ["A", "a"]}},
+                                  gamete_labels=["default", "wolbachia"],
                                   somatic_labels=["normal", "infected"])
         # infected viability should be 0.9, normal stays 1.0
         cfg = nt.PopulationBuilder.for_discrete(sp).setup(stochastic=False)
@@ -97,6 +101,7 @@ class TestWolbachiaEndToEnd:
     def test_run_with_wolbachia_preset(self):
         """Population runs without crash with Wolbachia preset applied."""
         sp = nt.Species.from_dict("w_run", {"c1": {"l1": ["A", "a"]}},
+                                  gamete_labels=["default", "wolbachia"],
                                   somatic_labels=["normal", "infected"])
         pop = nt.DiscreteGenerationPopulation.setup(
             species=sp, stochastic=False,

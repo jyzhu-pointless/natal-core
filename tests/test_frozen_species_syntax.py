@@ -1,7 +1,7 @@
 """Frozen user-surface contract samples: species structure registration.
 
-RUST_ONLY_REFACTOR_PLAN.md section 2.1 freezes the ``Species.from_dict``
-declaration syntax: chromosomes / loci / alleles, sex chromosomes,
+The frozen contracts in ``CHANGELOG.md`` ("Frozen contracts") freeze the
+``Species.from_dict`` declaration syntax: chromosomes / loci / alleles, sex chromosomes,
 labels, and recombination rates must keep their current expression
 forms.  These tests are executable samples of that syntax and pin the
 resulting genotype space and recombination numbers.

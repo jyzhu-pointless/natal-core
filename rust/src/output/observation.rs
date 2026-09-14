@@ -17,8 +17,13 @@ pub fn project(
     collapse: bool,
     aggregate: bool,
 ) -> PyResult<Vec<f64>> {
+    // Destructure the D/S/A/Z shape; `plane` is the per-deme (sex, age, ztype)
+    // stride shared by the state slice and the compiled selector mask.
     let [d, s, a, z] = dims;
     let plane = s * a * z;
+    // Reject layout mismatches before indexing: every deme needs a full plane,
+    // the mask must be a whole number of planes, and the selection must name
+    // at least one in-range deme.
     if plane == 0
         || ind.len() != d * plane
         || mask.len() % plane != 0
@@ -29,9 +34,12 @@ pub fn project(
             "Observation dimensions or deme selection do not match the population layout",
         ));
     }
+    // Groups are stacked planes in the mask; aggregate collapses the deme axis
+    // to one entry and collapse removes the age axis from the output.
     let groups = mask.len() / plane;
     let out_d = if aggregate { 1 } else { selected.len() };
     let out_a = if collapse { 1 } else { a };
+    // Output is group-major row-major: (group, destination deme, sex, age).
     let mut values = vec![0.0; groups * out_d * s * out_a];
     // Keep each reduction axis separate: genotype first, then age, then
     // deme. Recording and later projections therefore share the same
@@ -41,6 +49,8 @@ pub fn project(
             for sex in 0..s {
                 for age_out in 0..out_a {
                     let mut result = 0.0;
+                    // Preserve reads exactly the `destination`-th selected
+                    // deme; aggregate re-sums every selected deme into that slot.
                     let start_d = if aggregate { 0 } else { destination };
                     let end_d = if aggregate {
                         selected.len()
@@ -49,10 +59,14 @@ pub fn project(
                     };
                     for &deme in &selected[start_d..end_d] {
                         let mut deme_total = 0.0;
+                        // Collapse sums the whole age axis; otherwise one output
+                        // age reads exactly its own age class.
                         let start_a = if collapse { 0 } else { age_out };
                         let end_a = if collapse { a } else { age_out + 1 };
                         for age in start_a..end_a {
                             let mut genotype_total = 0.0;
+                            // Genotype reduction: sum count * mask over the
+                            // ztype axis at this deme/sex/age offset.
                             for genotype in 0..z {
                                 let offset = (sex * a + age) * z + genotype;
                                 genotype_total +=
@@ -62,6 +76,9 @@ pub fn project(
                         }
                         result += deme_total;
                     }
+                    // Same flat index formula on both sides of the reduction;
+                    // reordering group/deme/sex/age here would desync Python's
+                    // reshape of this buffer.
                     values[((group * out_d + destination) * s + sex) * out_a + age_out] = result;
                 }
             }
@@ -81,6 +98,8 @@ pub fn project_observation<'py>(
     collapse_age: bool,
     aggregate: bool,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    // Reuse the shared projection for current-state snapshots; the returned
+    // array is a fresh buffer that Python owns.
     Ok(PyArray1::from_vec(
         py,
         project(

@@ -406,3 +406,29 @@ def test_observationfilter_create_observation_deleted() -> None:
     from natal.frontend.output.observation import ObservationFilter
     assert not hasattr(ObservationFilter, "create_observation")
     assert "create_observation" not in dir(ObservationFilter)
+
+
+def test_collapsed_age_history_translates_to_readable_dict() -> None:
+    """A collapse_age history must not raise in the readable-dict translator.
+
+    Every history row was reshaped to ``(n_groups, n_sexes, n_ages)``, but a
+    collapsed observation stores one age-less value per (group, sex), so its
+    rows are shorter and the reshape raised for a configuration the engine
+    supports.  The collapsed payload must therefore carry plain per-sex
+    values and no age keys.
+    """
+    groups = OrderedDict((("wild", IndividualSelector(ztype="WT|WT")),))
+    pop = _build_population(
+        "contract_collapse_translate",
+        groups=groups,
+        collapse_age=True,
+        history_mode="observation",
+    )
+    pop.run(2)
+
+    readable = nt.population_observation_history_to_readable_dict(pop)
+    assert readable["snapshots"], "the recorded ticks should be present"
+    per_sex = readable["snapshots"][-1]["observed"]["wild"]
+    assert per_sex, "the wild group should hold counts"
+    assert all(isinstance(value, float) for value in per_sex.values()), per_sex
+    assert all(not str(key).startswith("age_") for key in per_sex), per_sex
