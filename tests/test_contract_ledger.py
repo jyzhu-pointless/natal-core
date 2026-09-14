@@ -18,8 +18,10 @@ the ledgers as data and checks them mechanically:
   to owning tests; a violated invariant can be registered as a known
   violation.  All S0 red-light repros (R1-R5) have graduated into the
   pytest suite next to their owning stage's fix, and the construction
-  script ``scripts/known_defect_repro.py`` is retired (C2/C4 remain
-  documented-only pending a spec decision).
+  script ``scripts/known_defect_repro.py`` is retired.  The last two
+  documented-only findings (C2, C4) have also graduated: the unified
+  Beverton-Holt default closed C2, and C4's claimed cross-deme fitness
+  leak did not reproduce, so its non-leakage is now pinned instead.
 
 Any pytest failure that is NOT in the known-violation list is by
 construction a new regression.
@@ -513,9 +515,9 @@ class InvariantEntry:
     Attributes:
         area: Verification face name.
         owning_tests: Test files that prove the invariant today.
-        known_violations: Defect ids (C2/C4 pending spec decisions) that
-            currently break the face; everything else graduates into the
-            owning tests once its stage lands.
+        known_violations: Defect ids that still break the face.  Empty
+            for every face today: a graduated finding becomes an owning
+            test instead, and the ledger rejects a face with neither.
     """
 
     area: str
@@ -585,14 +587,17 @@ INVARIANTS: tuple[InvariantEntry, ...] = (
 # Audit findings recorded by the S0 reviewers (not in the plan's R/T list):
 # C1 pop.params.meiosis_map raised AttributeError — FIXED by
 #     adding the meiosis_map -> zygotes_to_gametes_map rename.
-# C2 plain vs spatial discrete default growth semantics diverge — still open.
+# C2 plain vs spatial discrete default growth semantics diverge — FIXED by
+#     the unified Beverton-Holt default (test_default_growth_mode.py).
 # C3 tensor_write("meiosis_map") reached storage but not dynamics — FIXED in
 #     the write now recomputes the derived offspring tensor in
 #     the same transaction (and rejects non-distribution rows atomically).
 # C4 deme.update().fitness(...) still writes the shared viability tables
-#     in place, leaking into every other deme (pre-existing sibling of the
-#     P2 leak closed; needs a spec decision whether to refuse
-#     like tensor_write or route through write_genetics).
+#     in place, leaking into every other deme — NOT REPRODUCED.  Probed on
+#     both spatial pop_types: the write forks the deme's genetics variant,
+#     only the named deme's viability draft changes (sum 12.0 -> 10.5) and
+#     the siblings stay bitwise identical through two ticks; pinned by
+#     TestDemeWriteIsolation in test_ownership_snapshots.py.
 EXTRA_FINDINGS: tuple[InvariantEntry, ...] = (
     InvariantEntry(
         area="C1: public meiosis_map params route resolves",
@@ -600,8 +605,7 @@ EXTRA_FINDINGS: tuple[InvariantEntry, ...] = (
     ),
     InvariantEntry(
         area="C2: plain vs spatial discrete density semantics agree",
-        owning_tests=(),
-        known_violations=("C2",),
+        owning_tests=("test_default_growth_mode.py",),
     ),
     InvariantEntry(
         area="C3: meiosis_map writes recompute the derived offspring tensor",
@@ -609,8 +613,7 @@ EXTRA_FINDINGS: tuple[InvariantEntry, ...] = (
     ),
     InvariantEntry(
         area="C4: deme-level fitness writes do not leak across shared tables",
-        owning_tests=(),
-        known_violations=("C4",),
+        owning_tests=("test_ownership_snapshots.py",),
     ),
 )
 
@@ -656,6 +659,18 @@ def test_invariant_owning_test_files_exist() -> None:
             assert path.is_file(), (
                 f"{entry.area}: owning test file {test_file} does not exist"
             )
+
+
+def test_every_invariant_face_has_evidence() -> None:
+    """A face must be owned by a test or registered as a known violation.
+
+    C2 and C4 graduated from ``known_violations`` into owning tests; an
+    entry left with neither would silently drop the face from the ledger.
+    """
+    for entry in (*INVARIANTS, *EXTRA_FINDINGS):
+        assert entry.owning_tests or entry.known_violations, (
+            f"{entry.area}: neither an owning test nor a known violation"
+        )
 
 
 def test_offspring_derivation_has_a_single_spelling() -> None:

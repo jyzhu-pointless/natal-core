@@ -1062,3 +1062,65 @@ class TestFrozenWriteErrorPaths:
             assert float(np.asarray(getattr(cfg, field), dtype=np.float64).sum()) == (
                 draft_sums_before[field]
             )
+
+
+# ── D2/C4: deme-level writes stay inside the deme's own variant ───────────────
+
+
+class TestDemeWriteIsolation:
+    """A deme-level fitness write must not leak into sibling demes.
+
+    The C4 finding (recorded in ``test_contract_ledger.py``) claimed
+    ``deme.update().fitness(...)`` mutated the shared viability tables in
+    place.  It does not: the write forks the deme's genetics variant, so the
+    sibling's draft is untouched and its trajectory stays bitwise identical
+    to an unpatched twin.
+    """
+
+    def test_deme_fitness_write_does_not_leak_into_siblings(self) -> None:
+        species = _species("C4Isolation")
+        spatial = nt.SpatialPopulation(
+            [
+                _build_age_with_species(species, "C4Deme0"),
+                _build_age_with_species(species, "C4Deme1"),
+            ],
+            migration_rate=0.0,
+            name="C4Isolation",
+        )
+        spatial._initialize_session(seed=0)  # noqa: SLF001 - deterministic start
+
+        def viability_sums(pop: nt.SpatialPopulation) -> list[float]:
+            drafts = pop._export_deme_drafts(compact=True)  # noqa: SLF001 - draft read
+            return [
+                float(np.asarray(draft.viability_fitness).sum()) for draft in drafts
+            ]
+
+        before = viability_sums(spatial)
+        spatial.demes[0].update().fitness(viability={"WT|WT": 0.25})
+        after = viability_sums(spatial)
+
+        assert after[1] == before[1], "the sibling's viability table changed"
+        assert after[0] != before[0], "the named deme's write did not land"
+
+        # Dynamics: a twin built without the patch must keep deme 1 bitwise
+        # identical after two ticks, while the patched deme diverges.
+        twin = nt.SpatialPopulation(
+            [
+                _build_age_with_species(species, "C4TwinDeme0"),
+                _build_age_with_species(species, "C4TwinDeme1"),
+            ],
+            migration_rate=0.0,
+            name="C4Twin",
+        )
+        twin._initialize_session(seed=0)  # noqa: SLF001 - deterministic start
+        spatial.run(2)
+        twin.run(2)
+
+        np.testing.assert_array_equal(
+            spatial.demes[1].state.individual_count,
+            twin.demes[1].state.individual_count,
+        )
+        assert not np.array_equal(
+            spatial.demes[0].state.individual_count,
+            twin.demes[0].state.individual_count,
+        ), "the patched deme should diverge from the twin"
