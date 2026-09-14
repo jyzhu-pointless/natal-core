@@ -9,10 +9,25 @@ The original simulation model was implemented in SLiM, and the code is available
 <https://github.com/jyzhu-pointless/RIDL-drive-project/tree/main/models>.
 
 Here we will remake the model using NATAL, and compare the results with the original SLiM model.
+
+Reproducibility
+---------------
+The grids are driven by one master seed.  Pass ``--seed`` (or set
+``NATAL_RIDL_SEED``) to reproduce a previous run exactly; without either, the
+seed is drawn from OS entropy and *recorded in the run manifest*
+(``drive_ridl_remake_batch_manifest.json``) so the run can be replayed later.
+``--smoke`` shrinks both grids and the replicate count for a quick end-to-end
+check, and ``--check`` asserts the output contract before any file is written.
+The full paper grids (317 simulated weeks x 20 replicates x 672 cells) are a
+deliberate long run: keep them out of CI.
 """
 
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
+import os
 from pathlib import Path
 from time import perf_counter
 from typing import Mapping, Sequence, TypeAlias
@@ -30,7 +45,8 @@ BASE_ADULT_MALE_RATIO = 4.0 / 7.0
 
 SIM_WEEKS = 317
 N_REPEATS = 20
-SEED = None
+SMOKE_REPEATS = 2
+MANIFEST_NAME = "drive_ridl_remake_batch_manifest.json"
 
 DRIVE_CONVERSION_RATES = np.round(np.arange(0.0, 1.0001, 0.05), 2)
 RELEASE_RATIOS = np.round(np.arange(0.0, 3.0001, 0.15), 2)
@@ -183,20 +199,37 @@ def run_single_replicate(
     return None
 
 
-def run_parameter_scan() -> tuple[np.ndarray, np.ndarray]:
-    """Run the conversion-rate vs drop-ratio grid."""
+def run_parameter_scan(
+    seed: int,
+    repeats: int,
+    conversion_rates: np.ndarray = DRIVE_CONVERSION_RATES,
+    release_ratios: np.ndarray = RELEASE_RATIOS,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run the conversion-rate vs drop-ratio grid.
+
+    Args:
+        seed: Master seed; every replicate seed is drawn from it in a fixed
+            order, so the same ``(seed, repeats, grids)`` reproduces the grid.
+        repeats: Replicates per grid cell.
+        conversion_rates: X-axis conversion rates.
+        release_ratios: Y-axis release ratios.
+
+    Returns:
+        ``(mean_suppression_weeks, success_counts)`` matrices shaped
+        ``(len(release_ratios), len(conversion_rates))``.
+    """
     mean_suppression_weeks = np.full(
-        (len(RELEASE_RATIOS), len(DRIVE_CONVERSION_RATES)),
+        (len(release_ratios), len(conversion_rates)),
         np.nan,
         dtype=np.float64,
     )
     success_counts = np.zeros_like(mean_suppression_weeks, dtype=np.int32)
 
-    master_rng = np.random.default_rng(SEED)
+    master_rng = np.random.default_rng(seed)
 
-    for i, release_ratio in enumerate(RELEASE_RATIOS):
-        for j, drive_rate in enumerate(DRIVE_CONVERSION_RATES):
-            replicate_seeds = master_rng.integers(0, 2**32 - 1, size=N_REPEATS, dtype=np.uint32)
+    for i, release_ratio in enumerate(release_ratios):
+        for j, drive_rate in enumerate(conversion_rates):
+            replicate_seeds = master_rng.integers(0, 2**32 - 1, size=repeats, dtype=np.uint32)
             suppression_weeks: list[float] = []
 
             for seed in replicate_seeds:
@@ -210,30 +243,47 @@ def run_parameter_scan() -> tuple[np.ndarray, np.ndarray]:
 
             print(
                 f"drive={drive_rate:.2f}, release_ratio={release_ratio:.2f}, "
-                f"suppressed={success_counts[i, j]}/{N_REPEATS}, "
+                f"suppressed={success_counts[i, j]}/{repeats}, "
                 f"mean_week={mean_suppression_weeks[i, j]}"
             )
 
     return mean_suppression_weeks, success_counts
 
 
-def run_fitness_parameter_scan() -> tuple[np.ndarray, np.ndarray]:
-    """Run the fitness vs drop-ratio grid at fixed conversion rate."""
+def run_fitness_parameter_scan(
+    seed: int,
+    repeats: int,
+    fitness_values: np.ndarray = FITNESS_VALUES,
+    release_ratios: np.ndarray = RELEASE_RATIOS_FITNESS_SCAN,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run the fitness vs drop-ratio grid at fixed conversion rate.
+
+    Args:
+        seed: Master seed for this grid; it is drawn independently from the
+            conversion scan so shrinking one grid does not shift the other.
+        repeats: Replicates per grid cell.
+        fitness_values: X-axis homozygote fitness values.
+        release_ratios: Y-axis release ratios.
+
+    Returns:
+        ``(mean_suppression_weeks, success_counts)`` matrices shaped
+        ``(len(release_ratios), len(fitness_values))``.
+    """
     mean_suppression_weeks = np.full(
-        (len(RELEASE_RATIOS_FITNESS_SCAN), len(FITNESS_VALUES)),
+        (len(release_ratios), len(fitness_values)),
         np.nan,
         dtype=np.float64,
     )
     success_counts = np.zeros_like(mean_suppression_weeks, dtype=np.int32)
 
-    master_rng = np.random.default_rng(SEED)
+    master_rng = np.random.default_rng(seed)
 
-    for i, release_ratio in enumerate(RELEASE_RATIOS_FITNESS_SCAN):
-        for j, fitness_value in enumerate(FITNESS_VALUES):
+    for i, release_ratio in enumerate(release_ratios):
+        for j, fitness_value in enumerate(fitness_values):
             replicate_seeds = master_rng.integers(
                 0,
                 2**32 - 1,
-                size=N_REPEATS,
+                size=repeats,
                 dtype=np.uint32,
             )
             suppression_weeks: list[float] = []
@@ -255,7 +305,7 @@ def run_fitness_parameter_scan() -> tuple[np.ndarray, np.ndarray]:
             print(
                 f"conv={FIXED_CONVERSION_RATE_FOR_FITNESS_SCAN:.2f}, "
                 f"fitness={fitness_value:.3f}, release_ratio={release_ratio:.2f}, "
-                f"suppressed={success_counts[i, j]}/{N_REPEATS}, "
+                f"suppressed={success_counts[i, j]}/{repeats}, "
                 f"mean_week={mean_suppression_weeks[i, j]}"
             )
 
@@ -327,85 +377,281 @@ def save_shared_colorbar(norm: Normalize) -> None:
     print(f"Colorbar saved to: {output_cbar_png}")
 
 
-def save_numeric_outputs(mean_suppression_weeks: np.ndarray, success_counts: np.ndarray) -> None:
-    """Save numeric matrices for downstream analysis."""
-    output_dir = Path(__file__).parent
+def save_numeric_outputs(
+    mean_suppression_weeks: np.ndarray,
+    success_counts: np.ndarray,
+    *,
+    suffix: str = "",
+    header: str = "",
+) -> list[Path]:
+    """Save numeric matrices for downstream analysis.
 
-    np.savetxt(
-        output_dir / "drive_ridl_remake_batch_mean_weeks.csv",
-        mean_suppression_weeks,
-        delimiter=",",
-        fmt="%.6f",
-    )
-    np.savetxt(
-        output_dir / "drive_ridl_remake_batch_success_counts.csv",
-        success_counts,
-        delimiter=",",
-        fmt="%d",
-    )
+    The provenance header travels with the data, so a CSV recovered without its
+    manifest still records the seed that produced it (``np.loadtxt`` skips
+    ``#`` comment lines).
+
+    Args:
+        mean_suppression_weeks: Mean suppression week per cell.
+        success_counts: Suppressed-replicate count per cell.
+        suffix: Filename suffix; ``"_smoke"`` keeps a quick run from
+            overwriting the paper grids.
+        header: Provenance line written above the matrix.
+
+    Returns:
+        The two written paths, for manifest digesting.
+    """
+    output_dir = Path(__file__).parent
+    mean_path = output_dir / f"drive_ridl_remake_batch_mean_weeks{suffix}.csv"
+    counts_path = output_dir / f"drive_ridl_remake_batch_success_counts{suffix}.csv"
+
+    np.savetxt(mean_path, mean_suppression_weeks, delimiter=",", fmt="%.6f", header=header)
+    np.savetxt(counts_path, success_counts, delimiter=",", fmt="%d", header=header)
+    return [mean_path, counts_path]
 
 
 def save_fitness_numeric_outputs(
     mean_suppression_weeks: np.ndarray,
     success_counts: np.ndarray,
-) -> None:
-    """Save numeric matrices for fitness scan outputs."""
+    *,
+    suffix: str = "",
+    header: str = "",
+) -> list[Path]:
+    """Save numeric matrices for fitness scan outputs (see ``save_numeric_outputs``)."""
     output_dir = Path(__file__).parent
+    mean_path = output_dir / f"drive_ridl_remake_fitness_mean_weeks{suffix}.csv"
+    counts_path = output_dir / f"drive_ridl_remake_fitness_success_counts{suffix}.csv"
 
-    np.savetxt(
-        output_dir / "drive_ridl_remake_fitness_mean_weeks.csv",
-        mean_suppression_weeks,
-        delimiter=",",
-        fmt="%.6f",
+    np.savetxt(mean_path, mean_suppression_weeks, delimiter=",", fmt="%.6f", header=header)
+    np.savetxt(counts_path, success_counts, delimiter=",", fmt="%d", header=header)
+    return [mean_path, counts_path]
+
+
+def resolve_seed(seed: int | None) -> int:
+    """Resolve the master seed, drawing and recording entropy when unset.
+
+    ``None`` keeps the demo's fresh-entropy default, but the drawn value is
+    returned so the manifest can record it: re-running with ``--seed <value>``
+    reproduces the grids exactly.
+
+    Args:
+        seed: Explicit seed from the CLI/environment, or ``None``.
+
+    Returns:
+        A concrete 64-bit master seed.
+    """
+    if seed is not None:
+        return int(seed)
+    return int.from_bytes(os.urandom(8), "little")
+
+
+def check_outputs(
+    mean_suppression_weeks: np.ndarray,
+    success_counts: np.ndarray,
+    *,
+    repeats: int,
+    label: str,
+) -> None:
+    """Assert the scan outputs satisfy their contract before anything is written.
+
+    A demo that only prints numbers cannot be regressed, so the cheap
+    invariants the paper grids must respect are checked here: a success count
+    lies in ``[0, repeats]``, a suppressed cell has a finite mean week inside
+    the simulated window, and an unsuppressed cell is NaN.
+
+    Args:
+        mean_suppression_weeks: Mean suppression week per cell.
+        success_counts: Suppressed-replicate count per cell.
+        repeats: Replicates per grid cell.
+        label: Grid name used in the assertion messages.
+
+    Raises:
+        AssertionError: If any cell violates the contract.
+    """
+    assert mean_suppression_weeks.shape == success_counts.shape, (
+        f"{label}: shape mismatch {mean_suppression_weeks.shape} "
+        f"vs {success_counts.shape}"
     )
-    np.savetxt(
-        output_dir / "drive_ridl_remake_fitness_success_counts.csv",
-        success_counts,
-        delimiter=",",
-        fmt="%d",
+    assert np.all((success_counts >= 0) & (success_counts <= repeats)), (
+        f"{label}: success counts outside [0, {repeats}]"
     )
+    suppressed = success_counts > 0
+    assert np.all(np.isnan(mean_suppression_weeks[~suppressed])), (
+        f"{label}: an unsuppressed cell carries a mean week"
+    )
+    finite = mean_suppression_weeks[suppressed]
+    assert np.all(np.isfinite(finite)), f"{label}: a suppressed cell has no mean"
+    assert np.all((finite >= 0.0) & (finite <= SIM_WEEKS)), (
+        f"{label}: mean week outside [0, {SIM_WEEKS}]"
+    )
+    print(f"[check] {label}: {success_counts.shape} cells satisfy the output contract")
 
 
-def main() -> None:
-    """Run parameter scan and generate outputs."""
+def write_manifest(
+    *,
+    seed: int,
+    repeats: int,
+    smoke: bool,
+    outputs: Sequence[Path],
+) -> Path:
+    """Record the seed, grid sizes and output digests next to the results.
+
+    Args:
+        seed: Master seed the run actually used.
+        repeats: Replicates per grid cell.
+        smoke: Whether the reduced grid was used.
+        outputs: Written CSV paths to digest.
+
+    Returns:
+        The manifest path.
+    """
+    manifest = {
+        "seed": seed,
+        "repeats": repeats,
+        "smoke": smoke,
+        "sim_weeks": SIM_WEEKS,
+        "n_repeats": repeats,
+        "outputs": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in outputs
+            if path.exists()
+        },
+    }
+    path = Path(__file__).with_name(MANIFEST_NAME)
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Manifest saved to: {path}")
+    return path
+
+
+def _env_seed() -> int | None:
+    """Read ``NATAL_RIDL_SEED``; an unset or empty value means "fresh entropy"."""
+    raw = os.environ.get("NATAL_RIDL_SEED")
+    return int(raw) if raw else None
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse the demo's reproducibility switches."""
+    parser = argparse.ArgumentParser(description="Drive-RIDL remake parameter scans.")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="master seed (default: $NATAL_RIDL_SEED, else fresh entropy)",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        help=f"replicates per grid cell (default: {N_REPEATS}, or {SMOKE_REPEATS} with --smoke)",
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="run a 3x3 grid subset for a quick end-to-end check",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="assert the output contract before writing any file",
+    )
+    parser.add_argument(
+        "--no-plots",
+        action="store_true",
+        help="skip heatmap rendering (useful headless or in CI)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the scans, write the manifest, and optionally render the heatmaps.
+
+    Args:
+        argv: CLI arguments (defaults to ``sys.argv[1:]``).
+
+    Returns:
+        Process exit code (0 on success).
+    """
+    args = parse_args(argv)
+    seed = resolve_seed(args.seed if args.seed is not None else _env_seed())
+    repeats = args.repeats if args.repeats is not None else (SMOKE_REPEATS if args.smoke else N_REPEATS)
+    assert repeats >= 1, f"repeats must be positive, got {repeats}"
+
+    # A smoke run uses the leading 3x3 corner of each grid, so its outputs are
+    # not comparable with the paper grids and get their own filenames.
+    span = 3 if args.smoke else None
+    conversion_rates = DRIVE_CONVERSION_RATES[:span]
+    release_ratios = RELEASE_RATIOS[:span]
+    fitness_values = FITNESS_VALUES[:span]
+    fitness_release_ratios = RELEASE_RATIOS_FITNESS_SCAN[:span]
+    suffix = "_smoke" if args.smoke else ""
+
+    print(f"master seed: {seed} (re-run with --seed {seed} to reproduce)")
+
     start_time_conversion = perf_counter()
-    mean_suppression_weeks, success_counts = run_parameter_scan()
+    mean_suppression_weeks, success_counts = run_parameter_scan(
+        seed, repeats, conversion_rates, release_ratios
+    )
     elapsed_seconds_conversion = perf_counter() - start_time_conversion
 
+    # The second grid draws its own stream so shrinking the first grid cannot
+    # shift the second grid's replicate seeds.
     start_time_fitness = perf_counter()
-    fitness_mean_suppression_weeks, fitness_success_counts = run_fitness_parameter_scan()
+    fitness_mean_suppression_weeks, fitness_success_counts = run_fitness_parameter_scan(
+        seed + 1, repeats, fitness_values, fitness_release_ratios
+    )
     elapsed_seconds_fitness = perf_counter() - start_time_fitness
 
-    shared_norm = Normalize(vmin=HEATMAP_VMIN, vmax=HEATMAP_VMAX, clip=True)
+    if args.check:
+        check_outputs(
+            mean_suppression_weeks, success_counts, repeats=repeats, label="conversion"
+        )
+        check_outputs(
+            fitness_mean_suppression_weeks,
+            fitness_success_counts,
+            repeats=repeats,
+            label="fitness",
+        )
 
-    save_numeric_outputs(mean_suppression_weeks, success_counts)
-    save_fitness_numeric_outputs(fitness_mean_suppression_weeks, fitness_success_counts)
+    provenance = (
+        f"seed={seed} repeats={repeats} smoke={args.smoke} sim_weeks={SIM_WEEKS}"
+    )
+    outputs = save_numeric_outputs(
+        mean_suppression_weeks, success_counts, suffix=suffix, header=provenance
+    )
+    outputs += save_fitness_numeric_outputs(
+        fitness_mean_suppression_weeks, fitness_success_counts, suffix=suffix, header=provenance
+    )
+    write_manifest(seed=seed, repeats=repeats, smoke=args.smoke, outputs=outputs)
 
-    plot_heatmap(
-        mean_suppression_weeks,
-        x_values=DRIVE_CONVERSION_RATES,
-        y_values=RELEASE_RATIOS,
-        x_label="Drive efficiency",
-        y_label="Drop ratio",
-        output_name="drive_ridl_remake_batch_heatmap.png",
-        norm=shared_norm,
-    )
-    plot_heatmap(
-        fitness_mean_suppression_weeks,
-        x_values=FITNESS_VALUES,
-        y_values=RELEASE_RATIOS_FITNESS_SCAN,
-        x_label="Drive fitness",
-        y_label="Drop ratio",
-        output_name="drive_ridl_remake_fitness_heatmap.png",
-        norm=shared_norm,
-    )
-    save_shared_colorbar(shared_norm)
+    if args.no_plots:
+        print("Skipping heatmaps (--no-plots)")
+    else:
+        shared_norm = Normalize(vmin=HEATMAP_VMIN, vmax=HEATMAP_VMAX, clip=True)
+        plot_heatmap(
+            mean_suppression_weeks,
+            x_values=conversion_rates,
+            y_values=release_ratios,
+            x_label="Drive efficiency",
+            y_label="Drop ratio",
+            output_name=f"drive_ridl_remake_batch_heatmap{suffix}.png",
+            norm=shared_norm,
+        )
+        plot_heatmap(
+            fitness_mean_suppression_weeks,
+            x_values=fitness_values,
+            y_values=fitness_release_ratios,
+            x_label="Drive fitness",
+            y_label="Drop ratio",
+            output_name=f"drive_ridl_remake_fitness_heatmap{suffix}.png",
+            norm=shared_norm,
+        )
+        save_shared_colorbar(shared_norm)
 
     print(
         f"Total scan time: {elapsed_seconds_conversion:.2f} s (conversion), "
         f"{elapsed_seconds_fitness:.2f} s (fitness)"
     )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
