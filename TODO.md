@@ -245,6 +245,44 @@ extreme_speed_mode=3 (WF)    : female=500.0 male=500.0 total=1000.0
 
 修复前 WF 路径为雌雄各 1000、总数 2000；现在两条路径一致。
 
+## CR-14 📋 Observation 的计数与规则统一携带年龄轴（讨论中，2026-09-14）
+
+**背景**：B8 修完后，`apply_rule` 仍接受三维规则 `(n_groups, n_sexes, n_ztypes)`，
+而一个被 OR 掉年龄的选择器掩码与"设计上不分年龄的规则"逐字节相同，函数无法分辨，
+外部手搓的坏输入仍会静默多算（只能靠 docstring 警告）。
+
+**已核验的事实**：
+- `DiscretePopulationState.individual_count`（`frontend/data/state.py:174`）形状已经是
+  `(n_sexes, n_ages, n_ztypes)`；离散世代模型确实有 age 0/1 两个阶段，只是 age 1
+  繁殖后在同一 tick 内死亡、两代不重叠。**所以"没有年龄轴"并不是离散模型的属性。**
+- 真正"没有年龄轴"的输入是历史便捷写法：`apply_rule` 文档化的二维计数
+  `(n_sexes, n_ztypes)`，以及 `Observation.apply`（`frontend/output/observation.py:203-206`）
+  对二维输入的边界提升——它在内部升为 `(1 deme, sexes, 1 age, ztypes)` 并强制
+  `collapse=True`（`:222-223`）。也就是说"无年龄"在这条路径上已经被当作"年龄轴长度为 1"
+  处理了，只是规则一侧还允许丢掉这一维。
+- 仓库内**没有任何产品代码调用 `apply_rule`**（只有 `natal/__init__.py`、
+  `frontend/output/__init__.py`、stub 的导出，以及若干测试）；三维规则只可能来自外部
+  调用方或直接调用编译器。
+
+**拟议方向（用户 2026-09-14 提出，待定）**：统一离散世代与年龄结构传入 observation 的计数，
+让规则/掩码**必然携带年龄轴**；缺失时归一化为长度为 1 的退化轴。
+- `apply_rule` 只接受四维规则；三维规则报错，并提示补一个长度为 1 的 age 轴。
+- 计数可继续接受 `(S, Z)`，在边界升成 `(S, 1, Z)`（`Observation.apply` 已经如此）。
+- 收益：彻底消除"形状相同、语义不同"的歧义，B8 那一类静默错误不再可能，
+  `collapse` 在长度为 1 的轴上退化为无操作，语义自然统一。
+- 代价：公共 API 语义变更（`apply_rule` 的三维规则从"支持"变"报错"），需要同步
+  docstring、stub、`tests/test_observation_phase2.py`（`test_apply_rule_2d_input_3d_mask`、
+  `test_apply_rule_3d_input_3d_mask`、`test_apply_rule_3d_input_unsupported_mask` 等）、
+  `docs/{en,zh}/observation_impl.md` 与 CHANGELOG；属产品代码改动，需独立审查。
+
+**待决问题**：
+1. 是否保留"不分年龄的规则"这一能力：直接移除（调用方自己 `np.broadcast_to` 补轴），
+   还是保留但要求显式声明（如 `apply_rule(..., age_free=True)`）？
+2. 二维计数 `(S, Z)` 是继续在边界升为 `(S, 1, Z)`（对持有聚合矩阵的用户友好），
+   还是一并要求显式三维？
+3. 若最终统一，`apply_rule` 与 `Observation.apply` 的规则形状契约应写进哪份文档作为权威
+   （候选：`docs/{en,zh}/observation_impl.md` 的 "rule 形状" 段落）。
+
 > [!NOTE] 历史标注
 > 与 numba 相关的 backlog 条目（`.numba_cache`、`NUMBA_ENABLED`、
 > `enable_numba()/disable_numba()`、`@pytest.mark.numba_off/on` 等）在 ⑥（numba
