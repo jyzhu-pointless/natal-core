@@ -18,7 +18,7 @@ seed is drawn from OS entropy and *recorded in the run manifest*
 (``drive_ridl_remake_batch_manifest.json``) so the run can be replayed later.
 ``--smoke`` shrinks both grids and the replicate count for a quick end-to-end
 check, and ``--check`` asserts the output contract before any file is written.
-The full paper grids (317 simulated weeks x 20 replicates x 672 cells) are a
+The full paper grids (317 simulated weeks x 20 replicates x 882 cells) are a
 deliberate long run: keep them out of CI.
 
 Reference
@@ -713,7 +713,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="assert the output contract before writing any file",
+        help=(
+            "assert the output contract before writing any file and compare the "
+            f"run against {REFERENCE_NAME} (uses seed {REFERENCE_SEED} unless "
+            "--seed/NATAL_RIDL_SEED asks for another draw, which skips the "
+            "comparison)"
+        ),
     )
     parser.add_argument(
         "--no-plots",
@@ -745,9 +750,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.write_reference and args.smoke:
         raise SystemExit("--write-reference needs the full grid, not --smoke")
     requested_seed = args.seed if args.seed is not None else _env_seed()
-    if requested_seed is None and args.write_reference:
+    if requested_seed is None and (args.write_reference or args.check):
+        # Both modes only mean something against the frozen reference, so an
+        # unspecified seed resolves to the reference's own seed.  An explicit
+        # --seed or NATAL_RIDL_SEED still wins and makes --check skip the
+        # comparison, because another seed is a different draw.
         requested_seed = REFERENCE_SEED
     seed = resolve_seed(requested_seed)
+    if args.write_reference and seed != REFERENCE_SEED:
+        raise SystemExit(
+            f"--write-reference freezes the canonical seed {REFERENCE_SEED}, "
+            f"but this run uses seed {seed}. Drop --seed/NATAL_RIDL_SEED or "
+            "update REFERENCE_SEED first."
+        )
     repeats = args.repeats if args.repeats is not None else (SMOKE_REPEATS if args.smoke else N_REPEATS)
     assert repeats >= 1, f"repeats must be positive, got {repeats}"
 
