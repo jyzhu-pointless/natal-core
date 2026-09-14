@@ -44,10 +44,12 @@ from natal.frontend.model.definition import copy_declaration_value
 from natal.frontend.population.base import BasePopulation, ParamChange
 from natal.frontend.spatial.migration import (
     MigrationCSR,
+    RateColumnDeclaration,
     RateDeclaration,
     csr_dense_row,
     fold_migration_csr,
     normalize_migration_rate,
+    normalize_migration_rate_column,
     resolve_migration_mode,
 )
 from natal.frontend.spatial.topology import (
@@ -82,7 +84,7 @@ def _coerce_adjacency_dense(
     adjacency: object,
     n_demes: int,
 ) -> NDArray[np.float64]:
-    """Coerce dense or sparse-like adjacency input to a dense float64 matrix.
+    """Coerce dense or sparse-like adjacency input to a row-stochastic matrix.
 
     Supported forms:
 
@@ -90,12 +92,23 @@ def _coerce_adjacency_dense(
     - CSR tuple ``(indptr, indices, data)``.
     - Objects exposing ``toarray()`` (for example scipy sparse matrices).
 
+    Contract: adjacency rows are **relative outbound weights**, not
+    probabilities.  Every non-empty row is normalized here to sum to 1, so
+    a row-stochastic input, a sub-stochastic input (row sum < 1) and a
+    super-stochastic input (row sum > 1) all describe the same outbound
+    distribution and migration conserves mass.  "Wants less migration" is
+    expressed through ``migration_rate``, never by shrinking a row.  An
+    all-zero row (an isolated deme with no outbound edges) is left
+    untouched: the engine's empty-row branch keeps that deme's mass at
+    the source.
+
     Args:
         adjacency: User-provided adjacency input.
         n_demes: Number of demes expected on each matrix axis.
 
     Returns:
-        A dense ``float64`` adjacency matrix.
+        A dense ``float64`` adjacency matrix whose non-empty rows sum to
+        one.
 
     Raises:
         TypeError: If input type is unsupported.
@@ -172,7 +185,13 @@ def _coerce_adjacency_dense(
             f"adjacency shape mismatch: expected ({n_demes}, {n_demes}), got {dense.shape}"
         )
 
-    return dense
+    # Relative outbound weights -> probability vectors, per non-empty row.
+    # The divisor is 1.0 for an all-zero (isolated) row, so it is preserved
+    # verbatim; a fresh array is returned so caller-owned inputs and scipy
+    # buffers are never written through.
+    row_sums = dense.sum(axis=1)
+    divisors = np.where(row_sums > 0.0, row_sums, 1.0)
+    return dense / divisors[:, None]
 
 
 if TYPE_CHECKING:
@@ -711,7 +730,7 @@ class SpatialPopulation:
         kernel_bank: Optional[Sequence[NDArray[np.float64]]] = None,
         deme_kernel_ids: Optional[NDArray[np.int64]] = None,
         kernel_include_center: bool = False,
-        migration_rate: RateDeclaration = 0.0,
+        migration_rate: RateColumnDeclaration = 0.0,
         adjust_migration_on_edge: bool = False,
         name: str = "SpatialPopulation",
     ) -> None:
@@ -743,13 +762,19 @@ class SpatialPopulation:
                 config); juvenile ages default to 0.  ``(n_ages,)`` arrays
                 are used as-is; a per-sex mapping such as
                 ``{"F": 0.2, "M": 0.05}`` applies the scalar/vector rules
-                per sex.  The normalized column lands on
-                ``pop.params.migration_rate`` with shape
+                per sex.  A full ``(n_demes, n_sexes, n_ages)`` column is
+                used as-is and an ``(n_demes, n_ages)`` table is broadcast
+                across sexes, giving each deme its own rate.  The normalized
+                column lands on ``pop.params.migration_rate`` with shape
                 ``(n_demes, n_sexes, n_ages)``.
-            adjust_migration_on_edge: Whether to adjust migration rates on
-                boundaries. When False (default), boundary demes migrate less
-                due to fewer valid neighbors. When True, all demes have the
-                same total migration rate regardless of position.
+            adjust_migration_on_edge: Legacy bit-parity flag.  It is a
+                numeric no-op: the fold already row-normalizes every
+                valid-adjacency row to a total weight of 1, so the
+                destination distribution is unchanged either way.  Boundary
+                demes simply have fewer neighbors and therefore send a
+                larger share to each one, while their total outbound quota
+                matches an interior deme's.  Use ``migration_rate`` for
+                per-deme control of that quota.
             name: Human-readable container name.
 
         Raises:
@@ -892,8 +917,11 @@ class SpatialPopulation:
         # about migration survives on the object besides the CSR and the
         # contract pair.
         n_sexes, n_ages, adult_start_age = self._rate_axes(n_demes)
-        rate_2d = normalize_migration_rate(
-            migration_rate, n_sexes, n_ages, adult_start_age
+        # Freeze the rate column first: the sugar (scalar/per-age/per-sex) is
+        # resolved to (S, A) and tiled over demes, while an explicit
+        # (n_demes, ...) column keeps each deme's own rates.
+        rate3d = normalize_migration_rate_column(
+            migration_rate, n_demes, n_sexes, n_ages, adult_start_age
         )
         migration_csr = fold_migration_csr(
             n_demes=n_demes,
@@ -907,9 +935,6 @@ class SpatialPopulation:
             mode=migration_mode,
         )
         self._migration_csr = migration_csr
-        # Homogeneous build-time default: every deme starts from the same
-        # (S, A) row, tiled to the (n_demes, S, A) contract column.
-        rate3d = np.tile(rate_2d, (n_demes, 1, 1))
         # Freeze the contract pair: the Blueprint carries the CSR the Rust
         # session consumes at handoff, the Params carry the rate column.
         self._blueprint, self._params = materialize(

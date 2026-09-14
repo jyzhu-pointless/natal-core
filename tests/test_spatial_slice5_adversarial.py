@@ -355,12 +355,15 @@ class TestAdjacencyFoldEquivalence:
             atol=1e-9,
         )
 
-    def test_raw_weights_keep_residual_at_source(self) -> None:
-        """A non-row-stochastic adjacency moves only ``rate * row_sum`` of mass.
+    def test_raw_weights_drop_undelivered_share(self) -> None:
+        """A raw non-row-stochastic adjacency loses the undelivered share.
 
-        The deterministic adjacency order computes ``stay = value -
-        outbound`` from the full outbound, so a row summing to 0.3 leaves
-        the undelivered share at the source instead of renormalizing.
+        The deterministic adjacency order subtracts the full outbound
+        ``value * rate`` from the source and delivers only
+        ``outbound * row_sum``, so a row summing to 0.3 moves 30% of the
+        outbound mass and drops the rest.  Only hand-built CSRs reach this
+        path: the builder row-normalizes adjacency before folding, so
+        ``row_sum`` is 1 there and the mass is conserved.
         """
         adjacency = np.array([[0.0, 0.3], [0.0, 0.0]])
         csr = _fold_adjacency(adjacency)

@@ -828,12 +828,17 @@ class TestMigrationBatchKernel:
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
-        # strategy="adjacency" resolves to adjacency-mode CSR: rows keep
-        # the raw topology adjacency weights (moore grid corner: weight
-        # 1.0 per neighbor, three neighbors per deme).
+        # strategy="adjacency" resolves to adjacency-mode CSR: rows are
+        # row-normalized relative outbound weights (moore grid corner: three
+        # neighbors per deme, 1/3 each, row sum 1).
         assert spatial.migration_csr.stay_after_send is False
         assert int(spatial.migration_csr.indptr[-1]) == 12
-        assert np.allclose(spatial.migration_csr.weights, 1.0)
+        assert np.allclose(spatial.migration_csr.weights, 1.0 / 3.0)
+        rows = spatial.migration_csr.indptr
+        assert all(
+            np.isclose(spatial.migration_csr.weights[rows[d] : rows[d + 1]].sum(), 1.0)
+            for d in range(4)
+        )
 
     def test_kernel_strategy_migration(self) -> None:
         """Explicit kernel migration strategy."""

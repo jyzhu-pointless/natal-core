@@ -33,6 +33,7 @@ __all__ = [
     "csr_dense_row",
     "fold_migration_csr",
     "normalize_migration_rate",
+    "normalize_migration_rate_column",
     "resolve_migration_mode",
 ]
 
@@ -43,6 +44,11 @@ MigrationStrategy = Literal["auto", "adjacency", "kernel", "hybrid"]
 RateDeclaration: TypeAlias = float | int | NDArray[np.floating] | Sequence[float] | dict[
     str, float | Sequence[float] | NDArray[np.floating]
 ]
+
+# A build-time declaration additionally accepts a whole per-deme column:
+# (n_demes, n_ages) broadcasts each deme's age vector across sexes, and
+# (n_demes, n_sexes, n_ages) is the canonical contract shape.
+RateColumnDeclaration: TypeAlias = RateDeclaration | NDArray[np.floating]
 
 
 class MigrationCSR(NamedTuple):
@@ -212,6 +218,77 @@ def _age_vector(
     )
 
 
+def normalize_migration_rate_column(
+    rate: RateColumnDeclaration,
+    n_demes: int,
+    n_sexes: int,
+    n_ages: int,
+    adult_start_age: int,
+) -> NDArray[np.float64]:
+    """Normalize a build-time declaration to a ``(D, S, A)`` rate column.
+
+    This is the build-time superset of :func:`normalize_migration_rate`.
+    Every declaration that function accepts (scalar, ``(n_ages,)`` vector,
+    ``(S, A)`` table, per-sex mapping) is normalized to one ``(S, A)``
+    table and tiled over demes.  Two per-deme forms are additionally
+    accepted, matching :meth:`SpatialPopulation.params.tensor_write`:
+
+    - ``(n_demes, n_ages)``: each deme's age vector, broadcast across
+      both sexes.
+    - ``(n_demes, n_sexes, n_ages)``: the canonical contract column, used
+      as-is.
+
+    A 2-D declaration whose shape is exactly ``(n_sexes, n_ages)`` keeps
+    the shared per-sex meaning (tiled over demes) rather than the
+    per-deme age-vector meaning; the two coincide only when
+    ``n_demes == n_sexes``.
+
+    Args:
+        rate: Build-time migration declaration.
+        n_demes: Number of demes (column height).
+        n_sexes: Number of sexes of the rate axis.
+        n_ages: Number of age classes of the rate axis.
+        adult_start_age: First adult age class for the scalar sugar.
+
+    Returns:
+        A fresh ``(n_demes, n_sexes, n_ages)`` float64 array.
+
+    Raises:
+        ValueError: If an array shape does not match, or a mapping key
+            is not a recognized sex label.
+    """
+    if isinstance(rate, dict):
+        # A per-sex mapping is one (S, A) table shared by every deme.
+        return np.tile(
+            normalize_migration_rate(rate, n_sexes, n_ages, adult_start_age),
+            (n_demes, 1, 1),
+        )
+
+    arr = np.asarray(rate, dtype=np.float64)
+    if arr.ndim == 3:
+        if arr.shape != (n_demes, n_sexes, n_ages):
+            raise ValueError(
+                f"migration_rate shape {arr.shape} does not match "
+                f"(n_demes={n_demes}, n_sexes={n_sexes}, n_ages={n_ages})"
+            )
+        # Copy so the returned column never aliases a caller-owned array.
+        return arr.astype(np.float64, copy=True)
+    if arr.ndim == 2 and arr.shape != (n_sexes, n_ages):
+        if arr.shape == (n_demes, n_ages):
+            # Per-deme age vector, tiled across the sex axis.
+            return np.repeat(arr[:, np.newaxis, :], n_sexes, axis=1)
+        raise ValueError(
+            f"migration_rate shape {arr.shape} does not match "
+            f"(n_demes={n_demes}, n_ages={n_ages}) or "
+            f"(n_sexes={n_sexes}, n_ages={n_ages})"
+        )
+    # Scalar / (n_ages,) / (S, A): one table for every deme.
+    return np.tile(
+        normalize_migration_rate(rate, n_sexes, n_ages, adult_start_age),
+        (n_demes, 1, 1),
+    )
+
+
 def resolve_migration_mode(
     strategy: MigrationStrategy,
     migration_kernel: NDArray[np.float64] | None,
@@ -284,7 +361,11 @@ def fold_migration_csr(
     offsets are visited in kernel row-major order, invalid (out-of-grid)
     offsets are dropped (or wrapped), and each emitted entry is scaled
     by the reciprocal of the kernel total — or of the valid-row total
-    when ``adjust_on_edge`` is set.  Entries are kept unmerged in visit
+    when ``adjust_on_edge`` is set.  The emitted row is then divided by
+    its own sum (the runtime distributor did that historically), which
+    cancels whichever denominator was chosen; ``adjust_on_edge`` is
+    therefore retained as a numeric no-op, see
+    :func:`_kernel_row_entries`.  Entries are kept unmerged in visit
     order because a wrapping kernel narrower than the grid can emit the
     same destination twice, and deterministic migration must add the two
     contributions as separate multiplications to stay bit-identical.
@@ -298,9 +379,10 @@ def fold_migration_csr(
         deme_kernel_ids: Per-deme kernel ids into the bank, when used.
         kernel_include_center: Whether the kernel center is an outbound
             target of its own source deme.
-        adjust_on_edge: Whether boundary demes renormalize to the full
-            migration rate (row-total scaling) instead of keeping mass
-            at the source (kernel-total scaling).
+        adjust_on_edge: Denominator choice (kernel total, or the
+            valid-row total). Both cancel in the final row
+            renormalization, so this is a numeric no-op retained for
+            bit-parity; see :func:`_kernel_row_entries`.
         mode: Resolved backend mode from :func:`resolve_migration_mode`.
 
     Returns:
@@ -413,7 +495,9 @@ def _kernel_row_entries(
         source_idx: Flattened source deme index.
         topology: Grid topology providing boundary handling.
         include_center: Whether the kernel center is emitted.
-        adjust_on_edge: Row-total scaling instead of kernel-total.
+        adjust_on_edge: Row-total scaling instead of kernel-total. The
+            final renormalization cancels it, so the emitted distribution
+            is identical for both values.
 
     Returns:
         ``(destinations, weights)`` parallel lists.
@@ -464,9 +548,9 @@ def _kernel_row_entries(
     if total <= 0.0:
         return [], []
 
-    # Denominator by mode: the full kernel total keeps boundary demes below
-    # the full rate, while the valid-row total gives every deme the full rate.
-    # Reciprocal multiply preserves the legacy float-operation order.
+    # Denominator by mode: legacy bit-parity only. The historical runtime
+    # distributor divided the emitted row by its own sum, so both choices
+    # below cancel in that division and yield the same distribution.
     if adjust_on_edge:
         inv = 1.0 / total
     else:

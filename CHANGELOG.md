@@ -24,6 +24,17 @@
   that relied on the implicit 5.0 weight change dynamics; pass
   `competition_strength=5.0` to keep them.
 
+### Added
+
+- **Build-time `migration_rate` supports per-deme values**. A
+  `batch_setting([...])` gives one rate declaration per deme (each element
+  follows the scalar / age-vector / `(S, A)` / per-sex-mapping sugar), and
+  `SpatialPopulationBuilder.migration()` also accepts the whole per-deme column
+  directly: `(n_demes, S, A)`, or `(n_demes, n_ages)` broadcast across sexes.
+  Both land on `pop.params.migration_rate`, matching the existing runtime
+  `params.tensor_write("migration_rate", ...)` channel. Boundary demes are now
+  controlled through this rate, not through their adjacency rows.
+
 ### Fixed
 
 - **A missing required gamete label is now a build error instead of a silent
@@ -53,6 +64,20 @@
   population purely from hooks (release/inundation runs); set
   `growth_mode="no_competition"` there if the injected individuals must
   survive.
+- **Adjacency rows are now normalized to relative weights, so migration
+  conserves mass**. The builder row-normalizes every non-empty adjacency row to
+  a probability vector before folding it into the migration CSR. Previously a
+  sub-stochastic row (sum < 1, e.g. 0.5) dropped the unrouted share every tick
+  while a super-stochastic row (sum > 1) created mass, and the default
+  topology-derived adjacency — `build_adjacency_matrix(topology)` without
+  `row_normalize` — hit exactly that path whenever `migration_rate > 0` was set
+  without an explicit adjacency (for example `SquareGrid(1, 3)` has row sums
+  `[1, 2, 1]`). All-zero rows (isolated demes) are left untouched and keep their
+  mass at the source. Sub-, row- and super-stochastic inputs now mean the same
+  outbound distribution; use `migration_rate` to migrate less. The old
+  "boundary demes migrate less because they have fewer neighbors" behavior is
+  gone — a boundary deme still sends its full quota, just to fewer neighbors, so
+  each one receives a larger share.
 
 ### Documentation
 
