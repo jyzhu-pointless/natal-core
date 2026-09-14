@@ -238,10 +238,12 @@ def normalize_migration_rate_column(
     - ``(n_demes, n_sexes, n_ages)``: the canonical contract column, used
       as-is.
 
-    A 2-D declaration whose shape is exactly ``(n_sexes, n_ages)`` keeps
-    the shared per-sex meaning (tiled over demes) rather than the
-    per-deme age-vector meaning; the two coincide only when
-    ``n_demes == n_sexes``.
+    Shape precedence: a 2-D declaration whose shape is exactly
+    ``(n_sexes, n_ages)`` keeps the shared per-sex meaning (tiled over
+    demes); only a different 2-D shape is read as the per-deme
+    ``(n_demes, n_ages)`` age vector.  When ``n_demes == n_sexes`` the two
+    shapes are indistinguishable, so pass the explicit 3-D column to mean
+    per-deme rates.
 
     Args:
         rate: Build-time migration declaration.

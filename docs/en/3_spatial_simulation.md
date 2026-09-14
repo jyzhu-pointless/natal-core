@@ -529,6 +529,8 @@ If a deme triggers a termination condition first (e.g., population extinction), 
 
 Every form lands on `pop.params.migration_rate` with shape `(n_demes, n_sexes, n_ages)` — the same column the runtime `params.tensor_write("migration_rate", ...)` channel writes.
 
+A 2-D declaration whose shape is exactly `(n_sexes, n_ages)` is read as the shared per-sex table; only another 2-D shape means per-deme age vectors. When `n_demes == n_sexes` those shapes are indistinguishable, so pass the explicit 3-D column for per-deme rates.
+
 ```python
 # Scalar — juveniles age < new_adult_age emigrate 0%, adults emigrate 10%
 spatial = SpatialPopulation(demes, migration_rate=0.1)

@@ -524,6 +524,8 @@ print(observed_history.values.shape)
 
 所有形式最终都落到 `pop.params.migration_rate`，形状为 `(n_demes, n_sexes, n_ages)`，与运行时 `params.tensor_write("migration_rate", ...)` 通道写入的是同一列。
 
+形状优先级：恰好为 `(n_sexes, n_ages)` 的二维输入按"所有 deme 共享的按性别表"解释；只有其他二维形状才表示 per-deme 的年龄向量。当 `n_demes == n_sexes` 时这两种形状无法区分，若要 per-deme 速率请显式传三维列。
+
 ```python
 # 标量 — age < new_adult_age 迁出 0%，成年迁出 10%（默认 new_adult_age=2）
 spatial = SpatialPopulation(demes, migration_rate=0.1)
