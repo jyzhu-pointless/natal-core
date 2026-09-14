@@ -30,6 +30,8 @@
 
 ## CR-0 📋 性染色体公开路径修复（修复边界已梳理，未实施）
 
+> **状态复核（2026-09-14）**：本条部分子因已随 `33236e7` 与 `370adf5`（D1）修掉——`builder/_base.py:607` 现在从 `species.get_sex_chromosome_groups()` 取标志并从 blueprint 转发掩码；`genetics/structures/_construction.py` 三个点改用 `get_sex_chromosome_groups()` 方法；`genetics/entities/genotype.py:399-411` 按性染色体组拼接而非缺一侧就跳过；`model/initial_state.py:144-157` 的 Genotype 键不再转字符串，`registry/index.py:318-333` 改为 O(1) 精确查找。**实施本条前需要先重新审计**，把仍成立的子项（例如 `patterns/elements/diploid.py:129-148` 仍在 `from_pair` 内部 `str(genotype)` 再解析）与已修项分开，避免再次按过期描述排期。
+
 **已核验的问题链**
 
 以下路径除注明外相对 src/natal/frontend/。
@@ -222,14 +224,26 @@
 - 后续核对确认名称格式混用：`contracts/blueprint.py:135` 的公开 `format_type_name()` 生成 `genotype:slab` / `haplotype:glab`，materialize 与部分 hook 目录沿用；`patterns/parser.py:50` 解析 `@lab`，`output/observation.py:920` 与 `spatial/population.py:1050` 的输出也使用 `@`。用户提出统一为 `@`，建议统一具体 ztype/gtype 名称生成，目录显式保留 `@default`；裸 genotype 选择器仍保留匹配任意 slab 的既有语义。
 - **用户已确认不兼容旧冒号标签格式：** 统一使用 @，不保留 genotype:slab / haplotype:glab 兼容解析。实施同步名称生成方、消费者、文档和锁定冒号格式的测试；不能简单全局替换冒号（无序模式 `::`、空间日志 `deme{i}:param` 各有独立含义）。即使格式统一，内部统计仍直接使用 registry 对象与索引，避免字符串反查。当前仅记录，未修改实现。
 
-## CR-13 📋 WF 融合路径性别分配未归一化（2026-09-13，已复现，修复方向已确认）
+## CR-13 ✅ DONE — WF 融合路径性别分配已归一化
 
-- 报告称 `rust/src/kernels/discrete_generation.rs:298,806` 的分阶段/WF 性别分配差异仅为风格漂移；实际核验不成立。分阶段在非单性别 mask 分支按 `f / (f + m)` 分配（零和回退 0.5），WF 则分别乘 f、m；age_structured.rs:392 后也使用归一化写法。
-- `frontend/model/assembly.py:225` 的 compatibility 来自雌、雄配子矩阵各自行和，并非一对相加为 1 的性别概率；`frontend/genetics/matrices.py:258` 后分别过滤和归一化配子行。实际 XY 案例两侧均为 1，female-only/male-only mask 均为 False，差异分支可以到达。
-- **主 agent 实际复现：** 复用 `tests/test_discrete_generation_sex_chromosome_mendelian.py::test_discrete_generation_xy_offspring_genotype_distribution_matches_mendelian`，1000 雌性与 1000 雄性亲本，每雌性 1 个卵，无竞争、适合度 1、确定性；仅通过 config._replace 将 extreme_speed_mode 从 0 切换为 3。分阶段后代雌雄各 500（原断言通过），WF 各 1000（原 500 断言失败），总数从预期 1000 变为 2000。脚本 `/tmp/review_wf_sex.py` 已运行，临时文件不保证长期存在。
-- 复现使用现有测试的内部构建入口，显式 has_sex_chromosomes=True，调用真实 Rust session 并 run(1)；没有手工伪造 compatibility 数组。当前公开 builder 的 has_sc 错误通常关闭此分支，因此不能宣称未经绕过该入口缺陷的公开 XY 构建已复现翻倍。修复入口标志时必须一并覆盖此问题。
-- **用户已确认修复方向：** 统一三条路径的性别分配概率定义，保留随机抽样方式各自的语义，保证分配前后总量守恒；不能将雌雄分别归一化的配子行和直接视为性别概率。与此同时，当前案例双侧 compatibility=1，表明通过能否产生配子推断性染色体性别掩码并不充分；真正 XX/XY、ZW/ZZ 的性别约束应按遗传结构定义，不能认为单纯归一化就修完性染色体问题。当前只记录，未实施。
-- `.venv/bin/python -m pytest -q tests/test_discrete_generation_sex_chromosome_mendelian.py tests/test_wright_fisher.py` → **7 passed**；现有覆盖没有阻止该差异。仅主 agent 调查与复现，未修改实现、未运行完整门禁或独立审查。
+**已于 `33236e7`（2026-09-13 `fix(genetics): unify conversion rules and harden
+baseline contracts`）修复，本条记录当时已过期。** 现在三条路径使用同一概率定义：
+
+- 分阶段离散：`rust/src/kernels/discrete_generation.rs:325-347`
+- WF 融合：`rust/src/kernels/discrete_generation.rs:898-913`
+- 年龄结构：`rust/src/kernels/age_structured.rs:432-440`
+
+三处都是 `f / (f + m)`（零和回退 0.5），雄性取余量，雌雄之和严格等于子代总量。
+
+**复现验证（2026-09-14 重跑）**：`tests/test_discrete_generation_sex_chromosome_mendelian.py`
+的 XY 模型，1000 雌 + 1000 雄、每雌 1 卵、无竞争、确定性，仅切换 `extreme_speed_mode`：
+
+```
+extreme_speed_mode=0 (分阶段): female=500.0 male=500.0 total=1000.0
+extreme_speed_mode=3 (WF)    : female=500.0 male=500.0 total=1000.0
+```
+
+修复前 WF 路径为雌雄各 1000、总数 2000；现在两条路径一致。
 
 > [!NOTE] 历史标注
 > 与 numba 相关的 backlog 条目（`.numba_cache`、`NUMBA_ENABLED`、
