@@ -189,6 +189,8 @@ NATAL Core 提供两种主要的种群类型：
 | `ricker` | 4 | `r^(1-x) · s` | 指数过度补偿；`r > e` 时出现振荡 |
 
 三条验收底线：① 平衡点 x=1 时所有曲线收敛到 `s`（g(1)=s）；② 低密度 x→0 时 g(0)=r·s（三条曲线在同一平衡点共享数值）；③ 确定性模拟下曲线缩放逐位可复现。
+
+第四条规则处理"参考点不可用"：当期望竞争强度 `C*` 为 0 时（承载容量为 0、声明的均衡分布没有可繁殖雌体、或 `eggs_per_female == 0`），模式 1–4 的招募量为 0（缩放为 `0`），而不再回退到"不调节"的缩放 `1.0`。`no_competition`（模式 0）仍是表达"不做密度调节"的方式，包括个体只来自 hook 投放的模型。
 | `low_density_growth_rate` | `float` | 低密度下的内禀增长率。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；取值过大容易导致种群振荡。 |
 | `age_1_carrying_capacity` | `Optional[int]` | age=1 阶段的种群承载容量。 | `None` | 幼体密度调节 | 如果显式指定，会优先使用该值（优先级最高）。 |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | 与 `age_1_carrying_capacity` 功能相同的遗留参数名（已弃用）。 | `None` | 幼体密度调节 | 推荐使用 `age_1_carrying_capacity`，两者同时设置时以 `age_1_carrying_capacity` 为准。 |

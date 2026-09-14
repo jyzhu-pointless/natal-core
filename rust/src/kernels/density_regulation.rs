@@ -177,6 +177,15 @@ pub fn scaling_factor(mode: i64, x: f64, r: f64) -> PyResult<f64> {
 ///   ``actual_growth_rate * expected_survival_rate``.
 /// - ricker (mode 4): same shape, no Python precedent.
 ///
+/// One case deliberately diverges from the retired reference.  When C* is
+/// zero — a carrying capacity of zero, or a declared equilibrium with no
+/// reproducing females — the reference guarded the ratio to 1.0 (the neutral
+/// point of every compensatory curve) and the survival rate to 1.0, which
+/// multiplied out to a scaling of exactly 1.0 and silently disabled
+/// regulation: a population with no habitat grew without bound instead of
+/// going extinct.  Modes 2..=4 now collapse recruitment to zero there, which
+/// is what FIXED mode already did.
+///
 /// ## Parameters
 /// - `mode`: Growth-mode id (0 none, 1 fixed, 2 linear, 3 beverton_holt,
 ///   4 ricker).
@@ -208,6 +217,14 @@ pub fn regulation_scaling(
             1.0
         }),
         2..=4 => {
+            // A zero equilibrium means the habitat supports nobody: there is
+            // no reference competition strength to evaluate the curve at, and
+            // the ratio/survival guards would otherwise multiply out to a
+            // scaling of exactly 1.0, silently switching regulation off.
+            // NaN is treated the same way: it is not a usable reference point.
+            if equilibrium <= 0.0 || equilibrium.is_nan() {
+                return Ok(0.0);
+            }
             // Curves carrying the equilibrium survival factor: evaluate g at the
             // guarded competition ratio, then scale by s* afterwards.
             let ratio = competition_ratio(actual, equilibrium);

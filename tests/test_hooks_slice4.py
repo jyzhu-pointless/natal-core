@@ -72,6 +72,13 @@ def _build_discrete(
             juvenile_growth_mode=growth_mode,
             low_density_growth_rate=6.0,
         )
+    else:
+        # eggs_per_female=0 here is a hook-isolation device, not a habitat
+        # statement: production is 0, so the derived equilibrium competition
+        # strength is 0 and the default curve would clear every age-0
+        # individual the hooks install.  Pin the pre-fix no-competition
+        # behaviour explicitly.
+        builder = builder.competition(growth_mode="no_competition")
     if hook_items:
         builder = builder.hooks(*hook_items)
     for items, kwargs in hook_calls or []:

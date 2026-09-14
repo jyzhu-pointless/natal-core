@@ -192,6 +192,8 @@ Competition parameters take effect during the survival phase of the population.
 | `ricker` | 4 | `r^(1-x) · s` | exponential overcompensation; oscillates for `r > e` |
 
 Three acceptance bottom lines: (1) at the equilibrium point x=1 all curves converge to `s` (g(1)=s); (2) at low density x->0, g(0)=r·s (the curves share values at the joint equilibrium point); (3) deterministic simulations produce bitwise-reproducible curve scaling.
+
+A fourth rule covers an unusable reference: when the expected competition strength `C*` is zero — a carrying capacity of zero, a declared equilibrium with no reproducing females, or `eggs_per_female == 0` — modes 1–4 recruit nothing (scaling `0`) instead of falling back to an unregulated scaling of `1.0`. `no_competition` (mode 0) remains the way to say "do not regulate", including for models whose only recruitment comes from hooks.
 | `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
 | `age_1_carrying_capacity` | `Optional[int]` | Carrying capacity at the age=1 stage | `None` | Juvenile density regulation | If explicitly specified, takes highest priority |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | Legacy parameter name (deprecated) with same function as `age_1_carrying_capacity` | `None` | Juvenile density regulation | `age_1_carrying_capacity` recommended; when both are set, `age_1_carrying_capacity` takes precedence |

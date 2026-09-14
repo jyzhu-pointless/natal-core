@@ -87,6 +87,13 @@ def _build(
     )
     if carrying_capacity is not None:
         builder = builder.competition(carrying_capacity=carrying_capacity)
+    else:
+        # eggs_per_female=0 here is a hook-isolation device, not a habitat
+        # statement: production is 0, so the derived equilibrium competition
+        # strength is 0 and the default curve would clear every age-0
+        # individual the hooks install.  Pin the pre-fix no-competition
+        # behaviour explicitly.
+        builder = builder.competition(growth_mode="no_competition")
     if hooks:
         builder = builder.hooks(*hooks)
     for items, kwargs in hook_calls or []:

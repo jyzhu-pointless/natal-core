@@ -69,6 +69,11 @@ def _build_discrete_population(
             )
             .reproduction(eggs_per_female=0.0)
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            # Zero eggs here is a hook-isolation device, not a habitat
+            # statement: production is 0, so the derived equilibrium
+            # competition strength is 0 and the default curve would clear
+            # every age-0 individual the hooks install.
+            .competition(growth_mode="no_competition")
         ),
         list(hook_calls or []),
     ).build()
@@ -184,6 +189,11 @@ def _build_simple_discrete_population(
             )
             .reproduction(eggs_per_female=0.0)
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            # Zero eggs here is a hook-isolation device, not a habitat
+            # statement: production is 0, so the derived equilibrium
+            # competition strength is 0 and the default curve would clear
+            # every age-0 individual the hooks install.
+            .competition(growth_mode="no_competition")
         ),
         list(hook_calls or []),
     ).build()

@@ -37,6 +37,22 @@
   `new_adult_age == 1` (every discrete model, and 2-age age-structured ones)
   age 0 is the only juvenile age and its weight is fixed at 1.0 — the value
   never reached the kernels.
+- **A zero equilibrium competition strength now extinguishes instead of
+  disabling regulation**. `C*` is the reference point the compensatory curves
+  are evaluated against. When it was zero the ratio guard substituted 1.0 (the
+  neutral point of every curve) and the survival guard substituted 1.0, so the
+  scaling was exactly 1.0 and regulation silently switched off. `C*` is zero
+  whenever the equilibrium produces no competing juveniles: a carrying
+  capacity of zero, a declared equilibrium distribution with no reproducing
+  females, or `eggs_per_female == 0`. Such a model used to grow without bound
+  (1000 adults reached 3,125,000 in five ticks) and now recruits nothing.
+
+  Modes 2–4 therefore return a zero scaling, matching `FIXED`. This
+  deliberately diverges from the retired Python reference, which had the same
+  guard combination. `eggs_per_female == 0` is a legitimate way to drive a
+  population purely from hooks (release/inundation runs); set
+  `growth_mode="no_competition"` there if the injected individuals must
+  survive.
 
 ### Documentation
 
