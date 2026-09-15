@@ -46,6 +46,25 @@ class TestCarryingCapacityResolution:
         )
         assert result == 1000.0
 
+    def test_carrying_capacity_aliases_follow_documented_priority(self) -> None:
+        """Test the two legacy aliases resolve from highest to lowest priority."""
+        assert resolve_carrying_capacity(300.0, 200.0) == 300.0
+        assert resolve_carrying_capacity(None, 200.0) == 200.0
+
+    def test_initial_state_fallback_accepts_exact_half_individual(self) -> None:
+        """Test the documented 0.5 threshold and one-age fallback boundary."""
+        age_one = np.array([[[0.0], [0.25]], [[0.0], [0.25]]])
+        assert resolve_carrying_capacity(None, None, age_one) == 0.5
+
+        one_age = np.array([[[0.25]], [[0.25]]])
+        assert resolve_carrying_capacity(None, None, one_age) == 0.5
+
+    def test_initial_state_fallback_rejects_counts_below_half(self) -> None:
+        """Test that no initial-state fallback is accepted below 0.5 total."""
+        initial = np.array([[[0.24]], [[0.25]]])
+        with pytest.raises(ValueError, match="No valid carrying capacity source"):
+            resolve_carrying_capacity(None, None, initial)
+
     def test_initial_state_fallback(self) -> None:
         """Test fallback to initial_individual_count when no explicit capacity given."""
         init = np.array([[[100.0]], [[100.0]]])  # shape (2, 1, 1)
@@ -190,6 +209,53 @@ class TestCarryingCapacityResolution:
 
         cfg = pop.export_config()
         assert cfg.carrying_capacity == 5000.0
+
+    def test_builder_primary_k_wins_over_both_aliases(self) -> None:
+        """Test build resolves carrying_capacity before either legacy alias."""
+        sp = _make_species("TestPrimaryK")
+
+        pop = (
+            nt.AgeStructuredPopulation
+            .setup(species=sp, name="PrimaryKTest", stochastic=False)
+            .age_structure(n_ages=3, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 40.0, 0.0]},
+                    "male": {"WT|WT": [0.0, 30.0, 0.0]},
+                }
+            )
+            .competition(
+                carrying_capacity=300.0,
+                age_1_carrying_capacity=200.0,
+                old_juvenile_carrying_capacity=100.0,
+            )
+            .build()
+        )
+
+        assert pop.export_config().carrying_capacity == 300.0
+
+    def test_builder_age_one_alias_wins_when_primary_k_is_omitted(self) -> None:
+        """Test age_1_carrying_capacity wins over the older alias at build time."""
+        sp = _make_species("TestAgeOneAlias")
+
+        pop = (
+            nt.AgeStructuredPopulation
+            .setup(species=sp, name="AgeOneAliasTest", stochastic=False)
+            .age_structure(n_ages=3, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 40.0, 0.0]},
+                    "male": {"WT|WT": [0.0, 30.0, 0.0]},
+                }
+            )
+            .competition(
+                age_1_carrying_capacity=200.0,
+                old_juvenile_carrying_capacity=100.0,
+            )
+            .build()
+        )
+
+        assert pop.export_config().carrying_capacity == 200.0
 
     def test_equilibrium_distribution_consistency(self) -> None:
         """Test equilibrium distribution + external eggs produce self-consistent metrics."""
