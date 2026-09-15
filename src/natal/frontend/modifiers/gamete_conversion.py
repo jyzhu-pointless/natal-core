@@ -21,13 +21,12 @@ Compile semantics (single owner):
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
 from natal.frontend.genetics import Species
-from natal.frontend.genetics.entities.haplotype import HaploidGenotype
 from natal.frontend.patterns.elements.atom import LabPattern
 from natal.frontend.patterns.elements.haploid import HaploidGenomePattern
 from natal.frontend.registry.index import IndexRegistry
@@ -42,7 +41,7 @@ from .conversion_rules import (
 if TYPE_CHECKING:
     from natal.frontend.genetics.compile import RecipeHost
     from natal.frontend.patterns import ZygoteTypePattern
-    from natal.frontend.patterns.parser import GenotypePatternParser
+    from natal.frontend.patterns.parser import ConversionTarget, GenotypePatternParser
 
 # A compiled matcher: (sex_idx, ztype_idx, gtype_idx) -> bool.
 _GtypeMatcher = Callable[[int, int, int], bool]
@@ -276,37 +275,39 @@ class GameteConversionRuleSet:
                     )
 
             if isinstance(rule, GameteGtypeConversionRule):
-                genotype_part, label_part = rule.target_parts
+                try:
+                    target_spec = parser.compile_conversion_target(
+                        rule.to, stage="gamete conversion", haploid=True, require_label=True
+                    )
+                except Exception as exc:
+                    raise ValueError(
+                        f"{self.name}: invalid conversion target {rule.to!r}"
+                    ) from exc
                 # `*` keeps the branch's own part, so "*@*" is the identity and
                 # "*@tag" only retags without touching the haploid genotype.
-                target_hg: Optional[HaploidGenotype] = None
-                if genotype_part != "*":
+                if (not target_spec.label.is_wildcard()
+                        and target_spec.label.lab not in registry.glab_labels):
+                    raise ValueError(f"{self.name}: rule {rule!r} target label is not registered")
+                target_pattern = cast(HaploidGenomePattern, target_spec.genotype)
+                if "*" not in target_spec.genotype_text and all(
+                    part is not None for part in target_pattern.haplotype_patterns
+                ):
                     try:
-                        target_hg = species.get_haploid_genotype_from_str(genotype_part)
+                        species.get_haploid_genotype_from_str(target_spec.genotype_text)
                     except Exception as exc:
                         raise ValueError(
                             f"{self.name}: rule {rule!r} target genotype "
-                            f"{genotype_part!r} is not a valid haploid genotype"
+                            f"{target_spec.genotype_text!r} is not a valid haploid genotype"
                         ) from exc
-                target_glab: Optional[str] = None
-                if label_part != "*":
-                    if label_part not in registry.glab_labels:
-                        raise ValueError(
-                            f"{self.name}: rule {rule!r} target label "
-                            f"{label_part!r} is not a registered gamete label"
-                        )
-                    target_glab = label_part
 
                 # Default arguments freeze this iteration's target, since the
                 # enclosing loop rebinds the locals on the next rule.
                 def convert(
                     gidx: int,
-                    _thg: Optional[HaploidGenotype] = target_hg,
-                    _tg: Optional[str] = target_glab,
+                    _target: ConversionTarget = target_spec,
                 ) -> int:
                     hg, glab = registry.index_to_gtype[gidx]
-                    hg2 = _thg if _thg is not None else hg
-                    glab2 = _tg if _tg is not None else glab
+                    hg2, glab2 = _target.apply_gamete(hg, glab, species)
                     try:
                         return registry.gtype_index(hg2, glab2)
                     except KeyError as exc:

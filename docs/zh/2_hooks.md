@@ -123,23 +123,53 @@ nt.Op.set_param("carrying_capacity", "K * 0.95", every=10)
 - 运行外，写入通过 `pop.params.<name> = ...` 相同的通道（路由分派、会话刷新、参数快照日志）生效。
 - `run()` 运行中，写入在会话拥有的生态列内部演化（事件粒度相同、jsonc 边界校验相同；非有限值或越界值如 `"K / 0"` 会在运行中抛 `ValueError`）。每次成功变化都会在事件边界写入 native `ParameterLog`，后续读取从会话快照取得当前值。
 
-### `Op.convert`：一对一概率转换
+### `Op.convert`：按个体条件转换
 
-`Op.convert(source, target, probability, when=None)` 把当前位于 `source` 基因型的个体以 `probability` **逐个体**转换到 `target`。两个 pattern 都必须**恰好匹配一个** ZType，否则编译期抛 `ValueError`。
+用 `from_` 选择参与转换的个体，用 `to` 描述改变哪些属性。两者都使用 `IndividualSelector`；Python 的 `from` 是保留字，因此参数写作 `from_`。
 
-- **雄性**：只有 `individual_count` 行迁移（雄性不带精子标签）。
-- **雌性（年龄结构）**：virgin 部分与**每个精子桶** `(female_z, male_z)` 都独立二项抽样并原子迁移到 `(target_z, male_z)` —— 精子基因型标签跟随雌性行移动，雄性轴不动。确定性模式下总数精确守恒，随机模式下期望值守恒。
-- **离散代**：无精子存储，退化为普通逐个体二项迁移。
-
-常用惯用法：`probability=1.0` 的"分流兜底"步骤，把链式转换的剩余部分全部收编：
+下面的声明假设种群包含所用标签，且至少有三个年龄：
 
 ```python
-# 30% 的 A|A 变成 A|a，其余变成 a|a
-nt.Op.convert("A|A", "A|a", probability=0.3),
-nt.Op.convert("A|A", "a|a", probability=1.0),
+nt.Op.convert(
+    from_=nt.IndividualSelector(age=2, ztype="*@uninfected"),
+    to=nt.IndividualSelector(age=1, ztype="*@infected"),
+    probability=0.25,
+    event="late",
+)
 ```
 
-多个 `convert` 按 hook priority 顺序执行。
+它把选中个体的 25% 转到 1 龄、感染标签，各自的基因型和性别保持不变。确定性模式按比例转移计数；随机模式抽样确定转换个体。
+
+- `from_` 中省略的字段和通配符表示不限。selector 并集保留条件之间的组合关系，重叠坐标只处理一次。
+- `to` 中省略的字段、未写出的染色体组和 `*` 表示保留对应来源值。`*@infected` 只改标签；`A|A@*` 替换给出的基因型部分，保留标签和省略的染色体组。
+- 每个来源必须得到一个合法目标。目标不接受并集、集合、否定或多个年龄／性别值。目标不在当前类型目录中时抛出 `ValueError`，不会在 Hook 中动态创建类型。
+- 同一条 Op 根据执行前的状态计算全部转移，不会再次转换本条操作刚转入的个体。不同 Op 仍按 Hook 执行顺序级联。
+- 转换不会跳过后续生命周期阶段。例如在 `late` 修改年龄后，仍会正常推进年龄。
+
+雌性转换后仍为雌性时，精子存储随个体迁移，包括成年回退到 `new_adult_age` 以下。雌转雄只丢弃实际转换雌性携带的精子；雄转雌从未交配状态开始。其他雌性已存储的精子，不因其来源雄性改变类型或性别而被改写。转移保持个体总数不变。
+
+旧字符串写法继续可用：
+
+```python
+nt.Op.convert("A|A", "A|a", probability=0.3, event="early"),
+nt.Op.convert("A|A", "a|a", probability=1.0, event="early"),
+```
+
+旧写法的来源和目标必须各自只匹配一个不同的 ZType，对全部年龄、两种性别执行。不要与 `from_`／`to` 参数混用。第二条转换处理第一条留下的剩余个体；不另设多目标概率分配接口。
+
+### `Op.clear_sperm_storage`：清除选中雌性的精子存储
+
+```python
+nt.Op.clear_sperm_storage(
+    selector=nt.IndividualSelector(sex="female", age=1),
+    event="late",
+)
+```
+
+清空选中雌性携带的全部精子存储，个体计数不变，后续按未交配状态处理。selector 选择携带精子的雌性，不筛选存储中的雄性类型。选中的雄性坐标会被忽略；重复执行或用于没有精子存储的模型，不会产生额外变化。
+
+操作按执行时的状态选择个体。放在转换之后的清除操作会影响所有匹配雌性，不会自动只清除刚被转换的个体。
+
 
 ## 随机性处理
 

@@ -124,23 +124,53 @@ Vector and genetics-tensor parameters raise `ValueError` -- use `pop.update()` /
 - Out of a run, the write flushes through the same channel as `pop.params.<name> = ...` (route dispatch, session refresh, and the parameter snapshot log).
 - Inside a `run()`, the write evolves within the session-owned ecology columns with the same event granularity and the same jsonc bounds (a non-finite or out-of-bounds value such as `"K / 0"` raises `ValueError` mid-run). Each committed transition is written at its event boundary to the native `ParameterLog`, and later reads obtain the current values from the session snapshot.
 
-### `Op.convert`: one-to-one probabilistic conversion
+### `Op.convert`: selected individual conversion
 
-`Op.convert(source, target, probability, when=None)` moves each individual currently in `source` to `target` with `probability`, independently per individual. Both patterns must each match **exactly one** ZType, otherwise `ValueError` at compile time.
+Use `from_` to select individuals and `to` to describe which attributes change. Both accept `IndividualSelector`; the underscore is required because Python reserves `from`.
 
-- **Males**: only `individual_count` rows migrate (males carry no sperm label).
-- **Females (age-structured)**: the virgin part and *every sperm bucket* `(female_z, male_z)` are binomially sampled and moved atomically to `(target_z, male_z)` -- the stored sperm genotype label follows the female row, the male axis is untouched. Totals are conserved exactly in deterministic mode and in expectation in stochastic mode.
-- **Discrete-generation**: no sperm storage, so the op degenerates to plain per-individual binomial migration.
-
-The canonical idiom uses a `probability=1.0` remainder step to absorb whatever the chain left over:
+The following declaration assumes the population contains the named labels and at least three ages:
 
 ```python
-# 30% of A|A become A|a, the rest become a|a
-nt.Op.convert("A|A", "A|a", probability=0.3),
-nt.Op.convert("A|A", "a|a", probability=1.0),
+nt.Op.convert(
+    from_=nt.IndividualSelector(age=2, ztype="*@uninfected"),
+    to=nt.IndividualSelector(age=1, ztype="*@infected"),
+    probability=0.25,
+    event="late",
+)
 ```
 
-Multiple `convert` ops run in hook-priority order.
+This moves 25% of the selected individuals to age 1 and the infected label, keeping each individual's genotype and sex. In deterministic mode, it moves that fraction of the counts; stochastic mode samples the converted individuals.
+
+- In `from_`, omitted fields and wildcards impose no restriction. Selector unions retain their combined conditions and overlapping coordinates are processed once.
+- In `to`, omitted fields, omitted chromosome groups, and `*` keep the corresponding source values. `*@infected` changes only the label; `A|A@*` replaces the specified genotype portion and keeps the label and omitted chromosome groups.
+- Each source must produce one legal destination. Targets do not accept unions, sets, negations, or multiple age/sex values. A missing destination in the active type catalog raises `ValueError`; it is not created during the hook.
+- All transfers in one op use the state at the start of that op. Newly arriving individuals are not converted again by the same op. Separate ops still form a cascade in hook execution order.
+- A conversion does not skip later lifecycle stages. For example, an age change in `late` is followed by the normal age advance.
+
+Female-to-female conversions move the associated sperm storage with the individuals, even when an adult moves below `new_adult_age`. Female-to-male conversions discard only the converted females' stored sperm; male-to-female conversions create unmated females. Sperm already stored by other females is not rewritten when its source male changes type or sex. Individual counts are conserved by the transfers.
+
+The legacy string form remains available:
+
+```python
+nt.Op.convert("A|A", "A|a", probability=0.3, event="early"),
+nt.Op.convert("A|A", "a|a", probability=1.0, event="early"),
+```
+
+Each legacy source and target must match exactly one ZType, they must differ, and all ages and both sexes participate. Do not mix legacy arguments with `from_`/`to`. The second declaration converts the remainder left by the first; there is no separate multi-destination probability interface.
+
+### `Op.clear_sperm_storage`: clear selected females' stored sperm
+
+```python
+nt.Op.clear_sperm_storage(
+    selector=nt.IndividualSelector(sex="female", age=1),
+    event="late",
+)
+```
+
+This clears all sperm storage carried by the selected females, leaving their individual counts unchanged. They are subsequently treated as unmated. The selector identifies the females, not the types of stored sperm. Male coordinates are ignored; repeating the operation or applying it to a model without sperm storage has no additional effect.
+
+Selection uses the state when this op executes. A clear following a conversion affects every matching female, not just those moved by that conversion.
+
 
 ## Stochastics
 

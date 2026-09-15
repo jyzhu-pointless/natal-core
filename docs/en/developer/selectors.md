@@ -79,6 +79,23 @@ Immutability and hashability are deliberate: they let one selector serve as a di
 
 The decisive difference is *when the index binding happens*. Build-time writes use complete-catalog coordinates; hooks, observation, and runtime writes must use the **published** catalog. The two differ here: complete index 2 is `A|X`, runtime index 2 is `a|a`. Binding a selector at the wrong moment does not raise — it produces a mask that runs fine and points at the wrong individuals.
 
+## Conversion targets: keep or replace
+
+Conversion targets share the pattern grammar, but they describe changes to a source rather than a set of matching destinations. `GenotypePatternParser.parse_conversion_target()` retains the original spelling and parsed structure; `compile_conversion_target()` rejects forbidden target forms before testing source reachability. `ConversionTarget.apply_zygote()` or `.apply_gamete()` then fills in the parts retained from each source.
+
+| Target part | Meaning |
+| --- | --- |
+| Omitted chromosome group or `*` | Keep the source part |
+| Exact allele or label | Replace that part |
+| Ordered local wildcard, such as `C|*` | Replace the left side and keep the source's right side |
+| Set, negation, or unordered partial expression such as `C::*` | Reject an ambiguous target |
+
+`*@infected` preserves each source genotype and changes its label. On a two-chromosome species, `A|A@*` replaces the specified first group and preserves the second group and label. Partial locus changes require a positional correspondence with the source loci. Complete exact targets retain the existing name-based chromosome interpretation, including explicitly reordered chromosome segments.
+
+The whole-state modifier rule declarations still require an explicit `@label` part; use `@*` to preserve a label. An Op target may omit the label entirely. An Op target may also omit age or sex, preserving that source coordinate. A target must produce one legal destination per source, and the destination must exist in the active registry. Multiple sources can have different destinations without introducing probability splitting between destinations.
+
+The ordinary pattern matching semantics above remain unchanged: omitted groups in a source impose no restriction. See [Hook conversions](../2_hooks.md) for execution order and sperm-storage behavior.
+
 ## Boundaries and errors
 
 | Case | Result |

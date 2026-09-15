@@ -434,6 +434,11 @@ def build_hook_program(
     all_sp_literals: List[float] = []
     all_convert_source_z: List[int] = []
     all_convert_target_z: List[int] = []
+    all_convert_offsets: List[int] = [0]
+    all_convert_source_coords: List[int] = []
+    all_convert_target_coords: List[int] = []
+    all_clear_offsets: List[int] = [0]
+    all_clear_coords: List[int] = []
     has_set_param = False
 
     all_deme_sel_types: List[int] = []
@@ -522,6 +527,18 @@ def build_hook_program(
             all_sp_literals.extend(plan.sp_literals.tolist())
             all_convert_source_z.extend(plan.convert_source_z.tolist())
             all_convert_target_z.extend(plan.convert_target_z.tolist())
+            coord_base = len(all_convert_source_coords) // 3
+            for i in range(plan.n_ops):
+                all_convert_offsets.append(
+                    coord_base + int(plan.convert_offsets[i + 1])
+                    - int(plan.convert_offsets[0])
+                )
+            all_convert_source_coords.extend(plan.convert_source_coords.reshape(-1).tolist())
+            all_convert_target_coords.extend(plan.convert_target_coords.reshape(-1).tolist())
+            clear_base = len(all_clear_coords) // 3
+            for i in range(plan.n_ops):
+                all_clear_offsets.append(clear_base + int(plan.clear_offsets[i + 1]) - int(plan.clear_offsets[0]))
+            all_clear_coords.extend(plan.clear_coords.reshape(-1).tolist())
 
             op_offsets.append(len(all_op_types))
             append_deme_selector(
@@ -560,6 +577,11 @@ def build_hook_program(
         sp_literals=np.array(all_sp_literals, dtype=np.float64),
         convert_source_z=np.array(all_convert_source_z, dtype=np.int32),
         convert_target_z=np.array(all_convert_target_z, dtype=np.int32),
+        convert_offsets=np.array(all_convert_offsets, dtype=np.int32),
+        convert_source_coords=np.array(all_convert_source_coords, dtype=np.int32).reshape(-1),
+        convert_target_coords=np.array(all_convert_target_coords, dtype=np.int32).reshape(-1),
+        clear_offsets=np.array(all_clear_offsets, dtype=np.int32),
+        clear_coords=np.array(all_clear_coords, dtype=np.int32).reshape(-1),
         has_set_param=has_set_param,
         deme_selector_types=np.array(all_deme_sel_types, dtype=np.int32),
         deme_selector_offsets=np.array(all_deme_sel_offsets, dtype=np.int32),
