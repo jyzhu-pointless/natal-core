@@ -305,6 +305,25 @@ class _DraftWriterBase:
                 ))
                 continue
             plans.append(plan_write(self._draft, entry, value))
+        # Compensatory curves consume an intrinsic rate r >= 1. Keep the
+        # route-table bound broad because ``none`` and ``fixed`` do not use r;
+        # validate the mode/r pair only after all writes have been parsed.
+        candidate_mode = self._draft.juvenile_growth_mode
+        candidate_r = self._draft.low_density_growth_rate
+        for plan in plans:
+            if plan.entry.config_field == "juvenile_growth_mode":
+                assert plan.scalar is not None
+                candidate_mode = int(cast("float", plan.scalar))
+            elif plan.entry.config_field == "low_density_growth_rate":
+                assert plan.scalar is not None
+                candidate_r = float(cast("float", plan.scalar))
+        if candidate_mode in (2, 3, 4) and (
+            not np.isfinite(candidate_r) or candidate_r < 1.0
+        ):
+            raise ValueError(
+                "low_density_growth_rate must be finite and at least 1.0 for the "
+                "linear/logistic, beverton_holt, and ricker growth modes"
+            )
         for plan in plans:
             touched.append(plan.entry)
             old = _committed_scalar(self._draft, plan.entry)

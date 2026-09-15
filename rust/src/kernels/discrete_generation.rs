@@ -247,7 +247,16 @@ fn fertilize_discrete(
                     n_pairs_eff
                 };
                 let total_lambda = (n_reproducing * eggs_per_pair).max(0.0);
-                if bp.continuous_sampling {
+                // Keep the reproduction-rate thinning above stochastic, but
+                // fixed egg counts disable only the Poisson clutch noise.
+                // Match age-structured semantics for both sampling modes.
+                if bp.fixed_egg_count {
+                    if bp.continuous_sampling {
+                        total_lambda
+                    } else {
+                        total_lambda.round()
+                    }
+                } else if bp.continuous_sampling {
                     continuous_poisson(rng, total_lambda)
                 } else {
                     poisson(rng, total_lambda)
@@ -918,15 +927,13 @@ pub fn run_wf_tick(
             }
         }
     }
-    // Fuse post-zygotic viability into the expected counts: per sex and genotype
-    // zygote viability x age viability x base age-0 survival.
+    // Embryonic viability reduces the pool that enters competition. Ordinary
+    // age-0 survival and genotype viability act only after density regulation,
+    // just as in the staged lifecycle; moving them earlier changes the curve's
+    // input and therefore its equilibrium.
     for go in 0..g {
-        expected_f[go] *= genetics.zygote_viability_fitness[go]
-            * viability_f[go]
-            * eco.survival_rates[deme * 2 * a];
-        expected_m[go] *= genetics.zygote_viability_fitness[g + go]
-            * viability_m[go]
-            * eco.survival_rates[deme * 2 * a + a];
+        expected_f[go] *= genetics.zygote_viability_fitness[go];
+        expected_m[go] *= genetics.zygote_viability_fitness[g + go];
     }
     let juvenile_growth_mode = eco.growth_mode[deme];
     if juvenile_growth_mode > 0 {
@@ -953,6 +960,10 @@ pub fn run_wf_tick(
         for value in expected_f.iter_mut().chain(expected_m.iter_mut()) {
             *value *= sf;
         }
+    }
+    for go in 0..g {
+        expected_f[go] *= viability_f[go] * eco.survival_rates[deme * 2 * a];
+        expected_m[go] *= viability_m[go] * eco.survival_rates[deme * 2 * a + a];
     }
     let mut new_f = vec![0.0; g];
     let mut new_m = vec![0.0; g];

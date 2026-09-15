@@ -287,9 +287,9 @@ pop = (
 
 ### 竞争与 Hook 支持
 
-极速模式支持三种密度调节模式（FIXED/LOGISTIC/BEVERTON_HOLT），与标准路径共用同一套 scaling 函数。仅支持 FIRST hooks（在 WF tick 之前触发），EARLY/LATE 在融合的 WF tick 中无自然插入点。
+极速模式支持所有内置密度调节模式（FIXED、LOGISTIC/LINEAR、BEVERTON_HOLT 和 RICKER），与标准路径共用同一套 scaling 函数。仅支持 FIRST hooks（在 WF tick 之前触发），EARLY/LATE 在融合的 WF tick 中无自然插入点。
 
-确定性 WF 模式与标准确定性路径 tick-by-tick 结果完全一致（NO_COMPETITION 模式下已验证）。
+确定性 WF 模式与标准确定性路径逐 tick 一致。合子期活力先作用，再计算幼体竞争量；普通存活和基因型活力在密度调节之后作用。WF 随机模式仍在最后统一抽样下一代，因此其方差不必与分阶段随机生命周期一致。
 
 ## 索引压缩
 

@@ -46,14 +46,26 @@ population.apply_preset(drive)
 #### 高级配置
 
 ```python
+import natal as nt
+from natal.frontend.presets import HomingDrive
+
+species = nt.Species.from_dict(
+    name="DepositionExample",
+    structure={"chr1": {"drive": ["WT", "Drive", "Resistance", "FunctionalResistance"]}},
+    gamete_labels=["default", "Cas9_deposited"],
+)
+
 # 性别特异性参数
 drive = HomingDrive(
     name="SexSpecificDrive",
     drive_allele="Drive",
     target_allele="WT",
+    resistance_allele="Resistance",
+    functional_resistance_allele="FunctionalResistance",
     drive_conversion_rate={"female": 0.98, "male": 0.92},  # 性别差异
     late_germline_resistance_formation_rate=(0.02, 0.04),  # 元组形式 (female, male)
     embryo_resistance_formation_rate=0.01,
+    cas9_deposition_glab="Cas9_deposited",
     functional_resistance_ratio=0.2,  # 20%的抗性等位基因是功能性的
 
     # 适应度成本
@@ -61,7 +73,25 @@ drive = HomingDrive(
     fecundity_scaling=0.95,     # 5%繁殖力成本
     sexual_selection_scaling=0.85  # 15%性选择劣势
 )
+population = (
+    nt.DiscreteGenerationPopulation.setup(species, stochastic=False)
+    .initial_state({"female": {"WT|Drive": 100}, "male": {"WT|WT": 100}})
+    .presets(drive)
+    .build()
+)
+population.run(1)
 ```
+
+胚胎抗性仅由亲本 Cas9 沉积触发。必须在物种的 `gamete_labels` 中注册
+`cas9_deposition_glab` 指定的标签；未配置标签时，即使胚胎继承了 drive 或 Cas9，
+也不发生胚胎编辑。携带者母本会给所有输出配子加标签，因此未继承 drive 的胚胎
+也可以被编辑。对于 split drive，发生沉积的亲本必须同时携带 drive 和 Cas9。
+
+胚胎抗性率的 `female` 和 `male` 分别表示母源和父源，不表示子代性别。
+标量会同时设置两个率，但父源仅在 `use_paternal_deposition=True` 时启用。
+因此，上例仅由母源沉积对每个剩余目标拷贝施加 1% 的编辑率。
+两个已启用来源同时存在时，按顺序作用于剩余目标拷贝，总转换概率为
+`1 - (1 - e_m) * (1 - e_p)`。
 
 ### ToxinAntidoteDrive - 毒素-解毒剂驱动（TARE/TADE）
 

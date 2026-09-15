@@ -39,6 +39,7 @@ def test_regression_issue34_zygote_modifier_index_error():
         resistance_allele="R2",
         functional_resistance_allele="R1",
         embryo_resistance_formation_rate=0.01,
+        cas9_deposition_glab="Cas9_deposited",
     )
 
     # This must not raise.
@@ -71,7 +72,8 @@ def test_regression_issue34_zygote_modifier_index_error():
 # ============================================================================
 # Issue #36 — gamete modifier wrong ztype
 # ============================================================================
-def test_regression_issue36_gamete_modifier_wrong_ztype():
+@pytest.mark.parametrize("somatic_labels", [["S"], ["S", "E", "I"]])
+def test_regression_issue36_gamete_modifier_wrong_ztype(somatic_labels: list[str]) -> None:
     """Cargo allele should NOT vanish when slabs > 1.
 
     Before the fix, ``to_gamete_modifier`` passed a raw genotype index to
@@ -87,7 +89,7 @@ def test_regression_issue36_gamete_modifier_wrong_ztype():
     sp = nt.Species.from_dict(
         name="mosquito",
         structure={"chr1": {"A": GENOS}},
-        somatic_labels=["S", "E", "I"],
+        somatic_labels=somatic_labels,
         gamete_labels=["default", "Cas9_deposited"],
         unordered=False,
     )
@@ -100,6 +102,7 @@ def test_regression_issue36_gamete_modifier_wrong_ztype():
         drive_conversion_rate=0.95,
         late_germline_resistance_formation_rate=0.5,
         embryo_resistance_formation_rate=0.01,
+        cas9_deposition_glab="Cas9_deposited",
         functional_resistance_ratio=1 / 300**4,
     )
     rd = int(0.5 / (1 - 0.5) * 21 * 72)
@@ -157,6 +160,25 @@ def test_regression_issue36_gamete_modifier_wrong_ztype():
         .build()
     )
 
+    # Drive/Cargo has no target allele: Mendelian inheritance must retain
+    # each allele at 1/2 for every somatic label. Only female gametes get
+    # deposited Cas9. This is independent of the trajectory snapshot below.
+    for zidx, (genotype, _slab) in enumerate(pop.registry.index_to_ztype):
+        if genotype.to_string() != "Drive|Rescue_Cargo":
+            continue
+        for sex in (0, 1):
+            expected = np.zeros(len(pop.registry.index_to_gtype))
+            label = "Cas9_deposited" if sex == 0 else "default"
+            for allele in ("Drive", "Rescue_Cargo"):
+                gidx = pop.registry.gtype_index(
+                    sp.get_haploid_genotype_from_str(allele), label
+                )
+                expected[gidx] = 0.5
+            np.testing.assert_allclose(
+                pop.config.zygotes_to_gametes_map[sex, zidx], expected,
+                rtol=0, atol=1e-14,
+            )
+
     # Run to tick 25 (5 ticks after release).
     reg = pop.registry
     locus = sp.get_locus("A")
@@ -182,13 +204,15 @@ def test_regression_issue36_gamete_modifier_wrong_ztype():
     drive_f = dc / max(ta, 1.0)
     cargo_f = cargo / max(ta, 1.0)
 
-    # Deterministic model — exact expected values computed from the
-    # fixed-point dynamics of the full age-structured model with
-    # HomingDrive (95% conversion, 50% resistance, 1% embryo resistance),
-    # beverton_holt competition, and multi-component fitness.
-    assert cargo_f == pytest.approx(0.21708254280392394, rel=1e-12), (
+    # Deterministic trajectory snapshot with 1% maternal deposition only.
+    # These are regression values, not an independently solved fixed point.
+    # Both one-label and expanded-label runs must match: adding unused labels
+    # cannot change the dynamics. The analytical gamete checks above pin the
+    # inheritance contract independently. A 1e-12 tolerance allows roundoff
+    # over 26 ticks while catching the original cargo-loss regression.
+    assert cargo_f == pytest.approx(0.21702905860963698, rel=1e-12), (
         f"cargo frequency mismatch (got {cargo_f!r})"
     )
-    assert drive_f == pytest.approx(0.2280972516803319, rel=1e-12), (
+    assert drive_f == pytest.approx(0.2283640777623788, rel=1e-12), (
         f"drive frequency mismatch (got {drive_f!r})"
     )

@@ -46,14 +46,26 @@ population.apply_preset(drive)
 #### Advanced Configuration
 
 ```python
+import natal as nt
+from natal.frontend.presets import HomingDrive
+
+species = nt.Species.from_dict(
+    name="DepositionExample",
+    structure={"chr1": {"drive": ["WT", "Drive", "Resistance", "FunctionalResistance"]}},
+    gamete_labels=["default", "Cas9_deposited"],
+)
+
 # Sex-specific parameters
 drive = HomingDrive(
     name="SexSpecificDrive",
     drive_allele="Drive",
     target_allele="WT",
+    resistance_allele="Resistance",
+    functional_resistance_allele="FunctionalResistance",
     drive_conversion_rate={"female": 0.98, "male": 0.92},  # Sex-specific rates
     late_germline_resistance_formation_rate=(0.02, 0.04),  # Tuple format (female, male)
     embryo_resistance_formation_rate=0.01,
+    cas9_deposition_glab="Cas9_deposited",
     functional_resistance_ratio=0.2,  # 20% of resistance alleles are functional
 
     # Fitness costs
@@ -61,7 +73,28 @@ drive = HomingDrive(
     fecundity_scaling=0.95,     # 5% fecundity cost
     sexual_selection_scaling=0.85  # 15% sexual selection disadvantage
 )
+population = (
+    nt.DiscreteGenerationPopulation.setup(species, stochastic=False)
+    .initial_state({"female": {"WT|Drive": 100}, "male": {"WT|WT": 100}})
+    .presets(drive)
+    .build()
+)
+population.run(1)
 ```
+
+Embryo resistance is triggered only by parental Cas9 deposition. Register
+`cas9_deposition_glab` in the species' `gamete_labels`; without a configured
+label, embryo editing is inactive even when the embryo inherits drive or Cas9.
+Carrier mothers label all their output gametes, so embryos that do not inherit
+drive can still be edited. For split drives, the depositing parent must carry
+both the drive and Cas9 alleles.
+
+The embryo rate's `female` and `male` entries refer to maternal and paternal
+sources, not offspring sex. A scalar sets both rates, but the paternal source
+is active only with `use_paternal_deposition=True`. Thus the example applies
+1% editing per remaining target copy from maternal deposition only. When both
+enabled sources are present, their rates act sequentially on the remaining
+target copies: the total conversion probability is `1 - (1 - e_m) * (1 - e_p)`.
 
 ### ToxinAntidoteDrive -- Toxin-Antidote Drive (TARE/TADE)
 

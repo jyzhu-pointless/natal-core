@@ -1087,6 +1087,24 @@ impl EcoCtx<'_> {
                     self.tick
                 ));
             }
+        }
+        let growth_rate_id = crate::generated::ecology_parameters::ECO_PARAM_COLUMNS
+            .iter()
+            .position(|name| *name == "low_density_growth_rate")
+            .expect("low_density_growth_rate is a generated ecology parameter");
+        let growth_rate = values
+            .get(growth_rate_id)
+            .copied()
+            .unwrap_or_else(|| self.params.low_density_growth_rate[self.deme]);
+        crate::model::validation::validate_growth_contract(
+            self.params.growth_mode[self.deme],
+            growth_rate,
+        )
+        .map_err(|err| err.to_string())?;
+        for (id, value) in values.iter().enumerate() {
+            if id >= crate::hooks::interpreter::N_ECO_PARAMS {
+                break;
+            }
             // Only real changes enter the audit journal, so params_log stays a
             // sparse and replayable record of the tick's transitions.
             let old = self.params.eco_value(id, self.deme);

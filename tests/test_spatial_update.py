@@ -1302,7 +1302,11 @@ def _sessionless_age_container(name: str) -> SpatialPopulation:
                 male_age_based_mating_rate=[0.0, 0.0],
                 eggs_per_female=0.0,
             )
-            .competition(carrying_capacity=100000.0, low_density_growth_rate=0.0)
+            # This fixture tests cached reads; r is unused without competition.
+            .competition(
+                carrying_capacity=100000.0, low_density_growth_rate=0.0,
+                juvenile_growth_mode="no_competition",
+            )
             .build()
         )
         for i in range(2)

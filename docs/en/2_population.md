@@ -286,7 +286,7 @@ pop = (
 
 ### Competition and Hooks
 
-All three competition modes (FIXED/LOGISTIC/BEVERTON_HOLT) are supported, sharing the same scaling functions as the standard path. Only FIRST hooks are supported (fired before the WF tick). Deterministic WF mode matches the standard deterministic path tick-by-tick.
+All built-in competition modes (FIXED, LOGISTIC/LINEAR, BEVERTON_HOLT, and RICKER) are supported, sharing the same scaling functions as the standard path. Only FIRST hooks are supported (fired before the WF tick). Deterministic WF mode matches the standard deterministic path tick-by-tick. Embryonic viability is applied before measuring juvenile competition; ordinary survival and genotype viability are applied after density regulation. WF stochastic modes retain their single final-generation sampling step, so their variance need not match the staged stochastic lifecycle.
 
 ## Index Compression
 
