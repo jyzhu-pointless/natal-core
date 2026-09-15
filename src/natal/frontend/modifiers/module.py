@@ -50,7 +50,7 @@ ZtypeKey: TypeAlias = Union[int, str, Genotype]
 GtypeKey: TypeAlias = Union[int, str, HaploidGenotype, Tuple[int, int], Tuple[str, int]]
 
 # Bulk-only modifier interface expectations (strict form):
-# - gamete modifier: callable() -> Dict[(sex_idx:int, genotype_idx:int) -> Dict[compressed_hg_glab_idx:int -> freq:float]]
+# - gamete modifier: callable() -> Dict[(sex_idx:int, ztype_idx:int) -> Dict[compressed_hg_glab_idx:int -> freq:float]]
 # - zygote modifier: callable() -> Dict[(c1:int, c2:int) -> replacement]
 #
 # The modifiers use compressed integer indices as keys so that outputs can be
@@ -67,12 +67,14 @@ class GameteModifier(Protocol):
 
         Dict[Tuple[int, int], Dict[int, float]]
 
-    where the outer key is ``(sex_idx, genotype_idx)`` and the inner mapping is
+    where the outer key is ``(sex_idx, ztype_key)`` and the inner mapping is
     ``{ compressed_hg_glab_idx: frequency, ... }``. Keys may be flexible types
     in wrappers (for convenience) but should ultimately resolve to integers.
 
-    ``sex_idx`` is an ``int``. ``genotype_idx`` may be an ``int``, a
+    ``sex_idx`` is an ``int``. ``ztype_key`` may be an ``int``, a
     ``Genotype`` object, or a string produced by ``Genotype.to_string()``.
+    An integer identifies one ZType; a genotype object or string selects
+    every slab belonging to that genotype.
 
     Key resolution is strict: an unresolvable source or target key, or a
     resolved index outside the population's active (possibly compressed)

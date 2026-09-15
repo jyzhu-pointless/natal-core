@@ -838,7 +838,7 @@ class PopulationBuilder:
             Self for chaining.
 
         Raises:
-            RuntimeError: When called on a discrete-generation draft
+            RuntimeError: When no Species is attached, on a discrete-generation draft
                 (fixed at 2 ages by normalization) or after domain
                 methods have already been called.
             ValueError: When *n_ages*/*new_adult_age* are inconsistent.
@@ -848,6 +848,8 @@ class PopulationBuilder:
             reproduction, survival, etc.).  Calling it after domain
             methods will raise ``RuntimeError``.
         """
+        if self._species is None:
+            raise RuntimeError("age_structure() requires a Species to rebuild genetic dimensions")
         if self._config.discrete_generation:
             raise RuntimeError(
                 "age_structure() is not applicable to discrete-generation "
@@ -868,35 +870,26 @@ class PopulationBuilder:
         from natal.frontend.model import build_population_config
 
         old = self._config
-        # Use species blueprint maps (unexpanded) so that
-        # build_population_config applies slab expansion exactly once.
-        if self._species is not None:
-            bp = self._species.get_config_blueprint()
-            n_g_orig = bp["n_genotypes"]
-            n_hg_orig = bp["n_gtypes"]
-            z2g_bp = bp["zygotes_to_gametes_map"]
-            g2z_bp = bp["gametes_to_zygotes_map"]
-            # Structure-derived sex masks, in the *unexpanded* genotype axis
-            # that build_population_config expects (the draft's own copies are
-            # already slab-expanded and cannot be forwarded here).
-            female_only_bp = bp["female_only_by_sex_chrom"]
-            male_only_bp = bp["male_only_by_sex_chrom"]
-        else:
-            n_g_orig = old.n_ztypes
-            n_hg_orig = old.n_gtypes
-            z2g_bp = old.zygotes_to_gametes_map
-            g2z_bp = old.gametes_to_zygotes_map
-            female_only_bp = None
-            male_only_bp = None
+        # Species blueprints supply a raw genotype count alongside maps whose
+        # ZType axis already includes slabs; assembly recognizes that layout.
+        bp = self._species.get_config_blueprint()
+        raw_genotype_count = bp["n_genotypes"]
+        gtype_count = bp["n_gtypes"]
+        z2g_bp = bp["zygotes_to_gametes_map"]
+        g2z_bp = bp["gametes_to_zygotes_map"]
+        # Structure-derived masks use the raw genotype axis, while the
+        # draft's masks already include each somatic label.
+        female_only_bp = bp["female_only_by_sex_chrom"]
+        male_only_bp = bp["male_only_by_sex_chrom"]
 
         self._config = build_population_config(
-            n_genotypes=n_g_orig,
-            n_gtypes=n_hg_orig,
+            n_genotypes=raw_genotype_count,
+            n_gtypes=gtype_count,
             n_ages=n_ages,
             n_glabs=old.n_glabs,
             n_slabs=old.n_slabs,
-            gamete_labels=self._species.gamete_labels if self._species else None,
-            somatic_labels=self._species.somatic_labels if self._species else None,
+            gamete_labels=self._species.gamete_labels,
+            somatic_labels=self._species.somatic_labels,
             zygotes_to_gametes_map=z2g_bp,
             gametes_to_zygotes_map=g2z_bp,
             new_adult_age=new_adult_age,
@@ -913,11 +906,7 @@ class PopulationBuilder:
         self._fitness_base = tuple(getattr(self._config, name).copy() for name in FITNESS_FIELDS)
         self._compiled_draft = None
         self._cached_compilation_key = None
-        # Rebuild registry for the new n_ages (affects genotype lookup dims).
-        if self._species is not None:
-            from natal.frontend.builder._base import build_registry
-
-            self._registry = build_registry(self._species)
+        self._registry = build_registry(self._species)
         return self
 
     @_declared

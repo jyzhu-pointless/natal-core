@@ -78,7 +78,7 @@ Configure basic population information and randomness.
 
 ### `age_structure(...)` – Age Structure
 
-Configure the population's age structure, including the total number of age stages and the juvenile/adult division.
+Configure the population's age structure, including the total number of age stages and the juvenile/adult division. The builder must have a `Species`: rebuilding ages also rebuilds genetic dimensions and sex constraints. A builder wrapping a draft without a Species rejects this operation before changing the draft.
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|

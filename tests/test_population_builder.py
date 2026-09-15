@@ -1452,6 +1452,20 @@ class TestRuntimeErrorGuards:
 class TestAgeStructureValidation:
     """Verify that age_structure() validates inputs correctly."""
 
+    def test_species_less_age_rebuild_rejected_before_slab_dimensions_change(self) -> None:
+        """A bare draft cannot rebuild genetic dimensions without its Species."""
+        species = nt.Species.from_dict(
+            "bare_age_slab_contract", {"c": {"l": ["A", "B"]}},
+            somatic_labels=["default", "infected"],
+        )
+        draft = PopulationBuilder.from_species(species).config
+        builder = PopulationBuilder(draft)
+        with pytest.raises(RuntimeError, match="requires a Species"):
+            builder.age_structure(4, 2)
+        assert builder.config is draft
+        assert draft.n_ztypes == 6
+        assert draft.zygotes_to_gametes_map.shape[1] == 6
+
     def test_n_ages_zero_raises(self, species):
         """n_ages <= 1 must raise ValueError."""
         with pytest.raises(ValueError, match="at least 2"):
