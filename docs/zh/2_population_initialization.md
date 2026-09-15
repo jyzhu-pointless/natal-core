@@ -177,8 +177,10 @@ builder 必须关联 `Species`，因为调整年龄也会重建遗传维度和�
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | 第二个幼体龄（age=1）的竞争权重。 | `1.0` | 幼体密度调节 | age=0 固定为 `1.0`；不设置时 age=1 与 age=0 同权重。仅当 `new_adult_age >= 2` 时有效；模型只有 age 0 这个幼体龄时，显式传入会报错而不是被忽略。 |
+| `competition_strength` | `float` | 第二个幼体龄（age=1）的竞争权重。 | `1.0` | 幼体密度调节 | age=0 默认为 `1.0`，此标量参数不修改它；不设置时 age=1 与 age=0 同权重。仅当 `new_adult_age >= 2` 时有效；模型只有 age 0 这个幼体龄时，显式传入会报错而不是被忽略。 |
 | `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"beverton_holt"` | 幼体密度调节 | 支持 `"no_competition"`、`"fixed"`、`"logistic"`（别名 `"linear"`）、`"beverton_holt"`（默认）、`"ricker"`。 |
+
+`competition_strength` 标量只设置第二个幼体龄的竞争权重。整向量入口 `pop.params.tensor_write("competition_weights", ...)` 也允许修改 age-0 权重；这会改变均衡竞争参考量，并可能改变种群轨迹。该入口没有将默认值 `1.0` 强制为不变量。
 
 **密度调节曲线**（`x` = 实际竞争强度 / 期望竞争强度；`s` = 平衡存活率；`r` = 低密度增长率）：
 
@@ -359,15 +361,14 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `*hook_items` | `HookOp` / `Op` 列表 / `Callable` | 声明式 Op（或其列表）、`@hook` 装饰的函数或单参数回调。 | 空 | 事件点（first / early / late / finish 等） | 声明式 Op 直接传入；事件由 `.hooks(..., event=...)` 或 Op 自带字段决定。 |
+| `*hook_items` | `HookOp` / `Op` 列表 / `Callable` | 声明式 Op（或其列表）、`@hook` 装饰的函数或单参数回调。 | 空 | 事件点（first / early / late / finish 等） | 推荐把 `event` 和 `priority` 写在每个声明式 Op 上；调用级元数据仍可作为兼容默认值或覆盖值。 |
 
 **示例**：
 
 ```python
 # ...
 .hooks(
-    nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
-    event="first",
+    nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10", event="first", priority=0),
 )
 ```
 

@@ -107,17 +107,10 @@ def test_regression_issue36_gamete_modifier_wrong_ztype(somatic_labels: list[str
     )
     rd = int(0.5 / (1 - 0.5) * 21 * 72)
 
-    @hook(event="first")
-    def release():
-        return [
-            Op.add(
-                genotypes="Drive|Rescue_Cargo@S",
-                ages=2,
-                sex="both",
-                delta=rd,
-                when="tick == 20",
-            )
-        ]
+    release = Op.add(
+        genotypes="Drive|Rescue_Cargo@S", ages=2, sex="both", delta=rd,
+        when="tick == 20", event="first",
+    )
 
     pop = (
         nt.PopulationBuilder.for_age_structured(sp)

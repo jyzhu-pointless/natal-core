@@ -147,10 +147,10 @@ registry.register_gamete_label("cas9_deposited")           # 返回 glab 索引
 
 ```python
 # 典型用法——无 slab，仅基因型
-Op.add(genotypes="Drive|WT", delta=500)
+Op.add(genotypes="Drive|WT", delta=500, event="early", priority=0)
 
 # 进阶用法——slab 约束
-Op.add(genotypes="Drive|WT@infected", delta=500)
+Op.add(genotypes="Drive|WT@infected", delta=500, event="early", priority=0)
 ```
 
 ### `@` 缺失的行为：两种不同的规则

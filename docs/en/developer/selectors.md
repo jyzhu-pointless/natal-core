@@ -72,7 +72,7 @@ Immutability and hashability are deliberate: they let one selector serve as a di
 | --- | --- | --- |
 | Initial counts | `initial_state(individual_count={"female": {"A|a": 100}})` | build time, written into the complete-axis draft |
 | Fitness | `fitness(viability={"A|a": 0.9})` | recorded at declaration, written to arrays at compile time |
-| Hook declarations | `hooks(Op.scale(...), event="early")` | **after publication**, compiled on final indices |
+| Hook declarations | `hooks(Op.scale(..., event="early"))` | **after publication**, compiled on final indices |
 | Observation groups | `with_observation(groups={...})` | **after publication**, compiled into masks |
 | Runtime parameter writes | `pop.params` writes by name | at run time, resolved on final indices |
 | Genetic rules | preset and modifier `genotype` conditions | at compile time, on the complete catalog |

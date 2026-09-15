@@ -55,15 +55,16 @@ def test_native_public_event_path_preserves_priority_condition_and_stop() -> Non
         "NativeHookSurface",
         "discrete",
         hook_calls=[
-            (([nt.Op.add(genotypes="WT|WT", ages=1, sex="female", delta=2.0)],),
-             {"event": "early", "priority": 1}),
+            (([nt.Op.add(genotypes="WT|WT", ages=1, sex="female", delta=2.0, event="early", priority=1)],),
+             {}),
             ((nt.Op.stop_if_above(
                 genotypes="WT|WT",
                 ages=1,
                 sex="female",
                 threshold=0.0,
                 when="tick >= 0",
-            ),), {"event": "early", "priority": 0}),
+                event="early", priority=0,
+            ),), {}),
         ],
     )
 
@@ -77,7 +78,7 @@ def test_native_scale_preserves_sperm_and_virgin_ratio() -> None:
     pop = _build_age_structured(
         _fresh_species(),
         "NativeSpermScale",
-        hook_calls=[(([nt.Op.scale(genotypes="A|A", ages=[1], sex="female", factor=0.5)],), {"event": "early"})],
+        hook_calls=[(([nt.Op.scale(genotypes="A|A", ages=[1], sex="female", factor=0.5, event="early")],), {})],
     )
     state = pop._live_state()
     individual_count = np.zeros_like(state.individual_count)
@@ -98,7 +99,7 @@ def test_native_program_rejects_unknown_opcode_before_state_change() -> None:
         "NativeOpcodeBoundary",
         "discrete",
         stochastic=False,
-        hook_calls=[([nt.Op.scale(genotypes="WT|WT", factor=0.5)], {"event": "early"})],
+        hook_calls=[([nt.Op.scale(genotypes="WT|WT", factor=0.5, event="early")], {})],
     )
     before = pop._rust_lifecycle_backend.state_snapshot()
     malformed = pop._hook_program._replace(
@@ -131,7 +132,7 @@ def test_wright_fisher_batch_journal_uses_each_event_tick() -> None:
         "EvaluatorWFJournal",
         "discrete",
         stochastic=False,
-        hook_calls=[((nt.Op.set_param("carrying_capacity", "carrying_capacity + 1"),), {"event": "first"})],
+        hook_calls=[((nt.Op.set_param("carrying_capacity", "carrying_capacity + 1", event="first"),), {})],
     )
     config = pop.config._replace(extreme_speed_mode=1)
     backend = RustDiscreteLifecycleBackend(config, seed=1)
@@ -170,7 +171,7 @@ def test_direct_population_event_initializes_native_session(model: Literal["age"
         f"DirectEvent_{model}",
         model,
         stochastic=False,
-        hook_calls=[((nt.Op.set_param("carrying_capacity", 321.0),), {"event": "first"})],
+        hook_calls=[((nt.Op.set_param("carrying_capacity", 321.0, event="first"),), {})],
     )
     # The raw constructor is the internal mechanism build/clone/restore
     # share; the compiled plan travels with it exactly as with clones.
@@ -283,7 +284,7 @@ def test_native_condition_logic_uses_boolean_truth_table(
         f"NativeTruthTable_{model}",
         model,
         stochastic=False,
-        hook_calls=[((nt.Op.add(genotypes="WT|WT", ages=1, sex="female", delta=1.0, when=condition),), {"event": "early"})],
+        hook_calls=[((nt.Op.add(genotypes="WT|WT", ages=1, sex="female", delta=1.0, when=condition, event="early"),), {})],
     )
     initial = pop.state
     for tick in range(6):

@@ -378,9 +378,10 @@ class TestSpatialHookCompress:
         )
         drive = _make_drive()
 
-        @nt.hook(event="first", priority=0)
-        def release():
-            return [nt.Op.add(genotypes="a|a", ages=1, sex="male", delta=10)]
+        release = nt.Op.add(
+            genotypes="a|a", ages=1, sex="male", delta=10,
+            event="first", priority=0,
+        )
 
         pop = nt.SpatialPopulation.builder(
             species=sp, n_demes=2, pop_type="discrete_generation",
@@ -403,9 +404,10 @@ class TestSpatialHookCompress:
             unordered=True, gamete_labels=["default"],
         )
 
-        @nt.hook(event="first", priority=0)
-        def release():
-            return [nt.Op.add(genotypes="A|A", ages=1, sex="male", delta=10)]
+        release = nt.Op.add(
+            genotypes="A|A", ages=1, sex="male", delta=10,
+            event="first", priority=0,
+        )
 
         pop = nt.SpatialPopulation.builder(
             species=sp, n_demes=2, pop_type="discrete_generation",
@@ -468,9 +470,10 @@ class TestSpatialHookPatternFormats:
             resistance_allele="R2", drive_conversion_rate=1.0,
         )
 
-        @nt.hook(event="first", priority=0)
-        def release():
-            return [nt.Op.add(genotypes="Dr|*", ages=1, sex="male", delta=10)]
+        release = nt.Op.add(
+            genotypes="Dr|*", ages=1, sex="male", delta=10,
+            event="first", priority=0,
+        )
 
         pop = nt.SpatialPopulation.builder(
             species=sp, n_demes=1, pop_type="discrete_generation",
@@ -493,9 +496,10 @@ class TestSpatialHookPatternFormats:
             gamete_labels=["default"],
         )
 
-        @nt.hook(event="first", priority=0)
-        def release():
-            return [nt.Op.add(genotypes="Dr|WT@E", ages=1, sex="male", delta=10)]
+        release = nt.Op.add(
+            genotypes="Dr|WT@E", ages=1, sex="male", delta=10,
+            event="first", priority=0,
+        )
 
         pop = nt.SpatialPopulation.builder(
             species=sp, n_demes=1, pop_type="discrete_generation",
@@ -696,9 +700,10 @@ class TestNonSpatialHookCompress:
             resistance_allele="R2", drive_conversion_rate=1.0,
         )
 
-        @nt.hook(event="first", priority=0)
-        def release():
-            return [nt.Op.add(genotypes="Dr|Dr", ages=1, sex="male", delta=10)]
+        release = nt.Op.add(
+            genotypes="Dr|Dr", ages=1, sex="male", delta=10,
+            event="first", priority=0,
+        )
 
         pop = (
             nt.AgeStructuredPopulation.setup(

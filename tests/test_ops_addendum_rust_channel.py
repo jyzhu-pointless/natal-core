@@ -121,7 +121,7 @@ def _build_spatial(
             hook_calls=[
                 (
                     ([Op.set_param("carrying_capacity", "K * 0.5", every=1, event=event)],),
-                    {"event": event},
+                    {},
                 )
             ],
         )
@@ -214,7 +214,7 @@ def test_spatial_heterogeneous_columns_split_across_demes() -> None:
             hook_calls=[
                 (
                     ([Op.set_param("carrying_capacity", "K * 0.5", every=1, event="early")],),
-                    {"event": "early"},
+                    {},
                 )
             ],
         ),
@@ -225,7 +225,7 @@ def test_spatial_heterogeneous_columns_split_across_demes() -> None:
             hook_calls=[
                 (
                     ([Op.set_param("carrying_capacity", "K * 0.5", every=1, event="early")],),
-                    {"event": "early"},
+                    {},
                 )
             ],
         ),
@@ -266,7 +266,7 @@ def test_rust_spatial_session_applies_event_writes_raw_rows() -> None:
             hook_calls=[
                 (
                     ([Op.set_param("carrying_capacity", "K * 0.5", every=1, event="first")],),
-                    {"event": "first"},
+                    {},
                 )
             ],
         )
@@ -319,7 +319,7 @@ def test_rust_run_merges_journal_into_draft_and_params_log() -> None:
     pop_rs = _build_viable(
         species_rs,
         "mergers",
-        hook_calls=[(([Op.set_param("carrying_capacity", "K * 0.9", every=1)],), {"event": "early"})],
+        hook_calls=[(([Op.set_param("carrying_capacity", "K * 0.9", every=1, event="early")],), {})],
     )
     pop_rs._initialize_session(seed=11)
     pop_rs.run(3, record_every=0)
@@ -347,7 +347,7 @@ def test_rust_run_inf_expression_raises_value_error_with_param_name() -> None:
     pop = _build_viable(
         species,
         "infrun",
-        hook_calls=[(([Op.set_param("carrying_capacity", "K / 0")],), {"event": "early"})],
+        hook_calls=[(([Op.set_param("carrying_capacity", "K / 0", event="early")],), {})],
     )
     pop._initialize_session(seed=13)
     with pytest.raises(ValueError, match="carrying_capacity") as excinfo:
@@ -366,8 +366,7 @@ def test_rust_discrete_run_merges_journal_into_draft_and_params_log() -> None:
     ).initial_state(
         individual_count={"female": {"A|A": 40.0}, "male": {"A|A": 20.0}}
     ).reproduction(eggs_per_female=4.0).hooks(
-        [Op.set_param("eggs_per_female", "eggs_per_female * 0.5", every=1)],
-        event="early",
+        [Op.set_param("eggs_per_female", "eggs_per_female * 0.5", every=1, event="early")],
     ).build()
     pop_rs._initialize_session(seed=19)
     pop_rs.run(3, record_every=0)
@@ -398,7 +397,7 @@ def test_spatial_drain_presentation_uses_deme_prefix() -> None:
             hook_calls=[
                 (
                     ([Op.set_param("carrying_capacity", "K * 0.5", every=1, event="first")],),
-                    {"event": "first"},
+                    {},
                 )
             ],
         )
@@ -438,8 +437,8 @@ def test_set_param_none_and_bool_value_raise_type_error(bad_value: object) -> No
             "badtype",
             hook_calls=[
                 (
-                    ([Op.set_param("carrying_capacity", bad_value)],),  # type: ignore[arg-type]  # deliberately invalid input
-                    {"event": "early"},
+                    ([Op.set_param("carrying_capacity", bad_value, event="early")],),  # type: ignore[arg-type]  # deliberately invalid input
+                    {},
                 )
             ],
         )
@@ -453,7 +452,7 @@ def test_set_param_invalid_character_raises_value_error(expr: str) -> None:
         _build_viable(
             species,
             f"badlex{abs(hash(expr)) % 10000}",
-            hook_calls=[(([Op.set_param("carrying_capacity", expr)],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("carrying_capacity", expr, event="early")],), {})],
         )
 
 
@@ -467,6 +466,7 @@ def test_set_param_missing_param_name_stays_value_error() -> None:
         "both",
         0.0,
         None,
+        event="early",
         param_name=None,
         value_expr=1.0,
     )
@@ -474,5 +474,5 @@ def test_set_param_missing_param_name_stays_value_error() -> None:
         _build_viable(
             species,
             "noname",
-            hook_calls=[(([raw_op],), {"event": "early"})],
+            hook_calls=[(([raw_op],), {})],
         )

@@ -198,16 +198,13 @@ def test_bare_definition_cannot_compile() -> None:
 
 def test_inline_build_hook_is_normalized_and_executed() -> None:
     """Inline terminal hook declarations share normal hook defaults and dispatch."""
-    from natal.frontend.hooks import HookOp, Op, hook
+    from natal.frontend.hooks import Op
 
     species = nt.Species.from_dict(
         name="EvaluatorInlineBuildHook", structure={"chr": {"locus": ["A", "B"]}}
     )
 
-    @hook(event="first")
-    def retune() -> list[HookOp]:
-        """Make execution of the inline declaration externally observable."""
-        return [Op.set_param("carrying_capacity", 123.0)]
+    retune = Op.set_param("carrying_capacity", 123.0, event="first")
 
     pop = PopulationBuilder.for_discrete(species).build(hook_items=[retune])
     pop.run(1)

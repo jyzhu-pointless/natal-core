@@ -82,15 +82,15 @@ def test_declarative_hooks_declared_at_build_run_in_engine(
     run with the hook must land strictly below the hook-free baseline.
     """
     ops = [
-        Op.scale(genotypes="*", ages="*", sex="both", factor=0.5),
-        Op.add(genotypes="A|A", ages=1, sex="female", delta=3.0, when="tick >= 0"),
+        Op.scale(genotypes="*", ages="*", sex="both", factor=0.5, event="early"),
+        Op.add(genotypes="A|A", ages=1, sex="female", delta=3.0, when="tick >= 0", event="early"),
     ]
 
     baseline = _build_population(species, "hook_baseline")
     hooked = _build_population(
         species,
         "hooked",
-        hook_calls=[((ops,), {"event": "early", "name": "early_control"})],
+        hook_calls=[((ops,), {"name": "early_control"})],
     )
     hooked._initialize_session(seed=7)
 

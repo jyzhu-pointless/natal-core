@@ -36,8 +36,11 @@ sp = nt.Species.from_dict(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 control_ops = [
-    nt.Op.scale(genotypes="*", ages="*", sex="both", factor=0.98),
-    nt.Op.add(genotypes="A|A", ages=1, sex="female", delta=5.0, when="tick >= 2"),
+    nt.Op.scale(genotypes="*", ages="*", sex="both", factor=0.98, event="early"),
+    nt.Op.add(
+        genotypes="A|A", ages=1, sex="female", delta=5.0,
+        when="tick >= 2", event="early",
+    ),
 ]
 
 pop = (
@@ -59,7 +62,7 @@ pop = (
     )
     .survival(female_age_based_survival=0.9, male_age_based_survival=0.9)
     .competition(juvenile_growth_mode=1, carrying_capacity=500)
-    .hooks(control_ops, event="early", name="demo_control")
+    .hooks(control_ops, name="demo_control")
     .build()
 )
 

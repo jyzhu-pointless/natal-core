@@ -178,8 +178,10 @@ Competition parameters take effect during the survival phase of the population.
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | Competition weight of the second juvenile age class (age=1) | `1.0` | Juvenile density regulation | Age 0 is fixed at `1.0`; leaving it unset keeps age 1 at the same weight. Needs `new_adult_age >= 2` — a model whose only juvenile age is age 0 rejects an explicit value instead of ignoring it |
+| `competition_strength` | `float` | Competition weight of the second juvenile age class (age=1) | `1.0` | Juvenile density regulation | Age 0 defaults to `1.0` and this scalar option does not change it; leaving it unset keeps age 1 at the same weight. Needs `new_adult_age >= 2` — a model whose only juvenile age is age 0 rejects an explicit value instead of ignoring it |
 | `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"beverton_holt"` | Juvenile density regulation | Supports `"no_competition"`, `"fixed"`, `"logistic"` (alias `"linear"`), `"beverton_holt"` (default) and `"ricker"` |
+
+The `competition_strength` scalar sets only the second juvenile age weight. The full-vector `pop.params.tensor_write("competition_weights", ...)` entry also accepts changes to the age-0 weight; that changes the equilibrium competition reference and can change the population trajectory. The default value of `1.0` is not enforced as an invariant by that entry.
 
 **Density-regulation curves** (`x` = actual competition strength / expected competition strength; `s` = expected survival; `r` = low-density growth rate):
 
@@ -360,15 +362,14 @@ Notes:
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `*hook_items` | `HookOp` / `Op` list / `Callable` | Declarative ops (or lists of them), `@hook`-decorated functions, or single-parameter callbacks | Empty | Event points (first / early / late / finish, etc.) | Declarative ops are passed directly; the event comes from `.hooks(..., event=...)` or the op's own fields. |
+| `*hook_items` | `HookOp` / `Op` list / `Callable` | Declarative ops (or lists of them), `@hook`-decorated functions, or single-parameter callbacks | Empty | Event points (first / early / late / finish, etc.) | Recommended: put `event` and `priority` on each declarative Op. Call-level metadata remains a compatibility default/override. |
 
 **Example**:
 
 ```python
 # ...
 .hooks(
-    nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
-    event="first",
+    nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10", event="first", priority=0),
 )
 ```
 

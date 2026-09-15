@@ -107,7 +107,7 @@ def test_convert_source_multiple_match_raises_with_match_list() -> None:
         _build_age_structured(
             species,
             "multi_src",
-            hook_calls=[(([Op.convert("*", "A|a", probability=0.5)],), {"event": "early"})],
+            hook_calls=[(([Op.convert("*", "A|a", probability=0.5, event="early")],), {})],
         )
 
 
@@ -118,7 +118,7 @@ def test_convert_target_multiple_match_raises() -> None:
         _build_age_structured(
             species,
             "multi_dst",
-            hook_calls=[(([Op.convert("A|A", "*", probability=0.5)],), {"event": "early"})],
+            hook_calls=[(([Op.convert("A|A", "*", probability=0.5, event="early")],), {})],
         )
 
 
@@ -129,7 +129,7 @@ def test_convert_zero_match_raises() -> None:
         _build_age_structured(
             species,
             "zero_src",
-            hook_calls=[(([Op.convert("Z|Z", "A|a", probability=0.5)],), {"event": "early"})],
+            hook_calls=[(([Op.convert("Z|Z", "A|a", probability=0.5, event="early")],), {})],
         )
 
 
@@ -140,7 +140,7 @@ def test_convert_identical_source_target_raises() -> None:
         _build_age_structured(
             species,
             "same_src_dst",
-            hook_calls=[(([Op.convert("A|A", "A|A", probability=0.5)],), {"event": "early"})],
+            hook_calls=[(([Op.convert("A|A", "A|A", probability=0.5, event="early")],), {})],
         )
 
 
@@ -159,7 +159,7 @@ def test_set_param_tensor_target_raises() -> None:
         _build_age_structured(
             species,
             "tensor_target",
-            hook_calls=[(([Op.set_param("viability", 1.0)],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("viability", 1.0, event="early")],), {})],
         )
 
 
@@ -170,7 +170,7 @@ def test_set_param_vector_target_raises() -> None:
         _build_age_structured(
             species,
             "vector_target",
-            hook_calls=[(([Op.set_param("female_age_based_survival", 1.0)],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("female_age_based_survival", 1.0, event="early")],), {})],
         )
 
 
@@ -181,7 +181,7 @@ def test_set_param_mode_enum_target_raises() -> None:
         _build_age_structured(
             species,
             "enum_target",
-            hook_calls=[(([Op.set_param("growth_mode", 1)],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("growth_mode", 1, event="early")],), {})],
         )
 
 
@@ -192,7 +192,7 @@ def test_set_param_unknown_name_raises() -> None:
         _build_age_structured(
             species,
             "unknown_name",
-            hook_calls=[(([Op.set_param("carrying_capacity", "not_a_param * 2")],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("carrying_capacity", "not_a_param * 2", event="early")],), {})],
         )
 
 
@@ -207,7 +207,7 @@ def test_set_param_bad_rpn_raises(expr: str) -> None:
         _build_age_structured(
             species,
             f"bad_rpn{abs(hash(expr)) % 1000}",
-            hook_calls=[(([Op.set_param("carrying_capacity", expr)],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("carrying_capacity", expr, event="early")],), {})],
         )
 
 
@@ -230,7 +230,7 @@ def test_convert_deterministic_conservation_bit_exact() -> None:
     pop = _build_age_structured(
         species,
         "conv_det",
-        hook_calls=[(([Op.convert("A|A", "A|a", probability=0.25)],), {"event": "early"})],
+        hook_calls=[(([Op.convert("A|A", "A|a", probability=0.25, event="early")],), {})],
     )
 
     ind_before = pop.state.individual_count.copy()
@@ -292,10 +292,10 @@ def test_convert_conditional_chain_split() -> None:
         hook_calls=[
             (
                 ([
-                    Op.convert("A|A", "A|a", probability=0.3),
-                    Op.convert("A|A", "a|a", probability=1.0),
+                    Op.convert("A|A", "A|a", probability=0.3, event="early"),
+                    Op.convert("A|A", "a|a", probability=1.0, event="early"),
                 ],),
-                {"event": "early"},
+                {},
             )
         ],
     )
@@ -323,7 +323,7 @@ def test_convert_discrete_model_degenerates_to_plain_migration() -> None:
         .initial_state(
             individual_count={"female": {"A|A": 40.0}, "male": {"A|A": 20.0}}
         )
-        .hooks([Op.convert("A|A", "A|a", probability=0.5)], event="early")
+        .hooks([Op.convert("A|A", "A|a", probability=0.5, event="early")])
         .build()
     )
     before = pop.state.individual_count.sum()
@@ -347,7 +347,7 @@ def test_set_param_rpn_matches_hand_written_expression_per_tick() -> None:
     pop = _build_age_structured(
         species,
         "rpn_vs_hand",
-        hook_calls=[(([Op.set_param("carrying_capacity", "K * 0.95", every=10)],), {"event": "early"})],
+        hook_calls=[(([Op.set_param("carrying_capacity", "K * 0.95", every=10, event="early")],), {})],
     )
 
     k_manual = 800.0
@@ -366,7 +366,7 @@ def test_set_param_every_start_schedule_and_params_log() -> None:
     pop = _build_age_structured(
         species,
         "schedule",
-        hook_calls=[(([Op.set_param("carrying_capacity", 123.0, every=10, start=5)],), {"event": "early"})],
+        hook_calls=[(([Op.set_param("carrying_capacity", 123.0, every=10, start=5, event="early")],), {})],
     )
 
     # Assignment semantics: the value persists between firings, so the
@@ -389,7 +389,7 @@ def test_set_param_params_log_matches_handwritten_channel() -> None:
     declarative = _build_age_structured(
         species,
         "log_declarative",
-        hook_calls=[(([Op.set_param("eggs_per_female", 5.0)],), {"event": "early"})],
+        hook_calls=[(([Op.set_param("eggs_per_female", 5.0, event="early")],), {})],
     )
     declarative.run(1, record_every=0)
 
@@ -412,7 +412,7 @@ def test_set_param_when_clause_gates_firing() -> None:
     pop = _build_age_structured(
         species,
         "when_gate",
-        hook_calls=[(([Op.set_param("carrying_capacity", 42.0, when="tick >= 2 and tick < 4")],), {"event": "early"})],
+        hook_calls=[(([Op.set_param("carrying_capacity", 42.0, when="tick >= 2 and tick < 4", event="early")],), {})],
     )
     values = []
     for _ in range(5):
@@ -430,7 +430,7 @@ def test_set_param_spatial_per_deme_columns() -> None:
             species,
             name,
             carrying_capacity=500.0,
-            hook_calls=[(([Op.set_param("carrying_capacity", 111.0, every=1)],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("carrying_capacity", 111.0, every=1, event="early")],), {})],
         )
 
     demes = [build_deme(f"sp_d{d}") for d in range(3)]
@@ -456,7 +456,7 @@ def test_set_param_spatial_per_deme_columns() -> None:
             species2,
             name,
             carrying_capacity=500.0,
-            hook_calls=[(([Op.set_param("carrying_capacity", 222.0, every=1)],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("carrying_capacity", 222.0, every=1, event="early")],), {})],
         )
 
     d0 = build_selected_deme("sel_d0")
@@ -491,11 +491,11 @@ def test_mixed_program_session_column_tracks_draft() -> None:
         hook_calls=[
             (
                 ([
-                    Op.set_param("carrying_capacity", "K * 0.9", every=1),
-                    Op.convert("A|A", "A|a", probability=0.25),
-                    Op.scale(genotypes="a|a", factor=0.5, sex="male"),
+                    Op.set_param("carrying_capacity", "K * 0.9", every=1, event="early"),
+                    Op.convert("A|A", "A|a", probability=0.25, event="early"),
+                    Op.scale(genotypes="a|a", factor=0.5, sex="male", event="early"),
                 ],),
-                {"event": "early", "name": "mixed_program"},
+                {"name": "mixed_program"},
             )
         ],
     )
@@ -523,14 +523,14 @@ def test_mixed_ops_execute_in_priority_order() -> None:
         species,
         "mixed",
         hook_calls=[
-            (([Op.set_param("carrying_capacity", "K * 0.5")],),
-             {"event": "early", "priority": 0, "name": "first_write"}),
+            (([Op.set_param("carrying_capacity", "K * 0.5", event="early", priority=0)],),
+             {"name": "first_write"}),
             (
                 ([
-                    Op.convert("A|A", "A|a", probability=0.5),
-                    Op.add(genotypes="a|a", ages="*", sex="both", delta=4.0),
+                    Op.convert("A|A", "A|a", probability=0.5, event="early", priority=1),
+                    Op.add(genotypes="a|a", ages="*", sex="both", delta=4.0, event="early", priority=1),
                 ],),
-                {"event": "early", "priority": 1, "name": "then_convert_add"},
+                {"name": "then_convert_add"},
             ),
         ],
     )
@@ -567,6 +567,6 @@ def test_op_types_and_program_flags() -> None:
     hooked = _build_age_structured(
         species,
         "flags_setparam",
-        hook_calls=[(([Op.set_param("sex_ratio", 0.5)],), {"event": "early"})],
+        hook_calls=[(([Op.set_param("sex_ratio", 0.5, event="early")],), {})],
     )
     assert hooked._hook_program.has_set_param is True  # noqa: SLF001

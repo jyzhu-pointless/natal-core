@@ -118,8 +118,9 @@ class HookOp:
     The compiler resolves all symbolic fields into concrete integer arrays.
 
     An ``HookOp`` can be registered directly as a declarative hook via
-    ``.hooks(op, ...)``. *event* rides on the op or comes from the
-    registration call (op-level wins when both are given); *priority*
+    ``.hooks(op, ...)``. Recommended declarations put *event* and
+    *priority* on the Op itself. *event* rides on the op or comes from
+    the registration call (op-level wins when both are given); *priority*
     is op-level data — a call-level ``priority`` assigns one shared
     value to the ops of that item (packing ops into one list is
     declaring them with one priority).

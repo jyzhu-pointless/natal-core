@@ -141,7 +141,7 @@ class TestZeroModuloDivisor:
         """The declaring build chain fails; nothing is registered."""
         import natal as nt
 
-        op = nt.Op.scale(ages=[0], factor=0.5, when="tick % 0 == 0")
+        op = nt.Op.scale(ages=[0], factor=0.5, when="tick % 0 == 0", event="early")
         species = nt.Species.from_dict(
             name="zmod_species", structure={"chr1": {"loc": ["WT", "Dr"]}}
         )
@@ -154,7 +154,7 @@ class TestZeroModuloDivisor:
             )
             .reproduction(eggs_per_female=0.0, sex_ratio=0.5)
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
-            .hooks(op, event="early")
+            .hooks(op)
         )
         with pytest.raises(ValueError, match="positive integer"):
             builder.build()

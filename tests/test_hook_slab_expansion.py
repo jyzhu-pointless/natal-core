@@ -131,9 +131,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
             .build()
         )
 
-        @nt.hook(event="early")
-        def scale_all():
-            return [Op.scale(factor=0.5)]
+        scale_all = Op.scale(factor=0.5, event="early")
 
         pop = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_star_hook")
@@ -155,9 +153,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
     def test_specific_genotype_hook_affects_all_slabs(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
 
-        @nt.hook(event="early")
-        def kill_AA():
-            return [Op.kill(prob=1.0, genotypes="A|A")]
+        kill_AA = Op.kill(prob=1.0, genotypes="A|A", event="early")
 
         pop = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_kill_AA")
@@ -180,9 +176,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
     def test_add_hook_affects_correct_ztypes(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
 
-        @nt.hook(event="early")
-        def add_aA():
-            return [Op.add(delta=10, genotypes="a|A")]
+        add_aA = Op.add(delta=10, genotypes="a|A", event="early")
 
         pop = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_add_aA")
@@ -202,9 +196,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
     def test_sample_hook_affects_all_ztypes(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
 
-        @nt.hook(event="early")
-        def sample_hook():
-            return [Op.sample(size=10, genotypes="A|A")]
+        sample_hook = Op.sample(size=10, genotypes="A|A", event="early")
 
         pop = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_sample_hook")
@@ -269,9 +261,9 @@ class TestPhaseD_MultiLocusSlab:
             .build()
         )
 
-        @nt.hook(event="early")
-        def scale_AA_BB():
-            return [Op.scale(factor=0.5, genotypes="A1/B1|A1/B1")]
+        scale_AA_BB = Op.scale(
+            factor=0.5, genotypes="A1/B1|A1/B1", event="early"
+        )
 
         hooked = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="phD_run_hooked")
@@ -287,4 +279,3 @@ class TestPhaseD_MultiLocusSlab:
         assert hooked.state.individual_count.sum() > 0
         pop.run(1)
         assert pop.state.individual_count.sum() > 0
-

@@ -1099,10 +1099,10 @@ def test_compact_plan_csr_then_callback_ordering() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    @nt.hook(event="early", priority=1)
-    def mul2_csr() -> list[object]:
-        """Scale age-1 females by two."""
-        return [Op.scale(genotypes="WT|WT", ages=1, sex="female", factor=2.0)]
+    mul2_csr = Op.scale(
+        genotypes="WT|WT", ages=1, sex="female", factor=2.0,
+        event="early", priority=1,
+    )
 
     sp = _build_quiescent_age_pop(
         species,

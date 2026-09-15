@@ -99,8 +99,10 @@ pop = nt.AgeStructuredPopulation\
     .presets(
         drive
     ).hooks(
-        nt.Op.add(genotypes="WT|Dr", ages=2, sex="male", delta=60, when="tick == 10"),
-        event="first",
+        nt.Op.add(
+            genotypes="WT|Dr", ages=2, sex="male", delta=60,
+            when="tick == 10", event="first",
+        ),
     ).build()
 
 nt.launch_vue(pop)

@@ -729,8 +729,8 @@ def test_hook_program_installation_preserves_backend(age_species: Species) -> No
             name,
             hook_calls=[
                 (
-                    ([Op.scale(genotypes="*", ages="*", sex="both", factor=0.9)],),
-                    {"event": "early", "name": "slice2_early_control"},
+                    ([Op.scale(genotypes="*", ages="*", sex="both", factor=0.9, event="early")],),
+                    {"name": "slice2_early_control"},
                 )
             ],
         )

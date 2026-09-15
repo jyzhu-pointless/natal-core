@@ -21,7 +21,7 @@ Hook 注册和手动触发（`pop.trigger_event(...)`）共用这一事件目录
 
 ## 声明式 Hook
 
-对于大多数用户，推荐直接把 `nt.Op.*` 对象传给 `.hooks()`，在种群构建链上声明：
+对于大多数用户，推荐直接把带有自身 `event` 和 `priority` 的 `nt.Op.*` 对象传给 `.hooks()`，在种群构建链上声明：
 
 ```python
 import natal as nt
@@ -47,11 +47,9 @@ pop = (
     )
     .hooks(
         [
-            nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0"),
-            nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98),
+            nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0", event="first", priority=10),
+            nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98, event="first", priority=10),
         ],
-        event="first",
-        priority=10,
     )
     .build()
 )
@@ -63,11 +61,11 @@ pop.run(n_steps=200, record_every=10)
 
 ## Hook 的编写形态
 
-- **声明式（Declarative）**：直接把 `Op` 对象（或其列表）传给 `.hooks()`，构建期编译为 CSR 计划。这是推荐写法。
+- **声明式（Declarative）**：直接把带有自身事件和优先级的 `Op` 对象（或其列表）传给 `.hooks()`，构建期编译为 CSR 计划。这是推荐写法。
 - **回调（Callback）**：单参数 `def hook(pop: TickContext) -> int`，用 `@nt.hook` 装饰后传入（也可直接传裸函数，事件在 `.hooks(..., event=...)` 上指定）。
 - **选择器回调（Selector）**：`@nt.hook(..., selectors={...})`，选择器值在构建期解析、调用时注入。
 
-`@nt.hook` 装饰器按函数签名识别后两类形态（构建期编译时判定）；零参数、返回 `List[HookOp]` 的函数也会被识别为声明式——构建期调用一次、把返回的 Op 列表送入同一条编译管线。当 Op 自带的 event / priority 均为默认值时，效果等同直接传这些 Op；装饰器上的 priority 对整组具有最终决定权。
+`@nt.hook` 装饰器在构建期间按函数签名识别后两类形态；零参数、返回 `List[HookOp]` 的函数仍是声明式 Hook 的兼容入口：构建流程可能先调用它收集引用，再调用它进行编译，返回的 Op 都进入正常管线。推荐直接声明带有 Op 本地 `event` / `priority` 的 Op。只有需要动态组装列表时才使用工厂形式；其装饰器和调用级元数据仍遵循下文的优先级规则。
 
 旧的 `(state, config, deme_id)` 三参数签名已被显式拒绝（`TypeError` —— 该签名是 njit 时代的遗物，没有迁移通道）。回调 Hook 返回值 `0`（或 `RESULT_CONTINUE`）继续模拟，非零值（或 `RESULT_STOP`）停止模拟。
 
@@ -93,14 +91,14 @@ pop.run(n_steps=200, record_every=10)
 - `Op.set_param`：按 tick 计划表调度一个生态参数（见下文）。
 - `Op.convert`：一对一概率性基因型转换（见下文）。
 
-把它们理解为"对状态张量进行声明式变换"。所有 `Op` 工厂方法都接受 `event` 与 `priority` 关键字参数：`event` 是 Op 级事件（优先于调用级），`priority` 是 Op 级优先级（调用级 `priority` 赋值时覆盖它）。
+把它们理解为"对状态张量进行声明式变换"。所有 `Op` 工厂方法都接受 `event` 与 `priority` 关键字参数。推荐把它们写在 Op 上。为兼容已有代码，`.hooks(..., event=...)` 可为缺少事件的 Op 提供默认值，但 Op 显式指定的事件优先；`.hooks(..., priority=...)` 可为一次声明中的 Op 赋同一优先级，并覆盖 Op 本地优先级。
 
 ### `Op.set_param`：无代码参数调度
 
 `Op.set_param(param, value, every=1, start=0, when=None)` 按 tick 计划重写一个运行时可变生态标量：
 
 ```python
-nt.Op.set_param("carrying_capacity", "K * 0.95", every=10)
+nt.Op.set_param("carrying_capacity", "K * 0.95", every=10, event="early", priority=0)
 ```
 
 - `value` 是**算术表达式**（RPN 编译）：操作数是 jsonc 参数名（`K` 是 `carrying_capacity` 的注册别名）或数字字面量，运算符是 `+ - * /`，支持括号。纯数字等价于常量表达式。表达式**每次触发时对当前值求值**，因此 `"K * 0.95"` 会复利递减。
@@ -229,16 +227,13 @@ pop = (
         "male": {"WT|WT": 1000}
     })
     .hooks(
-        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0"),
-        event="first", priority=10,
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0", event="first", priority=10),
     )
     .hooks(
-        nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.95, when="tick > 50"),
-        event="late", priority=5,
+        nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.95, event="late", priority=5, when="tick > 50"),
     )
     .hooks(
-        nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000),
-        event="late",
+        nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000, event="late", priority=0),
     )
     .build()
 )
@@ -256,7 +251,7 @@ Rust 原生引擎是唯一的执行后端，Hook 只有一条执行路径：
 - 单参数回调（`TickContext`）在事件边界跨 Python↔Rust 桥进入会话，每次调用获得独立的上下文封装；回调写入进入该次调用的事件事务，成功才提交、失败则丢弃本次候选。
 - 同一事件内，声明式操作与 Python 回调按 `priority` **跨类型统一排序**（数值小者先执行；同 priority 时按声明顺序）。两类 Hook 的 `priority` 互相可比：无论回调还是声明式操作，`priority` 更小者总是先执行，后面的 Hook 能看到前面 Hook 的写入。
 
-Hook 是"Op 即 hook"的声明式编译模型：`Op` 对象本身构成 hook 程序，直接传入 `.hooks()` 即完成声明（`@hook` 装饰的零参数函数仍可作为返回 Op 列表的工厂入口，效果等价）。`initialize` 事件不存在 —— 初始化阶段的逻辑请用 `first` 事件的首个 tick（`when="tick == 1"`）或 `finish` 事件表达。
+Hook 是"Op 即 hook"的声明式编译模型：`Op` 对象本身构成 hook 程序，直接传入 `.hooks()` 即完成声明。`@hook` 装饰的零参数函数返回 Op 列表仍可作为兼容工厂入口；构建流程可能先调用它收集引用，再调用它进行编译。`initialize` 事件不存在 —— 初始化阶段的逻辑请用 `first` 事件的首个 tick（`when="tick == 1"`）或 `finish` 事件表达。
 
 `SpatialPopulation` 中，local Hook 的 `priority` 只在 deme 内部生效；不同 deme 之间不定义全局顺序。空间模型见 [空间模拟](3_spatial_simulation.md)。
 
@@ -286,12 +281,10 @@ pop = (
         "male": {"WT|WT": 1000}
     })
     .hooks(
-        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0"),
-        event="first",
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0", event="first", priority=0),
     )
     .hooks(
-        nt.Op.stop_if_zero(sex="female"),
-        event="late", priority=5,
+        nt.Op.stop_if_zero(sex="female", event="late", priority=5),
     )
     .build()
 )

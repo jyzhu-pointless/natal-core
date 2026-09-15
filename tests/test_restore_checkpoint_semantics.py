@@ -551,7 +551,7 @@ class TestSetParamAuditPrecedence:
         """A mid-run set_param edit is undone on the value face."""
         pop = _build_age(
             "R3JournalA",
-            hook_calls=[(([Op.set_param("carrying_capacity", 111.0, when="tick >= 1")],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("carrying_capacity", 111.0, when="tick >= 1", event="early")],), {})],
         )
         pop.run(3, record_every=1)
         assert pop.params.carrying_capacity == 111.0
@@ -568,7 +568,7 @@ class TestSetParamAuditPrecedence:
         pop.run(3, record_every=1)
         control = _build_age(
             "R3JournalB",
-            hook_calls=[(([Op.set_param("carrying_capacity", 111.0, when="tick >= 1")],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("carrying_capacity", 111.0, when="tick >= 1", event="early")],), {})],
         )
         control.run(3, record_every=1)
         np.testing.assert_array_equal(
@@ -579,7 +579,7 @@ class TestSetParamAuditPrecedence:
         """The discrete journal channel shows the same precedence."""
         pop = _build_discrete(
             "R3JournalC",
-            hook_calls=[(([Op.set_param("eggs_per_female", 9.0, when="tick >= 1")],), {"event": "early"})],
+            hook_calls=[(([Op.set_param("eggs_per_female", 9.0, when="tick >= 1", event="early")],), {})],
         )
         pop.run(3, record_every=1)
         assert pop.params.eggs_per_female == 9.0

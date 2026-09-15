@@ -125,8 +125,7 @@ pop = (nt.DiscreteGenerationPopulation
     )
     .presets(drive)
     .hooks(
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
-        event="first",
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10", event="first", priority=0),
     )
     .build())
 

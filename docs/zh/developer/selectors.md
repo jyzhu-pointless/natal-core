@@ -72,7 +72,7 @@ resolve_zygote_type("a|A", species, reg)  → 索引 1
 | --- | --- | --- |
 | 初始数量 | `initial_state(individual_count={"female": {"A|a": 100}})` | 构建期，写入完整轴草稿 |
 | fitness | `fitness(viability={"A|a": 0.9})` | 声明期记录、编译期写数组 |
-| Hook 声明 | `hooks(Op.scale(...), event="early")` | **发布后**按最终索引编译 |
+| Hook 声明 | `hooks(Op.scale(..., event="early"))` | **发布后**按最终索引编译 |
 | 观测组 | `with_observation(groups={...})` | **发布后**编译成掩码 |
 | 运行期参数写入 | `pop.params` 的按名写入 | 运行期，按最终索引解析 |
 | 遗传规则 | 预设与修饰器的 `genotype` 条件 | 编译期，作用于完整目录 |

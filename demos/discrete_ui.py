@@ -48,10 +48,12 @@ pop = (nt.DiscreteGenerationPopulation
         carrying_capacity=100000,
         juvenile_growth_mode="beverton_holt"
     )
-    # 3b. Declare the release event: bare Op objects passed to .hooks()
+    # 3b. Declare the release event with its event boundary on the Op itself.
     .hooks(
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
-        event="first",
+        nt.Op.add(
+            genotypes="WT|Dr", ages=1, sex="male", delta=500,
+            when="tick == 10", event="first",
+        ),
     )
     .presets(drive).fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}}).build())
 

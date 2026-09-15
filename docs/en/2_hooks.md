@@ -21,7 +21,7 @@ When selecting an event, it is recommended to first clarify at which specific ti
 
 ## Declarative Hooks
 
-For most users, the recommended style is to pass `nt.Op.*` objects directly to `.hooks()` in the population build chain:
+For most users, the recommended style is to pass `nt.Op.*` objects directly to `.hooks()` in the population build chain, with each Op carrying its own `event` and `priority`:
 
 ```python
 import natal as nt
@@ -47,11 +47,9 @@ pop = (
     )
     .hooks(
         [
-            nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0"),
-            nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98),
+            nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0", event="first", priority=10),
+            nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98, event="first", priority=10),
         ],
-        event="first",
-        priority=10,
     )
     .build()
 )
@@ -63,11 +61,11 @@ The `Op` objects themselves are the declaration: they are compiled into a CSR pl
 
 ## Hook Authoring Shapes
 
-- **Declarative**: pass `Op` objects (or a list of them) to `.hooks()`; compiled into a CSR plan at build time. This is the recommended style.
+- **Declarative**: pass `Op` objects (or a list of them) to `.hooks()`; put the event and priority on each Op, then compile into a CSR plan at build time. This is the recommended style.
 - **Callback**: single parameter `def hook(pop: TickContext) -> int`, decorated with `@nt.hook` (a plain function also works, with the event given by `.hooks(..., event=...)`).
 - **Selector callback**: `@nt.hook(..., selectors={...})`; selector values are resolved at build time and injected on each call.
 
-The `@nt.hook` decorator detects the latter two shapes from the function signature (at build-time compilation). A zero-parameter function returning `List[HookOp]` is also recognized as declarative — it is called once at build time and its Op list enters the same compilation pipeline. When the ops' own event / priority are the defaults this behaves exactly like passing the ops directly; the decorator `priority` has the final say over the group.
+The `@nt.hook` decorator detects the latter two shapes from the function signature during the build. A zero-parameter function returning `List[HookOp]` remains a compatibility entry point for declarative hooks: the build-time flow may invoke it for reference collection and then for compilation, with the returned Ops entering the normal pipeline. Direct Op declarations with Op-local `event` and `priority` are recommended. The factory form is useful only when the list must be assembled dynamically; its decorator and call-level metadata still follow the precedence rules below.
 
 The legacy `(state, config, deme_id)` three-parameter signature is explicitly rejected (`TypeError` -- it is a leftover of the njit era with no migration channel). Callbacks return `0` (or `RESULT_CONTINUE`) to continue; a non-zero value (or `RESULT_STOP`) stops the simulation.
 
@@ -93,14 +91,14 @@ Common operations include:
 - `Op.set_param`: Schedule one ecology parameter on a tick plan (see below).
 - `Op.convert`: One-to-one probabilistic zygote-type conversion (see below).
 
-Think of them as "declarative transformations over the state tensor". Every `Op` factory accepts `event` and `priority` keyword arguments: `event` is the op-level event (it wins over the call level), `priority` is the op-level priority (a call-level `priority` assignment overrides it).
+Think of them as "declarative transformations over the state tensor". Every `Op` factory accepts `event` and `priority` keyword arguments. Put these on the Op in recommended code. For compatibility, a `.hooks(..., event=...)` default can fill a missing Op event, while the Op's explicit event wins. `.hooks(..., priority=...)` can assign one shared priority to a declaration and overrides Op-local priorities.
 
 ### `Op.set_param`: code-free parameter scheduling
 
 `Op.set_param(param, value, every=1, start=0, when=None)` rewrites one runtime-mutable ecology scalar on a tick schedule:
 
 ```python
-nt.Op.set_param("carrying_capacity", "K * 0.95", every=10)
+nt.Op.set_param("carrying_capacity", "K * 0.95", every=10, event="early", priority=0)
 ```
 
 - `value` is an arithmetic expression (compiled to RPN): operands are jsonc parameter names (`K` is the registered alias of `carrying_capacity`) or numeric literals; operators are `+ - * /` with parentheses. A plain number is sugar for a constant. The expression is evaluated **against the current values every firing tick**, so `"K * 0.95"` compounds.
@@ -232,16 +230,13 @@ pop = (
         "male": {"WT|WT": 1000}
     })
     .hooks(
-        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0"),
-        event="first", priority=10,
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0", event="first", priority=10),
     )
     .hooks(
-        nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.95, when="tick > 50"),
-        event="late", priority=5,
+        nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.95, when="tick > 50", event="late", priority=5),
     )
     .hooks(
-        nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000),
-        event="late",
+        nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000, event="late", priority=0),
     )
     .build()
 )
@@ -259,7 +254,7 @@ The native Rust engine is the only execution backend, so hooks have a single exe
 - Single-parameter callbacks (`TickContext`) cross the Python<->Rust boundary at event boundaries; each invocation gets its own context wrapper, and its writes join that invocation's event transaction — committed on success, discarded on failure.
 - Within one event, declarative ops and Python callbacks interleave in one cross-type `priority` order (lower values first; ties keep declaration order). The two kinds share a single comparable scale: whichever hook — callback or declarative — has the smaller `priority` always runs first, and later hooks see earlier writes.
 
-Hooks are "Op is a hook": `Op` objects constitute the hook program, and passing them to `.hooks()` is the declaration (a zero-parameter `@hook`-decorated function returning the Op list remains an equivalent factory entry point). There is no `initialize` event -- express initialization logic with the first tick of the `first` event (`when="tick == 1"`) or with the `finish` event.
+Hooks are "Op is a hook": `Op` objects constitute the hook program, and passing them to `.hooks()` is the declaration. A zero-parameter `@hook`-decorated function returning an Op list remains a compatibility factory entry point; the build-time flow may invoke it for reference collection and compilation. There is no `initialize` event -- express initialization logic with the first tick of the `first` event (`when="tick == 1"`) or with the `finish` event.
 
 In `SpatialPopulation`, local-hook `priority` only applies within a deme; no global order is defined across demes. See [Spatial Simulation](3_spatial_simulation.md).
 
@@ -289,12 +284,10 @@ pop = (
         "male": {"WT|WT": 1000}
     })
     .hooks(
-        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0"),
-        event="first",
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0", event="first", priority=0),
     )
     .hooks(
-        nt.Op.stop_if_zero(sex="female"),
-        event="late", priority=5,
+        nt.Op.stop_if_zero(sex="female", event="late", priority=5),
     )
     .build()
 )

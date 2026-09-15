@@ -172,8 +172,8 @@ def test_early_hook_k_write_refreshes_logistic_metrics_same_tick() -> None:
     hooked = _age_population(
         species, "k_write_hooked", growth_mode=2, k=500.0, r=3.0,
         hooks=lambda builder: builder.hooks(
-            [Op.set_param("carrying_capacity", 150.0, start=1)],
-            event="early", name="k_write",
+            [Op.set_param("carrying_capacity", 150.0, start=1, event="early")],
+            name="k_write",
         ),
     )
     species_manual = _fresh_species("Kw")
@@ -376,8 +376,8 @@ def test_value_preserving_set_param_hook_leaves_trajectory_bitwise() -> None:
         if hooked:
             def hooks(builder):  # noqa: F811 - rebinding keeps _heterogeneous_spatial generic
                 return builder.hooks(
-                    [Op.set_param("carrying_capacity", "K * 1.0", every=1)],
-                    event="early", name="k_identity",
+                    [Op.set_param("carrying_capacity", "K * 1.0", every=1, event="early")],
+                    name="k_identity",
                 )
         return _heterogeneous_spatial(
             species, name, stochastic=True, hooks=hooks

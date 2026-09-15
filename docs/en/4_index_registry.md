@@ -147,10 +147,10 @@ User-facing parameters are named `genotypes` for familiarity, but they actually 
 
 ```python
 # Typical usage — no slab, just genotype
-Op.add(genotypes="Drive|WT", delta=500)
+Op.add(genotypes="Drive|WT", delta=500, event="early", priority=0)
 
 # Advanced usage — slab-constrained
-Op.add(genotypes="Drive|WT@infected", delta=500)
+Op.add(genotypes="Drive|WT@infected", delta=500, event="early", priority=0)
 ```
 
 ### `@`-Absence Behavior: Two Different Rules

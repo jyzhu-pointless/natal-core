@@ -87,11 +87,11 @@ def scenario_age_logistic_hook():
         mode=2, K=500, r=4.0,
         hooks=lambda builder: builder.hooks(
             [
-                nt.Op.scale(genotypes="*", ages="*", sex="both", factor=0.98),
+                nt.Op.scale(genotypes="*", ages="*", sex="both", factor=0.98, event="early"),
                 nt.Op.add(genotypes="A|A", ages=1, sex="female", delta=5.0,
-                          when="tick >= 2"),
+                          when="tick >= 2", event="early"),
             ],
-            event="early", name="phase0_control",
+            name="phase0_control",
         ),
     )
 

@@ -122,8 +122,8 @@ def test_invalid_growth_hook_preserves_event_state_and_parameters(model: str) ->
 
     pop = _population(
         f"hook_r_{model}", model, stochastic=False,
-        hook_calls=[((nt.Op.set_param("carrying_capacity", 123),
-                      nt.Op.set_param("low_density_growth_rate", 0.5)), {"event": "first"})],
+        hook_calls=[((nt.Op.set_param("carrying_capacity", 123, event="first"),
+                      nt.Op.set_param("low_density_growth_rate", 0.5, event="first")), {})],
     )
     before = pop.state.individual_count.copy()
     log_before = pop.params_log
