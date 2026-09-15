@@ -54,7 +54,11 @@ markdown_extensions:
       generic: true
   - footnotes
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.mark
   - attr_list
   - pymdownx.emoji:
@@ -130,14 +134,32 @@ nav:
     - Reading route: developer/index.md
     - "Sample: A model’s complete journey": developer/model_journey.md
     - "Sample: Reproduction calculations": developer/reproduction.md
-    - Architecture and data flow: developer/architecture.md
-    - Model compilation and index publication: developer/model.md
-    - Sessions and a single tick: developer/runtime.md
-    - Numerical algorithms: developer/algorithms.md
-    - Hooks and controlled updates: developer/hooks.md
-    - Spatial execution and migration: developer/spatial.md
-    - Observation, history, and checkpoints: developer/output.md
-    - Making and validating changes: developer/development.md
+    - Architecture and responsibility boundaries: developer/architecture.md
+    - From biological concepts to genetic objects: developer/genetic_objects.md
+    - Type catalog, indices, and array coordinates: developer/data_layout.md
+    - Patterns and selectors: developer/selectors.md
+    - From declaration to compiled products: developer/model.md
+    - Genetic presets and conversion rules: developer/genetic_compilation.md
+    - Reachability and publication: developer/publication.md
+    - How Python and Rust exchange data: developer/contracts.md
+    - How a session advances one simulation: developer/runtime.md
+    - Survival and generation replacement: developer/survival.md
+    - Age structure and sperm storage: developer/age_structure.md
+    - Density regulation and equilibrium: developer/density_regulation.md
+    - Random sampling and reproducibility: developer/randomness.md
+    - The fused Wright-Fisher path: developer/wright_fisher.md
+    - Numerical algorithms (navigation): developer/algorithms.md
+    - How runtime parameters are read and updated: developer/runtime_updates.md
+    - How hooks compile and are scheduled: developer/hooks.md
+    - Callback transactions, failure, and stop boundaries: developer/transactions.md
+    - Spatial construction and sharing: developer/spatial.md
+    - Spatial lifecycle and migration: developer/migration.md
+    - How observation produces results: developer/observation.md
+    - History recording and the parameter timeline: developer/history.md
+    - Checkpoint restoration and replay: developer/checkpoints.md
+    - Observation, history, and checkpoints (navigation): developer/output.md
+    - From a need to an acceptable change: developer/development.md
+    - How to verify numbers and state: developer/verification.md
   - API Reference:
     - Overview: api/index.md
     - genetic_structures: api/genetic_structures.md

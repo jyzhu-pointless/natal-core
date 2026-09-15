@@ -14,7 +14,7 @@ The table specifies the complete teaching scenario; it is not code with initiali
 | --- | --- | --- |
 | Model | Ordinary staged discrete generations; fused acceleration off | Reproduction, survival, then complete generation replacement |
 | Numerical mode | Deterministic | Counts are expectations and may be fractional |
-| Initial adults | 100 of each sex, all A|a | Two parental pools |
+| Initial adults | 100 of each sex, all A\|a | Two parental pools |
 | Initial juveniles | 0 | Empty age-0 slots |
 | Inheritance | Mendelian segregation; only the default gamete and somatic labels | No additional conversions or label states |
 | Adult mating rates | 1 for both sexes | All females may mate; all males contribute to partner weights |

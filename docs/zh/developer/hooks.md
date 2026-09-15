@@ -1,35 +1,81 @@
-# Hook 与受控修改
+# Hook 如何编译和调度
 
-Hook 既可以是可编译的声明式操作，也可以是 Python 回调。两者进入同一事件调度，但回调需要跨 Python/Rust 边界获取受控访问能力。
+Hook 是在运行期干预模型的手段。项目提供两种写法：声明式操作（`Op.*`）与 Python 回调；两者进入同一个事件调度，按 priority 混合排序，但它们的访问方式和事务边界不同。
+
+## 两种写法
+
+| 写法 | 例子 | 特点 |
+| --- | --- | --- |
+| 声明式操作 | `Op.scale(genotypes="A|A", ages=0, sex="female", factor=0.5, event="early")` | 原生执行、无需跨语言回调、可静态编译选择集 |
+| Python 回调 | `def hook(ctx): ctx.params.carrying_capacity = 300; return 0` | 任意逻辑，但需要受控访问与事务 |
+
+声明式操作的选择集是 `(genotypes, ages, sex)`，外加可选的 `when` 条件；它在编译期解析成掩码。回调拿到的 `ctx` 提供状态、参数、`rng` 与 `stop()`，其边界见[回调事务](transactions.md)。
 
 ## 从声明到执行槽
 
-[hooks/_compile.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/hooks/_compile.py) 的 `compile_hook_call()` 解析单个调用；`build_hook_program()` 组装执行程序。`HookLayoutContext` 提供布局上下文，选择器根据已发布的索引解析。编译时还处理 priority、身份去重和 deme 范围。
+```mermaid
+flowchart TD
+    D["hooks(...) 声明"] --> C["compile_hook_call()：解析单个调用"]
+    C --> K["identity 去重 + priority 赋值"]
+    K --> P["按最终索引编译选择器<br/>生成掩码与槽位"]
+    P --> R["HookProgram：事件到槽位的有序表"]
+    R --> E["execute_event(event, ...)：逐槽执行"]
+```
 
-Rust [HookProgram](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/hooks/interpreter.rs) 按同一优先级顺序执行原生计划槽和 Python 回调槽。不能假定“先执行所有声明式 Hook，再执行 Python Hook”；混合注册的先后关系也是合同的一部分。
+几个必须记住的细节：
 
-普通 tick 在 first、early、late 处调用 `execute_event()`；其后的 `EcoCtx.commit()` 让后续阶段读到已提交参数。手动事件、finish 与融合执行模式还有各自入口，不能从普通 tick 推断全部事件行为。
+- **选择器在发布后编译**。因此 Hook 里的类型名会按最终目录解析；引用到的类型会被保留在运行布局里（核验：在只有 `A|A` 的两等位基因模型上声明一个作用于 `a|a` 的 Hook，`a|a@default` 会留在目录中）。
+- **priority 的赋值模型**：调用级 `priority=` 给该次调用的整组操作赋值；一次打包传入的操作共享同一个值；不传时使用操作自身携带的 priority，且它们必须一致。用 `Op.*` 写法时 priority 也可以直接写在操作里。
+- **身份去重**：同一个操作对象被声明两次只会记录一次。核验：把同一个 `Op.scale` 对象声明两次，缩放只发生一次（成年总数 50，而不是 12.5）。
 
-## 回调事务的有效期
+## 事件与执行顺序
 
-[TickContext](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/hooks/tick_context.py) 与 [EventTransaction / HookRng](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/hooks/_transaction.py) 把回调访问连接到 [Rust transaction](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/hooks/transaction.rs)。
+| 事件 | 位置 |
+| --- | --- |
+| `first` | 繁殖之前 |
+| `early` | 繁殖之后、生存之前 |
+| `late` | 生存之后、aging 之前 |
+| `finish` | `run(..., finish=True)` 结束时 |
 
-事务让回调在候选数据上修改，并在成功时提交。状态和参数按需要获取；只写标量的回调不应为此拉取完整个体数量数组。`HookRng` 使用当前受控随机流，不能在回调返回后继续使用；保留上下文或参数句柄也不能绕过有效期和事务路由。
+同一事件内，声明式槽与回调槽按 priority 混合执行，**不是"先跑完所有声明式再跑回调"**。核验：priority 1 的声明式缩放与 priority 5 的回调，执行顺序是 `callback-first`、`callback-early`（各自事件内回调在后），最终数量是缩放两次中的一次作用于幼体后的结果（每性别 `[6.25, 12.5, 6.25]`）。
 
-应区分三个边界：一个回调的候选修改、同一事件里多个回调的提交、整个 tick 的阶段计算。后面的回调失败，不会撤销前面已经成功提交的回调；已经发生的生命周期阶段也不是自动恢复到 tick 起点。
+Rust 侧 [HookProgram](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/hooks/interpreter.rs) 在执行前先校验操作码，遇到未知操作码直接报错，而不是部分应用前面的操作；任一槽请求停止都会立即短路整个事件。
 
-例如同一事件的回调 A 成功修改参数，回调 B 随后失败，A 的提交应保留，B 的未提交修改不应泄漏。这个场景在 `test_prior_callback_commit_survives_later_failure` 中有明确断言。
+## 选择集与作用域
 
-## 标量更新与遗传重编译
+`Op.scale(genotypes="A|A", ages=0, sex="female", factor=0.5, event="early")` 只影响匹配坐标：
 
-[builder/_runtime.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/builder/_runtime.py) 中的 `RuntimeUpdater` 把不同更新送入相应写入路径。普通参数写入需要验证候选值；custom 更新先合并、规范化，再刷新原生槽，成功后才更新 Python 草稿和审计记录。
+| 选择 | 效果（核验值） |
+| --- | --- |
+| 全类型、age 0、两性 | 幼体整体减半 |
+| `A|A`、age 0、雌性 | 只有雌性 A\|A 变成 6.25，其余不变 |
+| 引用不存在的类型 | 空选择在编译期即报错，不会静默跳过 |
 
-预设和遗传修饰器涉及派生映射。`compile_runtime_candidate()` 在隔离候选上重编译，`commit_genetic_update()` 负责提交；不能直接就地修改一张映射表而保留旧后代张量。运行布局已经发布，重编译还必须尊重当前轴身份。
+最后一行与选择器章节的规则一致：需要具体坐标的路径上，空匹配是错误。
 
-`reconfigure_preset()` 与追加预设不同：它按其约定从中性 fitness 重放，并在回调事务中登记必要的外部对象恢复动作。编写扩展时要核对这一方法的实际语义，不能假定每种更新都保留先前手动 fitness。
+## 停止与声明式条件
 
-## 验证与修改路线
+`Op.stop_if_*` 与回调里的 `ctx.stop()` 等价：在当前边界结束本次 tick。核验：`stop_if_below(threshold=10000)` 在 `early` 触发后，时钟仍为 0，会话状态为 `Stopped`，`is_finished` 为真。停止不改写已经完成的阶段。
 
-[test_hook_transaction_contract.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_hook_transaction_contract.py) 包含过期通道、递归运行、先前提交保留、按需数据获取、custom 数组隔离和原生参数更新原子性等场景。
+## 改动会影响谁
 
-新增 Hook 操作时，沿“Python 声明→编译槽→原生解释器→参数或状态提交→停止/失败→检查点”检查。至少明确：选择器解析时机、与回调的排序、可修改字段、后续阶段可见性，以及失败后保留的边界。参数名称和事件名称相同，并不足以证明两个入口行为一致。
+| agent 的建议 | 判断依据 |
+| --- | --- |
+| 在运行期追加一个 Hook | Hook 只在构建期声明；需要重建种群 |
+| 假定声明式 Hook 都先于回调执行 | 两者按 priority 混合排序 |
+| 用同一个操作对象声明两次以"叠加" | 同对象会去重；要叠加需两个不同对象 |
+| 在 Hook 里引用一个被压缩掉的类型 | 引用会让该类型进入保留集合；否则选择器编译会失败 |
+| 在 Hook 里改遗传映射 | 遗传更新需要候选重编译路径，不能就地改表 |
+
+## 实现定位与核验依据
+
+| 实现入口 | 本章对应职责 |
+| --- | --- |
+| [hooks/_compile.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/hooks/_compile.py) | 单个调用的解析、去重、选择器编译与槽位组装 |
+| [hooks/entry/declarative.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/hooks/entry/declarative.py) | `Op.*` 声明式操作的参数与语义 |
+| [rust/src/hooks/interpreter.rs](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/hooks/interpreter.rs) | `execute_event()`：槽位遍历、操作码校验、停止短路 |
+| [hooks/tick_context.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/hooks/tick_context.py) | 回调可用的状态、参数、RNG 与 `stop()` |
+
+本章的混合排序、priority 赋值、同对象去重、作用域选择、类型保留与声明式停止均由同一组输入核验。既有测试中，[test_hook_transaction_contract.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_hook_transaction_contract.py) 与 [test_manual_finish_event_contract.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_manual_finish_event_contract.py) 保护 Hook 编译与事件边界。
+
+下一步阅读[回调事务、失败与停止边界](transactions.md)。

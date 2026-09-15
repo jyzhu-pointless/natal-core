@@ -1,56 +1,98 @@
-# Model compilation and index publication
+# From declaration to compiled products
 
-A biological type can have different integer indices in the complete species catalog and the compressed runtime layout. Model construction must keep genetic tables, initial counts, selectors, and result names on the same coordinates.
+[The previous chapter](selectors.md) explained how conditions become coordinates. This one answers the earlier question: how a chain of calls becomes a **candidate compilation product**, what gets normalised, what gets cached, and what a failure leaves behind.
 
-## ZTypes and GTypes
+Three kinds of thing must be kept apart here, because they are routinely conflated:
 
-[IndexRegistry](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/registry/index.py) stores `(genotype, slab_label)` in `index_to_ztype` and `(haploid_genotype, glab_label)` in `index_to_gtype`. A ZType is therefore more than a bare genotype: its somatic label is part of its identity. A GType likewise includes its gamete label.
-
-Let Z be the final ZType count, G the final GType count, and A the age count. Common arrays use the following layouts, with female before male on the sex axis.
-
-| Draft field | Shape | Axes |
+| Kind | Representative | Property |
 | --- | --- | --- |
-| `initial_individual_count` | `(2, A, Z)` | Sex, age, individual type |
-| `initial_sperm_storage` | `(A, Z, Z)` | Female age, female type, stored sperm's male type |
-| `zygotes_to_gametes_map` | `(2, Z, G)` | Parent sex, parent type, gamete type |
-| `gametes_to_zygotes_map` | `(G, G, Z)` | Female gamete, male gamete, offspring type |
-| `offspring_tensor` | `(Z, Z, Z)` | Female parent, male parent, offspring type |
-| `sexual_selection_fitness` | `(Z, Z)` | Female parent, male parent |
+| Declaration | `PopulationBuilder` chain calls, `ModelDefinition` | Replayable and rebuildable; holds no computed results |
+| Draft | `ModelDraft` | Numeric complete-axis arrays, still build-time |
+| Candidate | `CompiledProducts` | Genetic maps, catalog, and modifier lists, not yet published |
 
-These are draft representations. Discrete-generation sessions do not retain sperm across ticks. A field's presence in the draft does not imply identical runtime state across models.
+## How one build is orchestrated
 
-## Compilation on complete axes
+```mermaid
+flowchart TD
+    C["Chain declaration<br/>.setup().reproduction().fitness()..."] --> J["Declaration journal<br/>recorded in call order"]
+    J --> D["Normalised draft ModelDraft<br/>defaults, dimensions, arrays"]
+    D --> K{"Compilation key already compiled?"}
+    K -->|yes| P["Reuse cached products<br/>copies of the arrays"]
+    K -->|no| X["compile_definition<br/>complete catalog + baseline + rules"]
+    X --> P
+    P --> V["Publication (next chapter)"]
+    X -->|failure| F["Nothing is published<br/>preset bindings restored"]
+```
 
-[compile_definition()](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/model/definition_compiler.py) requires an unpublished, complete species registry. It creates an isolated working copy through `CompileHost`, restarts from fitness baselines, orders presets by priority, and applies explicit fitness steps at their recorded positions. It then appends manual modifiers and rebuilds inheritance maps from the Mendelian baseline.
+The branch is worth noting: **the second compilation of one declaration is not necessarily recomputed**, and a cache hit hands back copies rather than shared references.
 
-Each collected modifier must apply once. A failed compile publishes no candidate and restores preset species bindings. Reusing an already modified map as the next baseline could apply the same conversion again during recompilation.
+## The declaration journal and replayability
 
-[build_config_maps()](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/model/assembly.py) fills defaults, validates dimensions, and assembles a complete-axis draft. Offspring derivation is deferred to final runtime axes, avoiding construction of a complete Z³ tensor whose entries may mostly be discarded.
+Every domain method on the build chain (`setup`, `age_structure`, `competition`, `reproduction`, `survival`, `initial_state`, `custom`, `presets`, `modifiers`, `fitness`, `hooks`, `with_observation`, `record_history`) is marked as a declaration. Each call records a journal entry and is **trial-compiled on a copy**: only a successful trial is adopted, and a failed one leaves the original object untouched.
 
-## Publication changes coordinates together
+`ModelDefinition` is a snapshot of that chain: species, journal, presets, manual modifiers, compilation key, fitness baseline, hook calls, observation groups, the compression switch, and any declared types. It also carries `draft` and `registry` as working copies. Publication stores this definition, so rebuilding a variant of an existing model does not require re-running the user's build script.
 
-[publish_products()](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/model/publication.py) performs these steps:
+## Normalisation: defaults and shapes
 
-1. Choose an explicit `IndexProjection`, a compression plan, or an identity projection.
-2. Validate source counts, type identities, and order; equal dimensions do not establish equal coordinates.
-3. Create a runtime registry and project initial state, fitness, and inheritance maps together through `_project_config()`.
-4. Derive offspring on final axes or reuse a validated spatial genetic template.
-5. Check shapes and names with `_validate_runtime_layout()` before publishing.
+Users write scalars and dictionaries; kernels read fixed-length arrays. Normalisation fills the gap:
 
-Original compilation products stay unpublished and reusable for isolated builds. `IndexProjection.z_full_to_runtime` and `g_full_to_runtime` use `-1` for removed types. Do not pass that sentinel directly as a NumPy index, where `-1` selects the last element.
+| Item | Normalised result | Note |
+| --- | --- | --- |
+| Age axis | a discrete-generation model fixes two slots | `age 0` juveniles, `age 1` adults; age-structured models declare theirs through `age_structure()` |
+| `adult_ages` | an index array derived from `new_adult_age` | tells the kernel which ages breed |
+| Reproduction/mating/survival rates | `(sex, age)` arrays | scalars are broadcast; missing age slots become 0 |
+| Reproduction participation | internal adult value 1 for discrete models | user-facing entries are parameters such as `female_adult_mating_rate` |
+| Density regulation | `BEVERTON_HOLT` by default | switched through `growth_mode`; see the later chapter *How density regulation and equilibrium are computed* |
+| Fitness | `(sex, age, Z)`, `(sex, Z)`, and `(Z, Z)` shapes | equal shapes do not imply equal meanings, see [array coordinates](data_layout.md) |
+| Type and name directories | `ztype_names`, `gtype_names` | generated from the registry and renumbered with it |
 
-## Compression retains more than nonzero individuals
+Normalisation also validates dimensions: illegal combinations fail at build time instead of surfacing later as an unexplained result. The two age slots of a discrete model are model semantics, not parameter defaults — setting the age-1 survival rate to 1 cannot make old adults survive into the next generation.
 
-`plan_projection()` seeds reachability with explicitly declared types, initially nonzero individuals, and both female and male type axes of initial sperm storage. It then computes inheritance closure. No seeds means retaining complete axes. The builder also adds extractable Hook type references to explicit retention seeds.
+## What the compilation product contains
 
-For example, suppose the complete catalog is A, B, C and runtime retains A, C. Runtime index 1 now means C. Compressing counts without the offspring tensor sends C's count through B's inheritance path. Dimensions can remain valid while the biological interpretation becomes wrong.
+`CompiledProducts` is a tuple of four things: the draft, the complete-catalog registry, the gamete modifier list, and the zygote modifier list. Its genetic products have these shapes in this example:
 
-Consequently, `_build_published()` compiles Hook descriptors and constructs output layouts only after publication. Static reference collection cannot fully infer arbitrary Python callback behavior, so explicit retention declarations remain useful.
+| Product | Complete-axis shape | Note |
+| --- | --- | --- |
+| `zygotes_to_gametes_map` (M) | `(2, 6, 3)` | sex, six ZTypes, three GTypes |
+| `gametes_to_zygotes_map` (F) | `(3, 3, 6)` | gamete pairs to offspring types |
+| `offspring_tensor` (P) | `(0, 0, 0)` | a **placeholder** meaning "not yet derived on the final axes" |
 
-## Verification and change constraints
+The `(0, 0, 0)` placeholder is easy to misread: it does not mean "no pair can reproduce", it means "not yet projected". A complete six-type P would hold 216 entries while the runtime model needs 27, so derivation waits until after publication.
 
-- [test_publication_contracts.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_publication_contracts.py) and [test_publication.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_publication.py): publication, projection, and layout contracts.
-- [test_offspring_single_derivation.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_offspring_single_derivation.py): timing of offspring derivation.
-- [test_spatial_publication.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_spatial_publication.py): shared runtime layouts across demes.
+The registry on a compilation product is the **complete catalog**, unpublished: all six ZTypes are present, including the X types that stay at zero in this example.
 
-When adding a field with Z or G axes, inspect projection, shape validation, names, materialization, and runtime recompilation together. Successful construction alone rarely detects a missing projection.
+## Compilation cache and candidate isolation
+
+- The compilation key describes this declaration; when the key matches an existing compilation, the builder reuses the cached products but hands out **copies of the arrays**.
+- Damaging one product therefore does not poison the next build: after overwriting a whole row of one builder's M table, a fresh builder over the same species still compiles the baseline values. This was verified.
+- Chain methods trial-compile on a copy and adopt only on success, so an interrupted call never leaves a half-finished model behind.
+- Compilation requires the registry to be **unpublished and complete**: unpublished means "the candidate is still editable", complete means "indices match the species catalog one-to-one". Failing either raises `ValueError` rather than repairing itself.
+
+## What happens on failure
+
+`compile_definition()` fails explicitly: it publishes nothing, restores the species binding of every preset, and re-raises. The declaration journal and the caller's preset objects are left as they were, so a failure can be fixed in one place and recompiled without rebuilding the whole model.
+
+## What a change affects
+
+| Agent proposal | Test to apply |
+| --- | --- |
+| Edit `ModelDraft` arrays to change the model | The draft is a build-time candidate; edits need a recompile and a publication before the runtime sees them |
+| Keep editing a previous compilation product | A cache hit hands out copies; cross-declaration reuse goes through `ModelDefinition` |
+| Call `age_structure` after `initial_state` | Domain method ordering is constrained and normalisation reports it at build time |
+| Read P as `(0, 0, 0)` meaning "cannot reproduce" | It means "not yet derived"; derivation happens at publication |
+| Treat the default `growth_mode` as "no density regulation" | The default is `BEVERTON_HOLT`; disabling it is explicit |
+
+## Implementation and verification entry points
+
+| Entry point | Responsibility in this chapter |
+| --- | --- |
+| [builder/_base.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/builder/_base.py): `_compile_products()`, `_definition_for_compile()`, `_publish_and_build()` | Declaration journal, compilation orchestration, candidate adoption |
+| [model/definition.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/model/definition.py) | Fields of the declaration snapshot |
+| [model/draft.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/model/draft.py) | Fields and shapes of the normalised draft |
+| [model/assembly.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/model/assembly.py): `build_discrete_engine_config()`, `build_config_maps()` | Defaults, dimension validation, complete-axis assembly |
+| [model/definition_compiler.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/model/definition_compiler.py): `compile_definition()` | Isolated compilation and failure rollback |
+
+The complete-catalog shapes, the P placeholder, the cached copies, and candidate isolation were all verified from one set of inputs. Among the existing tests, [test_publication_contracts.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_publication_contracts.py) and [test_spatial_publication.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_spatial_publication.py) cover the contract between compilation products and publication; they do not protect the caching and isolation behaviour described here, which this batch's verification supplies.
+
+Next, read [How genetic presets and conversion rules compile](genetic_compilation.md) to open the baseline-to-rules pipeline inside compilation.

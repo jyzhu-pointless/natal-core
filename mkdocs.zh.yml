@@ -54,7 +54,11 @@ markdown_extensions:
       generic: true
   - footnotes
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.mark
   - attr_list
   - pymdownx.emoji:
@@ -130,14 +134,32 @@ nav:
     - 阅读路线: developer/index.md
     - 样章：模型的完整旅程: developer/model_journey.md
     - 样章：一次繁殖如何计算: developer/reproduction.md
-    - 架构与数据流: developer/architecture.md
-    - 模型编译与索引发布: developer/model.md
-    - 会话与一次 tick: developer/runtime.md
-    - 关键数值算法: developer/algorithms.md
-    - Hook 与受控修改: developer/hooks.md
-    - 空间执行与迁移: developer/spatial.md
-    - 观测、历史与检查点: developer/output.md
-    - 修改与验证路线: developer/development.md
+    - 架构与职责边界: developer/architecture.md
+    - 从生物学概念到遗传对象: developer/genetic_objects.md
+    - 类型目录与数组坐标: developer/data_layout.md
+    - 模式与选择器: developer/selectors.md
+    - 从声明到编译产物: developer/model.md
+    - 遗传预设与转换规则: developer/genetic_compilation.md
+    - 可达性与模型发布: developer/publication.md
+    - Python 与 Rust 的数据交换: developer/contracts.md
+    - 会话如何推进一次模拟: developer/runtime.md
+    - 生存与世代更替: developer/survival.md
+    - 年龄结构与长期精子存储: developer/age_structure.md
+    - 密度调节与平衡量: developer/density_regulation.md
+    - 随机采样与可复现性: developer/randomness.md
+    - 融合 Wright–Fisher 路径: developer/wright_fisher.md
+    - 数值算法导航: developer/algorithms.md
+    - 运行参数如何读取和更新: developer/runtime_updates.md
+    - Hook 如何编译和调度: developer/hooks.md
+    - 回调事务、失败与停止边界: developer/transactions.md
+    - 空间构建与共享: developer/spatial.md
+    - 空间生命周期与迁移: developer/migration.md
+    - 观测如何生成结果: developer/observation.md
+    - 历史记录与参数时间线: developer/history.md
+    - 检查点恢复与重放: developer/checkpoints.md
+    - 观测、历史与检查点（导航）: developer/output.md
+    - 从需求到可验收的改动: developer/development.md
+    - 如何验证数值与状态: developer/verification.md
   - API 参考:
     - API 概览: api/index.md
     - 遗传结构: api/genetic_structures.md

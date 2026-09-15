@@ -1,46 +1,126 @@
-# Sessions and a single tick
+# How a session advances one simulation
 
-This chapter follows the ordinary discrete-generation path. Python checks and adapts calls, a Rust session owns state, and kernels execute numerical stages. Batch execution does not return the complete state to Python after every stage.
+[The previous chapter](contracts.md) handed the data to the native session. This one explains how the session uses it to advance time: which stages make up one tick, when the clock moves, how the execution status changes, and what stopping or failing leaves behind.
 
-## Entry points and calls
+The chapter follows the plain discrete-generation path; age-structured and fused paths are distinguished in later chapters.
 
-[DiscreteGenerationPopulation.run()](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/population/discrete_generation.py) checks standalone execution ownership, reentrancy, failure, and stopping before resolving the recording interval and entering `_run_rust_lifecycle()`. `run_tick()` delegates to a one-step `run()` using the population's recording interval.
+## Four layers and their responsibilities
 
-[RustDiscreteLifecycleBackend](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/backends/rust/rust_backend.py) materializes contracts and creates the native session during construction; its `run()` adapts native batch execution. The builder path establishes a session at build time, while some direct-construction paths defer it until execution. A new-session-per-run interpretation cannot explain continuous random streams and history.
-
-Rust [DiscreteGenerationSession](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/sessions/discrete_generation.rs) uses `run_inner()` to organize the batch loop, logs, recording, and checkpoints. The [kernel run_tick()](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/kernels/discrete_generation.rs) organizes stages within a step.
-
-## Ordinary staged execution
-
-| Stage | Implementation behavior | Observable state |
+| Layer | Representative | Responsibility |
 | --- | --- | --- |
-| `first` | `HookProgram.execute_event()`, then commit event writes | Before reproduction |
-| reproduction | `reproduction()`: mating, fertilization, zygote fitness | Offspring occupy age 0 |
-| `early` | Execute Hooks and commit | Offspring have not passed survival |
-| survival | `survival()`: juvenile density regulation and survival | Surviving offspring occupy age 0 |
-| `late` | Execute Hooks and commit | Before aging |
-| aging | `aging()`: age 0 replaces age 1; clear age 0 | Next generation's adults |
+| Population object | `DiscreteGenerationPopulation` | entry guards, record-interval resolution, query interfaces |
+| Backend adapter | `RustDiscreteLifecycleBackend` | materialising contracts, creating the session, adapting calls |
+| Native session | `DiscreteGenerationSession` | owns state, tick, RNG, execution status, and parameters |
+| Kernels | `run_tick()` and the stage functions | per-tick computation |
 
-`EcoCtx.phase` changes at these boundaries. `stage_sources()` selects current ecology and genetics before each stage, allowing earlier event commits to affect later calculations in the same tick.
+[DiscreteGenerationPopulation.run()](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/population/discrete_generation.py) checks three guards in order (re-entrancy, failed, finished), resolves the record interval, and calls the backend; `run_tick()` is simply "run with a step count of one" using the population's configured interval. Batch runs loop inside Rust and **never hand the full state back to Python between stages**.
 
-The session advances the tick after successful stage completion. A Hook stop result skips remaining stages; entering `run_tick` does not guarantee a tick increment. Failure also does not mean whole-tick rollback: completed stages and earlier callback commits may remain. See [Hook transactions](hooks.md).
+## The stages of one tick
 
-## Execution status is not an independent Python flag
+```mermaid
+sequenceDiagram
+    participant P as Python run()
+    participant S as native session
+    participant K as kernel run_tick
+    P->>S: run(n_steps, record_interval)
+    loop every tick
+        S->>K: first event (hooks, boundary commit)
+        K->>K: reproduction: pairing, fertilisation, zygote fitness
+        S->>K: early event (hooks, boundary commit)
+        K->>K: survival: density regulation, then survival and viability
+        S->>K: late event (hooks, boundary commit)
+        K->>K: aging: age-0 overwrites age-1, age-0 cleared
+    end
+    S-->>P: new tick, history, checkpoints
+```
 
-[ExecutionStatus](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/sessions/status.rs) defines `Ready`, `Running`, `Stopped`, and `Failed`. `begin()` accepts only Ready and transitions it to Running; rejection does not mutate status. Normal completion returns to a resumable boundary, whereas stopping and failure block direct continuation.
+| Boundary | Counts per sex at that moment (`[age-0, age-1]`) |
+| --- | --- |
+| End of build / `first` | `[0, 100]` |
+| `early` (after reproduction) | `[100, 100]` |
+| `late` (after survival) | `[50, 100]` |
+| After aging | `[0, 50]` |
 
-Python guards also prevent callbacks from recursively running the same population. Inspect native execution state, phase, and tick when diagnosing failures; counts alone do not identify the execution boundary. Checkpoint restoration restores recorded status, so restoring a Stopped checkpoint does not automatically make it Ready.
+The first and last rows carry two lessons: at `early` both generations exist at once (200 per sex in total), so a summed total is *not* the size of the next generation; after aging the old adults are replaced and age 0 is empty.
 
-## Two paths to read separately
+Hooks at one boundary run in a single cross-type priority order, and **ecology parameter writes committed at a boundary are visible to the later stages of the same tick** — that is same-tick visibility, not "effective next tick".
 
-Age-structured kernels also implement reproduction, survival, and aging, but sperm storage persists through those stages. Aging shifts multiple age classes instead of replacing two generations.
+## Clock and batches
 
-The fused Wright–Fisher path uses `run_wf_tick()`, with `first` scheduled separately by the session. It does not execute the ordinary `early`, `late`, and three-stage combination. It has its own mode validation and update algorithm; it must not be described merely as a faster ordinary loop, and the table above does not apply unconditionally to every mode.
+- The session advances `state_tick` only after a tick completes normally. A stop or a failure leaves the clock untouched at the boundary.
+- `run(n)` loops inside Rust; `record_every` decides whether each tick writes a history row, `0` records nothing at all (the clock still advances), and `None` uses the population default.
+- Verified: after three steps the tick is 3 and the history ticks are `(0, 1, 2, 3)`; with `record_every=0` the history is empty while the tick is 2.
 
-## Verification entry points
+## Execution status
 
-- [test_rust_discrete_lifecycle.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_rust_discrete_lifecycle.py): native discrete lifecycle execution.
-- [test_run_state_and_recording_lifecycle.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_run_state_and_recording_lifecycle.py): stopping, failure, restoration, continuous recording, and native ticks.
-- [test_frozen_lifecycle_rules.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_frozen_lifecycle_rules.py): lifecycle restrictions.
+```mermaid
+stateDiagram-v2
+    [*] --> Ready
+    Ready --> Running: begin()
+    Running --> Ready: whole tick or batch completes normally
+    Running --> Stopped: a hook requests stop, or finish=True
+    Running --> Failed: a stage or callback raises
+    Stopped --> Ready: restore a checkpoint or reset
+    Failed --> Ready: restore a checkpoint or reset
+```
 
-Changing stage order requires checking Hook-visible state, parameter visibility, stopping boundaries, recording, and RNG order. Equal total counts cannot establish that these contracts remain unchanged.
+The native status has exactly four values: `Ready`, `Running`, `Stopped`, and `Failed` from [ExecutionStatus](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/sessions/status.rs). `begin()` only allows Ready → Running, and a refused call **does not modify the status**, so the caller can inspect it.
+
+Verified transitions (`execution_state()` returns `(status name, phase cursor)`):
+
+| Operation | Result |
+| --- | --- |
+| End of build | `("Ready", 0)` |
+| A clean two-step run | `("Ready", 0)` with tick 2 |
+| Stop at early | `("Stopped", 2)` with tick still 0 and `is_finished` true |
+| `run(1, finish=True)` | `("Stopped", 0)` with tick 1 |
+| A callback raising | `("Failed", 2)` with tick still 0 and `is_failed` true |
+
+The phase cursor in the second element says *where* execution stopped — information a read-only count snapshot cannot provide.
+
+## Stopping, failing, and partial state
+
+Stopping does not undo completed stages. The three verified stop positions, shown as per-sex `[age-0, age-1]`:
+
+| Stop position | State afterwards | Meaning |
+| --- | --- | --- |
+| `first` | `[0, 100]` | nothing has happened yet |
+| `early` | `[100, 100]` | offspring exist and the parents are still there |
+| `late` | `[50, 100]` | offspring have survived but have not replaced the parents |
+
+So a stop behaves like "pausing at a boundary" rather than "returning to the start of the tick". Failure is the same shape: after a callback raises, the completed stages of that tick remain, the session is marked `Failed`, and later `run()` calls are refused with a hint to restore a checkpoint or reset.
+
+## Guards and their messages
+
+| Case | Result |
+| --- | --- |
+| Calling `run()` inside a callback | `RuntimeError: Nested run is forbidden` |
+| Calling `run()` after `finish=True` | `RuntimeError: Population '...' has finished. Cannot run() again after finish=True.` |
+| Calling `run()` after a failure | `RuntimeError: Population has failed; restore a checkpoint or reset before run` |
+| Several ordinary `run()` calls in a row | allowed; the guards target nesting and termination, not call counts |
+
+Hooks are declared at build time only: the population object has no registration entry point, so a callback cannot be added after construction. That is why "attach an observation hook halfway through a run" is not possible — it needs a rebuild.
+
+## What a change affects
+
+| Agent proposal | Test to apply |
+| --- | --- |
+| Call `pop.run()` from inside a hook | It is refused; the work belongs inside the current stage |
+| Use the `early` total as the next generation's size | Both generations coexist there; read the boundary after aging |
+| Resume from an arbitrary point after a stop | A stop marks the session `Stopped`; restore or reset first |
+| Rebuild the session every step to "refresh" parameters | That loses the timeline, RNG, and history; use a parameter channel |
+| Read `record_every=0` as "no advance" | It only disables recording; the clock still advances |
+
+## Implementation and verification entry points
+
+| Entry point | Responsibility in this chapter |
+| --- | --- |
+| [population/discrete_generation.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/population/discrete_generation.py): `run()`, `run_tick()` | Guards, record interval, batch entry |
+| [backends/rust/rust_backend.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/backends/rust/rust_backend.py): `RustDiscreteLifecycleBackend` | Session creation and call adaptation |
+| [sessions/discrete_generation.rs](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/sessions/discrete_generation.rs): `run_inner()`, `execution_state()` | Batch loop, status transitions, phase cursor |
+| [kernels/discrete_generation.rs](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/kernels/discrete_generation.rs): `run_tick()` | Stage order and boundary commits |
+| [sessions/status.rs](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/sessions/status.rs) | The four states and the `begin()` guard |
+
+The stage count, clock behaviour, five status transitions, three stop positions, guard messages, and record intervals were all verified from one set of inputs. Among the existing tests, [test_rust_discrete_lifecycle.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_rust_discrete_lifecycle.py) and [test_run_state_and_recording_lifecycle.py](https://github.com/jyzhu-pointless/natal-core/blob/main/tests/test_run_state_and_recording_lifecycle.py) protect the discrete lifecycle and run state.
+
+Next, read [How survival and generation replacement are calculated](survival.md) to open up what happens between `early` and `late`.
