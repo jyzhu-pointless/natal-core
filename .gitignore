@@ -1,3 +1,22 @@
+# Markdown: keep documentation tracked — repo-root *.md, *.md under docs/, and
+# README*.md anywhere (any name flavor). Every other *.md is a scratch note and
+# stays out of git. GitHub Copilot instruction files keep their own exceptions in
+# the .github section below. Rules further down win (gitignore is last-match-wins),
+# so the junk exclusions below (TODO.legacy.md, *beamer*, csv*, debug*, diagnose*)
+# still apply on top of this policy.
+*.md
+!/*.md
+!/docs/**/*.md
+!README*.md
+!readme*.md
+
+# Presentations are not tracked.
+*.ppt
+*.pptx
+*.pptm
+*.pps
+*.ppsx
+
 # Python-generated files
 __pycache__/
 *.py[oc]
