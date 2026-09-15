@@ -1,7 +1,38 @@
 """Tests for slab-aware presets (Wolbachia, TransgenicBackground)."""
 
 import natal as nt
+import pytest
 from natal.frontend import presets
+
+
+def test_wolbachia_explicit_source_labels_preserve_maternal_transmission():
+    sp = nt.Species.from_dict(
+        "explicit_cytoplasmic_sources", {"c": {"l": ["A"]}},
+        gamete_labels=["untagged", "wolbachia"],
+        somatic_labels=["uninfected", "infected"],
+    )
+    pop = (
+        nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)
+        .initial_state(individual_count={
+            "female": {"A|A@infected": 30, "A|A@uninfected": 20},
+            "male": {"A|A@uninfected": 50},
+        })
+        .competition(juvenile_growth_mode=0)
+        .reproduction(eggs_per_female=2)
+        .survival(female_age0_survival=1, male_age0_survival=1)
+        .presets(nt.Wolbachia(
+            "explicit", normal_slab="uninfected", default_glab="untagged",
+        ))
+        .build()
+    )
+    pop.run(1)
+    counts = pop.state.individual_count.sum(axis=(0, 1))
+    infected = [
+        idx for idx, (_, label) in enumerate(pop.index_registry.index_to_ztype)
+        if label == "infected"
+    ]
+    assert counts[infected].sum() == pytest.approx(60)
+    assert counts.sum() == pytest.approx(100)
 
 
 def _make_species_with_slabs():

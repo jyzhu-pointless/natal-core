@@ -22,6 +22,33 @@ pop = (nt.DiscreteGenerationPopulation.setup(species, name="TestPop")
 
 ## Built-in Presets
 
+### CytoplasmicPreset and Wolbachia — Maternal Label Inheritance
+
+`CytoplasmicPreset` uses conversion rules for both gamete tagging and zygote
+label inheritance. Its keyword-only parameters `default_glab` and `default_slab`
+explicitly select the source gamete and somatic labels eligible for conversion;
+both default to the name `default`. Names must exist in the corresponding species
+label lists when the inheritance rules are compiled.
+
+For females in a mapped somatic label, only gametes still carrying the default
+gamete label receive the corresponding maternal tag. During fertilization, that
+tag redirects offspring still carrying the default somatic label to the mapped
+label, without changing their genotype. Other labels are preserved.
+
+These rules act on the distribution left by preceding modifiers. In particular,
+an earlier modifier's genotype changes remain, and offspring already assigned
+a non-default somatic label are not relabeled. Modifier order therefore matters.
+`Wolbachia` uses this mechanism for infection inheritance. Its `default_glab`
+parameter selects the source gamete label (default `default`), and its existing
+`normal_slab` parameter also selects the source somatic label (default `normal`).
+For custom names, pass them explicitly; for example, a species whose uninfected
+somatic label is `default` needs `normal_slab="default"`.
+
+These preset parameters do not reorder labels or change the species' baseline
+distribution, which still assigns probability to the first label in each list.
+Selecting a different source label only processes branches already carrying
+that label, for example after an earlier modifier has assigned it.
+
 ### HomingDrive -- Homing-based Gene Drive
 
 `HomingDrive` implements CRISPR/Cas9-type homing-based gene drive:

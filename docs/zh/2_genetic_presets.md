@@ -22,6 +22,27 @@ pop = (nt.DiscreteGenerationPopulation.setup(species, name="TestPop")
 
 ## 内置预设
 
+### CytoplasmicPreset 与 Wolbachia：母系标签遗传
+
+`CytoplasmicPreset` 的配子标记和合子标签遗传都使用转换规则。仅限关键字的参数
+`default_glab` 和 `default_slab` 显式指定允许转换的来源配子标签和体细胞标签，
+两者默认都为名字 `default`。编译遗传规则时，这些名字必须存在于物种对应的标签列表中。
+
+对于带有映射中体细胞标签的雌性，只有仍带默认配子标签的配子会获得对应的母系标记。
+受精时，该标记将仍带默认体细胞标签的后代转到映射中的标签，保持基因型不变。
+已有的其他标签不会被覆盖。
+
+这些规则接着处理前面 modifier 留下的分布。因此，前面 modifier 对基因型的修改会保留，
+已经获得非默认体细胞标签的后代不会再被重新标记；modifier 的执行顺序会影响结果。
+`Wolbachia` 使用这一机制实现感染状态的遗传。它的 `default_glab` 指定来源配子标签
+（默认 `default`），已有的 `normal_slab` 也用于指定来源体细胞标签（默认 `normal`）。
+使用自定义名字时需显式传入；例如，物种的未感染体细胞标签叫 `default` 时，
+需传入 `normal_slab="default"`。
+
+这些 preset 参数不会重排标签，也不会改变物种基础遗传表仍向各列表第一项分配概率的行为。
+如果指定的来源标签不是第一项，规则只处理已经带有该标签的分支，例如前面的 modifier
+已经将它们标记为该标签的情况。
+
 ### HomingDrive - 同源重组基因驱动
 
 `HomingDrive` 实现 CRISPR/Cas9 类型的同源重组基因驱动：

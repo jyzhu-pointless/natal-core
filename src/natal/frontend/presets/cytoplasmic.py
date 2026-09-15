@@ -5,19 +5,20 @@ Public module — provides CytoplasmicPreset, Wolbachia, and TransgenicBackgroun
 
 # pyright: reportPrivateUsage=false
 
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, List, Optional
 
 import numpy as np
 from numpy.typing import NDArray
 
 from natal.frontend.genetics import (
-    Genotype,
     Species,
 )
-from natal.frontend.modifiers.gamete_conversion import (
+from natal.frontend.modifiers import (
     GameteConversionRuleSet,
+    GameteModifier,
+    ZygoteConversionRuleSet,
+    ZygoteModifier,
 )
-from natal.frontend.modifiers.module import GameteModifier, ZygoteModifier
 
 from ._base import GeneticPreset
 from ._types import PresetFitnessPatch
@@ -34,15 +35,18 @@ if TYPE_CHECKING:
 class CytoplasmicPreset(GeneticPreset):
     """Base class for maternally-inherited cytoplasmic elements.
 
-    Child slab = mother slab regardless of father.  The mechanism:
+    Maternal tags redirect offspring that still carry the default slab.
+    Existing non-default labels are preserved. The mechanism:
     1. *Gamete tagging* — ``gamete_modifier`` builds a declarative
-       ``GameteConversionRuleSet`` with pre-compiled probability
-       transition matrices.  Default-glab gametes from specific
+       ``GameteConversionRuleSet``. Default-glab gametes from specific
        maternal genotypes are reassigned to the cytoplasmic glab.
-    2. *Zygote redirect* — ``zygote_modifier`` uses pre-computed
-       ``glab → target_slab`` index lookup to redirect zygote
-       columns: maternal gametes tagged with the cytoplasmic glab
-       produce offspring in the matching slab.
+    2. *Zygote redirect* — ``zygote_modifier`` builds a declarative
+       ``ZygoteConversionRuleSet``: tagged maternal gametes redirect
+       default-slab offspring to the matching slab, retaining genotype.
+
+    ``default_glab`` and ``default_slab`` explicitly select the source
+    labels; they do not change the species' baseline distribution.
+    Both rule sets act on the distribution left by preceding modifiers.
 
     Subclasses must provide ``_maternal_map`` — a dict mapping
     ``{maternal_slab_name: glab_name}``.  Each maternal slab that
@@ -53,6 +57,30 @@ class CytoplasmicPreset(GeneticPreset):
     """
 
     _maternal_map: dict[str, str] = {}  # {slab_name: glab_name}
+
+    def __init__(
+        self,
+        name: str = "",
+        species: Optional[Species] = None,
+        priority: int = 0,
+        *,
+        default_glab: str = "default",
+        default_slab: str = "default",
+    ) -> None:
+        """Configure the labels eligible for maternal inheritance.
+
+        Args:
+            name: Optional preset name.
+            species: Optional species bound at construction time.
+            priority: Modifier and fitness application priority.
+            default_glab: Source gamete label eligible for maternal tagging.
+            default_slab: Source somatic label eligible for offspring relabeling.
+                These names select existing labels without changing the
+                species' baseline distribution or label order.
+        """
+        super().__init__(name=name, species=species, priority=priority)
+        self.default_glab = default_glab
+        self.default_slab = default_slab
 
     def _active_maternal_map(self, glab_names: List[str] | tuple[str, ...]) -> dict[str, str]:
         """Return the ``{slab: glab}`` pairs whose glab the species declares.
@@ -95,7 +123,10 @@ class CytoplasmicPreset(GeneticPreset):
         Uses the declarative :class:`GameteConversionRuleSet`: one whole-gtype
         conversion per target glab, restricted to female producers whose
         ztype slab matches and to gametes currently carrying the default
-        glab.
+        glab specified by ``default_glab``.
+
+        Raises:
+            ValueError: If a required source or target label is unknown.
         """
         if not self._maternal_map:
             return None
@@ -105,6 +136,8 @@ class CytoplasmicPreset(GeneticPreset):
         active_map = self._active_maternal_map(list(glab_to_idx))
 
         ruleset = GameteConversionRuleSet()
+        if self.default_glab not in host.registry.glab_labels:
+            raise ValueError(f"Preset '{self.name}': unknown default_glab {self.default_glab!r}")
         for slab_name, glab_name in active_map.items():
             ruleset.add_gtype_convert(
                 to=f"*@{glab_name}",
@@ -112,7 +145,7 @@ class CytoplasmicPreset(GeneticPreset):
                 filters={
                     "parent_sex": "female",
                     "parent": f"*@{slab_name}",
-                    "current": "*@default",
+                    "current": f"*@{self.default_glab}",
                 },
             )
 
@@ -123,8 +156,12 @@ class CytoplasmicPreset(GeneticPreset):
 
         For each (slab_name, glab_name) in ``_maternal_map``: when the
         maternal gamete (c1) carries *glab_name*, redirect default-slab
-        zygote outcomes to *slab_name*.  Pre-compiled c1-indexing avoids
-        per-call registry lookups.
+        zygote outcomes to *slab_name* using conversion rules. The source
+        label is explicitly configured by ``default_slab``. Other slabs and the
+        genotype are preserved, including earlier modifiers' changes.
+
+        Raises:
+            ValueError: If a required source or target label is unknown.
         """
         if not self._maternal_map:
             return None
@@ -133,51 +170,20 @@ class CytoplasmicPreset(GeneticPreset):
         # A missing label is a configuration error, not a silent no-op.
         active_map = self._active_maternal_map(list(glab_to_idx))
 
-        registry = host.registry
-        g2z = host.config.gametes_to_zygotes_map
-        default_slab = registry.slab_labels[0]
-        n_gtypes = g2z.shape[0]
+        ruleset = ZygoteConversionRuleSet()
+        if self.default_slab not in host.registry.slab_labels:
+            raise ValueError(f"Preset '{self.name}': unknown default_slab {self.default_slab!r}")
+        for slab_name, glab_name in active_map.items():
+            ruleset.add_ztype_convert(
+                to=f"*@{slab_name}",
+                rate=1.0,
+                filters={
+                    "maternal": f"*@{glab_name}",
+                    "current": f"*@{self.default_slab}",
+                },
+            )
 
-        # Pre-compute: glab_name → [c1 indices where glab matches]
-        glab_c1: dict[str, list[int]] = {}
-        for c1 in range(n_gtypes):
-            _, glab = registry.index_to_gtype[c1]
-            glab_c1.setdefault(glab, []).append(c1)
-
-        def modifier_func(*_args: object, **_kwargs: object) -> Dict[
-            Tuple[int, int], Dict[int, float]
-        ]:
-            result: Dict[Tuple[int, int], Dict[int, float]] = {}
-
-            for slab_name, glab_name in active_map.items():
-                for c1 in glab_c1.get(glab_name, []):
-                    for c2 in range(n_gtypes):
-                        row = g2z[c1, c2]
-                        total = float(row.sum())
-                        if total == 0:
-                            continue
-                        dist: Dict[int, float] = {}
-                        for ztype_idx in range(len(row)):
-                            val = float(row[ztype_idx])
-                            if val <= 0:
-                                continue
-                            gt, slab = cast(
-                                tuple[object, str],
-                                registry.index_to_ztype[ztype_idx],
-                            )
-                            if slab == default_slab:
-                                dst_z = registry.ztype_index(
-                                    cast(Genotype, gt), slab_name,
-                                )
-                                dist[dst_z] = dist.get(dst_z, 0.0) + val
-                            else:
-                                dist[ztype_idx] = dist.get(ztype_idx, 0.0) + val
-                        if dist:
-                            result[(c1, c2)] = dist
-
-            return result
-
-        return modifier_func  # type: ignore[return-type]  # inner func matches ZygoteModifier protocol
+        return ruleset.to_zygote_modifier(host) if ruleset.rules else None  # type: ignore[return-type]  # structurally satisfies the ZygoteModifier protocol
 
     @staticmethod
     def apply_zygote_redirect(
@@ -216,12 +222,14 @@ class CytoplasmicPreset(GeneticPreset):
 
 
 class Wolbachia(CytoplasmicPreset):
-    """Maternally-inherited endosymbiont.  Infected mothers pass the
-    infection to all offspring regardless of the father.
+    """Maternally-inherited endosymbiont with explicit source labels.
+
+    Infected mothers tag offspring that still carry ``normal_slab``,
+    regardless of the father. Other somatic labels are preserved.
 
     Requires Species with:
-      - gamete_labels including ``"wolbachia"``
-      - somatic_labels including ``"normal"``, ``"infected"``
+      - gamete_labels including ``default_glab`` and ``"wolbachia"``
+      - somatic_labels including ``normal_slab`` and ``infected_slab``
     """
 
     def __init__(
@@ -233,20 +241,27 @@ class Wolbachia(CytoplasmicPreset):
         fecundity_scaling: Optional[float] = None,
         species: Optional[Species] = None,
         priority: int = 0,
+        *,
+        default_glab: str = "default",
     ) -> None:
         """Initialize a Wolbachia cytoplasmic preset.
 
         Args:
             name: Preset name.
             infected_slab: Somatic slab label for infected individuals.
-            normal_slab: Somatic slab label for uninfected individuals.
+            normal_slab: Somatic label for uninfected individuals and the
+                source label eligible for offspring infection tagging.
             viability_scaling: Viability multiplier for infected carriers.
             fecundity_scaling: Fecundity multiplier for infected carriers.
                 ``None`` means no fecundity effect.
             species: Optional species for validation.
             priority: Modifier and fitness application priority.
+            default_glab: Source gamete label eligible for maternal tagging.
         """
-        super().__init__(name=name, species=species, priority=priority)
+        super().__init__(
+            name=name, species=species, priority=priority,
+            default_glab=default_glab, default_slab=normal_slab,
+        )
         self._maternal_map = {infected_slab: "wolbachia"}
         self.infected_slab = infected_slab
         self.normal_slab = normal_slab
