@@ -203,7 +203,7 @@ Parameter descriptions:
 3. `rate_mode`: `"strict"` (default) treats the rates as probabilities and rejects a sum above 1; `"proportional"` treats them as proportions and scales them to sum to 1, so `[2, 3, 5]` is the same model as `[0.2, 0.3, 0.5]`.
 4. `viability_scaling` / `fecundity_scaling` / `sexual_selection_scaling` / `zygote_viability_scaling` (and their `*_mode`): Fitness effects applied to the whole target group; all default to neutral.
 
-The mutation happens in the germline only (while gametes are produced, before fertilization); the preset registers no zygote-stage modifier. An embryonic channel is deliberately deferred (TODO.md item #14), so `zygote_modifier()` always returns `None`.
+In the current implementation, the mutation happens in the germline only (while gametes are produced, before fertilization); the preset registers no zygote-stage modifier.
 
 The conversion rules of one ruleset run as a cascade: each rule only sees the source mass the previous rule left. Declaring `[0.3, 0.5, 0.1]` would therefore hand the second target an effective share of `0.5 × 0.7 = 0.35` if the raw rates were passed through. `PointMutation` compensates internally with `r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`, so the realized gamete distribution of an `A|A` parent is exactly:
 

@@ -74,7 +74,7 @@ unchanged from `v0.3.0b0`.
 - **`PointMutation` preset for spontaneous point mutation**. The new built-in
   preset converts a source allele into one or more target alleles in every
   gamete carrying it (no parent-genotype filter). The mutation is germline-only
-  for now (the embryonic channel is deferred with TODO.md item #14).
+  for now (the embryonic channel is deferred with TODO.legacy.md ARCH-021).
   Multi-target declarations compete: the preset compensates for the conversion
   cascade internally (`r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`), so each target's realized
   share equals its declared rate instead of the earlier-declared target taking

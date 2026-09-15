@@ -194,7 +194,7 @@ population.apply_preset(mutation)
 3. `rate_mode`：`"strict"`（默认）把速率当作概率，和超过 1 时报错；`"proportional"` 把速率当作比例并缩放到和为 1，因此 `[2, 3, 5]` 与 `[0.2, 0.3, 0.5]` 是同一个模型
 4. `viability_scaling` / `fecundity_scaling` / `sexual_selection_scaling` / `zygote_viability_scaling`（以及对应的 `*_mode`）：作用于整个目标等位基因组的适应度效应，默认中性
 
-突变只发生在生殖系（减数分裂产生配子时，受精之前）；预设不注册任何合子期修饰器。胚胎期通道已刻意暂缓（TODO.md #14），因此 `zygote_modifier()` 始终返回 `None`。
+在目前实现中，突变只发生在生殖系（减数分裂产生配子时，受精之前）；预设不注册任何合子期修饰器。
 
 同一个 ruleset 内的转换规则按级联执行：每条规则只能看到前一条规则剩下的源等位基因份额。若直接透传用户速率，`[0.3, 0.5, 0.1]` 中第二个目标的有效份额会变成 `0.5 × 0.7 = 0.35`。`PointMutation` 内部按 `r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)` 做补偿，因此 `A|A` 亲本的配子分布恰好是：
 
