@@ -6,6 +6,7 @@
 - **部分完成**：已有相关能力，但仍有明确遗留。**未完成**：已有工作方向，尚未实现。**待设计**：需求或方案仍需确定。**暂缓**：已明确决定延期。
 - 每项先说明现状，再补充依据和限制，最后单列设计。设计部分不表示已实现，也不改变原有延期决定。
 - 未完成项以 2026-09-15 的工作区审计为基础，包含当时未提交的修改及本机相邻 inferencer 仓库。2026-09-16 完成的 K 值测试、个体转换、命名清理和 CytoplasmicPreset 迁移已移入 [归档与验证记录](TODO.legacy.md)；其中也记录了本轮发现的旧审计遗漏。
+- TODO-020 至 TODO-025 来自 2026-09-16 的第三轮数值抽查（28 个抽查点 + 3 份文献复现）。证据是可执行测试：本机 `.zcode/regular-quality-control/test_r3_01..07`（该目录在 `.gitignore` 内，未纳入版本控制），`.venv/bin/python -m pytest .zcode/regular-quality-control -q` 可复现，其中标记 `EVIDENCE_*` 的失败即下列条目的证据。
 - 文中源码路径省略 `src/natal/frontend/` 前缀时，以该目录为起点；Rust 和测试路径从仓库根目录起算。
 
 ## 目录
@@ -31,6 +32,12 @@
 | TODO-017 | 缓存、编译与性能 | Preset 定向重编译与后缀重建 | 未完成 |
 | TODO-018 | 缓存、编译与性能 | Zygote modifier 矩阵化与稀疏表示 | 未完成 |
 | TODO-019 | 缓存、编译与性能 | Rust 引擎性能优化审计 | 待设计 |
+| TODO-020 | 遗传规则与预设 | Wolbachia 细胞质不兼容 | 待设计 |
+| TODO-021 | 遗传规则与预设 | RuleSet 挂载写法与文档一致 | 部分完成 |
+| TODO-022 | 遗传规则与预设 | 反向突变跨 preset 的级联语义 | 待设计 |
+| TODO-023 | 种群模型与竞争语义 | 均衡标定与两性幼体存活差异 | 待设计 |
+| TODO-024 | 种群模型与竞争语义 | 分阶段随机路径的采样结构说明 | 待设计 |
+| TODO-025 | 种群模型与竞争语义 | 迁移速率缺少拓扑时的静默无操作 | 未完成 |
 
 ## 遗传规则与预设
 
@@ -116,6 +123,73 @@
 - 将来若实现，需要定义哪些位点互为同源、哪些区间可交换、交换概率，以及交换后的染色体身份和合法配子。
 - 这是新的遗传模型能力，需要单独设计和验证。
 
+### TODO-020 Wolbachia 细胞质不兼容
+
+**状态：待设计**
+
+#### 现状
+
+`Wolbachia` 目前只是一个母系 slab 标记加按 slab 的适合度缩放，不含细胞质不兼容（CI）的交叉效应，也没有传递保真度参数。`docs/en/4_index_registry.md` 与 `docs/zh/4_index_registry.md` 都称它用 infected/normal slab 建模了细胞质不兼容。
+
+#### 详细说明
+
+- `presets/cytoplasmic.py` 只做两件事：感染母本的 default 配子以硬编码 `rate=1.0` 重贴为 `wolbachia` 标签；子代 slab 完全由母本配子标签决定，父本感染状态无影响。
+- 适配置补丁按个体自身 slab 乘在 viability/fecundity 上，不区分父本×母本组合，因此不表达 CI 的“感染父 × 未感染母”不亲和方向。
+- 已执行实验：未感染母（500）× 感染父（500），每雌 2 卵，子代 1000 全为正常 slab，与亲和方向完全一致；真正的 CI 应表现为该方向子代减少或为零。
+- 无适合度代价时感染频率严格保持初值（感染母本的子代全感染、父本不传递）。有 CI 的菌株应从低于阈值时消失、高于阈值时固定，因此当前行为与文档描述不符。
+- 同一预设的静态方法 `apply_zygote_redirect()` 没有产品调用方，只有 `tests/test_slab_integration.py` 直接调用。
+- 证据测试：`.zcode/regular-quality-control/test_r3_05_migration_sex_wolbachia.py` 的 `test_cytoplasmic_incompatibility_reduces_incompatible_crosses_EVIDENCE_F3`（失败）与 `test_implemented_wolbachia_is_a_neutral_maternal_marker`（通过）。
+
+#### 设计与待决定事项
+
+- 先决定是补能力还是改文档：补能力需要 CI 强度与传递保真度两个参数，并让后代概率按父本×母本 slab 组合缩放（现有 zygote 规则只按母本配子标签判定，需要新的条件维度）。
+- 若补能力，明确 CI 作用于卵孵化率还是子代适合度、两性是否对称、不亲和方向的强度默认值，以及与现有 `viability_scaling` 的叠加顺序。
+- 若改文档，中英两版同步改成“母系标记 + 按 slab 适合度”，并说明用户如何用 `ZygoteConversionRuleSet` 自行搭建 CI（`docs/en/genotype_filter.md` 已有母系传递示例）。
+- 顺带决定 `apply_zygote_redirect()` 是作为自定义预设的公开工具保留，还是随文档整理一并处理。
+
+### TODO-021 RuleSet 挂载写法与文档一致
+
+**状态：部分完成**
+
+#### 现状
+
+两个转换规则集的 docstring 都演示 `builder.modifiers(...=[rs.to_*modifier])`，直接照抄会在编译期报错。可用的挂载路径存在，但没有写进文档。
+
+#### 详细说明
+
+- `modifiers/gamete_conversion.py:87` 与 `modifiers/zygote_conversion.py:89` 的示例传入未调用的绑定方法；编译管线会以 population 调用它并要求返回 Mapping，而它返回 `CompiledRuleModifier`，报 `TypeError: ... must return a mapping from keys to replacements`。
+- 可用路径有两条：先按 population 编译再经运行时更新器挂载（`rs.to_gamete_modifier(pop)` + `pop.update().modifiers(...)`，`tests/test_runtime_updater_contracts.py` 即此写法），或把 ruleset 包成 preset（`HomingDrive` 走的路径）。
+- 证据测试：`.zcode/regular-quality-control/test_r3_06_conversion_copy_algebra.py` 的 `test_documented_ruleset_mount_form_works_EVIDENCE_F4`（失败）；同文件另有 7 条通过测试覆盖每拷贝转换代数、单侧转换与 0/1 边界。
+- 构建链上没有 population 可作为 host，这正是 builder 侧直接挂载裸 ruleset 缺一环的原因。
+
+#### 设计与待决定事项
+
+- 决定改文档还是补能力：改文档只需把两处示例换成可用写法；补能力则要允许 builder 接受绑定方法并在编译期提供 host（等价于让上例成立）。
+- 若补能力，明确 host 的来源、与 `presets()` 路径的优先级和错误信息，并覆盖重复挂载、多套 ruleset 组合的顺序。
+- 两种方案都要保证 `to_*_modifier(host)` 的现有语义（返回 `rows_for` 可调用的编译结果）不被改变。
+
+### TODO-022 反向突变跨 preset 的级联语义
+
+**状态：待设计**
+
+#### 现状
+
+PointMutation 没有内建的反向突变参数，双向突变要挂两个单目标 preset：后声明的规则作用于前一条的输出。这层语义文档写了（“先声明先得”），但没写它与教科书双向突变模型的差异，也没有校正入口。
+
+#### 详细说明
+
+- 级联映射为 `q' = (1−ν)·[q + μ(1−q)]`，平衡 `μ(1−ν) / (ν + μ(1−ν))`；教科书（每条配子相对继承状态最多突变一次）为 `q' = q(1−ν) + μ(1−q)`，平衡 `μ/(μ+ν)`。两者只差 `μν(1−q)` 一项，即同一减数分裂内 W→D→W 的双突变被级联计入。
+- 已执行实验（μ=0.02、ν=0.06）：不校正 0.23858、教科书 0.25、反向预设先声明 0.25380；即声明顺序翻转偏差符号。速率 ≤1e−3 时绝对偏差约 1e−4，可忽略。
+- 精确校正存在且已验证：把**先声明**那条规则的速率放大 `1/(1−另一条速率)`（正向先则用 μ/(1−ν)，反向先则用 ν/(1−μ)），把级联映射的斜率与截距同时配平，逐代与教科书递推一致到 1e−16，平衡回到 0.25。
+- 反例陷阱：套用 preset 内部的补偿公式 `r'ₖ = rₖ/(1−Σᵢ₌₁ᵏ⁻¹rᵢ)` 跨 preset 使用时只配平斜率，平衡落到 0.23469，比不校正还远。
+- 证据测试：`.zcode/regular-quality-control/test_r3_04_sampling_and_mutation.py` 的 `test_manual_rate_correction_restores_the_textbook_two_way_model`（两种声明顺序各一条，通过）、`test_cross_preset_compensation_formula_is_not_the_correction`（反例，通过）、`test_stacked_back_mutation_follows_the_documented_cascade`（级联本身，通过）。
+
+#### 设计与待决定事项
+
+- 先决定要不要在文档补一句“堆叠正反向 ≠ 教科书双向突变，顺序决定偏差符号”，以及是否提供校正后的声明配方。
+- 若提供入口，可选方案是让 preset 支持成对的双向声明并在内部做上述补偿；需要明确它与多目标单 preset（内部已补偿、语义为同时竞争）的关系，避免两套语义混淆。
+- 只对二等位两规则的情形有精确校正；三个以上等位、任意转移矩阵时级联自由度数不足，一般无解，需自定义 modifier 或接受 O(μν) 残差，设计文档要写明这个边界。
+
 ## 种群模型与竞争语义
 
 ### TODO-005 离散代竞争模式收敛
@@ -160,6 +234,72 @@
 - 保持暂缓。决定是否限制第 0 项必须为 1，还是允许用户修改，并解释它对 C* 和 K 的影响。
 - 确定后再统一各写入口的校验、文档和测试。
 - 若讨论均衡点等于 `rel[0]×K`，必须同时写明均衡分布、繁殖、存活和 `external_expected_eggs` 等前提，不能当作所有模式通用的公式。
+
+### TODO-023 均衡标定与两性幼体存活差异
+
+**状态：待设计**
+
+#### 现状
+
+补偿型曲线（logistic、Beverton-Holt、ricker）的平衡点只在两性幼体存活相等时等于 `carrying_capacity` 声明的 K。`female_age0_survival ≠ male_age0_survival` 是受支持的配置（雌性致死型 RIDL、性连锁适合度等常见模型会用到），此时实际平衡点偏离 K，且没有告警。
+
+#### 详细说明
+
+- 参考分布把 age-1 雌性写死为 `K × sex_ratio`（`rust/src/kernels/equilibrium.rs:154-155`），平衡存活率分母却用按 sex_ratio 混合的 `s_0_avg`（同文件 `:181`）。两性幼体存活不同时，实际成体性比为 `sex_ratio × s_f / s_avg`，参考蛋产量 C* 与真实动态不再一致。
+- 推导出的闭式：`N*/K = (s_avg0/s_f) × x*`，其中 `s_avg0 = sex_ratio·s_f + (1−sex_ratio)·s_m`，Beverton-Holt 下 `x* = (r·s_f/s_avg0 − 1)/(r − 1)`，ricker 下 `x* = 1 − ln(s_avg0/s_f)/ln r`。
+- 已执行实验（K=2000，两个引擎一致）：`s_f=0.9, s_m=0.8, r=3` → 2055.6（+2.8%）；`s_f=0.8, s_m=0.3, r=3` → 2312.5（+15.6%）；`sex_ratio=0.4` 且 `s_f=0.8, s_m=0.3, r=2` → 2750（+37.5%）；ricker 同参数反向 → 1987.2（−0.6%）。偏差随 r→1 放大。闭式与实测吻合到 1e-6。
+- 两性存活相等时固定点精确等于 K（对照实验通过），说明偏差只来自性比假设，不是曲线或缩放顺序的问题。
+- 显式 `equilibrium_distribution` 路径同样不做一致性校验：声明 age-1 为 700 雌 + 1300 雄、总数 2000 时，实际平衡在 2300，无告警。声明与 sex_ratio 一致（1000+1000）时精确回到 2000。
+- 证据测试：`.zcode/regular-quality-control/test_r3_07_equilibrium_calibration.py`（5 条 `EVIDENCE_F1` 失败 + 1 条对照通过）。
+
+#### 设计与待决定事项
+
+- 二选一：修标定（让参考分布按两性各自存活推导，或让 s* 的分母与实际性比加权一致），或把 `carrying_capacity` 的措辞改成“两性幼体存活相等时的 age-1 平衡规模”并在中英文初始化文档写明前提。
+- 修标定会改变所有两性存活不同配置的平衡点，属于科学语义变更，需要作者确认并更新受影响文档与测试；改措辞则不改变任何数值，但要说明偏差方向与量级。
+- 顺带决定显式 `equilibrium_distribution` 是否加一致性校验或告警（声明分布与 sex_ratio 推导不符时提示），这与 TODO-006 的竞争权重话题相邻，都涉及 C* 的前提。
+
+### TODO-024 分阶段随机路径的采样结构说明
+
+**状态：待设计**
+
+#### 现状
+
+极速 Wright-Fisher 模式（`extreme_speed_mode=1`）与分阶段管线的随机抽样结构不同，文档只描述了前者。两者是各自独立的模型（不承诺随机方差一致），但用户拿分阶段结果对比教科书 Wright-Fisher 期望时会系统性偏大。
+
+#### 详细说明
+
+- 融合 WF 路径每代一次多项抽样，等位计数方差为经典的 `2N·p(1−p)`；分阶段路径的子代抽样之后，密度阶段又会按 `recruit_juveniles` 的文档语义重采样一次 age-0 队列（`rust/src/kernels/discrete_generation.rs:609`、`age_structured.rs:952`，抽样点在 `:571` 与 `:760`）。
+- 缩放系数恰为 1.0 时（`no_competition`，或 `fixed`/补偿型曲线在参考点以下）第二次抽样不改变总数，但会叠加一份独立的多项方差：实测等位计数方差 19.6，理想 WF 为 10.0，漂移标准差偏大 √2，等效 Ne 约为融合模式的一半。
+- `fixed_egg_count=True` 只关闭窝卵数的泊松噪声，不影响这次重采样；离散与年龄结构两个引擎行为一致。
+- 已执行实验：20 个 W|D 亲代、子代总数固定 20、p=0.5，2000 次重复；离散步进 19.6（离散抽样与连续抽样两种模式都如此），融合 WF 路径 10.1。
+- 证据测试：`.zcode/regular-quality-control/test_r3_04_sampling_and_mutation.py` 的四个抽样结构测试（全部通过，逐条钉住两条路径的行为与比值）。
+
+#### 设计与待决定事项
+
+- 决定是否在 `docs/en/2_population.md` 与中文版补一句：分阶段随机路径比理想 Wright-Fisher 多一次队列重采样，`fixed_egg_count` 与 `no_competition` 都不会关闭它。
+- 若要改成“缩放为 1 时跳过重采样”，属于会改变随机结果的模型变更（两性模型都要同步），需要作者决定并评估对既有随机实验的影响；无论选择哪种，都应保留测试里的抽样结构断言。
+- 说明文档时要避免暗示两条路径应当方差一致：融合模式是独立模型，不是分阶段管线的优化实现。
+
+### TODO-025 迁移速率缺少拓扑时的静默无操作
+
+**状态：未完成**
+
+#### 现状
+
+只给 `migration_rate`、不提供 topology/kernel/adjacency 时，空间迁移不移动任何人，也不产生任何提示。文档示例都带拓扑，但参数本身看不出这个依赖。
+
+#### 详细说明
+
+- `spatial/builder.py::migration()` 的 `migration_rate` 只声明每个 deme 迁出的比例，迁出目标的分布来自拓扑、kernel 或 adjacency；三者都缺省时没有任何边。
+- 已执行实验：2 deme 与 3 deme、`migration_rate=0.3` 且无拓扑时，等位频率在多代内完全不变；显式给定对称 adjacency 后，频率差按 `(1−2m)^t` 衰减、全局频率守恒。
+- 该行为曾让上一轮抽查的“迁移移动了个体”断言变成空断言（数值变化其实来自生命周期换代），说明这个默认值会实际误导使用与验证。
+- 相关通过测试：`.zcode/regular-quality-control/test_r3_05_migration_sex_wolbachia.py` 的混合定律测试与 `m=0` 对照。
+
+#### 设计与待决定事项
+
+- 在构建期检测“迁移速率非零但没有可用的迁出目标”，报错或至少告警，并说明三种提供拓扑的入口。
+- 明确判定条件：`migration_rate` 非零且无 topology、无 kernel/kernel_bank、无 adjacency 时触发；给出可操作的报错文案。
+- 顺带核对 `strategy="auto"` 在其他入口组合下的解析优先级，避免新增校验与既有合法用法冲突。
 
 ## 观测、历史与状态存储
 
