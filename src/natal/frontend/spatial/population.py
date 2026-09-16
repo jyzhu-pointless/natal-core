@@ -7,6 +7,7 @@ session; ``DemeSlice`` exposes the aligned population surface per deme.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import (
@@ -955,6 +956,40 @@ class SpatialPopulation:
             adjust_on_edge=bool(adjust_migration_on_edge),
             mode=migration_mode,
         )
+        # A non-zero migration rate with no inter-deme edge sends every deme's
+        # outbound share back to itself: nothing mixes, and the stochastic path
+        # still consumes its outbound sampling draws.  Both silent routes land
+        # here — a defaulted identity adjacency (no topology / kernel /
+        # adjacency) and a kernel whose only non-zero weight is the excluded
+        # center — so name the remedy once.  The check stays silent whenever any
+        # deme does connect (deliberately isolated demes are not flagged) and
+        # for single-deme layouts, which have no inter-deme edge by construction.
+
+        # Warning placement: the constructor is reached through
+        # ``SpatialPopulationBuilder.build()``, so ``stacklevel=2`` reports the
+        # builder's build path (deeper levels land on other internal frames
+        # too).  The message names the remedy itself, so the reported line is
+        # not the user's only clue.
+        if n_demes > 1 and float(np.max(rate3d)) > 0.0:
+            indptr = np.asarray(migration_csr.indptr)
+            dest = np.asarray(migration_csr.dest_idx)
+            if dest.size:
+                sources = np.repeat(np.arange(n_demes), np.diff(indptr))
+                inter_deme = bool(np.any(dest != sources))
+            else:
+                inter_deme = False
+            if not inter_deme:
+                warnings.warn(
+                    "migration_rate is non-zero but no individual can move "
+                    "between demes: every resolved outbound edge stays inside "
+                    "its own deme. A missing topology / kernel / adjacency "
+                    "resolves to the identity adjacency, and a kernel whose "
+                    "only non-zero weight is the excluded center behaves the "
+                    "same way. Pass topology=, kernel= or adjacency= to "
+                    ".migration(...) to migrate between demes.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         self._migration_csr = migration_csr
         # Freeze the contract pair: the Blueprint carries the CSR the Rust
         # session consumes at handoff, the Params carry the rate column.
