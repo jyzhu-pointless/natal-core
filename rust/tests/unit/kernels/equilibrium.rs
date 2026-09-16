@@ -69,15 +69,77 @@ fn n_demes_ptrs(n: usize) -> usize {
     n + 1
 }
 
-/// Derived-distribution fixture must match the Python reference
-/// bit-for-bit (values computed from
-/// ``compute_equilibrium_metrics`` on the identical inputs).
+/// Derived distribution with sex-specific age-0 survival: the age-1 split
+/// follows the *surviving* sex ratio, so the calibrated equilibrium stays at
+/// K.  The fixture's female age-0 survival (0.9) differs from the male's
+/// (0.85), so these constants are the corrected reference rather than the
+/// retired Python reference (that parity claim now holds only for
+/// equal-survival inputs — see the sibling test).  Values replicated
+/// independently from the documented operation order:
+///   female share = 0.5 * 0.9 / (0.5 * 0.9 + 0.5 * 0.85) -> 205.714...
+///   produced_age_0 = 205.714...*0.8*1.0*30 + 164.571...*0.7*0.9*30
+///                  + 115.2*0.6*0.8*30
+///   s* = 400 / (produced_age_0 * (0.5 * 0.9 + 0.5 * 0.85))
 #[test]
-fn derived_distribution_matches_python_reference() {
+fn derived_distribution_uses_the_surviving_sex_ratio() {
     let (bp, params, _) = fixture();
     let (comp, surv) = equilibrium_metrics(&bp, &params, 0);
-    assert_eq!(comp, 9436.8);
-    assert_eq!(surv, 0.04844257133168629);
+    assert_eq!(comp, 9706.42285714286);
+    assert_eq!(surv, 0.04709694435025054);
+}
+
+/// Equal age-0 survival keeps the historical age-1 split bit-for-bit: the
+/// calibration must not move for any model whose sexes survive equally.
+/// sex_ratio = 0.1 with both survivals at 0.3 is chosen because the
+/// survival-weighted form alone rounds the female entry to 39.99999999999999
+/// instead of 40.0, shifting both constants in the last ulp — so this test
+/// fails if the equal-survival branch is dropped.
+#[test]
+fn equal_sex_survival_keeps_the_historical_age1_split() {
+    let (bp, mut params, _) = fixture();
+    params.sex_ratio = vec![0.1];
+    params.survival_rates = vec![0.3; 8];
+    let (comp, surv) = equilibrium_metrics(&bp, &params, 0);
+    assert_eq!(comp, 1238.6399999999999);
+    assert_eq!(surv, 1.076449439169842);
+}
+
+/// With `new_adult_age = 2` the age-1 juveniles of *both* sexes enter the
+/// competition strength, so the male half of the split is load-bearing: the
+/// same fixture with `sex_ratio = 0.3` is checked here, where the surviving
+/// male share (0.6878612716763005 of K) is 4.86 head below the raw offspring
+/// share (0.7 of K) and C* would move to 3218.5341040462435 — off the
+/// composition the model reaches, which is what moves the calibrated
+/// equilibrium away from K.  Values replicated independently from the
+/// documented operation order:
+///   female share = 0.3 * 0.9 / (0.3 * 0.9 + 0.7 * 0.85) -> 124.855...
+///   male share -> 275.144... (age-1 row sums to K = 400)
+///   female age-2/3 = 124.855...*0.8 and *0.8*0.7
+///   produced_age_0 = 99.884...*0.7*0.9*30 + 69.919...*0.6*0.8*30
+///                  -> 2894.649710982659
+///   C* = produced_age_0*1.0 + (124.855... + 275.144...)*0.8
+///   s* = 400 / (produced_age_0 * (0.3 * 0.9 + 0.7 * 0.85))
+#[test]
+fn derived_distribution_puts_the_surviving_male_share_into_c_star() {
+    let (mut bp, mut params, _) = fixture();
+    bp.new_adult_age = 2;
+    params.sex_ratio = vec![0.3];
+    let (comp, surv) = equilibrium_metrics(&bp, &params, 0);
+    assert_eq!(comp, 3214.6497109826596);
+    assert_eq!(surv, 0.15975257521151237);
+}
+
+/// Degenerate reference: with no female offspring at all (sex_ratio = 0) the
+/// surviving mass is empty, so the split falls back to the offspring ratio
+/// and the survival-rate guard yields 1.0.
+#[test]
+fn degenerate_zero_surviving_mass_falls_back_to_the_offspring_split() {
+    let (bp, mut params, _) = fixture();
+    params.sex_ratio = vec![0.0];
+    params.survival_rates = vec![0.5, 0.8, 0.7, 0.6, 0.0, 0.75, 0.65, 0.55];
+    let (comp, surv) = equilibrium_metrics(&bp, &params, 0);
+    assert_eq!(comp, 0.0);
+    assert_eq!(surv, 1.0);
 }
 
 /// Declared distribution + external egg override must match the

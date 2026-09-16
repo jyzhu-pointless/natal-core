@@ -181,3 +181,151 @@ def test_native_spatial_constructor_validates_every_deme_growth_pair(model: str,
             np.stack([draft.initial_individual_count] * 2),
             np.stack([draft.initial_sperm_storage] * 2), 0,
         )
+
+
+# ---------------------------------------------------------------------------
+# Equilibrium calibration and sex-specific juvenile survival
+# ---------------------------------------------------------------------------
+# The derived reference distribution splits the age-1 total by the *surviving*
+# sex ratio -- the offspring sex ratio filtered by each sex's own age-0
+# survival -- so the calibrated equilibrium is the declared carrying capacity
+# even when the two sexes survive differently.  Splitting by the raw sex ratio
+# instead made the realised equilibrium miss K by 2.8%-37.5% (larger as r
+# approaches 1) whenever `female_age0_survival != male_age0_survival`.
+# Equal-survival models are unaffected bit-for-bit; their convergence is
+# covered by tests/test_default_growth_mode.py.
+
+_DISCRETE_CASES = [
+    # (growth_mode, sex_ratio, female age-0 survival, male age-0 survival, r)
+    ("beverton_holt", 0.5, 0.9, 0.8, 3.0),
+    ("beverton_holt", 0.5, 0.8, 0.3, 3.0),
+    ("beverton_holt", 0.4, 0.8, 0.3, 2.0),
+    ("ricker", 0.5, 0.9, 0.8, 3.0),
+]
+
+
+@pytest.mark.parametrize("growth_mode,sex_ratio,s_f,s_m,r", _DISCRETE_CASES)
+def test_discrete_equilibrium_reaches_k_under_sex_specific_survival(
+    growth_mode: str, sex_ratio: float, s_f: float, s_m: float, r: float
+) -> None:
+    """Discrete engine: the adult equilibrium is exactly K.
+
+    Catches a reference distribution whose age-1 sex split ignores the
+    per-sex age-0 survival: with (0.5, 0.9, 0.8, 3) the pre-fix calibration
+    settled at 2055.6 instead of 2000, (0.5, 0.8, 0.3, 3) at 2312.5, and
+    (0.4, 0.8, 0.3, 2) at 2750.
+    """
+    carrying_capacity = 2000.0
+    population = (
+        nt.DiscreteGenerationPopulation.setup(
+            species=_species(f"sex_surv_{growth_mode}_{s_f}_{s_m}_{r}"),
+            name=f"sex_surv_{growth_mode}_{s_f}_{s_m}_{r}",
+            stochastic=False,
+        )
+        .initial_state(
+            individual_count={
+                "female": {"A|A": carrying_capacity / 2},
+                "male": {"A|A": carrying_capacity / 2},
+            }
+        )
+        .survival(female_age0_survival=s_f, male_age0_survival=s_m)
+        .reproduction(eggs_per_female=6.0, sex_ratio=sex_ratio)
+        .competition(
+            juvenile_growth_mode=growth_mode,
+            carrying_capacity=carrying_capacity,
+            low_density_growth_rate=r,
+        )
+        .build()
+    )
+    population.run(400)
+    adults = float(np.asarray(population.state.individual_count)[:, 1, :].sum())
+    assert adults == pytest.approx(carrying_capacity, rel=1e-9)
+
+
+def test_age_structured_equilibrium_reaches_k_under_sex_specific_survival() -> None:
+    """Age-structured engine: the age-1 total is exactly K.
+
+    Same calibration core as the discrete path; with s_f = 0.8 and s_m = 0.3
+    the pre-fix calibration settled at 2312.5 instead of 2000.
+    """
+    carrying_capacity = 2000.0
+    population = (
+        nt.AgeStructuredPopulation.setup(
+            species=_species("age_sex_surv"), name="age_sex_surv", stochastic=False
+        )
+        .age_structure(n_ages=3, new_adult_age=1)
+        .initial_state(
+            individual_count={"female": {"A|A": {1: 500.0}}, "male": {"A|A": {1: 500.0}}}
+        )
+        .survival(
+            female_age_based_survival=[0.8, 0.8, 0.5],
+            male_age_based_survival=[0.3, 0.3, 0.5],
+        )
+        .reproduction(
+            female_age_based_mating_rate=[0.0, 1.0, 1.0],
+            male_age_based_mating_rate=[0.0, 1.0, 1.0],
+            eggs_per_female=20.0,
+            sex_ratio=0.5,
+        )
+        .competition(
+            juvenile_growth_mode="beverton_holt",
+            carrying_capacity=carrying_capacity,
+            low_density_growth_rate=3.0,
+        )
+        .build()
+    )
+    population.run(600)
+    age_distribution = population.get_age_distribution("both")
+    assert float(age_distribution[1]) == pytest.approx(carrying_capacity, rel=1e-9)
+
+
+def test_age_structured_juvenile_weights_stay_at_k_under_sex_specific_survival() -> None:
+    """Age 1 is a juvenile here, so both sexes' age-1 counts enter C*.
+
+    ``new_adult_age = 2`` puts the age-1 row inside the competition strength,
+    which makes the male half of the reference split load-bearing.  The
+    realised equilibrium composition is the surviving sex ratio,
+    ``sex_ratio * s_f / (sex_ratio * s_f + (1 - sex_ratio) * s_m) = 0.8 / 1.1``
+    of the age-1 total, so both halves are checked.  A reference that keeps
+    the raw offspring ratio for the male half is far from self-consistent:
+    a declared variant with that male entry settles at 2939.2 instead of
+    2000 for these inputs.
+    """
+    carrying_capacity = 2000.0
+    population = (
+        nt.AgeStructuredPopulation.setup(
+            species=_species("age_sex_surv_juvenile_weight"),
+            name="age_sex_surv_juvenile_weight",
+            stochastic=False,
+        )
+        .age_structure(n_ages=4, new_adult_age=2)
+        .initial_state(
+            individual_count={"female": {"A|A": {2: 500.0}}, "male": {"A|A": {2: 500.0}}}
+        )
+        .survival(
+            female_age_based_survival=[0.8, 0.8, 0.8, 0.8],
+            male_age_based_survival=[0.3, 0.7, 0.7, 0.7],
+        )
+        .reproduction(
+            female_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0],
+            male_age_based_mating_rate=[0.0, 0.0, 1.0, 1.0],
+            eggs_per_female=20.0,
+            sex_ratio=0.5,
+        )
+        .competition(
+            juvenile_growth_mode="beverton_holt",
+            carrying_capacity=carrying_capacity,
+            low_density_growth_rate=2.0,
+        )
+        .build()
+    )
+    population.run(800)
+    age_distribution = population.get_age_distribution("both")
+    assert float(age_distribution[1]) == pytest.approx(carrying_capacity, rel=1e-9)
+    individual_count = np.asarray(population.state.individual_count)
+    female_age_1 = float(individual_count[0, 1, :].sum())
+    male_age_1 = float(individual_count[1, 1, :].sum())
+    expected_female_share = 0.5 * 0.8 / (0.5 * 0.8 + 0.5 * 0.3)
+    assert female_age_1 / (female_age_1 + male_age_1) == pytest.approx(
+        expected_female_share, rel=1e-9
+    )

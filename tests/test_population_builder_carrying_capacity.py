@@ -103,6 +103,50 @@ class TestCarryingCapacityResolution:
         assert dist[0, 0] == 0.0
         assert dist[1, 0] == 0.0
 
+    def test_build_equilibrium_distribution_uses_the_surviving_sex_ratio(self) -> None:
+        """Age-1 follows each sex's own age-0 survival, matching the engine rule.
+
+        survival row 0 (female) age 0 = 0.9 and row 1 (male) age 0 = 0.8, so
+        with sex_ratio 0.5 the masses are 0.5 * 0.9 = 0.45 and 0.5 * 0.8 = 0.4
+        over 0.85 surviving.  Age 1 is therefore 529.4117647058823 females and
+        470.5882352941176 males (sum = K); the raw offspring split would give
+        500 / 500 and misstate the female count the calibration uses.
+        """
+        n_ages = 4
+        survival = np.array([
+            [0.9, 0.9, 0.8, 0.7],
+            [0.8, 0.8, 0.7, 0.6],
+        ], dtype=np.float64)
+        dist = build_equilibrium_distribution(
+            K=1000.0, sex_ratio=0.5, age_based_survival_rates=survival, n_ages=n_ages,
+        )
+        assert dist[0, 1] == 529.4117647058823
+        assert dist[1, 1] == 470.5882352941176
+        assert dist[0, 1] + dist[1, 1] == 1000.0
+        assert dist[0, 1] / (dist[0, 1] + dist[1, 1]) == pytest.approx(0.9 / 1.7)
+        # Older ages keep the per-sex forward propagation.
+        assert dist[0, 2] == pytest.approx(dist[0, 1] * 0.9)
+        assert dist[1, 2] == pytest.approx(dist[1, 1] * 0.8)
+
+    def test_build_equilibrium_distribution_keeps_the_historical_split(self) -> None:
+        """Equal age-0 survival, and the empty surviving mass, keep the old split."""
+        equal = build_equilibrium_distribution(
+            K=1000.0,
+            sex_ratio=0.4,
+            age_based_survival_rates=np.array([[0.3, 0.3], [0.3, 0.3]]),
+            n_ages=2,
+        )
+        assert equal[0, 1] == 400.0
+        assert equal[1, 1] == 600.0
+        empty_mass = build_equilibrium_distribution(
+            K=1000.0,
+            sex_ratio=0.0,
+            age_based_survival_rates=np.array([[0.9, 0.9], [0.0, 0.0]]),
+            n_ages=2,
+        )
+        assert empty_mass[0, 1] == 0.0
+        assert empty_mass[1, 1] == 1000.0
+
     def test_compute_expected_eggs_from_females(self) -> None:
         """Test expected egg computation from adult female count."""
         n_ages = 4
