@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#091515">
+  <meta name="description" content="NATAL Core：基于聚合计算的种群遗传模拟框架。Python 建模，Rust 计算。">
+  <title>NATAL Core — 种群遗传，聚合计算</title>
+  <link rel="icon" href="./natal.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main" data-i18n="skip">跳至内容</a>
+  <div class="header-shell">
+  <header class="wrap header">
+    <a class="brand" href="#" aria-label="NATAL Core"><img src="assets/natal-brand.svg" alt="" width="168" height="48"><span>Core</span></a>
+    <nav aria-label="主导航">
+      <a href="https://natal-core.readthedocs.io/zh-cn/latest/" data-docs data-i18n="docs">文档 ↗</a>
+      <a href="https://github.com/jyzhu-pointless/natal-core">GitHub ↗</a>
+      <button id="language" type="button" aria-label="Switch to English">EN</button>
+    </nav>
+  </header>
+  </div>
+  <nav hidden class="section-dots" aria-label="章节导航">
+    <a href="#aggregation" data-section="aggregation" aria-label="1. 数值聚合"><span aria-hidden="true"></span></a>
+    <a href="#genetics" data-section="genetics" aria-label="2. 遗传结构"><span aria-hidden="true"></span></a>
+    <a href="#preset" data-section="preset" aria-label="3. 遗传规则"><span aria-hidden="true"></span></a>
+    <a href="#lifecycle" data-section="lifecycle" aria-label="4. 生命周期"><span aria-hidden="true"></span></a>
+    <a href="#performance" data-section="performance" aria-label="5. 高性能计算引擎"><span aria-hidden="true"></span></a>
+    <a href="#spatial" data-section="spatial" aria-label="6. 空间模型"><span aria-hidden="true"></span></a>
+    <a href="#agent" data-section="agent" aria-label="7. AI agent 友好"><span aria-hidden="true"></span></a>
+  </nav>
+  <main id="main" class="wrap">
+    <section class="hero">
+      <p class="natal-full-name"><strong>N</strong>umerical <strong>A</strong>ggregation <strong>T</strong>oolkit for <strong>A</strong>nalysis of <strong>L</strong>ifecycles</p>
+      <h1><span data-i18n="hero1">种群遗传，</span><em data-i18n="hero2">聚合计算。</em></h1>
+      <p class="intro" data-i18n="intro">基于数值聚合的前向种群遗传模拟引擎。支持可配置的生命周期，用于研究基因驱动及其他种群遗传过程。</p>
+      <div class="hero-actions">
+        <div class="command"><code>pip install natal-core</code><button class="copy" type="button" data-i18n="copy" aria-label="复制安装命令">复制</button></div>
+        <div class="start-actions"><a class="button" href="https://natal-core.readthedocs.io/zh-cn/latest/" data-docs><span data-i18n="start">开始建模</span> ↗</a><a class="version" href="https://github.com/jyzhu-pointless/natal-core/releases/tag/v0.3.0">v0.3.0</a></div>
+      </div>
+    </section>
+    <section class="capability-stack" aria-label="模型概念" data-models-label>
+      <article class="feature-card aggregation-card" data-animation="aggregation" id="aggregation" aria-labelledby="aggregation-heading"><div class="diagram"><svg viewBox="0 0 360 240" role="img" aria-labelledby="tensor-title"><desc id="tensor-title" data-i18n="tensorAlt">雌性与雄性两层种群张量，按年龄、基因型与自定义标签聚合更新</desc><g class="sex-planes" fill="#16392e" stroke="#5e9f82"><rect x="110" y="62" width="132" height="108" rx="5"/><rect x="94" y="76" width="132" height="108" rx="5"/></g><g class="aggregate-cells" fill="#b8efd0"><rect x="94" y="76" width="29" height="23" rx="3" opacity="0.20"/><rect x="127" y="76" width="29" height="23" rx="3" opacity="0.44"/><rect x="160" y="76" width="29" height="23" rx="3" opacity="0.68"/><rect x="193" y="76" width="29" height="23" rx="3" opacity="0.20"/><rect x="94" y="103" width="29" height="23" rx="3" opacity="0.56"/><rect x="127" y="103" width="29" height="23" rx="3" opacity="0.80"/><rect x="160" y="103" width="29" height="23" rx="3" opacity="0.32"/><rect x="193" y="103" width="29" height="23" rx="3" opacity="0.56"/><rect x="94" y="130" width="29" height="23" rx="3" opacity="0.20"/><rect x="127" y="130" width="29" height="23" rx="3" opacity="0.44"/><rect x="160" y="130" width="29" height="23" rx="3" opacity="0.68"/><rect x="193" y="130" width="29" height="23" rx="3" opacity="0.20"/><rect x="94" y="157" width="29" height="23" rx="3" opacity="0.56"/><rect x="127" y="157" width="29" height="23" rx="3" opacity="0.80"/><rect x="160" y="157" width="29" height="23" rx="3" opacity="0.32"/><rect x="193" y="157" width="29" height="23" rx="3" opacity="0.56"/></g><g stroke="#90bba5" fill="none"><path d="M83 76v109M94 196h132M239 183l33-30"/></g><g class="svg-label"><text x="158" y="222" text-anchor="middle" data-i18n="father">基因型 × 标签</text><text x="67" y="137" text-anchor="middle" transform="rotate(-90 67 137)" data-i18n="mother">年龄</text><text x="274" y="195" data-i18n="offspring">雌 / 雄</text></g></svg></div><div class="feature-copy"><h2 id="aggregation-heading" data-i18n="tensorTitle">数值聚合</h2><p data-i18n="tensorText">按年龄、性别、基因型与自定义标签组织种群，以各类群的数量进行聚合计算。</p></div></article>
+      <article class="feature-card genetics-card" data-animation="genetics" id="genetics" aria-labelledby="genetics-heading">
+        <div class="diagram"><svg viewBox="0 0 480 280" role="img" aria-labelledby="genetics-title">
+          <desc id="genetics-title" data-i18n="geneticsAlt">依次创建染色体、添加位点、定义各位点的等位基因，完成后循环演示</desc>
+          <g class="genetics-chromosomes">
+            <g class="chromosome-rails" stroke="#608c71" stroke-width="12" stroke-linecap="round"><path pathLength="1" d="M92 85H417"/><path pathLength="1" d="M92 183H354"/></g>
+            <g class="svg-label"><text x="20" y="92">chr1</text><text x="20" y="190">chr2</text></g>
+          </g>
+          <g class="genetics-loci" fill="#b8efd0" stroke="#d1f4de" stroke-width="1.5">
+            <rect x="154" y="71" width="28" height="28" rx="7"/><rect x="312" y="71" width="28" height="28" rx="7"/><rect x="216" y="169" width="28" height="28" rx="7"/>
+          </g>
+          <g class="genetics-alleles">
+            <g fill="none" stroke="#608c71"><path d="M168 69V51M326 69V51M230 167V149"/></g>
+            <g class="genetics-allele-options" text-anchor="middle"><text x="168" y="40">A · a</text><text x="326" y="40">B · b</text><text x="230" y="138">C · c · r</text></g>
+          </g>
+        </svg></div><div class="feature-copy"><h2 id="genetics-heading" data-i18n="geneticsHeading">可配置的遗传结构</h2><p data-i18n="geneticsText">定义染色体、位点及其等位基因，配置模型的遗传结构。</p></div></article>
+      <article class="feature-card preset-card" data-animation="preset" id="preset" aria-labelledby="preset-heading"><div class="diagram preset-diagrams"><div class="preset-deck" data-active="0"><div class="preset-slide" data-position="0" aria-hidden="false"><h3 data-i18n="mutationLabel">点突变</h3><svg viewBox="0 0 480 180" role="img" aria-labelledby="preset-title-0"><desc id="preset-title-0" data-i18n="mutationLabel">点突变</desc><g class="mutation-demo" transform="translate(0 30)">
+          <rect x="86" y="48" width="54" height="48" rx="8" fill="#244835" />
+          <text x="113" y="80" text-anchor="middle" class="allele-letter">A</text>
+          <path class="mutation-arrow" d="M167 72H284m-8-6 8 6-8 6" fill="none" stroke="#b8efd0" stroke-width="2" />
+          <rect class="mutant-allele" x="310" y="48" width="54" height="48" rx="8" fill="#a6d9bc" />
+          <text x="337" y="80" text-anchor="middle" class="allele-letter mutant-letter">a</text>
+        </g>
+        </svg></div><div class="preset-slide" data-position="1" aria-hidden="true"><h3 data-i18n="homingLabel">Homing</h3><svg viewBox="0 0 480 180" role="img" aria-labelledby="preset-title-1"><desc id="preset-title-1" data-i18n="homingLabel">Homing</desc><g class="homing-demo" transform="translate(0 -100)">
+          <g stroke-width="10" stroke-linecap="round"><path d="M97 167v41M128 167v41M321 167v41" stroke="#a6d9bc" /><path d="M128 167v41" stroke="#577c6a" /><path class="drive-conversion" d="M352 167v41" stroke="#a6d9bc" /></g>
+          <path class="drive-arrow" d="M167 188H284m-8-6 8 6-8 6" fill="none" stroke="#b8efd0" stroke-width="2" />
+          <g class="svg-note" text-anchor="middle"><text x="97" y="234">D</text><text x="128" y="234">W</text><text x="321" y="234">D</text><text class="drive-result-d" x="352" y="234">D</text><text class="drive-result-w" x="352" y="234">W</text></g>
+        </g>
+        </svg></div><div class="preset-slide" data-position="2" aria-hidden="true"><h3 data-i18n="toxinLabel">Toxin–antidote · TARE</h3><svg viewBox="0 0 480 180" role="img" aria-labelledby="preset-title-2"><desc id="preset-title-2" data-i18n="toxinLabel">Toxin–antidote · TARE</desc><g class="toxin-demo" transform="translate(0 -240)">
+          <text x="65" y="337" text-anchor="middle" class="allele-letter">W</text>
+          <path class="toxin-arrow" d="M87 330H144m-8-6 8 6-8 6" fill="none" stroke="#e2aa95" stroke-width="2" />
+          <text x="170" y="337" text-anchor="middle" class="disrupted-allele allele-letter">r</text>
+          <path d="M189 330h42v-23h39m-39 23v34h39" fill="none" stroke="#52745f" stroke-width="1.5" />
+          <g class="toxin-loss"><text x="304" y="314" text-anchor="middle" class="allele-letter">r/r</text><path d="m351 299 15 15m0-15-15 15" stroke="#e2aa95" stroke-width="3" /></g>
+          <g class="toxin-rescue"><text x="304" y="371" text-anchor="middle" class="allele-letter">D/r</text><path d="m349 362 8 8 16-19" fill="none" stroke="#b8efd0" stroke-width="3" /></g>
+        </g>
+      </svg></div></div><div class="preset-pagination"><button type="button" data-preset="0" data-label="mutationLabel" aria-label="点突变" aria-pressed="true"><span aria-hidden="true"></span></button><button type="button" data-preset="1" data-label="homingLabel" aria-label="Homing" aria-pressed="false"><span aria-hidden="true"></span></button><button type="button" data-preset="2" data-label="toxinLabel" aria-label="Toxin–antidote · TARE" aria-pressed="false"><span aria-hidden="true"></span></button></div></div><div class="feature-copy"><h2 id="preset-heading" data-i18n="driveTitle">可配置的遗传规则</h2><p data-i18n="driveText">通过预设配置遗传机制，包括点突变、homing 和 toxin-antidote。</p></div></article>
+      <article class="feature-card lifecycle-card" data-animation="lifecycle" id="lifecycle" aria-labelledby="lifecycle-heading">
+        <div class="diagram"><svg id="life-demo" viewBox="0 0 480 350" role="img" aria-labelledby="life-title">
+          <desc id="life-title" data-i18n="lifeAlt">连续演示多个 tick：初始全部为野生型，每个 tick 繁殖前释放转基因成虫；颜色随繁殖、生存和增龄延续，直到全部个体携带构建，再从头循环</desc>
+          <defs>
+            <g id="life-egg"><ellipse rx="5" ry="9" fill="currentColor"/></g>
+            <g id="life-larva" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"><path d="M-10-5Q-2-14 1-3T11 5"/></g>
+            <g id="life-pupa"><path d="M-7-10Q10-14 9 0Q8 11 0 12Q-8 7-7-10Z" fill="currentColor"/><path d="M-5-2L7 1M-3 4L5 6" stroke="#16392e" fill="none"/></g>
+            <g id="life-adult" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><ellipse cx="-8" cy="-4" rx="9" ry="5" transform="rotate(25 -8 -4)" fill="currentColor" opacity=".35"/><ellipse cx="8" cy="-4" rx="9" ry="5" transform="rotate(-25 8 -4)" fill="currentColor" opacity=".35"/><path d="M0-9V11M0-4L-10-13M0-4L10-13M0 3L-12 10M0 3L12 10"/><circle cy="-10" r="3" fill="currentColor"/></g>
+          </defs>
+          <path class="life-cycle-track" d="M87 60H435Q465 60 465 92.5Q465 125 435 125H45Q15 125 15 92.5Q15 60 45 60Z" fill="none" stroke="#608c71" stroke-width="2"/>
+          <path d="m158 55 7 5-7 5m153-10 7 5-7 5m-58 55-7 5 7 5M18 96l-3-7-3 7" fill="none" stroke="#b8efd0" stroke-width="2"/>
+          <g class="life-phase life-inserted-hook" data-phase="0"><path class="life-hook-node" d="m57 114 11 11-11 11-11-11Z"/><text x="57" y="157" data-i18n="lifeRelease">释放</text></g>
+          <g class="life-phase" data-phase="1"><rect x="35" y="40" width="104" height="40" rx="20"/><text x="87" y="65" data-i18n="birth">繁殖</text></g>
+          <g class="life-phase" data-phase="2"><rect x="188" y="40" width="104" height="40" rx="20"/><text x="240" y="65" data-i18n="survival">生存</text></g>
+          <g class="life-phase" data-phase="3"><rect x="341" y="40" width="104" height="40" rx="20"/><text x="393" y="65" data-i18n="aging">增龄</text></g>
+          <ellipse id="life-parent-glow" cx="393" cy="254" rx="73" ry="82" fill="#b8efd0" opacity="0"/>
+          <path id="life-birth-flow" d="M386 168Q240 119 90 168" fill="none" stroke="#e9ce8f" stroke-width="2" opacity="0"/>
+          <g id="life-cohorts"></g>
+        </svg></div><div class="feature-copy"><h2 id="lifecycle-heading" data-i18n="lifeHeading">可配置的生命周期</h2><p data-i18n="lifeText">配置繁殖、生存与增龄阶段，通过 hooks 在阶段前后加入释放等干预。</p></div></article>
+      <article class="performance feature-card" data-animation="performance" id="performance" aria-labelledby="performance-heading">
+      <div class="feature-copy"><h2 id="performance-heading" data-i18n="performanceTitle">高性能计算引擎</h2><p data-i18n="performanceText">使用 Python 配置模型，由 Rust 后端执行种群状态更新。</p></div>
+      <div class="diagram engine-diagram"><svg viewBox="0 0 520 220" role="img" aria-labelledby="engine-title"><desc id="engine-title" data-i18n="performanceAlt">Python 模型配置流入 Rust 后端，生成模拟轨迹</desc>
+        <g class="engine-flow" stroke="#58816b" fill="none" stroke-width="2"><path d="M85 68H201M85 110H201M85 152H201M321 110H450"/></g>
+        <g class="data-blocks" fill="#b8efd0"><rect x="92" y="62" width="20" height="12" rx="3"/><rect x="114" y="104" width="20" height="12" rx="3"/><rect x="88" y="146" width="20" height="12" rx="3"/></g>
+        <rect class="engine-core" x="201" y="53" width="120" height="114" rx="18" fill="#1c3c2c" stroke="#86bb96"/>
+        <text x="261" y="120" text-anchor="middle" class="engine-word">Rust</text>
+        <path class="result-line" d="M360 130l15-15 15 7 15-35 15 14 15-23 15 9" fill="none" stroke="#e6ce8c" stroke-width="3"/>
+        <g class="svg-label" text-anchor="middle"><text x="105" y="202">Python</text><text x="261" y="202" data-i18n="nativeEngine">原生内核</text><text x="415" y="202" data-i18n="trajectories">模拟轨迹</text></g>
+      </svg></div>
+    </article>
+      <article class="feature-card spatial-demo" data-animation="spatial" id="spatial" aria-labelledby="spatial-heading">
+      <div class="feature-copy"><h2 id="spatial-heading" data-i18n="spatialTitle">空间模型</h2><p data-i18n="spatialText">在相互连接的局部种群间模拟迁移，观察基因驱动扩散与种群数量变化。</p></div>
+      <div class="diagram"><svg id="hex-replay" viewBox="0 0 640 400" role="img" aria-labelledby="hex-replay-title"><desc id="hex-replay-title" data-i18n="spatialAlt">真实模拟循环回放，颜色亮度表示局部种群数量</desc><g id="hex-cells"></g></svg><p id="replay-status" class="data-note" role="status"></p></div>
+    </article>
+      <article class="feature-card agent-section" data-animation="agent" id="agent" aria-labelledby="agent-heading">
+      <div class="feature-copy"><h2 id="agent-heading" data-i18n="agentTitle">对研究者与 AI agent 友好</h2><p data-i18n="agentText">链式 API、类型标注和示例，便于研究者与 AI agent 阅读、编写和修改模型配置。</p></div>
+      <div class="diagram api-diagram"><svg viewBox="0 0 480 320" role="img" aria-labelledby="api-title">
+        <desc id="api-title" data-i18n="apiAlt">链式配置依次高亮：设置初始状态、应用预设、构建种群</desc>
+        <path d="M61 65V263H112" fill="none" stroke="#3b6551" stroke-width="2"/>
+        <text x="37" y="42" class="api-class">PopulationBuilder</text>
+        <g class="api-step api-step-one"><circle cx="61" cy="100" r="5"/><text x="89" y="108">.initial_state(…)</text></g>
+        <g class="api-step api-step-two"><circle cx="61" cy="159" r="5"/><text x="89" y="167">.presets(…)</text></g>
+        <g class="api-step api-step-three"><circle cx="61" cy="218" r="5"/><text x="89" y="226">.build()</text></g>
+        <text x="124" y="273" class="api-result">Population</text>
+        <path class="api-trace" d="M61 65V263H112" fill="none" stroke="#b8efd0" stroke-width="3"/>
+      </svg></div>
+    </article>
+    </section>
+  </main>
+  <footer class="wrap footer"><span>NATAL Core</span><a href="https://github.com/jyzhu-pointless/natal-core/blob/main/LICENSE">MIT License ↗</a></footer>
+  <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+</body>
+</html>
