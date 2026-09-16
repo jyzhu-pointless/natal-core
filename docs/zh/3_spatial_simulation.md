@@ -126,6 +126,9 @@ pop = (
 
 各方法的详细参数说明见 [种群初始化](2_population_initialization.md)（setup、initial_state、survival、reproduction、competition）、[Hook 系统](2_hooks.md)、[基因驱动预设](2_genetic_presets.md)。
 
+两种空间引擎的 `.reproduction(fixed_egg_count=True/False)` 都会应用显式设置；
+省略该参数或传入 `None` 时保留 `.setup()` 的值（初始默认为 `False`）。
+
 ### 空间特有：`.migration()`
 
 ```python

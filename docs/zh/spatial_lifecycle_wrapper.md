@@ -73,6 +73,6 @@ pop.params.tensor_write("migration_rate", {"F": 0.2, "M": 0.05})  # 运行时改
 **`SpatialPopulation.update()` 链已删除**。
 
 > **注意**：空间容器的 `pop.params` 每次访问都返回**新的** `SpatialParamsView`。
-> 因此 `pop.params.carrying_capacity = 5` 只会写到这个临时视图上，对引擎无效
-> （实测参数值不变）。空间参数写入必须用 `pop.params.tensor_write(...)` 或
+> `pop.params.carrying_capacity = 5` 等属性赋值会抛出 `AttributeError`，不会
+> 静默写入临时视图。空间参数写入必须用 `pop.params.tensor_write(...)` 或
 > `deme(i).write_ecology(...)`。

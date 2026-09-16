@@ -162,6 +162,14 @@ print(pop.config.custom["temperature"])  # 35.0
 
 ### 6.1 `pop.params`（between-tick 批量写入推荐）
 
+空间容器的参数视图不支持属性赋值：`pop.params.carrying_capacity = 5` 会抛出
+`AttributeError`。请使用下面的 `tensor_write`，或已有的单 deme 写入接口。
+
+空间 Python hook 内，容器及 deme 的状态、计数和聚合查询会抛出 `RuntimeError`，
+不再返回上次发布的旧缓存；显式 `trigger_event` 触发的回调也遵循此规则。
+读取或修改当前 deme 请使用 `ctx.state`，统计请使用 `ctx.metrics`。
+跨 deme 查询应放在 `run()` 调用之间；这次修复没有增加跨 deme 实时读取能力。
+
 `pop.params` 按需派生 `(n_demes, ...)` 生态列并返回写保护视图（有会话时源自
 会话列，无会话时源自 deme draft）；`tensor_write` 校验形状后通过共享写入通道
 按 deme 路由（写入会话权威列与 deme draft 声明，读取随读随派生）：

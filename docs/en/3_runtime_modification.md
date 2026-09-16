@@ -169,6 +169,17 @@ print(pop.config.custom["temperature"])  # 35.0
 
 ### 6.1 `pop.params` (recommended for between-tick bulk writes)
 
+The spatial container's parameter view does not support attribute assignment:
+`pop.params.carrying_capacity = 5` raises `AttributeError`. Use `tensor_write`
+below or the existing per-deme write interfaces.
+
+Inside spatial Python hooks, state, count, and aggregate queries on the container
+or its demes raise `RuntimeError` instead of returning the last-published cache.
+This also applies to callbacks invoked through explicit `trigger_event` calls.
+Use `ctx.state` to read or modify the current deme and `ctx.metrics` for its
+statistics. Query across demes between `run()` calls; this fix does not add live
+cross-deme reads.
+
 `pop.params` derives the `(n_demes, ...)` ecology columns on demand and returns write-protected views (from the session columns when a session is enabled, otherwise from the deme drafts); `tensor_write` validates the shape and routes values per deme through the shared write channel (the session's authoritative column and the deme draft declaration are written; reads derive on demand):
 
 ```python

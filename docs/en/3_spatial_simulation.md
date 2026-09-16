@@ -126,6 +126,10 @@ pop = (
 
 Detailed parameter descriptions for each method can be found in [Population Initialization](2_population_initialization.md) (setup, initial_state, survival, reproduction, competition), [Hook System](2_hooks.md), and [Gene Drive Presets](2_genetic_presets.md).
 
+Both spatial engines apply an explicit `.reproduction(fixed_egg_count=True/False)`
+setting. Omitting the parameter or passing `None` preserves the `.setup()` value
+(initially `False`).
+
 ### Spatial-Specific: `.migration()`
 
 ```python
