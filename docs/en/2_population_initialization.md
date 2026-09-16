@@ -25,7 +25,6 @@ pop = (
     .survival(female_age_based_survival=0.85)
     .reproduction(eggs_per_female=50.0)
     .competition(age_1_carrying_capacity=1000)
-    .hooks(my_hook)
     .build()
 )
 ```

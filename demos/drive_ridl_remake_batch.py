@@ -814,7 +814,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             fitness_success_counts=fitness_success_counts,
         )
 
-    if args.check:
+    if args.check and args.smoke:
+        print("[check] smoke grid: output contract checked; skipping full-grid reference comparison")
+    elif args.check:
         check_reference(
             Path(__file__).with_name(REFERENCE_NAME),
             seed=seed,

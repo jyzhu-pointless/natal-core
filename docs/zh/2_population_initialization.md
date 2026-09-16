@@ -9,7 +9,7 @@
 ```python
 import natal as nt
 
-sp = nt.Species.from_dict(...)
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
 
 # 年龄结构化种群
 pop = (
@@ -22,7 +22,6 @@ pop = (
     .survival(female_age_based_survival=0.85)
     .reproduction(eggs_per_female=50.0)
     .competition(age_1_carrying_capacity=1000)
-    .hooks(my_hook)
     .build()
 )
 ```

@@ -129,6 +129,7 @@ def test_reference_is_skipped_for_a_different_run(demo, tmp_path: Path) -> None:
         )
         is False
     )
+
     assert (
         demo.check_reference(
             path,
@@ -141,3 +142,61 @@ def test_reference_is_skipped_for_a_different_run(demo, tmp_path: Path) -> None:
         )
         is False
     )
+
+
+@pytest.fixture
+def cli_demo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Exercise CLI dispatch with cheap scan arrays and a real full-grid reference."""
+    module = _load_demo()
+    monkeypatch.setattr(module, "__file__", str(tmp_path / _DEMO.name))
+    means = np.full((len(module.RELEASE_RATIOS), len(module.DRIVE_CONVERSION_RATES)), np.nan)
+    fitness_means = np.full((len(module.RELEASE_RATIOS_FITNESS_SCAN), len(module.FITNESS_VALUES)), np.nan)
+    module.write_reference(
+        tmp_path / module.REFERENCE_NAME,
+        seed=module.REFERENCE_SEED,
+        repeats=20,
+        mean_suppression_weeks=means,
+        success_counts=np.zeros(means.shape, dtype=np.int64),
+        fitness_mean_suppression_weeks=fitness_means,
+        fitness_success_counts=np.zeros(fitness_means.shape, dtype=np.int64),
+    )
+
+    def scan(seed, repeats, x_values, y_values):
+        shape = (len(y_values), len(x_values))
+        return np.full(shape, np.nan), np.zeros(shape, dtype=np.int64)
+
+    monkeypatch.setattr(module, "run_parameter_scan", scan)
+    monkeypatch.setattr(module, "run_fitness_parameter_scan", scan)
+    monkeypatch.setattr(module, "save_numeric_outputs", lambda *args, **kwargs: [])
+    monkeypatch.setattr(module, "save_fitness_numeric_outputs", lambda *args, **kwargs: [])
+    monkeypatch.setattr(module, "write_manifest", lambda **kwargs: None)
+    return module
+
+
+def test_smoke_cli_checks_contract_but_skips_full_grid_reference(cli_demo, capsys) -> None:
+    """Matching canonical seed/repeats must not compare a 3x3 scan to 21x21."""
+    assert cli_demo.main(["--smoke", "--repeats", "20", "--check", "--no-plots"]) == 0
+    output = capsys.readouterr().out
+    assert "conversion: (3, 3) cells satisfy the output contract" in output
+    assert "fitness: (3, 3) cells satisfy the output contract" in output
+    assert "skipping full-grid reference comparison" in output
+
+
+def test_smoke_cli_still_rejects_invalid_outputs(cli_demo, monkeypatch) -> None:
+    """Skipping full-grid comparison must not skip the smoke output invariants."""
+    monkeypatch.setattr(cli_demo, "run_parameter_scan", lambda *args: (np.ones((3, 3)), np.full((3, 3), 21)))
+    with pytest.raises(AssertionError, match="success counts outside"):
+        cli_demo.main(["--smoke", "--repeats", "20", "--check", "--no-plots"])
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_full_grid_cli_retains_reference_comparison(cli_demo, monkeypatch, capsys, drift) -> None:
+    """Full-grid check compares exact values even though the costly scans are stubbed."""
+    if drift:
+        shape = (len(cli_demo.RELEASE_RATIOS), len(cli_demo.DRIVE_CONVERSION_RATES))
+        monkeypatch.setattr(cli_demo, "run_parameter_scan", lambda *args: (np.ones(shape), np.ones(shape, dtype=np.int64)))
+        with pytest.raises(AssertionError, match="suppressed counts differ"):
+            cli_demo.main(["--repeats", "20", "--check", "--no-plots"])
+    else:
+        assert cli_demo.main(["--repeats", "20", "--check", "--no-plots"]) == 0
+        assert "matched the frozen reference" in capsys.readouterr().out

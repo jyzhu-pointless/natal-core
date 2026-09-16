@@ -23,7 +23,7 @@ spatial = (
 ### 推荐：SpatialPopulationBuilder（链式 API）
 
 ```python
-from natal import Species, HexGrid, SpatialPopulation
+from natal import Species, HexGrid, SquareGrid, SpatialPopulation
 from natal.frontend.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
@@ -218,7 +218,17 @@ pop = (
 为每个 deme 指定不同的初始基因型分布，常用于空间驱动释放场景：
 
 ```python
+import numpy as np
+from natal import Species, HexGrid, SpatialPopulation, HomingDrive
 from natal.frontend.spatial import batch_setting
+
+drive_species = Species.from_dict(
+    name="spatial_drive_release",
+    structure={"chr1": {"drive": ["WT", "Dr", "R1", "R2"]}},
+)
+drive_kernel = np.array([[0.0, 1.0, 0.0],
+                         [1.0, 0.0, 1.0],
+                         [0.0, 1.0, 0.0]])
 
 # 默认所有 deme 只有 WT
 n_demes = 100
@@ -232,7 +242,7 @@ states = [default_state] * n_demes
 states[n_demes // 2] = release_state
 
 pop = (
-    SpatialPopulation.builder(species, n_demes=n_demes, topology=HexGrid(10, 10))
+    SpatialPopulation.builder(drive_species, n_demes=n_demes, topology=HexGrid(10, 10))
     .setup(name="drive_release", stochastic=True, continuous_sampling=True)
     .initial_state(individual_count=batch_setting(states))
     .reproduction(eggs_per_female=50)
@@ -242,7 +252,7 @@ pop = (
                          resistance_allele="R2", functional_resistance_allele="R1",
                          drive_conversion_rate=0.95))
     .fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}})
-    .migration(kernel=kernel, migration_rate=0.2)
+    .migration(kernel=drive_kernel, migration_rate=0.2)
     .build()
 )
 ```
@@ -529,6 +539,9 @@ print(observed_history.values.shape)
 
 形状优先级：恰好为 `(n_sexes, n_ages)` 的二维输入按"所有 deme 共享的按性别表"解释；只有其他二维形状才表示 per-deme 的年龄向量。当 `n_demes == n_sexes` 时这两种形状无法区分，若要 per-deme 速率请显式传三维列。
 
+下面前两个示例假设 `demes` 中的年龄结构化种群共享同一个 Species，
+均有四个年龄且 `new_adult_age=2`。
+
 ```python
 # 标量 — age < new_adult_age 迁出 0%，成年迁出 10%（默认 new_adult_age=2）
 spatial = SpatialPopulation(demes, migration_rate=0.1)
@@ -538,15 +551,15 @@ spatial = SpatialPopulation(demes, migration_rate=[0.0, 0.0, 0.3, 0.1])
 
 # per-deme — 三 deme 链中中间 deme 的迁出量是两侧的四倍
 spatial = (
-    SpatialPopulation.builder(species, n_demes=3, topology=topo)
+    SpatialPopulation.builder(species, n_demes=3, topology=SquareGrid(1, 3))
+    .age_structure(n_ages=4, new_adult_age=2)
     .migration(migration_rate=batch_setting([0.1, 0.4, 0.1]))
-    # ... 其余链式调用 ...
     .build()
 )
 
 # 运行时修改
-spatial.migration_rate = 0.2                 # 仅成年年龄生效
-spatial.migration_rate = [0.0, 0.0, 0.3, 0.1]  # 按年龄精确设置
+spatial.params.tensor_write("migration_rate", 0.2)  # 仅成年年龄
+spatial.params.tensor_write("migration_rate", [0.0, 0.0, 0.3, 0.1])  # 四个年龄
 ```
 
 - `0.0`：不迁移（所有年龄）。

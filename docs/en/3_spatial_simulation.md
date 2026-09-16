@@ -23,7 +23,7 @@ spatial = (
 ### Recommended: SpatialPopulationBuilder (Chainable API)
 
 ```python
-from natal import Species, HexGrid, SpatialPopulation
+from natal import Species, HexGrid, SquareGrid, SpatialPopulation
 from natal.frontend.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
@@ -219,7 +219,17 @@ pop = (
 Specify different initial genotype distributions for each deme, commonly used in spatial drive release scenarios:
 
 ```python
+import numpy as np
+from natal import Species, HexGrid, SpatialPopulation, HomingDrive
 from natal.frontend.spatial import batch_setting
+
+drive_species = Species.from_dict(
+    name="spatial_drive_release",
+    structure={"chr1": {"drive": ["WT", "Dr", "R1", "R2"]}},
+)
+drive_kernel = np.array([[0.0, 1.0, 0.0],
+                         [1.0, 0.0, 1.0],
+                         [0.0, 1.0, 0.0]])
 
 # Default: all demes have only WT
 n_demes = 100
@@ -233,7 +243,7 @@ states = [default_state] * n_demes
 states[n_demes // 2] = release_state
 
 pop = (
-    SpatialPopulation.builder(species, n_demes=n_demes, topology=HexGrid(10, 10))
+    SpatialPopulation.builder(drive_species, n_demes=n_demes, topology=HexGrid(10, 10))
     .setup(name="drive_release", stochastic=True, continuous_sampling=True)
     .initial_state(individual_count=batch_setting(states))
     .reproduction(eggs_per_female=50)
@@ -243,7 +253,7 @@ pop = (
                          resistance_allele="R2", functional_resistance_allele="R1",
                          drive_conversion_rate=0.95))
     .fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}})
-    .migration(kernel=kernel, migration_rate=0.2)
+    .migration(kernel=drive_kernel, migration_rate=0.2)
     .build()
 )
 ```
@@ -535,6 +545,9 @@ Every form lands on `pop.params.migration_rate` with shape `(n_demes, n_sexes, n
 
 A 2-D declaration whose shape is exactly `(n_sexes, n_ages)` is read as the shared per-sex table; only another 2-D shape means per-deme age vectors. When `n_demes == n_sexes` those shapes are indistinguishable, so pass the explicit 3-D column for per-deme rates.
 
+The first two examples below assume `demes` contains age-structured populations
+with four ages and `new_adult_age=2`, sharing the same Species.
+
 ```python
 # Scalar — juveniles age < new_adult_age emigrate 0%, adults emigrate 10%
 spatial = SpatialPopulation(demes, migration_rate=0.1)
@@ -544,15 +557,15 @@ spatial = SpatialPopulation(demes, migration_rate=[0.0, 0.0, 0.3, 0.1])
 
 # Per-deme — the middle deme of a 3-deme chain emigrates four times as much
 spatial = (
-    SpatialPopulation.builder(species, n_demes=3, topology=topo)
+    SpatialPopulation.builder(species, n_demes=3, topology=SquareGrid(1, 3))
+    .age_structure(n_ages=4, new_adult_age=2)
     .migration(migration_rate=batch_setting([0.1, 0.4, 0.1]))
-    # ... remaining chainable calls ...
     .build()
 )
 
 # Runtime update
-spatial.migration_rate = 0.2                 # adult ages only
-spatial.migration_rate = [0.0, 0.0, 0.3, 0.1]  # per-age
+spatial.params.tensor_write("migration_rate", 0.2)  # adult ages only
+spatial.params.tensor_write("migration_rate", [0.0, 0.0, 0.3, 0.1])  # four ages
 ```
 
 - `0.0`: No migration (all ages).

@@ -1,6 +1,6 @@
 [project]
 name = "natal-core"
-version = "0.3.0b1"
+version = "0.3.0"
 description = "Numerical Aggregation Toolkit for Analysis of Lifecycles, a high-performance forward-time population genetics simulation engine especially designed for gene drive modeling."
 readme = "README.md"
 authors = [
@@ -10,7 +10,7 @@ license = { text = "MIT" }
 requires-python = ">=3.10"
 keywords = ["population-genetics", "simulation", "bioinformatics", "evolutionary-biology"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",

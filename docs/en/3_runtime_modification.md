@@ -1,6 +1,8 @@
 # Runtime Parameter Modification
 
-All parameters can be changed during simulation without rebuilding the population.
+Supported runtime parameters can be changed without rebuilding the population.
+Build-time settings and type/age dimensions remain subject to their construction
+constraints; derived equilibrium metrics are read-only.
 This chapter covers three scenarios:
 
 - **Between-tick**: Python-side via `pop.update()` or `pop.params.<name> = v`
@@ -49,6 +51,8 @@ Each call commits to the running population and appends a parameter-log row when
 `pop.params.<name> = value` is the preferred channel for between-tick writes: attribute writes are jsonc-bounds-validated and reach the draft, the live Rust session, and the parameter snapshot log. Reads return the current value:
 
 ```python
+import numpy as np
+
 pop.params.carrying_capacity = 5000.0
 print(pop.params.carrying_capacity)  # current value
 # vector / tensor parameters use a dedicated channel
@@ -183,7 +187,16 @@ cross-deme reads.
 `pop.params` derives the `(n_demes, ...)` ecology columns on demand and returns write-protected views (from the session columns when a session is enabled, otherwise from the deme drafts); `tensor_write` validates the shape and routes values per deme through the shared write channel (the session's authoritative column and the deme draft declaration are written; reads derive on demand):
 
 ```python
-from natal.frontend.spatial import batch_setting
+from natal import SpatialPopulation, SquareGrid
+
+pop = (
+    SpatialPopulation.builder(sp, n_demes=4, topology=SquareGrid(2, 2),
+                              pop_type="discrete_generation")
+    .setup(stochastic=False)
+    .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+    .competition(carrying_capacity=1000)
+    .build()
+)
 
 # same value for all demes: per-deme shape broadcasts
 pop.params.tensor_write("survival_rates", np.ones((2, 2)))
@@ -212,9 +225,13 @@ pop.deme(3).write_ecology("carrying_capacity", 8000.0)
 pop.deme(3).write_genetics("viability_fitness", new_table)
 ```
 
-### 6.3 `batch_setting`: The Single Entry Point
+### 6.3 `batch_setting`: Per-Deme Declarations
 
-At build time, `batch_setting([...])` is the **only** declaration entry for per-deme heterogeneous parameters: the kind is inferred from the values (`"scalar"` / `"array"` / lambda `"spatial"`), and the homogeneous vs. heterogeneous path forks automatically in `build()`. fitness/presets do not support `batch_setting` (they modify config-internal ndarrays, which cannot be expressed as scalars); the `spatial` kind lambda requires the builder to have received a `topology`.
+At build time, `batch_setting([...])` declares per-deme values, including fitness
+maps and preset objects. The builder expands these declarations and groups
+matching configurations. A `(row, col)` callable requires a topology; a
+`(flat_idx)` callable does not. Migration rates also accept explicit per-deme
+arrays. See [Spatial Simulation](3_spatial_simulation.md) for shapes and examples.
 
 ---
 
