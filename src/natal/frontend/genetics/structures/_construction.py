@@ -64,6 +64,10 @@ class SpeciesConstructionMixin:
         Args:
             name: Name of the species.
             structure: Dictionary defining the structure.
+            gamete_labels: Optional list of gamete labels (e.g., ``["default", "cas9_deposited"]``).
+            somatic_labels: Optional list of somatic labels (e.g., ``["normal", "infected"]``).
+            unordered: If True, the source of chromosomes (maternal/paternal) is not tracked in ``Genotype`` instances.
+                i.e., ``A|a`` and ``a|A`` are considered equivalent. If False, the order of chromosomes is tracked.
 
         Returns:
             Species instance with all Chromosomes and Loci created.
