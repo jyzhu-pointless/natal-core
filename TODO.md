@@ -1,792 +1,605 @@
 # TODO
 
-## 本轮审查方案汇总（2026-09-13）
+## 使用约定
 
-整合 architecture-deep-dive.html 及后续核验。**当前只记录方案，所有 CR 项均未在本轮实施；确认设计不等于代码已修复。** 下方测试结果是调查时的历史自测，不能当作新合同验收；临时复现脚本可能不再存在，实施时转为持久回归测试。源码行号为调查定位，后续可能漂移。
+- 按领域分类，当前待办连续编号，不代表优先级。完成项移入 [TODO.legacy.md](TODO.legacy.md)，集中整理时重新编号并同步正文引用。
+- **部分完成**：已有相关能力，但仍有明确遗留。**未完成**：已有工作方向，尚未实现。**待设计**：需求或方案仍需确定。**暂缓**：已明确决定延期。
+- 每项先说明现状，再补充依据和限制，最后单列设计。设计部分不表示已实现，也不改变原有延期决定。
+- 未完成项以 2026-09-15 的工作区审计为基础，包含当时未提交的修改及本机相邻 inferencer 仓库。2026-09-16 完成的 K 值测试、个体转换、命名清理和 CytoplasmicPreset 迁移已移入 [归档与验证记录](TODO.legacy.md)；其中也记录了本轮发现的旧审计遗漏。
+- 2026-09-16 第三轮数值抽查（28 个抽查点 + 3 份文献复现）登记的问题已全部处理完毕：均衡标定、Wolbachia 文档、RuleSet 挂载示例、反向突变级联说明、分阶段采样说明，以及迁移速率的构建期警告（行为语义经确认不变）。条目与证据见 [归档与验证记录](TODO.legacy.md) 的 QC-020 至 QC-025；证据测试保留在本机 `.zcode/regular-quality-control/test_r3_01..07`（该目录在 `.gitignore` 内）。
+- 文中源码路径省略 `src/natal/frontend/` 前缀时，以该目录为起点；Rust 和测试路径从仓库根目录起算。
 
-| 编号 | 最终范围 | 状态 |
-|---|---|---|
-| CR-0 | XY/ZW 解析、字符串化、精确初始化与性别约束 | ✅ 已实施（2026-09-13），待最终审查 |
-| CR-1 | 四类规则、统一 filters/to、联合概率与声明顺序 | ✅ 已实施并获终审 APPROVED（2026-09-13） |
-| CR-2 | 配子修饰器非法键报错，先验证再应用 | ✅ 已实施（2026-09-13） |
-| CR-3 | 仅 first/early/late/finish，拒绝非法事件 | ✅ 已实施（2026-09-13） |
-| CR-4 | 配置快照尺寸失配报错 | ✅ 已实施（2026-09-13） |
-| CR-5 | 取模除数为正整数，解析时拒绝零 | ✅ 已实施（2026-09-13） |
-| CR-6 | 注释、乱码、遗留与不可达代码、过时引用 | ✅ 已实施（2026-09-13） |
-| CR-7 | 删除配子缓存，统一基线，内容快照失效 | ✅ 已实施（2026-09-13）；规则基线统一并入 CR-1 引擎 |
-| CR-8 | 物种与实体缓存生命周期重构 | 明确暂缓 |
-| CR-9 | 计算前校验遗传结构完整性 | ✅ 已实施（2026-09-13） |
-| CR-10 | XY/ZW 同源区段交换 | 明确不在本轮实现 |
-| CR-11 | 删除重复且被覆盖的 genotype 缓存键计算 | ✅ 已实施（2026-09-13） |
-| CR-12 | TickMetrics 索引直查，类型名称统一 @ | ✅ 已实施并获终审 APPROVED（2026-09-13） |
-| CR-13 | WF 性别分配归一化与总量守恒 | ✅ 已实施（2026-09-13） |
-| CR-14 | 计数与规则统一携带年龄轴（含两处归一化收敛） | ✅ 已实施并获独立审查 APPROVED（2026-09-14） |
+## 当前优先级：准备 v0.3.0 正式版
 
-**实施依赖与验证边界**
+- 2026-09-16 决定：当前以稳定现有实现、必要缺陷修复、文档核对和发布验证为主，不再推进大规模破坏性改动。
+- Population/Landscape 分离、构建与更新接口收拢、preset 声明统一、Hook 重构、密度调节拆分及 Python callback 并行统一登记于 TODO-020，暂缓至 v0.3.0 发布后重新排期，不作为本次正式版的发布前置条件。
+- 下列待办是长期问题清单，不表示全部纳入 v0.3.0。现有公开接口和科学模型语义不因本计划自动改变；发布所需修复应单独界定范围。
+- 发布准备尚需核对版本与变更说明、文档及示例、Python/Rust 完整质量门禁、发行包构建和安装验证。此处记录工作方向，不表示已完成发布验证、创建 tag 或上传发行包。
 
-- CR-0/9/13 联合验证：仅修公开性染色体标志会暴露 WF 翻倍，不将单点修改当作完整修复。
-- CR-1/12 同步迁移，不兼容旧规则接口和冒号标签格式；既有无序模式 ::、空间日志冒号含义不变。
-- CR-7 提供未修饰基线，CR-1 刷新验收同时检查来源、概率不重复叠加、索引对齐与对象隔离；CR-8 不随此项扩大实施。
-- 实施遵循 AGENTS.md 和质量规范：基本验证、相关 stub/中英文文档/示例同步、高风险独立 evaluator 审查及最终门禁。本次仅文档整理，不运行或声称新合同代码验证。
+## 目录
 
-## CR-0 ✅ DONE — 性染色体公开路径修复（2026-09-13 实施，2026-09-14 复核一致）
-
-> **状态复核（2026-09-14）**：与上表状态一致——列出的子因均已随 `33236e7` 与 `370adf5`（D1）修复：`builder/_base.py:607` 从 `species.get_sex_chromosome_groups()` 取标志并经 blueprint 转发掩码；`genetics/structures/_construction.py` 三处改用 `get_sex_chromosome_groups()` 方法；`genetics/entities/genotype.py:399-411` 按性染色体组拼接；`model/initial_state.py:144-157` 的 Genotype 键不再转字符串；`registry/index.py:318-333` 为 O(1) 精确查找。唯一仍在的旧写法是 `patterns/elements/diploid.py:129-148` 的 `from_pair` 内部 `str(genotype)` 再解析——它是构造匹配模式的既有路径，若将来发现具体缺陷再单开条目。
-
-**已核验的问题链**
-
-以下路径除注明外相对 src/natal/frontend/。
-
-- genetics/entities/genotype.py:402 按每条染色体同时取母父 haplotype，缺一侧就跳过；XY/ZW 异型对丢失性染色体部分，纯性染色体对象可得到空串。
-- genetics/structures/_construction.py:216,291 读取未初始化的 sex_chromosome_groups 属性而非已有 get_sex_chromosome_groups 方法，合法 XY 字符串被按错误段数拒绝。
-- model/initial_state.py:108 将 Genotype 对象转字符串再解析模式；patterns/elements/diploid.py:138 的 from_pair 也内部转字符串。registry/index.py:324 取首个匹配项，空串/宽泛模式使精确初始化落错类型；报告建议仅调用 from_pair 不足以修复。
-- builder/_base.py:600 读取不存在的 has_sex_chromosomes 并回退 False；开启标志后，assembly 从配子行和推断性别 mask 也不充分，见 CR-13。
-- 前期公开路径复现 XY 雄性对象初始化落到 XX 类型、XY 字符串解析失败。内部手工开启标志的测试通过不能替代公开入口覆盖。
-
-**修复边界**
-
-- 性别系统与性染色体分组使用一致来源；字符串化、完整解析、模式匹配按性染色体组处理，保留母父相位；覆盖 XY/ZW 以及混合常染色体的往返。
-- 精确对象、精确字符串和显式 slab 初始化按 registry 精确身份定位；对象入口不先转字符串再匹配，合法模式选择与精确初始化分开，避免静默选择首个类型。
-- XX/XY、ZW/ZZ 性别约束来自遗传结构，不能由配子行和推断；年龄结构、分阶段离散代与 WF 遵守同一概率定义，保留各自抽样方式。
-- 按 CR-9 拒绝计算时无位点的染色体，不新增空 Y/W 字符串占位语法或自动虚拟等位基因；按 CR-10 不实现异型性染色体同源区段交换。
-- 验收通过公开 builder，覆盖对象/字符串/标签输入、非 0.5 sex_ratio、XY/ZW、压缩与 slab 扩展、初始与后代性别/类型一致性、往返及总量守恒。辅助方法名称在实施时确定。
-
-## CR-1 📋 Conversion rules 统一接口与执行语义（方案已确认，未实施）
-
-**四类 API**
-
-采用关键字参数。rate 必填，filters=None 表示不限制，name=None 仅用于展示。
-
-| 类别 | 必填字段 | 可选字段 | 动作 |
+| 编号 | 分类 | 事项 | 状态 |
 |---|---|---|---|
-| GameteGtypeConversionRule | to: str、rate: float | filters、name | 一次事件转换完整 gtype |
-| ZygoteZtypeConversionRule | to: str、rate: float | filters、name | 一次事件转换完整 ztype |
-| GameteAlleleConversionRule | from_allele: str、to_allele: str、rate: float | filters、name | 局部替换，不改变 glab |
-| ZygoteAlleleConversionRule | from_allele: str、to_allele: str、rate: float | filters、name、side | 局部替换，不改变 slab |
+| TODO-001 | 遗传规则与预设 | absolute_resistance 快捷配置与概率语义 | 待设计 |
+| TODO-002 | 遗传规则与预设 | 胚胎 resistance 按亲本状态配置 | 待设计 |
+| TODO-003 | 遗传规则与预设 | 自定义 modifier 协议与 ZType 命名 | 部分完成 |
+| TODO-004 | 遗传规则与预设 | XY/ZW 同源区段交换 | 暂缓 |
+| TODO-005 | 种群模型与竞争语义 | 离散代竞争模式收敛 | 暂缓 |
+| TODO-006 | 种群模型与竞争语义 | 离散代竞争权重字段清理 | 暂缓 |
+| TODO-007 | 观测、历史与状态存储 | natal-inferencer 接口协调 | 部分完成 |
+| TODO-008 | 观测、历史与状态存储 | Observation 按规则聚合全部匹配轴 | 部分完成 |
+| TODO-009 | 观测、历史与状态存储 | 空间状态跨进程导入 | 部分完成 |
+| TODO-010 | 观测、历史与状态存储 | History 持久化存档 | 待设计 |
+| TODO-011 | 观测、历史与状态存储 | 多 Observation 与运行时规则编译 | 部分完成 |
+| TODO-012 | 观测、历史与状态存储 | 稀疏状态与导入 | 待设计 |
+| TODO-013 | Hook 与运行控制 | Hook 条件触发与 tick 内记录 | 待设计 |
+| TODO-014 | Hook 与运行控制 | 可恢复的条件中止 | 待设计 |
+| TODO-015 | Hook 与运行控制 | 空间全局阶段 Hook | 待设计 |
+| TODO-016 | 缓存、编译与性能 | 物种与实体缓存生命周期 | 暂缓 |
+| TODO-017 | 缓存、编译与性能 | Preset 定向重编译与后缀重建 | 未完成 |
+| TODO-018 | 缓存、编译与性能 | Zygote modifier 矩阵化与稀疏表示 | 未完成 |
+| TODO-019 | 缓存、编译与性能 | Rust 引擎性能优化审计 | 待设计 |
+| TODO-020 | 架构与多物种建模 | Population/Landscape、配置声明与 Hook 统一重构 | 暂缓 |
+| TODO-021 | 观测、历史与状态存储 | Readable 导出支持多 somatic label 状态 | 待设计 |
 
-- filters 类型为 Mapping[str, str] 或 None；name 为 str 或 None。side 为 maternal/paternal/both，默认 both，表示合子遗传副本而非亲本个体，两侧独立转换。
-- 不要求 locus：Gene 名在同一 Species 内唯一（src/natal/frontend/genetics/entities/gene.py:98），由源等位基因定位位点，并验证目标等位基因属于同一位点。
-- GameteGlabConversionRule 并入 Gtype 转换；ZygoteGlabRedirectRule 并入 Ztype 转换，原母源 glab 是来源条件，目标 slab 是动作。
-- 新接口不兼容旧规则接口，不保留旧标签类、旧参数、旧别名或对象/callable 输入的兼容包装；同步迁移规则相关公开导出、stub、预设、文档、示例与测试，不扩大为删除全库无关历史 API。
-- 现有 GameteAllele.target_glab 的成功联动模型迁移为完整 Gtype 联合转换，不能机械拆成两个独立事件。
+## 遗传规则与预设
 
-**统一 filters**
+### TODO-001 absolute_resistance 快捷配置与概率语义
 
-普通字符串字典，复用既有类型模式，不新增条件 DSL；同一阶段的整体/Allele 规则支持相同的键。
+**状态：待设计**
 
-| 键 | 配子规则 | 合子规则 |
+#### 现状
+
+现在的 resistance 参数表示“homing 结束后，剩下的目标等位基因有多大比例变成抗性等位基因”。还不能直接指定它占原始目标等位基因的比例。
+
+#### 详细说明
+
+- `presets/homing.py::gamete_modifier()` 先执行 homing 转换，再处理剩余的 target；两个参数都是各自步骤中的条件概率。
+- 已执行的例子：A|B 亲本中，A 是目标、B 是驱动、R 是抗性等位基因。homing=0.8、late resistance=0.8 时，配子比例为 A=0.02、B=0.90、R=0.08。两个参数相加超过 1 仍然合法。
+- `absolute_resistance` 快捷参数尚不存在。
+
+#### 设计与待决定事项
+
+- 确定“绝对抗性比例”的分母、换算方式和边界，并保留现有条件概率参数。
+- 如果 d 和 r 都以原始目标等位基因为分母，才需要规定 d+r>1 时如何报错。
+- 与 TODO-002 一起设计。这会改变参数表达的生物学含义，不能只按改名处理。
+
+### TODO-002 胚胎 resistance 按亲本状态配置
+
+**状态：待设计**
+
+#### 现状
+
+现在可以分别设置母源和父源 Cas9 沉积引起的胚胎编辑率，但不能根据亲本的 Cas9 拷贝数或表达时间自动调整速率。胚胎是否继承了 Cas9，本身不会触发额外编辑。
+
+#### 详细说明
+
+- `presets/homing.py::zygote_modifier()` 按来源配子的沉积标签判断是否编辑。速率对表示母源/父源通道；输入字典中的 female/male 指来源亲本，不是子代性别。
+- 父源通道还要启用 `use_paternal_deposition`。未设置 `cas9_deposition_glab` 时，即使速率非零，也不会生成胚胎编辑规则。
+- 亲本是否携带 drive/Cas9 决定配子是否获得沉积标签；获得标签后的编辑率仍是预先设置的固定值。
+- `tests/test_preset_deposition_carryover.py` 已覆盖这些行为并通过。
+
+#### 设计与待决定事项
+
+- 确定如何把亲本的拷贝数或表达时间传给胚胎编辑步骤，以及母源、父源作用如何叠加。
+- 当前合子 filters 只能读取来源配子及其标签，不能直接读取该配子亲本的完整基因型；需要先解决信息如何传递，再设计速率参数。
+- 与 TODO-001 一起设计，保留已经确定的“只由亲本沉积触发”规则。
+
+### TODO-003 自定义 modifier 协议与 ZType 命名
+
+**状态：部分完成**
+
+#### 现状
+
+自定义 modifier 可以用整数精确选择一个 ZType，却不能像统一规则一样用 `A|A@infected` 选择标签。只传基因型时，来源选择和目标分布还有不同的处理方式。
+
+#### 详细说明
+
+- `modifiers/module.py::_resolve_ztype_key()` 会把裸字符串或 Genotype 对象展开到该基因型的全部 slab；整数直接指向一个 ZType。
+- 实验中，`A|A` 匹配两个 slab，精确整数正常工作；`A|A@infected` 被拒绝。内部抛 KeyError，外层包装补充上下文后转为 ValueError。
+- 当 Genotype 对象或裸字符串用作合子目标时，`_normalize_zygote_val_to_distribution()` 会把概率均分给该基因型的全部 slab。
+- GameteModifier 的说明已区分精确 ZType 整数索引与展开到全部 slab 的基因型键；标签字符串协议仍待统一。
+
+#### 设计与待决定事项
+
+- 为自定义 modifier 定义一致的标签选择写法，分别说明“选哪些来源”和“把概率分给哪些目标”。
+- 决定如何兼容现有的全 slab 展开、概率均分和整数索引行为，并补齐错误用例。
+- 继续使用已经确定的 `filters/to` 规则接口；CytoplasmicPreset 已迁入统一规则，见 [归档记录](TODO.legacy.md)。
+
+### TODO-004 XY/ZW 同源区段交换
+
+**状态：暂缓**
+
+#### 现状
+
+目前 X/Y 和 Z/W 只按整条单倍型分离，不会互相交换同源区段。XX、ZZ 等同型染色体仍可使用现有重组计算。
+
+#### 详细说明
+
+- `genetics/entities/genotype.py::produce_gametes()` 只有在两个单倍型属于同一个 Chromosome 对象时才计算重组。
+- 异型 X/Y、Z/W 各以 0.5 的概率进入配子；代码中没有跨染色体的同源位点对应或交换区间模型。
+- 性染色体专项测试通过。已经完成的字符串解析、精确初始化和性别约束不包含这项能力。
+
+#### 设计与待决定事项
+
+- 保持暂缓。
+- 将来若实现，需要定义哪些位点互为同源、哪些区间可交换、交换概率，以及交换后的染色体身份和合法配子。
+- 这是新的遗传模型能力，需要单独设计和验证。
+
+## 种群模型与竞争语义
+
+### TODO-005 离散代竞争模式收敛
+
+**状态：暂缓**
+
+#### 现状
+
+离散代目前支持多种密度调节曲线，没有收敛为只用 FIXED。各模式直接读取当前运行参数，所需均衡指标由 Rust 按需计算。
+
+#### 详细说明
+
+- 支持 `no_competition`、`fixed`、`linear`（别名 `logistic`）、`beverton_holt` 和 `ricker`。旧拼法 `concave` 已被拒绝，并提示改用 `beverton_holt`。
+- `no_competition` 不做密度调节；FIXED 按 `min(1, K/N₀)` 截断，其中 K 是承载量，N₀ 是当前 age-0 个体数。
+- 其他三条曲线使用均衡竞争量 C*、均衡存活率 s* 和 `low_density_growth_rate`。C*、s* 由 `rust/src/kernels/equilibrium.rs` 推导。
+- 分阶段 FIXED 路径仍计算一次均衡指标，但该计算不影响最终缩放值。
+- 各合法模式均已通过公开 build/run 实验，相关 density/WF 测试通过。
+
+#### 设计与待决定事项
+
+- 保持暂缓。若只保留 FIXED，先明确删除哪些模式、如何迁移默认值和已有调用，以及运行时写参数的限制。
+- 评估低密度增长和过渡过程的变化；切换曲线会改变仿真结果。
+- 与 TODO-006 一起核对 Rust 中使用均衡指标的位置。当前实现已经没有旧方案所假定的 Python sync 流程，不能照旧方案删函数或字段。
+- TODO-020 将密度调节从 survival 拆出，但不因此决定离散代只保留 FIXED；本项继续暂缓。
+
+### TODO-006 离散代竞争权重字段清理
+
+**状态：暂缓**
+
+#### 现状
+
+离散代的年龄竞争权重仍会影响均衡计算，不是可以直接删除的空字段。第 0 项默认是 1，但公开的整向量写入口允许改变它，并且确实会改变仿真结果。
+
+#### 详细说明
+
+- 实际竞争量只统计 age-0 个体总数，不乘年龄权重；均衡计算却使用 `produced_age_0 * competition_weights[0]` 得到参考竞争量 C*。
+- `competition(competition_strength=...)` 只设置第二个幼龄的权重；没有第二个幼龄时会报错。`params.tensor_write("competition_weights", ...)` 则可以修改整个向量，包括第 0 项。
+- 已执行实验：100 雌+100 雄、K=200、每雌 2 卵、sex_ratio=0.5、幼体存活率=1，使用 Beverton–Holt 且低密度增长率为 2。权重 `[1, 1]` 时下一代为 200；改成 `[2, 1]` 时约为 266.6667。
+- 中英文初始化文档已改为说明默认值和两个入口的区别。
+
+#### 设计与待决定事项
+
+- 保持暂缓。决定是否限制第 0 项必须为 1，还是允许用户修改，并解释它对 C* 和 K 的影响。
+- 确定后再统一各写入口的校验、文档和测试。
+- 若讨论均衡点等于 `rel[0]×K`，必须同时写明均衡分布、繁殖、存活和 `external_expected_eggs` 等前提，不能当作所有模式通用的公式。
+- TODO-020 标定设计需同时核对实际压力与参考压力的权重定义；不在 v0.3.0 发布准备中顺带改变此语义。
+
+## 观测、历史与状态存储
+
+### TODO-007 natal-inferencer 接口协调
+
+**状态：部分完成**
+
+#### 现状
+
+本机 natal-inferencer 只完成了部分接口迁移，目前还不能与当前 natal-core 一起导入运行。剩余工作包括旧配置类型和执行引擎，不只是 Observation 名称。
+
+#### 详细说明
+
+- 相邻仓库已使用 `population.observation` 和部分 `.apply()`。
+- `api.py` 及策略仍导入已删除的 `natal.data` 和旧 PopulationConfig；`_parallel_transition.py` 仍依赖 `natal.numba`、`njit_switch` 和旧 tick 调用方式。
+- 实际导入报错为 `ModuleNotFoundError: No module named 'natal.data'`。此结论针对本机 checkout 与当前 core，未验证其他版本组合。
+- `build_mask()` 仍是公开方法。inferencer 把它展开成矩阵，批量计算粒子的观测值；这个用法本身没有过时。
+- 未运行 inferencer 的完整测试套件。
+
+#### 设计与待决定事项
+
+- 协调当前 Rust session 的状态、参数和随机数接口，迁移粒子推进过程及包路径。
+- 与 TODO-008 一起核对观测结果的形状和求和方式，再决定是否改写批量投影。不要机械替换成逐粒子 `.apply()`。
+- 增加跨仓库集成测试，覆盖默认观测、显式观测和粒子仿真的连续运行。
+
+### TODO-008 Observation 按规则聚合全部匹配轴
+
+**状态：部分完成**
+
+#### 现状
+
+一条 Observation 规则已经会把匹配的 ZType 加起来，但通常仍分别返回各性别、年龄的结果。若要每条规则只得到一个总数，现在还需要调用方继续求和。
+
+#### 详细说明
+
+- 普通三维计数得到 `(group, sex, age)`；group 表示一条具名规则。`collapse_age=True` 时得到 `(group, sex)`，二维计数输入也返回这一形状。
+- 空间观测可以按 `deme_mode` 保留或汇总各 deme；sex 维度始终保留。
+- 已执行实验：一条匹配全体的规则，输入 100 雌+100 雄，返回 `(1, 2, 2)`，成年位置各 100，而非单个数值 200。直接投影与 raw History 的事后投影一致。
+- inferencer 用 `_aggregate_observation_groups()` 对 group 以外的维度继续求和。相关输出测试通过。
+
+#### 设计与待决定事项
+
+- 决定是否在 core 提供“每条规则一个总数”的方式，以及 sex、age、deme 是否全部汇总。
+- 明确结果标签、维度名称、多条规则重复匹配同一个体和默认逐 ZType 观测的行为。
+- 与 inferencer 同步迁移；目前保留性别和年龄是既定行为，不应直接判为统计错误。
+
+### TODO-009 空间状态跨进程导入
+
+**状态：部分完成**
+
+#### 现状
+
+空间种群可以回到本次运行中保存的 checkpoint，但还不能把整个种群保存后交给另一个进程恢复。单个 deme 的状态导出不足以完成这件事。
+
+#### 详细说明
+
+- `SpatialPopulation.restore_checkpoint(tick)` 会恢复记录时的个体状态、随机数状态、生态参数和执行阶段，并删除之后的历史记录。
+- 整个 SpatialPopulation 没有公开的 `export_state()` / `import_state()` 往返接口。
+- `pop.deme(i).export_state()` 只导出一个 deme 的状态数组，不包含完整空间会话、各 deme 的随机数状态和迁移结构。
+- 空间 History 和运行测试通过；完整导入接口的缺失已通过源码、stub 和运行时属性核对。
+
+#### 设计与待决定事项
+
+- 与 TODO-010 一起设计空间存档格式及恢复入口。
+- 区分“加载计数后开始一次新仿真”和“从原位置精确续跑”，分别说明需要保存的数据。
+- 精确续跑应覆盖全部 deme、迁移结构、运行参数、随机数、执行阶段和日志。
+- TODO-020 会改变空间状态的所有权，需要同步适配已有恢复合同；完整跨进程存档仍由本项与 TODO-010 单独安排。
+
+### TODO-010 History 持久化存档
+
+**状态：待设计**
+
+#### 现状
+
+History 已经能导出数据供分析，但没有配套的保存和重新载入接口。仅保存历史计数，也不足以在新进程中精确续跑原来的随机仿真。
+
+#### 详细说明
+
+- 已有 `to_dict()`、`values`、`individual_count` 和 `sperm_storage` 等读取方式；没有 `History.save/load` 或等价的公开往返接口。
+- 普通种群的 `export_state/import_state` 不携带整份 History。
+- `History.restore_state(tick)` 只返回个体计数和精子数组。Population 的精确 checkpoint 还依赖 session 中的随机数状态、生态参数、执行阶段和运行状态。
+
+#### 设计与待决定事项
+
+- 先明确存档用于事后分析、精确续跑，还是同时支持两者。
+- 保存版本、字段和维度定义、类型目录、标签、记录模式，以及用于检查布局是否兼容的标识。
+- 若支持续跑，还要保存完整 checkpoint、运行参数和恢复模型所需的声明。
+- 与 TODO-009 一起考虑空间数据、压缩、分块读取和格式升级。
+
+### TODO-011 多 Observation 与运行时规则编译
+
+**状态：部分完成**
+
+#### 现状
+
+现在可以为同一份数据创建多套 Observation，分别计算结果，也能重新分析 raw History。缺少的是一个公开、独立的入口，让用户直接从选择条件生成这些规则。
+
+#### 详细说明
+
+- Population 只保存构建时选定的一套默认 Observation，没有 `create_observation()` 或 `observe(other)` 方法。
+- `natal.Observation` 已公开；用户可以提供预先生成的 mask，调用 `.apply()`。mask 是标记哪些计数参与每条规则的数组。
+- `History.observe(other_observation)` 支持另一套规则，但会检查其类型和维度布局是否与历史记录兼容。
+- 实验中，另一套“所有 ZType 求和”的规则成功用于直接投影和历史分析，Population 原有的 Observation 没有改变。
+- 内部 `ObservationFilter` 已能编译选择条件，但未从顶层公开导出。
+
+#### 设计与待决定事项
+
+- 决定是否公开从 selector/groups 创建任意 Observation 的独立编译入口。
+- 明确规则可以在哪些 Population 或 History 之间复用，以及布局不兼容时如何报错。
+- 保留 Population 默认规则在构建期确定的约定，不恢复已删除的运行时 setter。
+
+### TODO-012 稀疏状态与导入
+
+**状态：待设计**
+
+#### 现状
+
+初始化时可以只写非零项，但仿真运行时仍会为全部保留类型分配完整数组。还没有只存非零计数的运行状态或配套导入格式。
+
+#### 详细说明
+
+- Python 暴露的计数是 dense ndarray，Rust 中的计数和精子状态是连续 Vec；即使某项为零，也占一个位置。
+- `model/initial_state.py` 接受按基因型、年龄组织的字典，之后仍转换为完整数组。
+- 可达性压缩会删除不可能出现的 ZType/GType，但对剩余类型仍用完整数组存值。
+- 迁移使用的 CSR 是稀疏拓扑边表，不是个体计数的稀疏存储。
+
+#### 设计与待决定事项
+
+- 先确定要解决的是输入方便、运行内存占用，还是存档体积。
+- 根据目标选择表示方式，明确读写接口、适用规模和性能/数值验证标准。
+- 转换矩阵的稀疏表示由 TODO-018 单独讨论。
+
+## Hook 与运行控制
+
+### TODO-013 Hook 条件触发与 tick 内记录
+
+**状态：待设计**
+
+#### 现状
+
+Hook 执行过程中还不能直接要求 History 记录一次快照。run 返回后可以手动记录，包括在一代中途停止后留下的状态。
+
+#### 详细说明
+
+- `record_snapshot()` 只能在引擎未运行时调用；TickContext 和声明式 Op 都没有记录 History 的操作。
+- `boundary_metadata` 已保存 tick、执行阶段和运行状态。late 停止后记录的快照会标为 Stopped，恢复后也仍然停止，不能从 first 直接继续。
+- 上述行为已由 `test_restore_carries_recorded_execution_status` 验证。
+- 当前阶段顺序是 first → 繁殖 → early → 存活 → late → 年龄推进；空间模型之后还有统一迁移。
+
+#### 设计与待决定事项
+
+- 设计 Hook 发出记录请求、引擎在指定位置写入数据的方式。
+- 明确同一 tick 内多次记录如何区分、数据如何缓冲，以及空间各 deme 是否必须在同一阶段记录。
+- 判断应扩展 History，还是另设用于观察中间过程的 trace 记录。现有阶段和状态信息可以复用，但还不够表达所有记录位置。
+
+### TODO-014 可恢复的条件中止
+
+**状态：待设计**
+
+#### 现状
+
+条件触发 STOP 后，不能直接调用 run 接着跑；目前也没有保留当前进度的暂停接口。恢复一个较早的 Ready checkpoint 或 reset 后，可以重新运行。
+
+#### 详细说明
+
+- Hook STOP 和 `ctx.stop()` 会把 session 置为 Stopped；Ready 表示可以开始下一次运行。
+- 恢复 Stopped checkpoint 仍然是停止状态；恢复较早的 Ready checkpoint 会回滚进度，然后允许继续。这些行为已有测试覆盖。
+- early/late 阶段停止可能只执行了当前 tick 的一部分，直接从 first 重跑会重复某些步骤。
+- 当前可用办法是每次正常运行一个 tick，在 Python 层检查条件，再决定是否调用下一次 run。
+
+#### 设计与待决定事项
+
+- 原延期决定保留。
+- 区分正常结束、完整 tick 边界暂停和 tick 中途取消，规定返回原因及 finish Hook 的执行次数。
+- 若新增 pause/break，明确恢复时从哪里继续，保证既不重复执行阶段，也不丢失当前进度。
+
+### TODO-015 空间全局阶段 Hook
+
+**状态：待设计**
+
+#### 现状
+
+空间 Hook 目前按 deme 执行，没有在整个空间迁移前或迁移后只执行一次的全局 Hook。`deme="*"` 只是让各个 deme 都执行该 Hook。
+
+#### 详细说明
+
+- 事件目录只有 first/early/late/finish；`trigger_event` 也针对一个指定 deme。
+- Rust 先执行各 deme 的生命周期，再执行统一迁移。
+- 有 Python callback 时，各 deme 按稳定顺序串行执行；没有 callback 时可以使用 Rayon 并行处理。
+
+#### 设计与待决定事项
+
+- 定义全局 Hook 的触发阶段、能够读取和修改的空间数据，以及随机数如何使用。
+- 明确它与各 deme 的 Hook、priority 和迁移之间的顺序。
+- 将来若增加入口，不应靠任选一个 deme 的 callback 来隐含执行全局逻辑。
+- 纳入 TODO-020 的统一阶段调度设计，扩展到跨 deme、跨物种读取及迁移更新；v0.3.0 发布前暂不实施。
+
+## 缓存、编译与性能
+
+### TODO-016 物种与实体缓存生命周期
+
+**状态：暂缓**
+
+#### 现状
+
+清理一个 Species 的缓存后，部分基因型和解析缓存仍会保留它。实验确认物种对象因此没有被回收，但尚未测量长期运行会多占多少内存。
+
+#### 详细说明
+
+- `genetics/entities/genotype.py::_cache` 用 Species 作键，`patterns/parser.py::_pattern_cache` 用 `(id(species), pattern)` 作键；通用实体缓存也仍存在。
+- `Species.clear_all_caches()` 目前只清理结构缓存和通用实体缓存，未覆盖前两处。
+- 三等位基因实验中，清理前后的 Genotype/pattern 条目数都是 6/1。删除实验局部引用并执行 GC 后，weakref 显示物种仍然存活。
+- 实体缓存还负责让相同遗传实体复用同一个对象，这与已经删除的配子计算结果缓存用途不同。
+- 尚未复现对象 id 重用导致错误，也不能认定上述缓存是所有对象保留问题的唯一来源。
+
+#### 设计与待决定事项
+
+- 保持暂缓。考虑让 Species 自己管理所属实体和解析缓存，使外部不再使用物种时可以一同回收。
+- 先盘点其他持有对象的全局位置，再定义 `clear_all_caches()` 到底清理什么。
+- 保留实体唯一性；活跃 registry 可能依赖对象身份，不能把清理身份目录当作普通参数刷新。
+- 仅改成 WeakKeyDictionary 未必有效：缓存值若反过来持有 Species，键仍可能无法释放。需要用实际回收测试验证方案。
+
+### TODO-017 Preset 定向重编译与后缀重建
+
+**状态：未完成**
+
+#### 现状
+
+修改一个 preset 的参数时，现在会重新生成所有 preset 的规则并重建遗传表。还没有复用未变化部分、只重编译受影响部分的机制。
+
+#### 详细说明
+
+- `builder/_runtime.py::reconfigure_preset()` 复制目标 preset 并更新候选声明，再调用 `compile_runtime_candidate()` 完整编译。
+- 实验注册两个 preset，只修改第一个；两者的配子和合子规则生成函数都各调用一次。现有 compile/refresh 测试通过。
+- preset 声明已有对象身份和 priority，生成后的列表只保留 `(id, name, callable)`。目前没有按名称前缀查找归属的逻辑。
+- RuleSet 按声明顺序转换分布，自定义 modifier 按自己的行替换规则执行；重配还会重置手动 fitness 声明。
+- 尚未测量重新解析规则与重算 offspring_tensor 各占多少时间。
+
+#### 设计与待决定事项
+
+1. 先测量耗时和内存，确认复用哪一部分最划算。
+2. 为生成的规则记录明确的 preset 归属，只重新生成变化的 preset；仍从未修饰的孟德尔基线依次执行所有规则，完整重算 offspring_tensor。
+3. 先按 TODO-020 明确 preset、人工 modifier 和 fitness 的统一声明与执行顺序。当前重配会清空手动 fitness 是现状，不是未来必须保留的合同；未来更新一个声明应保留其他声明。v0.3.0 发布准备不顺带切换这一行为。
+4. 只有收益足够时，才保存中间遗传表：修改第 N 个 preset 后，从第 N−1 步的结果开始重算后续步骤。同时规定标签目录、压缩、增删 preset、priority 和手动规则改变时哪些缓存失效。
+
+**验证要求**：结果应与用最终参数重新构建的种群逐元素相等；覆盖重叠/不重叠规则、相同/不同 priority、自定义 modifier、年龄结构/离散代/空间模型、压缩及不完整的类型目录。比较仅复用编译结果和保存中间表两种方案的时间、峰值内存，以及从多少个 preset 起才有收益。
+
+**排期**：统一声明先保证完整重编译正确，再评估本项优化；不作为 v0.3.0 发布前置条件。
+
+### TODO-018 Zygote modifier 矩阵化与稀疏表示
+
+**状态：未完成**
+
+#### 现状
+
+合子规则现在逐条更新后代概率分布，最后写成完整遗传张量。还没有把整套规则合成一张转换矩阵，也没有通用的稀疏矩阵表示。
+
+#### 详细说明
+
+- 模式匹配和转换函数会先编译；`CompiledRuleModifier.rows_for()` 再沿每个输入行，用 `{ztype_idx: probability}` 字典依次计算规则。
+- 配子端现在也使用这种方式。分支字典只保存非零概率，但最终 g2z 等运行张量仍是完整数组。
+- 因此，“规则已编译”不代表“整套转换已变为矩阵乘法”。
+
+#### 设计与待决定事项
+
+- 先测量规则编译、逐条执行和张量生成的成本，再判断是否值得矩阵化或使用稀疏存储。
+- 保留来源条件、当前分支条件、声明顺序及多套 RuleSet 的组合行为。
+- 转换可能依赖来源和前一条规则的结果；设计矩阵时必须表达这些条件，不能直接假定所有输入共用一张无条件矩阵。
+
+### TODO-019 Rust 引擎性能优化审计
+
+**状态：待设计**
+
+#### 现状
+
+Rust 引擎中仍有重复分配临时数组、重新计算交配矩阵等可调查的开销，但还没有当前性能数据证明哪个最值得优化。空间 deme 已有条件并行，单个 Hook 操作内部仍主要使用循环。
+
+#### 详细说明
+
+| 位置 | 当前行为 |
+|---|---|
+| Hook 操作 | Rust interpreter 在一个操作内逐索引处理；没有在 ZType 维度内部并行。 |
+| 交配矩阵 | `rust/src/kernels/discrete_generation.rs` 在繁殖阶段分配并计算 mating_prob，未见通用缓存。 |
+| 临时数组 | discrete 和 equilibrium 中仍有每次分配的 Vec；部分函数已有局部工作数组复用，但未见跨 tick 通用缓冲区。 |
+| 空间调度 | 无 Python callback 时可用 Rayon 并行；有 callback 时按 deme 顺序串行。 |
+
+已完成的 offspring tensor Rust 实现和录制路径合并见归档。本轮只核对了代码，没有运行性能基准；历史百分比和倍数估算不适用于当前排期。
+
+#### 设计与待决定事项
+
+- 先按有/无 callback、不同 ZType/年龄/精子张量规模测量耗时和分配量，确定主要开销。
+- 分别评估 Hook 内部并行、交配矩阵缓存和跨 tick 缓冲区复用；明确参数或状态变化后如何更新缓存。
+- deme 负载均衡继续暂缓。将来评估时应看实际计算规模，不能只用个体总数推断任务耗时。
+- 每项优化都比较时间和内存，并验证结果及随机数行为是否保持一致。
+
+## 架构与多物种建模
+
+### TODO-020 Population/Landscape、配置声明与 Hook 统一重构
+
+**状态：暂缓（v0.3.0 发布后重新排期；具体接口仍待设计）**
+
+#### 现状与问题
+
+- `spatial/builder.py` 有独立的空间链式配置入口和 `BatchSetting` 展开逻辑，虽已使用 `PopulationBuilder`，仍需维护两套配置表面。单种群与空间运行时更新能力也不对称。
+- `builder/_runtime.py` 同时包含构建共享逻辑和运行时更新；`builder/_writers.py::CoreConfigWriter` 承担底层写入职责。构建与运行时职责混放，用户又能通过多个入口修改参数，难以形成清楚的使用约定。
+- `model/definition.py` 分别保存 presets、manual modifiers、fitness base 和 fitness steps。运行时重配 preset 会清空手动 fitness，声明归属与重建语义需要统一。
+- 空间 Hook 按 deme 执行，缺少跨 deme 的全局阶段与迁移修改入口；有 Python callback 时不能继续使用现有的 deme 并行路径。详见 TODO-015。
+- `SpatialPopulation` 以同一物种的多个 deme 为中心组织对象，Population 与空间环境的职责尚未分离，难以直接承载不同遗传目录、年龄结构的多物种交互。
+- `rust/src/kernels/age_structured.rs` 与 `discrete_generation.rs` 的 survival 内包含密度倍率计算、幼体招募及抽样，之后才执行基础生存。密度调节不是独立 Hook，不能仅关闭曲线就认为已移除相关抽样。
+
+#### 已确定的方向与范围
+
+- 分离 Population 与 Landscape，为多物种共存、种间密度调节和空间迁移提供明确的对象职责。
+- 复用 PopulationBuilder，保留按 deme 配置的 `batch_setting` 能力，消除重复的参数解析与校验实现。
+- 运行时修改参数的推荐做法始终是 hook 内更新；收拢修改入口，将运行时逻辑移出 builder 子包。
+- 密度调节以 Hook 作为底层管理与调度模型，压力来源和受影响群体分别指定。读取成年数量、缩放繁殖后 age0 即可表达讨论中的繁殖密度效应，不额外实现一套修改繁殖力的机制。
+- 支持跨 deme、跨物种的 Hook，以及 hook 内修改迁移；真正并行执行 Python custom hook 是后续目标。
+- 将人工 modifier 和 fitness 纳入统一 preset 声明是拟采用的方案，具体接口与组合合同尚未定稿。
+- 本条是发布后的设计计划。下述对象关系、阶段名称、事务粒度和多进程方案均为建议，不代表生产接口已经支持，也不授权当前开始实现。
+
+#### A. Population 与 Landscape 的职责
+
+| 对象 | 建议职责 |
+|---|---|
+| Species | 遗传结构与类型定义。 |
+| Population | 一个种群的个体状态、繁殖与生存参数、遗传声明。 |
+| Landscape | deme、拓扑、种群放置、迁移及共同运行时钟。 |
+| Hook | 在明确的阶段读取状态、修改状态或参数。 |
+
+- 建议 deme 表示位置：同一 deme 可有多个种群，同一种群可分布在多个 deme；该对象关系仍需在实施前定稿。
+- 不同物种保留各自的年龄结构和遗传目录，不强制共用同一张状态张量。种间作用通过各自计算出的压力等量交换信息。
+- 加入 Landscape 后，由 Landscape 统一推进 Population，避免多个运行入口同时修改同一份状态。单种群独立运行复用同一阶段执行机制。
+- 第一版建议共享 tick 时钟；不同物种使用不同时间步长暂不纳入。
+- 状态、随机数、参数和执行阶段的所有权必须明确，现有 History、Observation 和 checkpoint 随新结构同步适配。
+
+#### B. 复用构建与 batch_setting
+
+- PopulationBuilder 记录种群配置声明，共用参数解析、默认值和校验；Landscape 负责空间配置的展开和连接。
+- 普通值表示各 deme 共用，显式 `batch_setting` 表示按 deme 取值。不根据 ndarray 的形状猜测其是年龄/fitness 张量还是空间批量值。
+- batch 声明在绑定 Landscape 的 deme 与拓扑信息后展开；缺少必要空间信息时明确报错。
+- Landscape 的构建入口只增加种群放置、拓扑和迁移等内容，不复制 reproduction、fitness 等方法的实现。
+- 明确允许按 deme 改变的字段、展开时机和数组所有权；遗传目录与类型布局的批量差异需要专门约束，不能按普通生态参数处理。
+
+#### C. 运行时更新与事务
+
+- 建议以 builder 配置初始声明，`ctx.params` 提供只读参数，`ctx.update()` 修改运行时参数，状态操作处理个体数量等变化，派生矩阵与标定由引擎生成。
+- 单种群、指定 deme、多个种群及 Landscape 使用相同的解析、校验与提交机制；迁移参数也能成为更新目标。
+- 建议一次 hook 内的修改先写入候选状态，后续读取可看到自身修改；正常结束后统一校验、编译和提交，失败则不留下部分参数、矩阵、标定或日志。
+- 需要明确多个 hook 的提交顺序与生效阶段，以及失败时是否恢复引擎管理的随机数状态；不承诺回滚用户回调的外部副作用。
+- `pop.update()` 是否保留为运行间隙的便利入口待定；若保留，只复用同一个机制，不再形成第二套更新语义。公开属性写入、张量写入等旧入口需逐项确定迁移方式。
+- builder 保留构建职责；运行时事务与提交放入运行时模块；共享解析与校验放入模型配置模块。CoreConfigWriter 等写入实现保持内部职责。
+
+#### D. preset、人工 modifier 与 fitness 的统一声明
+
+- 建议使用具名、可排序、可修改和移除的声明项，统一内置 preset、人工 modifier 与 fitness；便利方法最终产生同一套声明。
+- 每项有稳定身份、参数及明确顺序。修改一个声明后重新生成结果时保留其他声明，不隐式清空人工 fitness。
+- 明确 replace/multiply、相同优先级顺序、删除声明、重叠规则、编译失败及运行时类型目录变化的合同。
+- preset 负责描述与生成规则，hook 负责运行时调度；preset 可以生成 hook，不必把全部遗传声明都改成每个 tick 执行的回调。
+- 第一版完整重编译，保证与最终声明重新构建的结果一致；TODO-017 的定向重编译及中间表缓存后置。
+
+#### E. 生命周期与统一 Hook 调度
+
+- 内置 Rust 操作和 Python custom hook 共用注册与调度描述，记录身份、阶段、作用范围、顺序和执行内容；内置操作无需绕到 Python 执行。
+- 区分局部 hook（某种群在某 deme）、跨种群/跨 deme hook、整个 Landscape hook。“各 deme 执行一次”不等同于“读取全部 deme 后执行一次”。
+- 建议阶段骨架为：tick 开始 → 繁殖 → 繁殖后 hook → 密度调节 → 基础生存 → 年龄推进 → 迁移前 hook → 迁移 → 迁移后 hook → tick 结束。
+- 现有 first/early/late/finish 与新阶段逐项映射；finish 的运行结束语义不能直接替换为 tick 结束。
+- 跨种群操作需要阶段同步。例如先让相关种群都完成繁殖，再读取同阶段压力。
+- 普通有顺序的 hook 可以读取此前已提交的修改；同一轮相互作用的密度调节则先统一读压力、算倍率，再统一应用，避免遍历顺序改变结果。
+- 明确迁移更新影响本 tick 还是下一 tick，并测试迁移守恒、无效配置及事务失败。阶段记录和可恢复中止继续由 TODO-013/014 单独安排，不默认随本次实现。
+
+#### F. 密度调节与参考标定
+
+已讨论的纯函数输入为当前压力 C、参考压力 C*、参考倍率 m* 及 response；输出倍率 m，关系为 `m = m* × g(C / C*)`，其中 `g(1) = 1`。倍率可以大于 1，不是生存概率。
+
+- 完整 hook 负责选择压力来源、取得参考标定、计算倍率并应用到目标群体；这些职责不能全部塞进 response 曲线。
+- 压力来源与目标独立，支持幼体压力、成年压力及多个物种的加权压力；生产实现要明确年龄、性别、类型及 deme 的选择规则。
+- 保留参考状态的声明：用户显式给定参考分布，或按 K 和基础人口学参数推导。两者择一作为权威来源，C* 与 m* 为派生值，不再独立可写。
+- 显式参考分布保持固定；推导形式在相关基础参数变化后重新生成参考分布。实际数量、释放或遗传负荷不会自动移动参考目标，遗传负荷也不能被标定自动补偿。
+- 参考压力与实际压力采用相同的阶段和权重定义。例如实际读取繁殖后的 age0，参考状态也必须先繁殖。基础繁殖、生存或压力定义变化后重新标定；跨种群依赖也需失效更新。
+- 标定必须计入基础生存，检查给定参考分布能否由所选调节方式维持；一个统一倍率无法维持的参考分布应明确报告，不能只对齐总数就声称平衡。
+- 将密度倍率计算、幼体招募及随机抽样、基础 survival/viability 分开界定，防止移动曲线后重复调节或遗留额外抽样。倍数大于 1 时也不能直接当作二项采样概率。
+- FIXED 硬上限与关闭密度调节分别保留自己的合同，不强行套入补偿型标定。生产实现前明确零 K、零参考压力、无有效繁殖等退化行为，以及随机结果的兼容目标。
+- TODO-005/006 的模式收敛和权重语义继续独立决策；本条不自动删除曲线或改写模型。
+
+**现有验证材料**：[独立 demo](demos/density_regulation.py) 与 [回归测试](tests/test_density_regulation_demo.py) 展示幼体/成年压力、临时出生脉冲、多物种压力、基线参数变化后的重新标定，以及同阶段读取不受 hook 顺序影响。demo 是确定性、两性别、两年龄模型，只支持正参考规模与有效繁殖/生存；没有遗传、迁移、随机采样，也不覆盖 FIXED 或零平衡退化。它是设计参照，不是现有 NATAL 公共接口；其验证不能替代生产引擎集成测试。
+
+#### G. Python custom hook 的真正并行
+
+- 建议先验证多进程原型：引擎提供阶段数据，worker 在隔离上下文执行 hook 并产生修改，主调度器验证、提交后进入下一阶段。后端方案尚未定稿。
+- 可并行的局部 hook 限定写目标；跨 deme/跨物种操作在明确的同步位置执行。重叠写入必须规定顺序或报冲突，不能取决于 worker 完成顺序。
+- 使用引擎提供的随机数流，明确串行/并行及不同 worker 数量的可复现合同。
+- 明确闭包、外部资源、可变持久状态的传递限制，禁止不受控的共享可变状态；不能承诺任意 Python callback 都可透明迁移。
+- worker 失败不得留下部分提交，也不得悄悄退回串行；并行上下文不能保留失效的 session 句柄。
+- 实测通信、复制、调度开销和收益。内置 Rust hook 保持原生执行路径，无 Python callback 的运行不应被额外进程机制拖慢。
+
+#### 发布后的实施顺序与验收
+
+| 阶段 | 工作 | 验收重点 |
 |---|---|---|
-| current | 当前分支 gtype 模式 | 当前分支 ztype 模式 |
-| parent | 产生配子的亲本 ztype 模式 | 不支持 |
-| parent_sex | female/male/both | 不支持 |
-| maternal | 不支持 | 形成合子的母源配子 gtype 模式 |
-| paternal | 不支持 | 形成合子的父源配子 gtype 模式 |
+| 0 | 固定对象归属、生命周期、更新及随机合同 | 区分保留行为与计划改变的行为；确定兼容和迁移策略。 |
+| 1 | 配置核心收拢、运行时逻辑移出 builder | 共用解析校验，保持模型结果，失败更新完整回滚。 |
+| 2 | 统一 preset/modifier/fitness 声明 | 更新不丢其他声明；与最终配置重新构建一致。 |
+| 3 | Population/Landscape 分离及 batch 构建复用 | 单种群与单物种多 deme 贯通，状态所有权清楚。 |
+| 4 | 生命周期阶段与跨 deme/global hook | 同阶段读取、明确提交顺序、迁移更新生效时机。 |
+| 5 | 密度调节迁出 survival | 参考平衡、倍率、采样次数及随机分布正确。 |
+| 6 | 多物种贯通 | 不同状态形状共存；相互作用不依赖遍历顺序。 |
+| 7 | Python custom hook 并行 | 真正并行、稳定随机合同、冲突和失败行为明确，并有性能数据。 |
+| 8 | 删除重复实现、同步文档/stub/示例 | 新接口完整可用，已有恢复与观测合同保持或明确迁移。 |
 
-- 各键之间为 AND，省略表示不限制；类型模式用 @ 限定标签，裸遗传组成模式不限制标签，@default 明确限定默认标签。
-- current 检查进入本条规则的分支状态；其他键检查固定来源。此前“合子 when 检查当前状态”的要求由 filters["current"] 承担，不另设 when 或 Condition 对象接口。
-- 未知键、拼写错误、阶段不支持的键、非法模式均在编译时显式报错，不解释为匹配失败。
+- 各阶段保持可运行，拆成可独立审查的改动；这张表不表示现在开始执行，也不为发布后承诺具体版本或日期。
+- 涉及科学计算、公开接口、状态所有权及 Python/Rust 交换的实现按仓库高风险流程验证，包含独立 evaluator 审查和最终门禁。数值测试同时覆盖确定性结果、随机行为、参考标定和退化情况。
+- 通用持久化格式、稀疏状态、不同物种时间步长、其他遗传模型扩展及无关性能优化不随本条自动纳入；分别保留原 TODO 范围。
 
-**目标、概率与顺序**
+## 发布验证发现的输出限制
 
-- 整体转换 to 必须为 `[genotype 或 *]@[label 或 *]`，配子侧为单倍体遗传组成。两部分显式给出，整部分 * 保留输入对应部分，具体值精确替换；不支持多候选目标或遗传组成内部的局部通配替换。
-- 合子 `A|B@I` 联合替换两部分，`*@I` 只改 slab，`A|B@*` 只改 genotype；`*@*` 为恒等转换，不额外禁止。
-- rate 必须有限且在 [0, 1]。整体转换成功分支同时采用目标各部分，失败分支保持原状态；独立变化用两条规则表达，条件须覆盖相应分支，不增加 independent 开关。
-- Allele 转换先检查分支条件，再对指定侧带源等位基因的副本独立以 rate 转换。合法输入未匹配源正常保持原状态；未知源/目标、非法标签或跨位点替换显式报错。
-- RuleSet 只按声明/追加顺序级联，无数字 priority，不按类型排序，不在首次匹配后停止。便捷方法完整暴露对应字段，不固定 rate。
-- 合子编译以 `(Genotype, slab) → probability` 跟踪联合分支，不再使用所有基因型共用的 effective_slab；实施时验证概率合并、压缩轴及目标可达性。
+### TODO-021 Readable 导出支持多 somatic label 状态
 
-**证据与验收**
+**状态：待设计**
 
-以下 modifiers 路径均位于 src/natal/frontend/。
+#### 现状与证据
 
-- modifiers/zygote_conversion.py:439,617：redirect 的 rate=0/0.25/1 均整体重定向；便捷方法固定 rate=1，已复现。
-- zygote_conversion.py:627、gamete_conversion.py:776,810：redirect 整数目标 1 被当作名称 "1"，未知目标无操作；配子负索引 -1 选择末标签。新规则取消整数索引输入，不保留此行为。
-- zygote_conversion.py:586,601,636：genotype 条件检查当前分支，redirect when 检查 base_gt/base_slab；A→B 后 when=B 不匹配，已复现。conditions.py:144,228,250 的合子性别条件均假、母源/父源条件均真，由新的阶段限定 filters 取代。
-- gamete_conversion.py:424、zygote_conversion.py:328,484 的首次匹配获胜文档错误；实际 A→B→C 得到 C。gamete_conversion.py:927、zygote_conversion.py:756 静态发现源存在而目标缺失时可能静默跳过。
-- 历史自测：`.venv/bin/python -m pytest -q tests/test_modifiers.py tests/test_conditions.py tests/test_conversion_refresh_contracts.py` → **173 passed**，未覆盖全部缺陷；`/tmp/review_conversion_rules.py` 已执行，临时文件不保证保留。不是新接口验证结果。
-- 实施验收覆盖 rate=0/1/中间值、联合转换、两侧独立转换、当前与来源条件、级联、恒等目标、非法输入、标签及压缩目录、刷新不重复叠加。执行高风险独立审查与最终门禁。
+- v0.3.0 示例验证发现：`population_to_readable_dict` 使用 `index_registry.index_to_genotype` 为状态轴命名，而多 somatic label 状态的末轴是 ZType，可能长于原始基因型目录。
+- 两个等位基因、两个 somatic label 的未压缩种群有 3 个原始基因型和 6 个 ZType；导出报 `Registry genotype count does not match state shape: 3 != 6`。单 somatic label 的对应示例可运行。
+- 检查位置为 `output/translation.py::_genotype_labels_from_registry`；此处会拒绝维度不匹配，不应删除校验后产生错位或重复键输出。
+- v0.3.0 文档与发布说明披露此限制；多标签模型可使用 `pop.observe()` 或通过 Observation 投影 raw History。它们是分析读取途径，不等价于可精确恢复运行的完整存档。
 
-## CR-2 📋 自定义配子修饰器静默吞错进入仿真（2026-09-12）
+#### 设计与待决定事项
 
-- **公开路径已复现，尚未修复：** `DiscreteGenerationPopulation.setup(...).modifiers(gamete_modifiers=[...]).build()` 接受非法源/目标键；错误没有被最终构建校验拦住。
-- 在确定性模式、100 个 A|A 雌性与 100 个 A|A 雄性、每雌性 1 个卵、无竞争的对照中：无修饰器产生 100 后代；非法源键被忽略仍为 100；`{"A|A": {"NOT_A_GAMETE": 1.0}}` 将配子行清零，产生 0；`{"A|A": {"A": 0.5, "NOT_A_GAMETE": 0.5}}` 留下行和 0.5，产生 25。四种构建均成功。
-- 源码：`src/natal/frontend/modifiers/module.py:264` 先清零，268 行吞目标解析异常，397/425/432 行吞源解析等异常，443 行返回结果副本。原输入数组未被直接修改，但错误输出进入配置。
-- 修复方向：明确输入键必须有效，先验证再替换；无效目标报错并定位声明。不得简单把残余概率归一化，也不能统一禁止零行（合法生物学模型可能需要零配子输出）。
-- **用户已确认：** 明确无效的基因型、配子、标签或越界索引应显式报错；合法条件不匹配正常跳过，合法全零分布按模型合同处理。先验证整份输出再应用；构建遇错失败，运行时更新遇错保留此前有效配置。本轮只记录决定，尚未实施。
-- 主 agent 执行 `.venv/bin/python /tmp/review_modifier_public.py` 得到上述结果；脚本在临时目录。本项未修复，未运行完整门禁或独立审查。
-
-## CR-3 📋 统一事件支持范围并拒绝未知事件（2026-09-12）
-
-- **用户已确认：** 不支持 `initialization`；未知或拼错的事件名必须显式报错。合法事件没有 callback 时仍正常返回继续。
-- 允许事件统一为 `first / early / late / finish`，注册与手动触发入口使用同一事件目录。移除 `BasePopulation.ALLOWED_EVENTS` 中的 `initialization`，注册或手动触发它均应拒绝，不映射为 `first`。
-- 手动触发应先校验事件名，再初始化会话或执行其他副作用；错误信息包含传入名称及合法名称。普通种群和空间种群入口保持一致。
-- 源码：`src/natal/frontend/population/base.py:156,1751`、`src/natal/frontend/hooks/types.py:186`、`src/natal/frontend/hooks/tick_context.py:726`。现有 runner 会跳过无事件 ID 的 callback。
-- 现有测试明确要求未知事件无操作、initialization callback 不执行；本次是已获用户确认的合同调整，后续将这些断言更新为拒绝非法事件，并保留合法空事件、正常 callback 和空间入口覆盖，不能只删除测试。
-- 自测命令：`.venv/bin/python -m pytest -q tests/test_hooks_slice4_adversarial.py -k 'trigger_event_unknown_event_is_noop or runner_skips_non_tick_event_descriptors'` → **2 passed, 30 deselected**，仅证明旧行为。尚未实施修复，未运行新合同测试、完整门禁或独立审查。
-
-## CR-4 📋 配置快照尺寸不一致时静默回退（2026-09-12）
-
-- `src/natal/backends/rust/rust_backend.py:59` 仅在原生张量元素数量等于 draft 数量时覆盖字段；不等时，71 行后的补齐逻辑复制旧 draft 值，形成混合快照。
-- 主 agent 用真实已构建种群的 session 读代理，仅将 `viability_fitness` 的读取替换为单元素 `[0.125]`：快照仍成功返回 draft 的 `(2,2,3)` 全 1 数组。这是故障注入复现，**不是正常公开操作可触发的证据**。
-- 同一真实 session 直接写入错误尺寸被原生层拒绝：`ValueError: genetics viability_fitness: expected 12 elements, got 1`。尚未发现合法公开操作导致尺寸失配；不能据此宣称压缩或恢复已损坏。
-- 影响入口：普通种群 `config` 读取、空间 deme 配置投影、hook 事务候选配置物化都复用该函数。
-- **用户已确认（2026-09-13）：** 在预期一致的元素数量不匹配时显式报内部一致性错误，不回退旧值；错误包含字段名和预期/实际数量。合法空张量或特殊投影单独处理。原生读取通常为扁平数组，不应直接比较 Python shape。修复方案已确认，尚未修改实现。
-
-## CR-5 📋 Hook 条件语法说明与零除数校验（2026-09-13）
-
-- 已复现 `tick >= -5`、`tick >= threshold` 均明确报 ValueError；非负整数字面量限制本身不属于静默计算错误。`docs/en/2_hooks.md` 和 `docs/zh/2_hooks.md` 尚未明确 N 的范围及不支持变量引用。
-- **新增公开路径复现：** `parse_condition("tick % 0 == 0")` 成功编译；将 `Op.scale(factor=0.0, when="tick % 0 == 0")` 注册到 early，build 和手动触发都成功，总数保持 200。对照 `when="tick >= 0"` 同一操作使总数从 200 变为 0。
-- 原因：`src/natal/frontend/hooks/entry/declarative.py:609` 的数字解析接受 0；`rust/src/hooks/interpreter.rs:488` 使用 `cond_param > 0 && tick % cond_param == 0`，将零除数表达式解释为恒假，避免崩溃但掩盖非法条件。
-- **用户已确认（2026-09-13）：** 取模除数必须为正整数，零除数在解析时显式报错，不解释为恒假。保持现有有限语法，并同步中英文文档说明这一限制。修复方案已确认，尚未修改实现。
-- 主 agent 执行专项 Python 片段复现上述行为；`.venv/bin/python -m pytest -q tests/test_hook_condition_interpreter.py` → **20 passed**。未运行完整门禁或独立审查。
-
-## CR-6 📋 轻量清理方案（2026-09-13，暂不实施）
-
-- **用户已确认清理方向，随后明确暂不执行、只记录方案。** 本轮仅调查源码，没有修改以下实现文件。
-- 修正 `src/natal/frontend/hooks/entry/declarative.py:1149,1234` 的性别 mask 注释为 `[female_selected, male_selected]`，不改变实际顺序。
-- 修正 `src/natal/frontend/modifiers/gamete_conversion.py:339` 默认规则名中的 `â†’` 为 `→`。
-- 清理 `src/natal/frontend/patterns/selector.py` 中已标记遗留且无外部调用的选择器方法；删除前核对公开导出、stub、文档和兼容范围，不能仅凭无仓库内调用就移除公开合同。保留在用的选择器与解析功能。
-- 清理 `src/natal/frontend/patterns/parser.py` 中当前调用链不触发的 species 分支、`_parse_flexible_loci`、仅供其使用的 `_is_valid_gene_char`，以及无调用者的 `_are_all_genes_single_characters`；相应移除不再需要的私有参数和导入，保持当前有效解析行为。
-- 更新或删除 `src/natal/frontend/registry/index.py:430` 对已删除 `natal.frontend.population_config` 模块的注释引用。
-- 实施时按实际变更风险验证：正文注释做准确性检查；代码删除与默认名称修复做针对性验证和最终完整门禁；若涉及公开 API 移除，执行独立审查及相关合同、stub、文档同步。
-- 本项仅负责轻量清理；缓存、重复键、指标索引与 WF 数值修复分别由 CR-7/8/11/12/13 跟踪。
-
-## CR-7 📋 物种基线、配子缓存与内容快照失效（方案已确认，未实施）
-
-**最终边界**
-
-- 删除 Genotype._gamete_cache，produce_gametes 直接计算；不删除实体去重缓存，不扩大到 CR-8。
-- 规则编译从 Species 的未修饰孟德尔基线开始：基线生成 → 当前 registry 轴投影 → 顺序应用规则 → 种群运行矩阵。配子 RuleSet 不再自行重复 initialize_gamete_map；合子侧遵守同一来源边界。
-- 不得以已施加规则的运行矩阵作为刷新基线，不污染共享基线；同一声明反复编译不叠加转换。
-- 基线内部持有；编译和种群获取隔离的投影/副本。重建替换缓存条目，不原地修改旧矩阵；修改 Species 不暗中更新已建种群。构建期间修改 Species 的检测边界在实施时核对，不声称支持并发修改。
-
-**内容快照失效机制**
-
-- 唯一基线获取入口保存并比较依赖内容快照；有效且相同则复用，变化则重建。复用前执行必要校验；重建失败显式报错，不回退旧缓存；仅在新基线完整构建成功后更新缓存及快照。
-- 快照保存独立值而非共享视图，精确比较，不用 allclose 忽略微小变化。不仅比较数组身份、标签数量或 setter 版本号，也不为生成缓存键枚举全部 genotype。
-- 覆盖有序染色体/位点/等位基因目录及身份、位点位置、性染色体定义、unordered、glab/slab 名称与顺序、重组图位点对应关系及数值。结构变化后下游目录/身份缓存有效性须验证，不能假定清基线即修复全部结构缓存。
-- map setter、批量入口和共享数组视图写入都应被检测；不引入 ndarray 子类或写入代理，不以禁止视图写入替代用户要求。
-- 惰性失效保证下次获取不复用旧结果，不要求数组写入时立刻置 None。通过视图写入的非法数值也要在使用前检查有限性、范围、长度及位点映射。
-- 更新要求用户手动清 _gamete_cache 的文档和旧测试。clear_all_caches 不能被宣传为可靠的计算结果失效入口。
-
-**源码、证据与验收**
-
-- src/natal/frontend/genetics/entities/genotype.py:278 和 genetics/structures/_mapping.py:104 两层非空即返回；genetics/compile.py:77 复用物种基线。Chromosome.set_recombination 只写图，不使两层缓存失效。
-- 双杂合 `A1/B1|A2/B2`：r=0.1 时亲本配子各 0.45、重组配子各 0.05；改 r=0.5 后直接查询仍旧。清单基因型缓存后直接查询各 0.25，但新建种群仍用 0.05；再清 config_blueprint 后新建种群才用 0.25。此操作仅用于定位，不是推荐用户 API。
-- 无 preset 首次构建每个基因型 produce_gametes 一次；同 Species 再构建与运行一代均零次；一个 HomingDrive preset 首次构建部分基因型调用两次，第二次来自 gamete_conversion.py:636 重建基线。
-- `/tmp/review_cache_snapshot.py` 已验证独立副本比较检测 setter、切片视图、np.asarray、np.copyto、ufunc out 五种写入；视图写入后当前基线仍返回同一对象。另行将 gamete_labels 设为 ['default', 'tagged']，缓存 n_glabs 仍为 1；现有基线矩阵可写。
-- 单数组 np.array_equal 微基准：10/1000/100000 个 float64 约 0.6/0.9/24 微秒；只代表当时本机数组比较，不是完整快照或端到端性能。临时脚本不保证长期保留。
-- 历史自测：`.venv/bin/python -m pytest -q tests/test_genetic_entities.py -k 'rate_change_requires_manual_cache_clear or two_loci_half_recombination_equal_quarters'` → **2 passed, 67 deselected**，证明旧行为。新合同未实施，未运行完整门禁或独立审查。
-- 实施验收：未改依赖时命中；五种写法修改后更新；标签/结构变化不复用旧轴；非法输入不回退旧结果；刷新不叠加规则；新旧种群隔离；CR-9 完整性校验不能被缓存绕过。
-
-## CR-8 📋 物种与实体缓存的生命周期（2026-09-13，暂缓）
-
-- **用户决定暂缓：** 改动范围较大，本轮不调整缓存归属、清理接口或实体身份合同。以下方案仅供后续单独评估，不视为已批准实施；保留现状和核验证据。
-
-- 区分 CR-7 的配子计算结果缓存与实体去重缓存：后者保证同一 Species 下相同遗传实体返回相同实例，不能简单随 `_gamete_cache` 一并删除。
-- 主 agent 最小复现：一个双等位基因 Species 枚举后有 6 条 GeneticEntity 缓存、3 条 Genotype 缓存、1 条 pattern 缓存；调用 `species.clear_all_caches()` 后分别为 0、3、1。释放外部引用并 `gc.collect()` 后 weakref 仍存活，Genotype 全局字典仍持有 Species 键。
-- 源码：`genetics/entities/_base.py:42,173,184` 全局字典保存实体、实体保存结构；`genetics/entities/genotype.py:61` 全局字典直接以 Species 为键；`patterns/parser.py:39,96` 类级缓存以 `(id(species), pattern)` 为键；`genetics/structures/species.py:195,200` 只清通用实体及结构缓存，未覆盖后两者。
-- 已证实的是缓存清理覆盖不完整及对象被保留，未复现 `id()` 复用导致错误匹配，也未量化长期内存增长。对象存活可能还有其他强引用根，不把上述路径声称为全部保留来源。
-- 建议以 Species 作为物种绑定实体及解析缓存的生命周期拥有者，保留实体唯一性；没有外部引用后由 GC 回收物种内部引用环，避免进程级字典永久持有 Species。实施前盘点全局 fallback 等其他引用根。
-- 必须区分计算结果失效与身份目录清理；活跃 registry 可能依赖对象身份，不能把清理实体缓存当成普通参数更新。明确 `clear_all_caches()` 是何种操作，再同步合同与测试。
-- 不建议仅替换成 WeakKeyDictionary：若值持有实体、实体反向持有 Species，仍可能阻止键回收。本项已按用户要求暂缓，未修改实现或运行完整门禁。
-
-## CR-9 📋 遗传结构完整性校验边界（2026-09-13，方案已确认）
-
-- **用户已确认：** 用于遗传计算的结构中，每条染色体至少有一个位点，每个位点至少有一个等位基因。该要求同样适用于常染色体和 X/Y/Z/W；无位点染色体不作为支持的计算输入。
-- `Species.__init__()` 及染色体、位点的逐步构造/编辑允许暂时不完整；仍检查已提供参数本身的合法性，但不因尚未添加子项而报错。查看结构不要求其完整。
-- 在完整基因型枚举、完整基因型字符串解析、遗传矩阵生成和物种基线获取前统一校验，建议由单一 `Species.validate_structure()` 入口实现，实际名称实施时确定。种群 setup 已会获取基线，不能延迟到最终 build 才检查。
-- 校验失败显式抛 ValueError，并定位 Species、染色体及位点；不静默跳过空染色体或空位点。缓存命中不能绕过有效性检查或既定失效机制。
-- 无须增加 finalize 或永久冻结状态。修改期间可暂时不完整，下一次计算前再检查。现有 from_dict 支持仅声明位点、随后添加等位基因，应保留这种逐步构造能力，不未经兼容核对就强制其返回时完整。
-- 单态染色体可由用户显式提供单一等位基因的标记位点，系统不自动添加占位位点或等位基因。性染色体修复因此无需新增无位点 haplotype 的字符串语法；此前空 Y/W 的支持设想由本决定替代。
-- 尚未修改实现；实施时同步公开合同、stub（若新增校验 API）、中英文文档和测试，并按高风险流程独立审查。
-
-## CR-10 🎨 XY/ZW 同源区段交换（2026-09-13，暂不实现）
-
-- **用户决定：** 暂不实现 X/Y 或 Z/W 之间的同源区段交换，不纳入当前性染色体问题修复。
-- 当前 `Genotype.produce_gametes()` 仅在两个 haplotype 属于同一 Chromosome 时计算重组；异型 X/Y、Z/W 按完整单倍型各 0.5 分离。XX、ZZ 的同型副本可使用既有重组逻辑。
-- 将来若实现，需要独立定义跨染色体的同源位点对应、可交换区间及重组率、交换后的染色体身份和合法配子；属于新增科学模型能力。
-- 此项暂缓不影响 XY/ZW 的字符串解析、初始化精确索引和性别约束修复；不能将这些修复宣称为同源区段交换支持。
-
-## CR-11 📋 Genotype 构造时重复计算缓存键（2026-09-13，方案已确认）
-
-- `src/natal/frontend/genetics/entities/genotype.py:80` 起先遍历染色体生成 `chrom_pairs/genotype_name`，111 行构造 cache_key；117 行起再按 unordered 规则规范化母父单倍体并生成 canon_name，139 行无条件覆盖 cache_key。两次赋值之间没有使用第一个 key，旧字符串计算未参与后续对象名称设置。
-- 前一段在完整遗传对象上只做读取和字符串拼接，属于冗余计算，不是已确认的数值错误。即使最终命中缓存，仍会先执行该段；未测量性能收益，不夸大影响。
-- 建议仅删除前一套被覆盖的计算及失效注释，保留后面的 canonical key、unordered 处理、缓存查找和对象唯一性语义；不与 CR-8 的缓存生命周期重构捆绑，也不删除实体去重缓存。
-- **用户已确认：** 删除前一套被覆盖的计算，保留 canonical key 与对象唯一性。当前只记录方案，未修改实现；实际删除时验证有序/无序、重复构造对象身份及性染色体的既有行为，并按最终风险分类执行检查。
-
-## CR-12 📋 TickMetrics 通过目录名称反查基因型（2026-09-13，索引直查方案已确认）
-
-- `src/natal/frontend/hooks/tick_context.py:140` 的 allele_frequencies 先取得名称→计数字典，然后对每个位点、每个名称调用 `_genotype_for_name()`；184 行后的实现按 `@/:` 拆字符串，再线性扫描 registry 比较 genotype.name。
-- 当前 Gene 名通过 `utils/helpers.py:31` 限制为字母、数字和下划线；标准 ztype 名由 `contracts/materialize.py:348` 从 registry 生成。因此报告对合法基因型名称含冒号的担忧尚未证实为可触发缺陷，不据此宣称频率计算错误。
-- 已存在 state ztype 轴与 registry.index_to_ztype 的对应关系，先生成字符串再反查属于冗余耦合；每个位点重复线性查找还增加开销，未测量性能影响。
-- **用户已确认：** allele_frequencies 直接沿当前 state 的 ztype 计数轴，通过 registry.index_to_ztype 取得 `(Genotype, slab)` 对象计算，移除字符串反查；保留 genotype_counts 等公开输出的名称字典形式。确认压缩、slab 扩展及空间 deme 目录对齐，失配明确报错，不能静默截断。
-- 不以本项扩大到其他科学统计语义修改或实体缓存重构。本项只记录方案，未修改实现。
-- 后续核对确认名称格式混用：`contracts/blueprint.py:135` 的公开 `format_type_name()` 生成 `genotype:slab` / `haplotype:glab`，materialize 与部分 hook 目录沿用；`patterns/parser.py:50` 解析 `@lab`，`output/observation.py:920` 与 `spatial/population.py:1050` 的输出也使用 `@`。用户提出统一为 `@`，建议统一具体 ztype/gtype 名称生成，目录显式保留 `@default`；裸 genotype 选择器仍保留匹配任意 slab 的既有语义。
-- **用户已确认不兼容旧冒号标签格式：** 统一使用 @，不保留 genotype:slab / haplotype:glab 兼容解析。实施同步名称生成方、消费者、文档和锁定冒号格式的测试；不能简单全局替换冒号（无序模式 `::`、空间日志 `deme{i}:param` 各有独立含义）。即使格式统一，内部统计仍直接使用 registry 对象与索引，避免字符串反查。当前仅记录，未修改实现。
-
-## CR-13 ✅ DONE — WF 融合路径性别分配已归一化
-
-**已于 `33236e7`（2026-09-13 `fix(genetics): unify conversion rules and harden
-baseline contracts`）修复，本条记录当时已过期。** 现在三条路径使用同一概率定义：
-
-- 分阶段离散：`rust/src/kernels/discrete_generation.rs:325-347`
-- WF 融合：`rust/src/kernels/discrete_generation.rs:898-913`
-- 年龄结构：`rust/src/kernels/age_structured.rs:432-440`
-
-三处都是 `f / (f + m)`（零和回退 0.5），雄性取余量，雌雄之和严格等于子代总量。
-
-**复现验证（2026-09-14 重跑）**：`tests/test_discrete_generation_sex_chromosome_mendelian.py`
-的 XY 模型，1000 雌 + 1000 雄、每雌 1 卵、无竞争、确定性，仅切换 `extreme_speed_mode`：
-
-```
-extreme_speed_mode=0 (分阶段): female=500.0 male=500.0 total=1000.0
-extreme_speed_mode=3 (WF)    : female=500.0 male=500.0 total=1000.0
-```
-
-修复前 WF 路径为雌雄各 1000、总数 2000；现在两条路径一致。
-
-## CR-14 ✅ DONE — 计数与规则统一携带年龄轴（2026-09-14，已获独立审查 APPROVED）
-
-**已实施**（`355c551`；讨论记录见 `3dc66f7` 之前的版本）。契约与实现：
-
-- 计数与规则**始终携带年龄轴**，缺失时归一化为长度 1 的退化年龄类。
-  `apply_rule` 只接受四维规则；传二维/三维规则抛
-  `rule must carry the age axis like the counts: expected 4-D (...) ...`，并给出补轴示例。
-- 二维计数 `(S, Z)` 在边界升为 `(S, 1, Z)`；其规则写作 `(n_groups, S, 1, Z)`。
-  `Observation.apply` 的计数输入与输出与改动前逐位一致（40 例并排对照，唯一差异是
-  "掩码与计数年龄范围不匹配"的报错信息更清晰，错误类型不变）。
-- 规则与计数的 sex/age/ztype 维度不匹配现在**在进入 Rust 前**报
-  `rule shape does not match the counts: ...`。这顺手修掉一个旧静默错算：元素总数恰好是
-  plane 整数倍、但布局不匹配的规则以前会被原生守卫放行并按错误布局重索引。
-- 归一化收敛到 `observation.py` 的 `_lift_projection_counts` / `_require_age_axis_rule`，
-  `apply` 与 `apply_rule` 共用；**另外三处**同样的"无年龄轴 = 1 个年龄类"推导
-  （`output/_recording.py`、`population/base.py`、`hooks/tick_context.py`）已收敛到
-  `frontend/data/state.py::state_axes`（内部 helper，不新增公共导出）。
-- 破坏性变更已写入 `CHANGELOG.md` 的 Breaking Changes；`docs/{en,zh}/observation_impl.md`
-  记录"规则与计数始终带 age 轴"；stub 无需改动（签名未变）。
-
-**用户决定（2026-09-14）**：不新增 `age_free` 开关——"不分年龄汇总"由
-`Observation(...)` + `collapse_age=True` 覆盖，`apply_rule` 的三维便利不值得一个公共参数。
-
-**回归**：`tests/test_observation_phase2.py` 五条规则形状测试改到新契约；
-独立审查新增 `tests/test_observation_age_axis_contract.py`（18 条，父提交 17 failed / 1 passed）。
-
-> [!NOTE] 历史标注
-> 与 numba 相关的 backlog 条目（`.numba_cache`、`NUMBA_ENABLED`、
-> `enable_numba()/disable_numba()`、`@pytest.mark.numba_off/on` 等）在 ⑥（numba
-> 全拆）完成后已全部过时，相关机制已从仓库移除。原 #15（`.numba_cache` 旧 import）、
-> #22（Numba JIT 缓存导致测试排序依赖）、#23（后端选择与测试缓存隔离）三节已删除：
-> 它们描述的 Numba 运行时、缓存目录与后端 seam 都不再存在，保留只会让维护者据此
-> 继续实现。
-
-
-> 最后审计：2026-08-15。已完成事项迁入本地 `TODO.legacy.md`；本文件只保留未完成或部分完成的工作。
->
-> 排序逻辑：正确性 bug > 性能优化 > UX 改进 > 代码质量。同一档内，部分完成 > 未开始 > 仅设计。
->
-> 状态标记：
-> - ✅ DONE — 已实现
-> - ⚠️ PARTIAL — 部分实现，有遗留问题
-> - 📋 NOT_DONE — 未实现
-> - 🎨 DESIGN_ONLY — 仅有设计方案，无实现
-
----
-
-## History / Observation 重构协调与延期设计（2026-07-15）
-
-> 本节记录此前 grill session 中已经讨论、但明确不应随当前增量重构一并实现的设计。当前重构只实现构建期 canonical Observation、单模式 History、post-hoc observation、`record_snapshot()` 和 raw checkpoint restore。
-
-### HO-C1 📋 natal-inferencer 接口协调
-
-natal-core 的最终接口稳定后，在 `natal-inferencer` 单独实施：
-
-- 将 `population.record_observation` 替换为只读 `population.observation`。
-- 粒子数组投影统一使用 `population.observation.apply(particle_counts)`。
-- 接受 Population 自动提供 identity Observation 的默认行为。
-- 删除对 `pop.create_observation()`、旧 output helpers 和兼容 alias 的依赖。
-- 增加跨仓库集成测试，覆盖默认 identity 与显式 Observation。
-
-natal-core 不为此保留 `record_observation` shim；两个项目尚未发布，可以直接协调升级。
-
-### HO-C2 📋 Observation rule 匹配结果聚合语义
-
-`natal-inferencer` 已提出：一条显式 observation rule 匹配到多个项时，对外应返回这些匹配项的总和，而不是把每个匹配项分别返回。
-
-**当前暂不修改。** `natal-inferencer` 仍依赖现有的分项结果结构；单独修改 natal-core 会破坏其输入形状、标签或索引约定。该变更必须与 inferencer 迁移协调完成，不能作为 core 内部的独立修复。
-
-后续实施时必须满足：
-
-- 聚合边界是一条具名 observation rule；每条 rule 只产生一个对应的聚合结果。
-- 聚合值在数值上等于该 rule 所有匹配项的显式求和，不能漏计或重复计数。
-- 多条 rule 分别独立聚合；同一项同时匹配多条 rule 时，应分别计入各自结果。
-- 默认 identity Observation 的逐 ZType 返回语义不随本项自动改变，除非另行评审。
-- natal-core、`natal-inferencer` 及跨仓库集成测试应在同一次兼容性迁移中更新。
-
-### HO-D1 🎨 Hook 条件触发与 tick 内记录
-
-**不纳入当前重构。** 当前只增加引擎空闲时调用的 `pop.record_snapshot()`，记录完整 tick 边界。
-
-未来如果允许 Hook 触发记录，必须先解决：
-
-- Hook 运行在 Rust session 内，不能直接调用 Python Population 方法。
-- `first`、`early`、`late` 对应不同生命周期阶段，单独使用 tick 无法唯一标识记录。
-- `early` 状态已完成繁殖但尚未完成存活和年龄推进；`late` 状态尚未完成年龄推进。这些状态不是普通 checkpoint，不能从标准 tick 入口恢复。
-- 空间模型还必须明确记录发生在 per-deme 生命周期、全局迁移之前还是之后，并保证跨 deme 一致性。
-- 可能需要 `(tick, phase, occurrence)` 身份、预分配的记录缓冲区和独立的 trace schema。
-- “记录规则”应编译成引擎可执行的信号或条件程序，而不是让 Hook 修改 History 容器。
-
-设计时应优先判断它是否应成为独立的 Trace / Event Record 系统，而不是继续扩张可恢复 History。
-
-### HO-D2 🎨 可恢复的条件中止
-
-**不纳入当前重构，也不增加 `resume()`。** 当前 `RESULT_STOP` 同时承担中止 Hook event、提前退出 `run()` 和永久 finish Population 三种语义；`stop_if_*` 触发后会设置 `is_finished=True`，无法安全继续。
-
-不能简单清除 `_finished`：
-
-- 在 `first` 停止虽然位于 tick 边界，但同一条件可能在下一次 `run()` 立即再次触发。
-- 在 `early` / `late` 停止时状态位于 tick 中间；从 `first` 重新进入会重复生命周期步骤并破坏数值语义。
-- finish Hook 已可能执行，重新开放 Population 会违反终止不变量。
-
-后续设计应拆开：
-
-- `finish`：永久结束，触发 finish Hook，不可继续。
-- `break` / `pause`：只让当前 `run()` 在完整 tick 边界返回，Population 仍可继续。
-- tick 内 abort：保留为生命周期控制，不伪装成可恢复暂停。
-
-可能需要独立 `RunResult` / stop reason 和 tick-boundary condition compiler。当前安全替代方案是在 Python 层逐 tick `run(n_steps=1, record_every=0)`，检查 `pop.observe()` 后调用 `pop.record_snapshot()`。
-
-### HO-D3 🎨 多 Observation 与运行时规则编译
-
-当前只支持一个由 Configurator 在构建期确定的 canonical Observation，不公开 `pop.create_observation()` 或 `pop.observe(other_observation)`。
-
-当前可用替代方式：
-
-- 在 canonical Observation 中声明多个具名 group，再手动拆分结果。
-- 使用 raw History 做自定义分析。
-
-只有出现一份 Population 必须维护多套可复用 Observation 的真实需求后，才设计独立于 Population 的 rule compiler；不得通过恢复 runtime setter 解决。
-
-### HO-D4 🎨 History 持久化存档
-
-当前 `export_state()` 只导出当前 Population 状态，History 不随状态导入导出。`restore_checkpoint()` 只使用当前 Population 内存中的 raw History。
-
-未来如需跨进程或长期存档，应单独设计 `History.save()` / `History.load()`：
-
-- 文件必须保存完整 immutable schema、Population layout fingerprint、labels、axes、mode 和版本。
-- raw 与 observation History 都应可往返，但只有 raw History 可以恢复 Population。
-- 不应重新暴露缺少 schema 的 flat ndarray 文件格式。
-- 需要明确版本迁移、压缩、分块读取和大规模空间 History 的存储策略。
-
----
-
-## 本地工具与排除工作后续
-
-### TOOL-D1 📋 放行 adversarial-review skill
-
-当前 `.opencode/skills/adversarial-review/SKILL.md` 仅存在于本地，并被
-`.gitignore` 的 `.opencode/*` 规则排除。当前机器可以执行该审查流程，但新
-clone 无法从仓库恢复。后续如需让审查流程自包含，应只放行并跟踪该 skill，
-其余 `.opencode` 内容继续忽略。
-
-### TOOL-D2 📋 重新评审 cluster benchmark 工作
-
-`benchmarks/mgdrive1/cluster/` 与
-`tests/test_northstar_cluster_orchestration.py` 当前按决定排除，不属于已跟踪
-benchmark 或门禁范围。后续只有在 cluster 调度实现准备纳入仓库时，才移除
-对应 ignore，并连同可复现环境、测试和运行说明一起评审。
-
----
-
-## Spatial Runtime Update 重构 — 延期决策（2026-07-18）
-
-> 本节记录此前重构审查中明确**不应随当前增量一并实现**的设计决策。当前重构维持现状（离散代保留 sync、CONCAVE 模式照旧消费 `expected_*`），以下三项留待后续单独评审。
-
-### SU-D1 🎨 离散代竞争语义收敛（FIXED-only vs 全模式）
-
-**不纳入当前重构。** 当前重构维持现状：离散代 CONCAVE/LOGISTIC 模式消费 `expected_competition_strength` 与 `expected_survival_rate` 两个由 `compute_equilibrium_metrics` 从 K/eggs_per_female/sex_ratio/存活/交配/繁殖率推导的均衡校准常数；FIXED/NO_COMPETITION 只读 K。三个离散 demo（`discrete.py`、`discrete_ui.py`、`spatial_hex_discrete.py`）和测试辅助均用 `"concave"`，落入 Beverton-Holt 分支（`discrete_generation_simulator.py:108-114`），消费 `expected_*`。
-
-未来若要收敛为 FIXED-only，必须先解决：
-
-- 入口需拒绝 CONCAVE/LOGISTIC 模式（`DiscreteConfigurator.competition()` 校验 `juvenile_growth_mode ∈ {NO_COMPETITION, FIXED}`）。
-- `set_param` 对离散代跳过自动 sync 的现状（`_base.py:247`）从"由 Configurator 方法层兜底"变为"永不 sync"，需删除 `DiscreteConfigurator.competition()/reproduction()` 末尾的 `self._sync_equilibrium()` 调用。
-- 三个 demo + 测试辅助的 `juvenile_growth_mode="concave"` 必须迁移到 `"fixed"`——**这是模型语义改动**：调节曲线从平滑 Beverton-Holt（`r/(ratio·(r−1)+1) × expected_surv`）变为硬截断（`min(1, K/N₀)`），过渡动态和低密度增长行为都不同。需单独评审是否可接受。
-- `compute_equilibrium_metrics` 的离散分支（`_base.py:1217-1228` 手工组装 survival/mating 数组）是否仍有其他消费方需审计。
-
-设计时应优先判断"离散代是否应彻底移除 `expected_*` 字段"（连同 `age_based_relative_competition_strength`，见 SU-D3），而非仅切换模式。
-
-### SU-D2 🎨 `competition_strength` 在 `new_adult_age=1` 下静默 no-op
-
-**不纳入当前重构。** `parameters.jsonc:39` 的 `competition_strength` 参数写入 `age_based_relative_competition_strength[1]`（`config_path=[1]`）。当 `new_adult_age=1` 时：
-
-- 期望侧：`compute_equilibrium_metrics` 的求和循环 `range(1, new_adult_age)` = `range(1, 1)` 为空，index 1 永不入算；
-- 实际侧：`compute_actual_competition_strength` 只加权 `age < new_adult_age`（即只到 age 0），index 1 同样不入算。
-
-结果：`pop.update().competition(competition_strength=2.0)` 在离散代（恒 `new_adult_age=1`）和任何 `new_adult_age=1` 的年龄结构配置下都是**静默 no-op**——写入成功、不报错、零效果。与 F5（hooks 静默 no-op）同类缺陷。
-
-后续设计应：
-
-- 离散代入口对 `competition_strength` 显式拒绝（`ValueError`，提示该参数仅多龄幼虫 `new_adult_age≥2` 有效）；
-- 文档注明 `competition_strength` 实际语义是"第 1 龄（第二个年龄）幼虫的相对竞争权重"，只在 `new_adult_age≥2` 时有意义；
-- 考虑是否提供 age-0 权重的合法调节入口（目前 rel[0] 由 `np.ones` 默认固定为 1.0，无用户可调路径）。
-
-### SU-D3 🎨 离散代 `age_based_relative_competition_strength` 仅为兼容层
-
-**不纳入当前重构。** 离散代 `new_adult_age=1`，只有 age-0 幼虫参与竞争（成体每 tick 全部替换，不进入密度调节），所以数学上只有一个竞争权重有意义——`rel[0]`。且 `rel[0]` 必须 = 1，否则均衡点偏移到 `rel[0]×K`（ratio=1 时招募数 = `produced_age_0 × expected_surv × s0 = rel[0]×K`），K 失去"承载力"含义。
-
-实际侧引擎根本不做加权（`run_discrete_survival` 用 `total_age_0` 原始总数；WF 路径注释明说 "only age-0 juveniles compete, actual_competition_strength is just the total juvenile count"）。`(2,)` 数组仅服务于与共享 `compute_equilibrium_metrics` 代码的兼容（`config.py:240-245` 注释 "kept for spatial builder compat; inactive in discrete" 已部分覆盖此意）。
-
-后续若做 SU-D1 的 FIXED-only 收敛，可一并移除该字段在离散代的消费；否则维持现状（默认 `np.ones`，rel[0]=1.0 自洽）。
----
-
-## 🔴 高优先级 — 正确性 / 阻塞项
-
-## 🟡 中优先级 — 性能 / 可维护性
-
-### #3 ✅ DONE — Observation 录制逻辑重复（已随 Rust-only 重构消失）
-
-**结论**：本条描述的"三条路径"（Numba 内核模板 / Python dispatch 回退 / 后处理）与
-`observation_record.py`、`RUN_FN_NAME`、`_run_python_dispatch`、`_process_kernel_history`
-均已不存在；现在只有 Rust engine 一条录制路径，重复源已消失。
-
-### #4 ⚠️ Zygote modifier 矩阵化与稀疏表示
-
-- zygote 侧仍使用 Dict[Genotype, float] 逐 rule 迭代，未矩阵化
-- `ModifierMatrix` 稀疏表示未实现（当前 dense 在 n_gtypes ≤ 250 时足够快）
-
-### #5 ⚠️ Spatial History
-
-**此分支改动**：无。所有 spatial history 基础设施（录制、解析、导出）均在主分支上已完成，此分支未做修改。
-
-**优先级理由**：🟡 Per-deme 历史录制和 UI 导出已实现，但 `import_state()` 缺失 —— panmictic 模型（`DiscreteGenerationPopulation`、`AgeStructuredPopulation`）均有 `import_state()`，SpatialPopulation 没有。对于需要 checkpoint/restore 的长期空间模拟是阻塞性缺失。
-
-- 保存每个 deme 的 History 数据，提供快捷解析和导出方法
-- 支持 UI 导出
-- 支持刷新后加载历史数据
-
-### #6 📋 改 `late_..._resistance` 为 `absolute_resistance`
-
-**此分支改动**：无。`absolute_resistance` 在该分支的 Python 源码、测试、demo、文档中均未出现。所有位置仍使用 `late_germline_resistance_formation_rate`。
-
-**优先级理由**：🟡 纯 API 重命名，不涉及正确性或性能。但若计划在 v0.2.0 发布前完成此变更，则需尽快决定——发布后改名就是 breaking change。建议与 #7（embryo resistance 灵活化）一并设计，避免两次改动同一参数体系。
-
-- 增加快捷设置方式，不删原有参数
-- $d+r>1$ → 报错
-
-### #7 📋 灵活化 embryo resistance rate 配置
-
-**此分支改动**：无。`embryo_resistance_formation_rate` 仍为静态 `_SexSpecificRates`（`Tuple[float, float]`），无 Cas9 拷贝数依赖，无杂合/纯合区分。
-
-**优先级理由**：🟡 增强功能，非 bug。对于使用 CRISPR 驱动元件（Homing Drive、Toxin-Antidote Drive）的模拟场景有意义，但取决于具体研究需求。建议与 #6 的 `absolute_resistance` 改动一同设计，统一 resistance 参数体系。
-
-- 未必是定值，可与亲本中 Cas9 copies（或表达时间）有关
-- 可支持 heterozygotes / homozygotes 不同配置
-
-### #9 ⚠️ 重复的 modifier map 重建逻辑
-
-**来源**：`code-quality-review-report.html` #5
-
-**当前状态**：离散代中的冗余覆写已经移除。剩余双重实现是
-`ModifierPresetMixin.refresh_modifier_maps()` 与 `Configurator._rebuild_config_maps()`；两者分别服务运行时和构建期，但必须维持相同的 Mendelian 基线与压缩轴投影语义。
-
-**优先级理由**：🟡 维护负担——任一入口的改动都可能遗漏同步到另一入口。
-
-- 提取公共核心为独立辅助函数，由两个入口共享
-
-### #9.1 📋 Preset modifier 定向重编译与后缀重建
-
-**来源**：2026-08-15 conversion refresh 修复后的架构讨论。
-
-**当前行为**：`reconfigure_preset(preset, ...)` 能按对象身份找到被修改的
-preset，但 `refresh_modifiers()` 仍会清空全部派生 modifier，按 priority 重新调用
-所有 preset 的 `gamete_modifier()` / `zygote_modifier()`，随后从 Mendelian 基线重放
-完整 modifier 列表并重算 `offspring_tensor` 和 preset fitness。
-
-并非所有 modifier 都是矩阵：`GameteConversionRuleSet` 只在单个 ruleset 内编译并
-组合 GType 转换矩阵；zygote conversion 仍生成分布字典，fitness 使用 patch，自定义
-modifier 则是不透明 callable。不同 preset 修改同一行时，目前也尚未正式定义应当
-“顺序转换”还是“后者覆盖”。在明确该组合语义前，不能安全地直接加入后缀缓存。
-
-**优先级理由**：🟡 架构与运行时配置性能。preset 数量较多或压缩映射较大时，修改
-一个参数却重新解析全部规则会产生不必要开销；但 `offspring_tensor` 的全量卷积可能
-仍是主要成本，应先基准测试再决定是否引入占用大量内存的中间 checkpoint。
-
-**建议分阶段实现**：
-
-1. 为派生 modifier 保存明确的 preset owner 身份和 priority，不依赖名称前缀关联。
-2. 先实现低风险版本：只重新编译发生变化的 preset，复用其他 preset 的已编译产物；
-   map 仍从 Mendelian 基线重放全部已编译阶段，`offspring_tensor` 仍完整重算。
-3. 统一内部阶段接口，明确 gamete、zygote、fitness 和 custom modifier 的输入/输出及
-   跨 preset 组合语义。
-4. 仅在基准证明值得时，缓存每个 preset 之前的 map checkpoint，修改第 N 个 preset
-   时恢复 N-1 的结果并只重放 `[N, end)`；同时定义 registry/compression、preset
-   增删、priority 变化和 manual modifier 变化时的缓存失效规则。
-
-**验收要求**：
-
-- 重配置结果与相同最终参数的 fresh build 逐元素一致
-- 覆盖多个 preset 修改重叠行与不重叠行、相同/不同 priority、custom modifier
-- 覆盖 age/discrete/spatial、compress 开关和稀疏 GType/ZType
-- 记录“仅定向重编译”和“checkpoint 后缀重建”的时间、峰值内存及 break-even preset 数
-
-### #11.5 ⚠️ Modifier 系统：genotype vs ztype 概念混用 + 冗余参数
-
-**来源**：2026-07-10 `expand_to_ztypes` 清理后的进一步审计。
-
-**遗留子项**：
-- 📋 命名修正：`GameteModifier` Protocol docstring 中 `genotype_idx` → `ztype_idx`、`_write_zygote_mapping` docstring、`_normalize_zygote_val` docstring
-- 📋 协议扩展：让 modifier 支持 slab-level 目标选择（当前 `ztype_indices_for()` 无条件全板展开）
-- 📋 Conversion ruleset 新 DSL（Condition 组合条件、`add_glab_convert`、`add_slab_convert`）API 已就绪，内部委托到旧 API；矩阵编译（`to_matrix(registry)`）和完整迁移待 Stage 2
-
-**涉及文件**：`src/natal/modifiers/module.py`、`src/natal/presets/cytoplasmic.py`、`src/natal/population/_mixins/_modifiers.py`、`src/natal/configurator/_registry_builder.py`
-
-### #11.1 ⚠️ Hook 系统测试覆盖缺口
-
-**来源**：2026-06-17 测试审计。`test_hook_kernel_ops.py` 是独立脚本不被 pytest 发现，`_apply_target_with_sperm` 零覆盖，多个 Op 类型无端到端生命周期测试。
-
-**优先级理由**：🟡 `_apply_target_with_sperm` 是最复杂的执行路径（virgin/sperm 拆分、随机采样、负值检测），其 bug 会静默破坏 sperm 数据。
-
-**遗留**：
-- `test_hook_kernel_ops.py` 需转换为 pytest 格式（所有 Op 类型的运行时测试当前仅在直接执行时运行）
-- `execute_csr_event_program_with_state` 无直接单元测试（已被模板间接覆盖）
-- `_check_csr_condition` 无直接单元测试（已被 condition interpreter 测试覆盖）
-
----
-
-## 📝 文档清理 — 过时路径引用
-
-> 以下条目由 `refactor/hooks-naming` 的对抗式 code review workflow 发现。模块路径已重命名，但文档/注释/缓存中仍有旧引用。
-> 本分支已修复 `src/` 和 `tests/` 范围内的全部 stale 引用（6 处）。`docs/` 和 `.numba_cache/` 不在此分支范围。
-
-### #14 ⚠️ 文档中仍有过时的 `hook_executor` 字段
-
-`natal/hooks/compiler.py` 和 `natal.hooks.executor` 等旧模块路径已经清理；目前仅剩
-`docs/{zh,en}/spatial_builder.md` 与 `spatial_configurator.md` 共 8 处
-`hook_executor` 字段说明，与当前运行时结构不一致。
-
-### #16 📋 spatial `deme_id` 合并+过滤机制未在文档中说明
-
-当前文档（`spatial_lifecycle_wrapper.md`、`3_advanced_hooks.md`）描述了 `_collect_effective_compiled_hooks()`（"收集所有 deme 的 hook"）和 Hook 签名接受 `deme_id` 参数，但**未解释两者的因果关系**：
-
-- **实际机制**：所有 deme 的 hook 被打平进一份全局 `CompiledEventHooks`，编译为一组 lifecycle wrapper；在 `prange` 中每个 deme 调用同一组 wrapper，通过 `deme_id` 过滤——CSR 路径用 `njit_deme_selector_matches()` 跳过不匹配的 hook，njit 路径生成 `if deme_id == X` guard。
-- **文档给人的印象**：每个 deme 独立运行自己的 hook 列表，`deme_id` 只是个"我是几号"的上下文。
-- **待补充**：在 `spatial_lifecycle_wrapper.md` 的编译阶段添加一段解释合并+过滤的设计动机（编译一次 vs 编译 N 次）。
-
-## 🟢 低优先级 — UX / 远期功能
-
-### #12 ✅ DONE — Spatial migration kernel 边界效应（由 D3′/D4 定案）
-
-**结论**：本条原先设想"总迁出量正比于邻居数"。该行为正是默认拓扑邻接行和 = 度数所
-导致的**凭空造质量**，已在 D3′/D4 修复中废止：builder 把邻接行归一化为相对迁出权重，
-每个 deme 都送出完整的 `migration_rate` 配额，边界 deme 只是把配额分给更少的邻居、
-每个邻居份额更大。需要"少迁移"时用 `migration_rate`，不要再缩小邻接行。
-详见 `CHANGELOG.md` 的 Breaking Changes 与 `docs/{en,zh}/3_spatial_simulation.md`。
-
-### #13 📋 K 值自动推导路径测试
-
-**来源**：`code-quality-review-report.html` #15
-
-**此分支改动**：无。Configurator 路径的 K 值自动推导优先级链无测试。
-
-**优先级理由**：🟢 低优先级覆盖缺口。自动推导是 fallback 逻辑，主路径已有测试。
-
-- 添加测试验证优先级链：`carrying_capacity` > `age_1_carrying_capacity` > `initial_individual_count`
-- 覆盖 Configurator 和 `pop.update()` 两个入口
-
-### #14 ✅ DONE — PointMutation 预设 —— 多点突变 + 概率自动校正
-
-**结论（已实装）**：新增内置预设 `PointMutation`
-（`src/natal/frontend/presets/point_mutation.py`），公开导出为
-`natal.PointMutation` 与 `natal.frontend.presets.PointMutation`。实现与下方设计一致：
-
-- 单 target（`target_allele` + `mutation_rate`）与多 target（`target_alleles` +
-  `mutation_rates`）两种声明形式；速率支持 `float` / `(female, male)` / 按性别字典
-- 级联补偿 `r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`，按性别分别计算，公开
-  `effective_rates()` 可查看补偿后的速率
-- `rate_mode="strict"`（默认，Σr > 1 报 `ValueError`）与 `"proportional"`
-  （等比缩放到和为 1）
-- 仅生殖系通道：原设计中的可选 `zygotic_mutation_rate`（胚胎期突变）曾实现，随后按要求
-  **暂时取消**（2026-09 维护者决定），`zygote_modifier()` 固定返回 `None`；该参数已不存在，
-  传入会直接 `TypeError`。胚胎期通道若将来需要，应作为独立条目重新设计（可考虑按 target
-  的速率形状与阶段维度，而不是再加一个孤立标量）
-- 对所有 target 的 declarative fitness patch（`make_fitness_patch_given_allele_scaling`）
-- 构造期即校验声明（形式混用、target 重复/等于 source、速率数量不匹配、速率非有限或
-  为负、按性别键非法、Σr 越界、非法 `rate_mode`），`reconfigure_preset` 写入的原始值
-  在编译期重新归一化并复检
-
-**未改动**：`GameteConversionRuleSet`、`GameteAlleleConversionRule`、`modifiers.py`、
-任何 Rust 内核。
-
-**文档**：`docs/{en,zh}/2_genetic_presets.md`（新增小节 + 可运行示例）、
-`docs/{en,zh}/1_quickstart.md`、`docs/{en,zh}/3_custom_presets.md`、
-`docs/{en,zh}/allele_conversion_rules.md`、`CHANGELOG.md`。
-**测试**：`tests/test_point_mutation_preset.py`（单/多 target、补偿公式、按性别、
-Σr>1 边界、reconfigure、负向声明、germline-only 负向契约与导出）+
-`tests/test_point_mutation_adversarial_review.py`（独立对抗式审查补充的输入契约回归：
-非法性别键的异常类型、非有限/越界速率拒绝、reconfigure 状态一致性）+
-`tests/test_point_mutation_dynamics.py`（端到端动力学：中性累积 `q(t)=1-(1-μ)^t`、
-竞争 target 的 B:C 比例逐代不变、隐性致死突变-选择平衡 `√μ/(1+√μ)`、乘性有害平衡与
-独立参考递推逐代一致、雌性特异速率折半、X 连锁双性别累积、spatial 全局递推与迁移扩散、
-重叠世代的调度决定衰减率（并在关闭精子存储时与由实测年龄结构算出的更新方程主根
-逐位吻合）、随机运行的复现性与二项一致性）。三个文件合计使新模块行覆盖率达 100%。
-
-**原设计（历史记录）**：
-
-**来源**：2026-06-05 设计讨论。用户需求：同时声明 source → [target₁, target₂, …] 的多条点突变，且各 target 的突变率互不干扰（"同时竞争"语义，而非 "先到先得"的级联语义）。
-
-**优先级理由**：🟢 新功能。最简形式（单 source → 单 target）实现量小（~80行），可直接参考 `ToxinAntidoteDrive` 的模式。多 target + 概率校正约 30 行增量。不影响现有 preset。
-
-**设计方案**：
-
-1. **单 target 基础形式**（对标 `ToxinAntidoteDrive` 的简洁度）：
-
-   ```python
-   PointMutation("A2B", source_allele="A", target_allele="B", mutation_rate=1e-5)
-   ```
-
-   - `gamete_modifier`：`add_allele_convert(A→B, rate, sex_filter=sex)`，**不传 `genotype_filter`**（点突变是自发的，不依赖父本基因型）
-   - `zygote_modifier`：默认返回 `None`。可选 `zygotic_mutation_rate` 参数支持胚胎期突变
-   - `fitness_patch`：对 `target_allele` 调用 `_make_fitness_patch_given_allele_scaling()`
-
-2. **多 target 扩展形式**：
-
-   ```python
-   PointMutation("MultiMut",
-       source_allele="A",
-       target_alleles=["B", "C", "D"],
-       mutation_rates=[1e-7, 5e-6, 1e-5],
-   )
-   ```
-
-3. **概率自动校正**（核心设计决策）：
-
-   **问题**：`GameteConversionRuleSet` 内部规则是顺序级联的——Rule2 只作用于 Rule1 处理后的"剩余 source"。如果直接传用户声明的 rate，B 先抢走一部分 source，C 只能从剩余中分，有效速率会偏离用户期望。
-
-   **为什么校正放在 PointMutation 层而非 RuleSet 层**：RuleSet 的级联语义是有意设计的——HomingDrive 的 "homing → resistance" 级联是生物学过程的忠实建模（resistance 只作用于 homing 失败的 target）。这不是 bug，不能"修正"。但点突变的多个产物是同一生物学过程的互斥结果，应该"同时竞争"——校正逻辑属于 PointMutation 的业务语义。
-
-   **校正公式**：`r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`
-
-   其中 `r'ₖ` 是传给 RuleSet 的调整后速率，`rₖ` 是用户声明的期望有效速率。校正后，无论规则以什么顺序插入，每个 target 拿到的有效份额恰好等于 `rₖ`。
-
-   **数值示例**（`r = [0.3, 0.5, 0.1]`）：
-
-   | k | 期望 rₖ | 调整后 r'ₖ | 有效份额 |
-   |---|---------|-----------|---------|
-   |1| 0.3 | 0.3 | 0.3 × 1.0 = 0.3 ✓ |
-   |2| 0.5 | 0.714 | 0.714 × 0.7 = 0.5 ✓ |
-   |3| 0.1 | 0.5 | 0.5 × 0.2 = 0.1 ✓ |
-
-   最终 source 剩余 = `1 - 0.3 - 0.5 - 0.1 = 0.1` ✓
-
-4. **Σr > 1 的处理**：默认 `raise ValueError`（mutation rate 通常很小，几乎不会触发）。可选 `rate_mode="proportional"` 自动等比缩放到和为 1，方便用户用比例而非概率表达。
-
-5. **性别维度**：校正按性别分别进行——`mutation_rates` 列表中每个元素本身可以是 `_SexSpecificRates`（`float | tuple | dict`），先 `_resolve_rates()` 展开为 `(female_rate, male_rate)`，再对每个性别独立校正。
-
-6. **与手动叠加两个 PointMutation 的对比**：
-
-   | 方式 | 语义 | 问题 |
-   |------|------|------|
-   | 两个独立 preset | 顺序级联（先到先得） | rate 大时有效份额偏离期望；顺序依赖 |
-   | 多 target 单 preset + 校正 | 同时竞争（互斥） | 无 |
-
-**实现路径**（纯加法，不改现有 API）：
-
-| 文件 | 改动 |
-|------|------|
-| `genetic_presets.py` | 新增 `PointMutation` 类（~110 行），`__all__` 添加导出 |
-| `test_genetic_presets.py` | 添加单 target / 多 target / 校正公式 / Σr>1 边界测试 |
-
-**不改**：`GameteConversionRuleSet`、`GameteAlleleConversionRule`、`modifiers.py`、任何 Rust 内核。
-
-### #17 ✅ DONE — `PopulationConfig._replace()` 的 0-d ndarray 退化（已随引擎重构消失）
-
-**结论**：本条定位在 `age_structured_simulator.py`（已删除）的 0-d 索引路径上，触发手段
-是 `NATAL_DISABLE_NUMBA=1` 与 `@pytest.mark.numba_off`（均已不存在）。当前配置走 Rust
-engine 的 Rust 侧类型，Python 侧不再有 `[()]` 索引路径，原缺陷与三个测试均不存在。
-遗留的通用约定：`import_config` 仍应拒绝用 Python scalar 替换 0-d ndarray 字段，若将来
-出现同类输入请在此重开条目。
-
-## v0.3.0 及远期更新
-
-> 以下四大功能详见 `v0.3.0-acceleration-and-compression-design.html` 综合设计方案。
-
-### #19 ⚠️ Somatic Label (slab) 的转换能力补全
-
-Somatic Label、扁平 ZType/GType 索引、slab-aware fitness/hook/observation、压缩及
-`CytoplasmicPreset` 已实现。原设计中的独立 4-D state 方案已被扁平 ZType 方案取代。
-仍缺少通用的 slab 转换 API：
-
-1. **三类 Slab 转换**：
-   - `T_zygotic`（glab → slab）：受精时，给定母本 glab、父本 glab、合子基因型 → 子代 slab 分布
-   - `T_gametic`（slab → glab）：减数分裂时，给定个体 slab、基因型、性别 → 配子 glab 分布
-   - `T_somatic`（slab → slab）：每 tick 存活阶段，个体 slab 转换（如 Cas9 表达衰退）
-
-2. 提供 `add_slab_convert` 等公开 DSL，替代 `CytoplasmicPreset` 内部的自制循环。
-3. 如需 tick 间 `T_somatic`，需明确它在生命周期中的执行阶段和 Hook 顺序。
-
-### #20 🎨 仿真引擎性能优化审计
-
-**来源**：2026-06-21 架构审计。对引擎热路径的 6 个优化点进行系统评估。
-
-**优先级理由**：🟡 性能工程。4 个纳入 v0.3.0，2 个推迟。均为纯优化，不改行为。
-
-> 注：本条写于 Python/Numba 引擎时期，下表 #B–#E 的难度、收益与行数评估针对当时的
-> 实现；Rust engine 接管后这些优化点需要重新评估，不要直接按表中的数字排期。
-
-**已完成**：offspring tensor 由 Rust 侧的
-`compute_offspring_probability_tensor()` 计算，且避免构造 O(G²·HL²) 中间数组。
-
-**仍待评估的优化**：
-
-| ID | 优化 | 难度 | 预期收益 | 行数 |
-|----|------|------|---------|------|
-| #B | CSR prange 并行化 | 中 | 2-4×（G≥200 时，per-op 内 genotype 维度并行） | ~120 |
-| #C | 交配矩阵缓存 | 低 | ~30% 交配计算开销 | ~80 |
-| #D | 内存分配复用（TickBuffers） | 中 | 减少 40-60% 分配调用 | ~200 |
-
-**推迟的优化**：
-- #E（deme 间负载均衡）：仅在 deme 间个体数差异 >10× 时有意义，大多数均匀场景无收益。
-- #F（观测录制路径统一）：与 TODO #3 重复，维护收益 > 性能收益。
-
-### 远期功能
-
-- Global hooks
-- Sparse（import / states）
-
-## initialization / finish 现状
-
-```txt
-事件定义里仍有 initialization、finish（以及 first/early/late）。
-base_population.py (line 51)
-types.py (line 124)
-kernel 加速路径目前只执行 first/early/late（CSR+chain）。
-simulator.py (line 382)
-finish 是 Python 层触发（run 结束或 finish_simulation()），不在 kernel 事件链里。
-age_structured_population.py (line 878)
-discrete_generation_population.py (line 233)
-base_population.py (line 801)
-initialization 目前也在 Python 事件体系里，不在 kernel 执行路径。
-```
-
----
-
-## Conversion Ruleset 重构（2026-07-10 grill session）
-
-### 📋 Stage 2 待做 — 剩余迁移
-
-1. `add_slab_convert` — gamete/zygote 端 slab 操作（当前 CytoplasmicPreset 自制循环）
-2. `extract_gamete_frequencies_by_glab` 调用精简（CytoplasmicPreset 路径仍保留）
-
-### 剩余 P2 命名清理（grill list #8-#16）
-
-| # | 位置 | 问题 |
-|---|------|------|
-| 8 | engine 40+ 处 | docstring `n_genotypes` 实际是 `n_ztypes` |
-| 9 | `age_structured.py:95-106` | `n_g_orig` 在 genotype/ztype 间摇摆 |
-| 10 | `hooks/declarative.py:268` | `_resolve_genotypes` → `_resolve_ztypes` |
-| 11 | `discrete_generation.py:161` | `n_genotypes = config.n_ztypes` |
-| 12 | `migration/adjacency.py:619` | `genotype_idx` → `ztype_idx` |
-| 13 | `configurator/_base.py` 10+ 处 | docstring "genotype" 应为 "ztype" |
-| 14 | `configurator/_factory.py` 5+ 处 | docstring "genotype" 应为 "ztype" |
-| 15 | `engine/age_structured.py` | `n_haplogenotypes`/`n_glabs` 标记 unused |
-| 16 | `population/age_structured.py:95-106` | `n_g_orig` 语义歧义 |
+- 明确 readable 格式如何表达 genotype 与 somatic label，保留不同 ZType 的身份和数量，评估现有单标签输出键的兼容要求。
+- 核对当前状态、历史、空间及压缩布局下的目录映射，并分别验证个体计数和精子存储轴的标签。
+- 与 TODO-008/010/011 协调输出与观测合同，作为独立修复安排，不纳入 TODO-020 的大重构前置条件。

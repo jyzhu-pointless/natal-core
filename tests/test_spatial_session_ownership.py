@@ -384,9 +384,7 @@ def test_declarative_hooks_run_on_discrete_spatial_rust() -> None:
     """R2 promotion: one Program for every model — a declarative halve-K
     hook lands on the discrete spatial Rust path exactly like the plain
     discrete twin (K 10000 -> 2500 over two late-event firings)."""
-    @nt.hook(event="late")
-    def halve_k() -> list:
-        return [nt.Op.set_param("carrying_capacity", "K * 0.5")]
+    halve_k = nt.Op.set_param("carrying_capacity", "K * 0.5", event="late")
 
     spatial = (
         nt.SpatialPopulation.builder(
@@ -603,9 +601,7 @@ def test_mixed_declarative_and_python_hooks_share_one_program() -> None:
     def observer(context: nt.TickContext) -> None:
         seen.append(int(context.deme_id))
 
-    @nt.hook(event="late")
-    def halve_k() -> list:
-        return [nt.Op.set_param("carrying_capacity", "K * 0.5")]
+    halve_k = nt.Op.set_param("carrying_capacity", "K * 0.5", event="late")
 
     population = (
         nt.SpatialPopulation.builder(
@@ -680,9 +676,9 @@ def test_declarative_and_python_same_tick_writes_compose() -> None:
     value and the python write lands beside it (no clobber)."""
     journal_seen: list[tuple] = []
 
-    @nt.hook(event="first")
-    def bump_eggs() -> list:
-        return [nt.Op.set_param("eggs_per_female", "eggs_per_female + 1", every=1)]
+    bump_eggs = nt.Op.set_param(
+        "eggs_per_female", "eggs_per_female + 1", every=1, event="first"
+    )
 
     @nt.hook(event="first")
     def write_k(context: nt.TickContext) -> None:
@@ -818,9 +814,7 @@ def test_spatial_stochastic_restore_replays_bitwise() -> None:
 def test_spatial_restore_rolls_back_ecology_and_revives() -> None:
     """Restore rolls the ecology columns back and revives the runnable
     state after a declarative hook changed K mid-run."""
-    @nt.hook(event="late")
-    def halve_k() -> list:
-        return [nt.Op.set_param("carrying_capacity", "K * 0.5")]
+    halve_k = nt.Op.set_param("carrying_capacity", "K * 0.5", event="late")
 
     population = (
         nt.SpatialPopulation.builder(
@@ -985,13 +979,13 @@ def test_spatial_program_rebases_set_param_literals() -> None:
     literal: the second hook must not consume the first hook's pool slot
     (spatial program concatenation rebases RPN literal indices)."""
 
-    @nt.hook(event="first")
-    def double_eggs() -> list:
-        return [nt.Op.set_param("eggs_per_female", "4.0 * 2", every=1)]
+    double_eggs = nt.Op.set_param(
+        "eggs_per_female", "4.0 * 2", every=1, event="first"
+    )
 
-    @nt.hook(event="late")
-    def halve_k() -> list:
-        return [nt.Op.set_param("carrying_capacity", "K * 0.5", every=1)]
+    halve_k = nt.Op.set_param(
+        "carrying_capacity", "K * 0.5", every=1, event="late"
+    )
 
     population = (
         nt.SpatialPopulation.builder(

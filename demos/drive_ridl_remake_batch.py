@@ -128,7 +128,8 @@ def compute_release_size(release_ratio: float) -> int:
 def make_release_op(release_size: int) -> nt.HookOp:
     """Create a late-event op that repeatedly releases male homozygotes from week 10."""
     return nt.Op.add(
-        genotypes="Dr|Dr", ages=1, sex="male", delta=release_size, when="tick >= 10"
+        genotypes="Dr|Dr", ages=1, sex="male", delta=release_size,
+        when="tick >= 10", event="late", priority=1,
     )
 
 
@@ -185,9 +186,9 @@ def build_population(
             drive_homozygote_fitness=drive_fitness
         )
     ).hooks(
-        release_op, event="late", priority=1
+        release_op
     ).hooks(
-        nt.Op.stop_if_zero(sex="female"), event="late"
+        nt.Op.stop_if_zero(sex="female", event="late")
     ).build()
     )
 
@@ -813,7 +814,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             fitness_success_counts=fitness_success_counts,
         )
 
-    if args.check:
+    if args.check and args.smoke:
+        print("[check] smoke grid: output contract checked; skipping full-grid reference comparison")
+    elif args.check:
         check_reference(
             Path(__file__).with_name(REFERENCE_NAME),
             seed=seed,

@@ -94,7 +94,7 @@ After construction, runtime parameter writes have exactly two entries:
 `deme(i).write_ecology(...)` / `write_genetics(...)` (single deme).
 **The `SpatialPopulation.update()` chain has been removed.**
 > **Note**: every access to the spatial container's `pop.params` returns a **new**
-> `SpatialParamsView`, so `pop.params.carrying_capacity = 5` writes only to that
-> temporary view and has no effect on the engine (measured: the parameter value is
-> unchanged). Spatial parameter writes must use `pop.params.tensor_write(...)` or
+> `SpatialParamsView`. Attribute assignments such as
+> `pop.params.carrying_capacity = 5` raise `AttributeError` instead of silently
+> writing to the temporary view. Spatial parameter writes must use `pop.params.tensor_write(...)` or
 > `deme(i).write_ecology(...)`.

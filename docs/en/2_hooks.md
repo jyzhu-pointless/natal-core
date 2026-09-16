@@ -21,7 +21,7 @@ When selecting an event, it is recommended to first clarify at which specific ti
 
 ## Declarative Hooks
 
-For most users, the recommended style is to pass `nt.Op.*` objects directly to `.hooks()` in the population build chain:
+For most users, the recommended style is to pass `nt.Op.*` objects directly to `.hooks()` in the population build chain, with each Op carrying its own `event` and `priority`:
 
 ```python
 import natal as nt
@@ -47,11 +47,9 @@ pop = (
     )
     .hooks(
         [
-            nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0"),
-            nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98),
+            nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=200, when="tick % 7 == 0", event="first", priority=10),
+            nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.98, event="first", priority=10),
         ],
-        event="first",
-        priority=10,
     )
     .build()
 )
@@ -63,11 +61,11 @@ The `Op` objects themselves are the declaration: they are compiled into a CSR pl
 
 ## Hook Authoring Shapes
 
-- **Declarative**: pass `Op` objects (or a list of them) to `.hooks()`; compiled into a CSR plan at build time. This is the recommended style.
+- **Declarative**: pass `Op` objects (or a list of them) to `.hooks()`; put the event and priority on each Op, then compile into a CSR plan at build time. This is the recommended style.
 - **Callback**: single parameter `def hook(pop: TickContext) -> int`, decorated with `@nt.hook` (a plain function also works, with the event given by `.hooks(..., event=...)`).
 - **Selector callback**: `@nt.hook(..., selectors={...})`; selector values are resolved at build time and injected on each call.
 
-The `@nt.hook` decorator detects the latter two shapes from the function signature (at build-time compilation). A zero-parameter function returning `List[HookOp]` is also recognized as declarative — it is called once at build time and its Op list enters the same compilation pipeline. When the ops' own event / priority are the defaults this behaves exactly like passing the ops directly; the decorator `priority` has the final say over the group.
+The `@nt.hook` decorator detects the latter two shapes from the function signature during the build. A zero-parameter function returning `List[HookOp]` remains a compatibility entry point for declarative hooks: the build-time flow may invoke it for reference collection and then for compilation, with the returned Ops entering the normal pipeline. Direct Op declarations with Op-local `event` and `priority` are recommended. The factory form is useful only when the list must be assembled dynamically; its decorator and call-level metadata still follow the precedence rules below.
 
 The legacy `(state, config, deme_id)` three-parameter signature is explicitly rejected (`TypeError` -- it is a leftover of the njit era with no migration channel). Callbacks return `0` (or `RESULT_CONTINUE`) to continue; a non-zero value (or `RESULT_STOP`) stops the simulation.
 
@@ -93,14 +91,14 @@ Common operations include:
 - `Op.set_param`: Schedule one ecology parameter on a tick plan (see below).
 - `Op.convert`: One-to-one probabilistic zygote-type conversion (see below).
 
-Think of them as "declarative transformations over the state tensor". Every `Op` factory accepts `event` and `priority` keyword arguments: `event` is the op-level event (it wins over the call level), `priority` is the op-level priority (a call-level `priority` assignment overrides it).
+Think of them as "declarative transformations over the state tensor". Every `Op` factory accepts `event` and `priority` keyword arguments. Put these on the Op in recommended code. For compatibility, a `.hooks(..., event=...)` default can fill a missing Op event, while the Op's explicit event wins. `.hooks(..., priority=...)` can assign one shared priority to a declaration and overrides Op-local priorities.
 
 ### `Op.set_param`: code-free parameter scheduling
 
 `Op.set_param(param, value, every=1, start=0, when=None)` rewrites one runtime-mutable ecology scalar on a tick schedule:
 
 ```python
-nt.Op.set_param("carrying_capacity", "K * 0.95", every=10)
+nt.Op.set_param("carrying_capacity", "K * 0.95", every=10, event="early", priority=0)
 ```
 
 - `value` is an arithmetic expression (compiled to RPN): operands are jsonc parameter names (`K` is the registered alias of `carrying_capacity`) or numeric literals; operators are `+ - * /` with parentheses. A plain number is sugar for a constant. The expression is evaluated **against the current values every firing tick**, so `"K * 0.95"` compounds.
@@ -124,23 +122,53 @@ Vector and genetics-tensor parameters raise `ValueError` -- use `pop.update()` /
 - Out of a run, the write flushes through the same channel as `pop.params.<name> = ...` (route dispatch, session refresh, and the parameter snapshot log).
 - Inside a `run()`, the write evolves within the session-owned ecology columns with the same event granularity and the same jsonc bounds (a non-finite or out-of-bounds value such as `"K / 0"` raises `ValueError` mid-run). Each committed transition is written at its event boundary to the native `ParameterLog`, and later reads obtain the current values from the session snapshot.
 
-### `Op.convert`: one-to-one probabilistic conversion
+### `Op.convert`: selected individual conversion
 
-`Op.convert(source, target, probability, when=None)` moves each individual currently in `source` to `target` with `probability`, independently per individual. Both patterns must each match **exactly one** ZType, otherwise `ValueError` at compile time.
+Use `from_` to select individuals and `to` to describe which attributes change. Both accept `IndividualSelector`; the underscore is required because Python reserves `from`.
 
-- **Males**: only `individual_count` rows migrate (males carry no sperm label).
-- **Females (age-structured)**: the virgin part and *every sperm bucket* `(female_z, male_z)` are binomially sampled and moved atomically to `(target_z, male_z)` -- the stored sperm genotype label follows the female row, the male axis is untouched. Totals are conserved exactly in deterministic mode and in expectation in stochastic mode.
-- **Discrete-generation**: no sperm storage, so the op degenerates to plain per-individual binomial migration.
-
-The canonical idiom uses a `probability=1.0` remainder step to absorb whatever the chain left over:
+The following declaration assumes the population contains the named labels and at least three ages:
 
 ```python
-# 30% of A|A become A|a, the rest become a|a
-nt.Op.convert("A|A", "A|a", probability=0.3),
-nt.Op.convert("A|A", "a|a", probability=1.0),
+nt.Op.convert(
+    from_=nt.IndividualSelector(age=2, ztype="*@uninfected"),
+    to=nt.IndividualSelector(age=1, ztype="*@infected"),
+    probability=0.25,
+    event="late",
+)
 ```
 
-Multiple `convert` ops run in hook-priority order.
+This moves 25% of the selected individuals to age 1 and the infected label, keeping each individual's genotype and sex. In deterministic mode, it moves that fraction of the counts; stochastic mode samples the converted individuals.
+
+- In `from_`, omitted fields and wildcards impose no restriction. Selector unions retain their combined conditions and overlapping coordinates are processed once.
+- In `to`, omitted fields, omitted chromosome groups, and `*` keep the corresponding source values. `*@infected` changes only the label; `A|A@*` replaces the specified genotype portion and keeps the label and omitted chromosome groups.
+- Each source must produce one legal destination. Targets do not accept unions, sets, negations, or multiple age/sex values. A missing destination in the active type catalog raises `ValueError`; it is not created during the hook.
+- All transfers in one op use the state at the start of that op. Newly arriving individuals are not converted again by the same op. Separate ops still form a cascade in hook execution order.
+- A conversion does not skip later lifecycle stages. For example, an age change in `late` is followed by the normal age advance.
+
+Female-to-female conversions move the associated sperm storage with the individuals, even when an adult moves below `new_adult_age`. Female-to-male conversions discard only the converted females' stored sperm; male-to-female conversions create unmated females. Sperm already stored by other females is not rewritten when its source male changes type or sex. Individual counts are conserved by the transfers.
+
+The legacy string form remains available:
+
+```python
+nt.Op.convert("A|A", "A|a", probability=0.3, event="early"),
+nt.Op.convert("A|A", "a|a", probability=1.0, event="early"),
+```
+
+Each legacy source and target must match exactly one ZType, they must differ, and all ages and both sexes participate. Do not mix legacy arguments with `from_`/`to`. The second declaration converts the remainder left by the first; there is no separate multi-destination probability interface.
+
+### `Op.clear_sperm_storage`: clear selected females' stored sperm
+
+```python
+nt.Op.clear_sperm_storage(
+    selector=nt.IndividualSelector(sex="female", age=1),
+    event="late",
+)
+```
+
+This clears all sperm storage carried by the selected females, leaving their individual counts unchanged. They are subsequently treated as unmated. The selector identifies the females, not the types of stored sperm. Male coordinates are ignored; repeating the operation or applying it to a model without sperm storage has no additional effect.
+
+Selection uses the state when this op executes. A clear following a conversion affects every matching female, not just those moved by that conversion.
+
 
 ## Stochastics
 
@@ -202,16 +230,13 @@ pop = (
         "male": {"WT|WT": 1000}
     })
     .hooks(
-        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0"),
-        event="first", priority=10,
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0", event="first", priority=10),
     )
     .hooks(
-        nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.95, when="tick > 50"),
-        event="late", priority=5,
+        nt.Op.scale(genotypes="WT|WT", ages="*", factor=0.95, when="tick > 50", event="late", priority=5),
     )
     .hooks(
-        nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000),
-        event="late",
+        nt.Op.stop_if_above(genotypes="Var|WT", threshold=5000, event="late", priority=0),
     )
     .build()
 )
@@ -229,7 +254,7 @@ The native Rust engine is the only execution backend, so hooks have a single exe
 - Single-parameter callbacks (`TickContext`) cross the Python<->Rust boundary at event boundaries; each invocation gets its own context wrapper, and its writes join that invocation's event transaction — committed on success, discarded on failure.
 - Within one event, declarative ops and Python callbacks interleave in one cross-type `priority` order (lower values first; ties keep declaration order). The two kinds share a single comparable scale: whichever hook — callback or declarative — has the smaller `priority` always runs first, and later hooks see earlier writes.
 
-Hooks are "Op is a hook": `Op` objects constitute the hook program, and passing them to `.hooks()` is the declaration (a zero-parameter `@hook`-decorated function returning the Op list remains an equivalent factory entry point). There is no `initialize` event -- express initialization logic with the first tick of the `first` event (`when="tick == 1"`) or with the `finish` event.
+Hooks are "Op is a hook": `Op` objects constitute the hook program, and passing them to `.hooks()` is the declaration. A zero-parameter `@hook`-decorated function returning an Op list remains a compatibility factory entry point; the build-time flow may invoke it for reference collection and compilation. There is no `initialize` event -- express initialization logic with the first tick of the `first` event (`when="tick == 1"`) or with the `finish` event.
 
 In `SpatialPopulation`, local-hook `priority` only applies within a deme; no global order is defined across demes. See [Spatial Simulation](3_spatial_simulation.md).
 
@@ -259,12 +284,10 @@ pop = (
         "male": {"WT|WT": 1000}
     })
     .hooks(
-        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0"),
-        event="first",
+        nt.Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 5 == 0", event="first", priority=0),
     )
     .hooks(
-        nt.Op.stop_if_zero(sex="female"),
-        event="late", priority=5,
+        nt.Op.stop_if_zero(sex="female", event="late", priority=5),
     )
     .build()
 )

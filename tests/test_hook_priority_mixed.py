@@ -115,10 +115,9 @@ def test_mixed_csr_then_callbacks_in_order() -> None:
     calls: List[str] = []
     observed: dict[str, float] = {}
 
-    @hook(event="first", priority=0)
-    def first_csr_early_pri():
-        # priority 0: runs before both callbacks despite being a plan
-        return [Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0)]
+    first_csr_early_pri = [
+        Op.add(genotypes="WT|WT", ages=1, sex="male", delta=3.0, event="first", priority=0)
+    ]
 
     @hook(event="first", priority=1)
     def cb_one(pop):
@@ -201,9 +200,11 @@ def _build_simple_discrete_population(
 
 def test_unified_csr_before_callback() -> None:
     """CSR(pri=0) → callback(pri=1): the callback sees the CSR mutation."""
-    @hook(event="first", priority=0)
-    def csr_hook():
-        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20)]
+    csr_hook = [
+        Op.set_count(
+            genotypes="WT|WT", ages=0, sex="male", value=20, event="first", priority=0
+        )
+    ]
 
     @hook(event="first", priority=1)
     def cb_hook(pop):
@@ -234,9 +235,11 @@ def test_callback_beats_lower_priority_csr() -> None:
         pop.state.individual_count[1, 0, 0] += 100.0
         return 0
 
-    @hook(event="early", priority=1)
-    def csr_hook():
-        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20)]
+    csr_hook = [
+        Op.set_count(
+            genotypes="WT|WT", ages=0, sex="male", value=20, event="early", priority=1
+        )
+    ]
 
     pop = _build_simple_discrete_population(
         "cb_beats_csr",
@@ -251,9 +254,11 @@ def test_callback_beats_lower_priority_csr() -> None:
 
 def test_callback_observes_priority_earlier_csr_write() -> None:
     """A callback reads the mutation of a smaller-priority CSR plan."""
-    @hook(event="early", priority=0)
-    def csr_hook():
-        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20)]
+    csr_hook = [
+        Op.set_count(
+            genotypes="WT|WT", ages=0, sex="male", value=20, event="early", priority=0
+        )
+    ]
 
     observed: dict[str, float] = {}
 
@@ -327,9 +332,11 @@ def test_same_priority_mixed_tie_keeps_declaration_order() -> None:
     """
     observed: List[float] = []
 
-    @hook(event="first", priority=0)
-    def plan_set_twenty():
-        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=20.0)]
+    plan_set_twenty = [
+        Op.set_count(
+            genotypes="WT|WT", ages=0, sex="male", value=20.0, event="first", priority=0
+        )
+    ]
 
     @hook(event="first", priority=0)
     def cb_after_plan(pop):
@@ -341,9 +348,11 @@ def test_same_priority_mixed_tie_keeps_declaration_order() -> None:
         observed.append(float(pop.state.individual_count[1, 0, 0]))
         return 0
 
-    @hook(event="first", priority=0)
-    def plan_set_thirty():
-        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=30.0)]
+    plan_set_thirty = [
+        Op.set_count(
+            genotypes="WT|WT", ages=0, sex="male", value=30.0, event="first", priority=0
+        )
+    ]
 
     pop = _build_simple_discrete_population(
         "tie_mixed_order",
@@ -365,9 +374,9 @@ def test_csr_on_other_event_still_executes() -> None:
         pop.state.individual_count[1, 0, 0] += 100.0
         return 0
 
-    @hook(event="early", priority=0)
-    def early_csr():
-        return [Op.add(genotypes="WT|WT", ages=0, sex="male", delta=50)]
+    early_csr = [
+        Op.add(genotypes="WT|WT", ages=0, sex="male", delta=50, event="early", priority=0)
+    ]
 
     pop = _build_simple_discrete_population(
         "csr_other_event",
@@ -387,14 +396,15 @@ def test_csr_on_other_event_still_executes() -> None:
 
 def test_stop_if_zero_shortcircuits_remaining_callbacks() -> None:
     """Op.stop_if_zero aborts the event, skipping later callbacks."""
-    @hook(event="first", priority=0)
-    def csr_kill():
-        # Set male to 0 → triggers stop_if_zero below.
-        return [Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=0)]
+    csr_kill = [
+        Op.set_count(
+            genotypes="WT|WT", ages=0, sex="male", value=0, event="first", priority=0
+        )
+    ]
 
-    @hook(event="first", priority=1)
-    def csr_stop():
-        return [Op.stop_if_zero(genotypes="WT|WT", ages=0, sex="male")]
+    csr_stop = [
+        Op.stop_if_zero(genotypes="WT|WT", ages=0, sex="male", event="first", priority=1)
+    ]
 
     @hook(event="first", priority=2)
     def cb_should_be_skipped(pop):
@@ -414,17 +424,16 @@ def test_stop_if_zero_shortcircuits_remaining_callbacks() -> None:
 
 def test_stop_if_extinction_shortcircuits_remaining_callbacks() -> None:
     """Op.stop_if_extinction aborts when total population reaches 0."""
-    @hook(event="first", priority=0)
-    def csr_kill():
-        # Set both sexes to 0.
-        return [
-            Op.set_count(genotypes="WT|WT", ages=0, sex="female", value=0),
-            Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=0),
-        ]
+    csr_kill = [
+        Op.set_count(
+            genotypes="WT|WT", ages=0, sex="female", value=0, event="first", priority=0
+        ),
+        Op.set_count(
+            genotypes="WT|WT", ages=0, sex="male", value=0, event="first", priority=0
+        ),
+    ]
 
-    @hook(event="first", priority=1)
-    def csr_stop():
-        return [Op.stop_if_extinction()]
+    csr_stop = [Op.stop_if_extinction(event="first", priority=1)]
 
     @hook(event="first", priority=2)
     def cb_should_be_skipped(pop):
@@ -443,10 +452,9 @@ def test_stop_if_extinction_shortcircuits_remaining_callbacks() -> None:
 
 def test_stop_if_zero_condition_not_met_continues() -> None:
     """Op.stop_if_zero does NOT abort when count > 0."""
-    @hook(event="first", priority=0)
-    def csr_stop():
-        # Male count is 10 > 0 → condition not met → continue.
-        return [Op.stop_if_zero(genotypes="WT|WT", ages=0, sex="male")]
+    csr_stop = [
+        Op.stop_if_zero(genotypes="WT|WT", ages=0, sex="male", event="first", priority=0)
+    ]
 
     @hook(event="first", priority=1)
     def cb_should_run(pop):
@@ -474,8 +482,8 @@ def test_op_scale_end_to_end() -> None:
     pop = _build_simple_discrete_population(
         "op_scale",
         [(
-            (Op.scale(genotypes="WT|WT", ages=0, sex="male", factor=0.3),),
-            {"event": "first"},
+            (Op.scale(genotypes="WT|WT", ages=0, sex="male", factor=0.3, event="first"),),
+            {},
         )],
     )
     pop.run(n_steps=1)
@@ -489,8 +497,8 @@ def test_op_sample_end_to_end() -> None:
     pop = _build_simple_discrete_population(
         "op_sample",
         [(
-            (Op.sample(genotypes="WT|WT", ages=0, sex="male", size=4),),
-            {"event": "first"},
+            (Op.sample(genotypes="WT|WT", ages=0, sex="male", size=4, event="first"),),
+            {},
         )],
     )
     pop.run(n_steps=1)
@@ -504,8 +512,8 @@ def test_op_kill_end_to_end() -> None:
     pop = _build_simple_discrete_population(
         "op_kill",
         [(
-            (Op.kill(genotypes="WT|WT", ages=0, sex="male", prob=0.6),),
-            {"event": "first"},
+            (Op.kill(genotypes="WT|WT", ages=0, sex="male", prob=0.6, event="first"),),
+            {},
         )],
     )
     pop.run(n_steps=1)
@@ -519,8 +527,8 @@ def test_op_subtract_end_to_end() -> None:
     pop = _build_simple_discrete_population(
         "op_sub",
         [(
-            (Op.subtract(genotypes="WT|WT", ages=0, sex="male", delta=7),),
-            {"event": "first"},
+            (Op.subtract(genotypes="WT|WT", ages=0, sex="male", delta=7, event="first"),),
+            {},
         )],
     )
     pop.run(n_steps=1)
@@ -569,8 +577,8 @@ def test_single_csr_hook() -> None:
     pop = _build_simple_discrete_population(
         "single_csr",
         [(
-            (Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=99),),
-            {"event": "early"},
+            (Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=99, event="early"),),
+            {},
         )],
     )
     pop.run(n_steps=1)

@@ -33,6 +33,7 @@ const OP_STOP_IF_ABOVE: i64 = 8;
 const OP_STOP_IF_EXTINCTION: i64 = 9;
 const OP_SET_PARAM: i64 = 10;
 const OP_CONVERT: i64 = 11;
+const OP_CLEAR_SPERM_STORAGE: i64 = 12;
 
 // RPN value-expression token kinds mirror ``natal.hooks.types`` (RPN_*).
 const RPN_LITERAL: i64 = 0;
@@ -152,6 +153,11 @@ pub struct HookProgram {
     // OP_CONVERT data area (single-ZType endpoints per op; -1 otherwise).
     pub convert_source_z: Vec<i64>,
     pub convert_target_z: Vec<i64>,
+    pub convert_offsets: Vec<i64>,
+    pub convert_source_coords: Vec<i64>,
+    pub convert_target_coords: Vec<i64>,
+    pub clear_offsets: Vec<i64>,
+    pub clear_coords: Vec<i64>,
     /// Cross-type priority interleaving: per-hook-slot column of length
     /// ``n_hooks``.  ``-1`` marks a CSR plan slot; ``>= 0`` marks a Python
     /// callback slot whose value indexes this event's entry in
@@ -1001,7 +1007,7 @@ impl HookProgram {
         // Reject unknown opcodes before touching state so a malformed program
         // cannot partially apply its earlier operations.
         for (op_index, &op_type) in self.op_types.iter().enumerate() {
-            if !(OP_SCALE..=OP_CONVERT).contains(&op_type) {
+            if !(OP_SCALE..=OP_CLEAR_SPERM_STORAGE).contains(&op_type) {
                 return Err(format!(
                     "Unknown mutation opcode {} at operation {}",
                     op_type, op_index
@@ -1200,89 +1206,199 @@ impl HookProgram {
                         }
                     }
                 } else if op_type == OP_CONVERT {
-                    // One-to-one probabilistic ZType migration: males move
-                    // plain counts; females move the virgin part and every
-                    // sperm bucket atomically (female label follows the
-                    // row, male axis untouched).  Every moved unit is
-                    // subtracted from the source and added to the target,
-                    // so totals are conserved by construction.
-                    let src_z = self.convert_source_z[op_idx] as usize;
-                    let dst_z = self.convert_target_z[op_idx] as usize;
-                    let prob = param;
-                    // Guard both endpoints before indexing the flat state.
-                    if src_z < n_ztypes && dst_z < n_ztypes {
-                        let has_sperm = !sperm_storage.is_empty();
-                        for age in 0..n_ages {
-                            // Males: move plain counts and add exactly the moved
-                            // amount to the target, so the total is conserved.
-                            let male_flat = (n_ages + age) * n_ztypes + src_z;
-                            let moved_male = convert_count(
-                                rng,
-                                individual_count[male_flat],
-                                prob,
-                                stochastic,
-                                continuous_sampling,
-                            );
-                            individual_count[male_flat] -= moved_male;
-                            individual_count[(n_ages + age) * n_ztypes + dst_z] += moved_male;
-
-                            if has_sperm {
-                                // Virgin count is fixed before the bucket
-                                // loop: the loop moves buckets out of the
-                                // source row, so the pre-loop row sum is
-                                // the mated total.
-                                let mut sperm_row_sum = 0.0;
+                    let map_start = self.convert_offsets.get(op_idx).copied().unwrap_or(0) as usize;
+                    let map_end = self
+                        .convert_offsets
+                        .get(op_idx + 1)
+                        .copied()
+                        .unwrap_or(map_start as i64) as usize;
+                    if map_end > map_start {
+                        // Selector conversions use a snapshot of all source
+                        // rows.  This makes overlapping destinations atomic:
+                        // a unit moved into another source row is not moved a
+                        // second time by this same operation.
+                        let source_ind = individual_count.to_vec();
+                        let source_sperm = sperm_storage.to_vec();
+                        for map_idx in map_start..map_end {
+                            let si = map_idx * 3;
+                            let src_sex = self.convert_source_coords[si] as usize;
+                            let src_age = self.convert_source_coords[si + 1] as usize;
+                            let src_z = self.convert_source_coords[si + 2] as usize;
+                            let dst_sex = self.convert_target_coords[si] as usize;
+                            let dst_age = self.convert_target_coords[si + 1] as usize;
+                            let dst_z = self.convert_target_coords[si + 2] as usize;
+                            if src_sex >= n_sexes
+                                || dst_sex >= n_sexes
+                                || src_age >= n_ages
+                                || dst_age >= n_ages
+                                || src_z >= n_ztypes
+                                || dst_z >= n_ztypes
+                            {
+                                return Err(
+                                    "Op.convert selector mapping is outside state bounds".into()
+                                );
+                            }
+                            let src_flat = (src_sex * n_ages + src_age) * n_ztypes + src_z;
+                            let dst_flat = (dst_sex * n_ages + dst_age) * n_ztypes + dst_z;
+                            if src_flat == dst_flat {
+                                continue;
+                            }
+                            let moved = if !sperm_storage.is_empty() && src_sex == 0 {
+                                let mut moved_sperm_total = 0.0;
+                                let mut source_sperm_total = 0.0;
                                 for mz in 0..n_ztypes {
-                                    sperm_row_sum +=
-                                        sperm_storage[(age * n_ztypes + src_z) * n_ztypes + mz];
-                                }
-                                let mut moved_mated = 0.0;
-                                // Each bucket is sampled independently; the
-                                // accumulated moved_mated feeds the source
-                                // subtraction below.
-                                for mz in 0..n_ztypes {
-                                    let bucket_flat = (age * n_ztypes + src_z) * n_ztypes + mz;
-                                    let moved_bucket = convert_count(
+                                    let bucket = (src_age * n_ztypes + src_z) * n_ztypes + mz;
+                                    source_sperm_total += source_sperm[bucket];
+                                    let drawn = convert_count(
                                         rng,
-                                        sperm_storage[bucket_flat],
+                                        source_sperm[bucket],
+                                        param,
+                                        stochastic,
+                                        continuous_sampling,
+                                    );
+                                    moved_sperm_total += drawn;
+                                    if dst_sex == 0 {
+                                        sperm_storage
+                                            [(dst_age * n_ztypes + dst_z) * n_ztypes + mz] += drawn;
+                                    }
+                                    sperm_storage[bucket] -= drawn;
+                                }
+                                let virgins = (source_ind[src_flat] - source_sperm_total).max(0.0);
+                                moved_sperm_total
+                                    + convert_count(
+                                        rng,
+                                        virgins,
+                                        param,
+                                        stochastic,
+                                        continuous_sampling,
+                                    )
+                            } else {
+                                convert_count(
+                                    rng,
+                                    source_ind[src_flat],
+                                    param,
+                                    stochastic,
+                                    continuous_sampling,
+                                )
+                            };
+                            individual_count[src_flat] -= moved;
+                            individual_count[dst_flat] += moved;
+                            // Only female-to-female movement carries stored
+                            // sperm.  Any female-to-male transfer discards the
+                            // moved females' sperm; male-to-female starts
+                            // virgins.  Existing destination rows are never
+                            // used as a source in this snapshot pass.
+                        }
+                    } else {
+                        // One-to-one probabilistic ZType migration: males move
+                        // plain counts; females move the virgin part and every
+                        // sperm bucket atomically (female label follows the
+                        // row, male axis untouched).  Every moved unit is
+                        // subtracted from the source and added to the target,
+                        // so totals are conserved by construction.
+                        let src_z = self.convert_source_z[op_idx] as usize;
+                        let dst_z = self.convert_target_z[op_idx] as usize;
+                        let prob = param;
+                        // Guard both endpoints before indexing the flat state.
+                        if src_z < n_ztypes && dst_z < n_ztypes {
+                            let has_sperm = !sperm_storage.is_empty();
+                            for age in 0..n_ages {
+                                // Males: move plain counts and add exactly the moved
+                                // amount to the target, so the total is conserved.
+                                let male_flat = (n_ages + age) * n_ztypes + src_z;
+                                let moved_male = convert_count(
+                                    rng,
+                                    individual_count[male_flat],
+                                    prob,
+                                    stochastic,
+                                    continuous_sampling,
+                                );
+                                individual_count[male_flat] -= moved_male;
+                                individual_count[(n_ages + age) * n_ztypes + dst_z] += moved_male;
+
+                                if has_sperm {
+                                    // Virgin count is fixed before the bucket
+                                    // loop: the loop moves buckets out of the
+                                    // source row, so the pre-loop row sum is
+                                    // the mated total.
+                                    let mut sperm_row_sum = 0.0;
+                                    for mz in 0..n_ztypes {
+                                        sperm_row_sum +=
+                                            sperm_storage[(age * n_ztypes + src_z) * n_ztypes + mz];
+                                    }
+                                    let mut moved_mated = 0.0;
+                                    // Each bucket is sampled independently; the
+                                    // accumulated moved_mated feeds the source
+                                    // subtraction below.
+                                    for mz in 0..n_ztypes {
+                                        let bucket_flat = (age * n_ztypes + src_z) * n_ztypes + mz;
+                                        let moved_bucket = convert_count(
+                                            rng,
+                                            sperm_storage[bucket_flat],
+                                            prob,
+                                            stochastic,
+                                            continuous_sampling,
+                                        );
+                                        sperm_storage[bucket_flat] -= moved_bucket;
+                                        sperm_storage[(age * n_ztypes + dst_z) * n_ztypes + mz] +=
+                                            moved_bucket;
+                                        moved_mated += moved_bucket;
+                                    }
+                                    let virgins = (individual_count[age * n_ztypes + src_z]
+                                        - sperm_row_sum)
+                                        .max(0.0);
+                                    // Virgin conversion is drawn after the buckets;
+                                    // the clamp guards independent sampling noise.
+                                    let moved_virgin = convert_count(
+                                        rng,
+                                        virgins,
                                         prob,
                                         stochastic,
                                         continuous_sampling,
                                     );
-                                    sperm_storage[bucket_flat] -= moved_bucket;
-                                    sperm_storage[(age * n_ztypes + dst_z) * n_ztypes + mz] +=
-                                        moved_bucket;
-                                    moved_mated += moved_bucket;
+                                    individual_count[age * n_ztypes + src_z] -=
+                                        moved_mated + moved_virgin;
+                                    individual_count[age * n_ztypes + dst_z] +=
+                                        moved_mated + moved_virgin;
+                                } else {
+                                    // Discrete-generation females have no sperm
+                                    // storage, so only their own count migrates.
+                                    let female_flat = age * n_ztypes + src_z;
+                                    let moved_female = convert_count(
+                                        rng,
+                                        individual_count[female_flat],
+                                        prob,
+                                        stochastic,
+                                        continuous_sampling,
+                                    );
+                                    individual_count[female_flat] -= moved_female;
+                                    individual_count[age * n_ztypes + dst_z] += moved_female;
                                 }
-                                let virgins = (individual_count[age * n_ztypes + src_z]
-                                    - sperm_row_sum)
-                                    .max(0.0);
-                                // Virgin conversion is drawn after the buckets;
-                                // the clamp guards independent sampling noise.
-                                let moved_virgin = convert_count(
-                                    rng,
-                                    virgins,
-                                    prob,
-                                    stochastic,
-                                    continuous_sampling,
-                                );
-                                individual_count[age * n_ztypes + src_z] -=
-                                    moved_mated + moved_virgin;
-                                individual_count[age * n_ztypes + dst_z] +=
-                                    moved_mated + moved_virgin;
-                            } else {
-                                // Discrete-generation females have no sperm
-                                // storage, so only their own count migrates.
-                                let female_flat = age * n_ztypes + src_z;
-                                let moved_female = convert_count(
-                                    rng,
-                                    individual_count[female_flat],
-                                    prob,
-                                    stochastic,
-                                    continuous_sampling,
-                                );
-                                individual_count[female_flat] -= moved_female;
-                                individual_count[age * n_ztypes + dst_z] += moved_female;
+                            }
+                        }
+                    }
+                } else if op_type == OP_CLEAR_SPERM_STORAGE {
+                    // Explicitly clear stored sperm for selected female rows.
+                    // The individual counts stay unchanged; male selections
+                    // are ignored because males do not own sperm storage.
+                    let clear_start = self.clear_offsets.get(op_idx).copied().unwrap_or(0) as usize;
+                    let clear_end = self
+                        .clear_offsets
+                        .get(op_idx + 1)
+                        .copied()
+                        .unwrap_or(clear_start as i64) as usize;
+                    if !sperm_storage.is_empty() && clear_end > clear_start {
+                        for coord_idx in clear_start..clear_end {
+                            let base = coord_idx * 3;
+                            let sex = self.clear_coords[base] as usize;
+                            let age = self.clear_coords[base + 1] as usize;
+                            let zidx = self.clear_coords[base + 2] as usize;
+                            if sex != 0 || age >= n_ages || zidx >= n_ztypes {
+                                continue;
+                            }
+                            let row_start = (age * n_ztypes + zidx) * n_ztypes;
+                            for value in &mut sperm_storage[row_start..row_start + n_ztypes] {
+                                *value = 0.0;
                             }
                         }
                     }

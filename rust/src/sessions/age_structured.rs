@@ -1182,6 +1182,11 @@ impl HookProgram {
             sp_literals: extract_f64_array(program, "sp_literals")?,
             convert_source_z: extract_i64_array(program, "convert_source_z")?,
             convert_target_z: extract_i64_array(program, "convert_target_z")?,
+            convert_offsets: extract_i64_array(program, "convert_offsets")?,
+            convert_source_coords: extract_i64_array(program, "convert_source_coords")?,
+            convert_target_coords: extract_i64_array(program, "convert_target_coords")?,
+            clear_offsets: extract_i64_array(program, "clear_offsets")?,
+            clear_coords: extract_i64_array(program, "clear_coords")?,
             python_callback_slots,
             has_set_param,
             ..Default::default()

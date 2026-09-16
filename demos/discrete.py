@@ -52,8 +52,10 @@ pop = nt.DiscreteGenerationPopulation \
     ) \
     .presets(drive) \
     .hooks(
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=5000, when="tick % 10 == 0 and tick > 0"),
-        event="first",
+        nt.Op.add(
+            genotypes="WT|Dr", ages=1, sex="male", delta=5000,
+            when="tick % 10 == 0 and tick > 0", event="first",
+        ),
     ) \
     .with_observation(
         groups={

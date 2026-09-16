@@ -22,6 +22,33 @@ pop = (nt.DiscreteGenerationPopulation.setup(species, name="TestPop")
 
 ## Built-in Presets
 
+### CytoplasmicPreset and Wolbachia — Maternal Label Inheritance
+
+`CytoplasmicPreset` uses conversion rules for both gamete tagging and zygote
+label inheritance. Its keyword-only parameters `default_glab` and `default_slab`
+explicitly select the source gamete and somatic labels eligible for conversion;
+both default to the name `default`. Names must exist in the corresponding species
+label lists when the inheritance rules are compiled.
+
+For females in a mapped somatic label, only gametes still carrying the default
+gamete label receive the corresponding maternal tag. During fertilization, that
+tag redirects offspring still carrying the default somatic label to the mapped
+label, without changing their genotype. Other labels are preserved.
+
+These rules act on the distribution left by preceding modifiers. In particular,
+an earlier modifier's genotype changes remain, and offspring already assigned
+a non-default somatic label are not relabeled. Modifier order therefore matters.
+`Wolbachia` uses this mechanism for infection inheritance. Its `default_glab`
+parameter selects the source gamete label (default `default`), and its existing
+`normal_slab` parameter also selects the source somatic label (default `normal`).
+For custom names, pass them explicitly; for example, a species whose uninfected
+somatic label is `default` needs `normal_slab="default"`.
+
+These preset parameters do not reorder labels or change the species' baseline
+distribution, which still assigns probability to the first label in each list.
+Selecting a different source label only processes branches already carrying
+that label, for example after an earlier modifier has assigned it.
+
 ### HomingDrive -- Homing-based Gene Drive
 
 `HomingDrive` implements CRISPR/Cas9-type homing-based gene drive:
@@ -46,14 +73,26 @@ population.apply_preset(drive)
 #### Advanced Configuration
 
 ```python
+import natal as nt
+from natal.frontend.presets import HomingDrive
+
+species = nt.Species.from_dict(
+    name="DepositionExample",
+    structure={"chr1": {"drive": ["WT", "Drive", "Resistance", "FunctionalResistance"]}},
+    gamete_labels=["default", "Cas9_deposited"],
+)
+
 # Sex-specific parameters
 drive = HomingDrive(
     name="SexSpecificDrive",
     drive_allele="Drive",
     target_allele="WT",
+    resistance_allele="Resistance",
+    functional_resistance_allele="FunctionalResistance",
     drive_conversion_rate={"female": 0.98, "male": 0.92},  # Sex-specific rates
     late_germline_resistance_formation_rate=(0.02, 0.04),  # Tuple format (female, male)
     embryo_resistance_formation_rate=0.01,
+    cas9_deposition_glab="Cas9_deposited",
     functional_resistance_ratio=0.2,  # 20% of resistance alleles are functional
 
     # Fitness costs
@@ -61,7 +100,28 @@ drive = HomingDrive(
     fecundity_scaling=0.95,     # 5% fecundity cost
     sexual_selection_scaling=0.85  # 15% sexual selection disadvantage
 )
+population = (
+    nt.DiscreteGenerationPopulation.setup(species, stochastic=False)
+    .initial_state({"female": {"WT|Drive": 100}, "male": {"WT|WT": 100}})
+    .presets(drive)
+    .build()
+)
+population.run(1)
 ```
+
+Embryo resistance is triggered only by parental Cas9 deposition. Register
+`cas9_deposition_glab` in the species' `gamete_labels`; without a configured
+label, embryo editing is inactive even when the embryo inherits drive or Cas9.
+Carrier mothers label all their output gametes, so embryos that do not inherit
+drive can still be edited. For split drives, the depositing parent must carry
+both the drive and Cas9 alleles.
+
+The embryo rate's `female` and `male` entries refer to maternal and paternal
+sources, not offspring sex. A scalar sets both rates, but the paternal source
+is active only with `use_paternal_deposition=True`. Thus the example applies
+1% editing per remaining target copy from maternal deposition only. When both
+enabled sources are present, their rates act sequentially on the remaining
+target copies: the total conversion probability is `1 - (1 - e_m) * (1 - e_p)`.
 
 ### ToxinAntidoteDrive -- Toxin-Antidote Drive (TARE/TADE)
 
@@ -143,7 +203,7 @@ Parameter descriptions:
 3. `rate_mode`: `"strict"` (default) treats the rates as probabilities and rejects a sum above 1; `"proportional"` treats them as proportions and scales them to sum to 1, so `[2, 3, 5]` is the same model as `[0.2, 0.3, 0.5]`.
 4. `viability_scaling` / `fecundity_scaling` / `sexual_selection_scaling` / `zygote_viability_scaling` (and their `*_mode`): Fitness effects applied to the whole target group; all default to neutral.
 
-The mutation happens in the germline only (while gametes are produced, before fertilization); the preset registers no zygote-stage modifier. An embryonic channel is deliberately deferred (TODO.md item #14), so `zygote_modifier()` always returns `None`.
+In the current implementation, the mutation happens in the germline only (while gametes are produced, before fertilization); the preset registers no zygote-stage modifier.
 
 The conversion rules of one ruleset run as a cascade: each rule only sees the source mass the previous rule left. Declaring `[0.3, 0.5, 0.1]` would therefore hand the second target an effective share of `0.5 × 0.7 = 0.35` if the raw rates were passed through. `PointMutation` compensates internally with `r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`, so the realized gamete distribution of an `A|A` parent is exactly:
 
@@ -155,6 +215,8 @@ The conversion rules of one ruleset run as a cascade: each rule only sees the so
 | A (unchanged) | — | — | 0.1 |
 
 This "simultaneous competition" semantics is what distinguishes one multi-target `PointMutation` from several stacked single-target presets, whose rules cascade in registration order (first declared, first served). The compensation is computed per sex, so sex-specific rates compete independently within each sex.
+
+Stacking presets therefore builds a *sequential* model, not the simultaneous one. A forward rule `W -> D` at `mu` declared before a reverse rule `D -> W` at `nu` gives `q' = (1 - nu) (q + mu (1 - q))` with equilibrium `mu (1 - nu) / (nu + mu (1 - nu))`, whereas the textbook "each gamete mutates at most once" model gives `q' = q (1 - nu) + mu (1 - q)` with equilibrium `mu / (mu + nu)`. The two differ by the double-mutation term `mu nu (1 - q)`: a gamete converted to `D` and back to `W` within one meiosis stays `W` in a cascade but counts as `D` when both rules act simultaneously (0.2386 against 0.25 for `mu = 0.02`, `nu = 0.06`). To recover the textbook model exactly, scale the *first-declared* rule: declare `mu / (1 - nu)` first and `nu` second (reverse-first: `nu / (1 - mu)` then `mu`), which matches both the slope and the intercept of the recursion. The preset's internal `r'k = rk / (1 - sum(ri, i < k))` compensation is not the cross-preset recipe — it matches the slope only and lands further from the textbook equilibrium (0.2347) than leaving the rates alone. With realistic rates (at most `1e-3`) the uncorrected offset is around `1e-4` and can be ignored.
 
 ## Practical Examples
 

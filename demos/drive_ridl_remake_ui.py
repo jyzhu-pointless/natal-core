@@ -81,12 +81,12 @@ pop = (nt.AgeStructuredPopulation.setup(
     # Repeated male release from week 10; the extinction guard runs first
     # (priority 0 < 1).
     ).hooks(
-        nt.Op.add(genotypes="Dr|Dr", ages=1, sex="male", delta=29234, when="tick >= 10"),
-        event="late",
-        priority=1,
+        nt.Op.add(
+            genotypes="Dr|Dr", ages=1, sex="male", delta=29234,
+            when="tick >= 10", event="late", priority=1,
+        ),
     ).hooks(
-        nt.Op.stop_if_zero(sex="female"),
-        event="late",
+        nt.Op.stop_if_zero(sex="female", event="late"),
     ).build()
 )
 

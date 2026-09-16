@@ -27,7 +27,9 @@ use crate::model::blueprint::Blueprint;
 use crate::model::custom_fields::{extract_custom_slots, CustomSlot};
 use crate::model::genetics::{is_genetics_tensor, GeneticsTensors};
 use crate::model::python::{extract_f64, extract_f64_vec, extract_i64};
-use crate::model::validation::{validate_scalar_value, validate_tensor_values};
+use crate::model::validation::{
+    validate_growth_contract, validate_scalar_value, validate_tensor_values,
+};
 
 /// Whether a contract field name denotes an ecology tensor (vector) field
 /// owned by [`EcologyParams`].  Genetics tensors are *not* ecology tensors.
@@ -857,6 +859,9 @@ impl EcologyParams {
                 )));
             }
         }
+        for deme in 0..self.n_demes {
+            validate_growth_contract(self.growth_mode[deme], self.low_density_growth_rate[deme])?;
+        }
         // Vector columns carry n_demes per-deme extents.
         for name in ECOLOGY_TENSOR_COLUMNS {
             let got = self.stored_len(name)?;
@@ -889,6 +894,14 @@ impl EcologyParams {
             self.scalar_ref(name, 0)?;
             validate_scalar_value(name, *value)?;
         }
+        let mode = writes
+            .get("growth_mode")
+            .map_or(self.growth_mode[0], |value| *value as i64);
+        let growth_rate = writes
+            .get("low_density_growth_rate")
+            .copied()
+            .unwrap_or(self.low_density_growth_rate[0]);
+        validate_growth_contract(mode, growth_rate)?;
         for (name, value) in writes {
             // Commit pass: growth_mode arrives as f64 and is written through the
             // i64 channel (truncating cast); other fields keep their float value.

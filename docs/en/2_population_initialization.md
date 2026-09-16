@@ -25,7 +25,6 @@ pop = (
     .survival(female_age_based_survival=0.85)
     .reproduction(eggs_per_female=50.0)
     .competition(age_1_carrying_capacity=1000)
-    .hooks(my_hook)
     .build()
 )
 ```
@@ -78,7 +77,7 @@ Configure basic population information and randomness.
 
 ### `age_structure(...)` – Age Structure
 
-Configure the population's age structure, including the total number of age stages and the juvenile/adult division.
+Configure the population's age structure, including the total number of age stages and the juvenile/adult division. The builder must have a `Species`: rebuilding ages also rebuilds genetic dimensions and sex constraints. A builder wrapping a draft without a Species rejects this operation before changing the draft.
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
@@ -178,8 +177,10 @@ Competition parameters take effect during the survival phase of the population.
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | Competition weight of the second juvenile age class (age=1) | `1.0` | Juvenile density regulation | Age 0 is fixed at `1.0`; leaving it unset keeps age 1 at the same weight. Needs `new_adult_age >= 2` — a model whose only juvenile age is age 0 rejects an explicit value instead of ignoring it |
+| `competition_strength` | `float` | Competition weight of the second juvenile age class (age=1) | `1.0` | Juvenile density regulation | Age 0 defaults to `1.0` and this scalar option does not change it; leaving it unset keeps age 1 at the same weight. Needs `new_adult_age >= 2` — a model whose only juvenile age is age 0 rejects an explicit value instead of ignoring it |
 | `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"beverton_holt"` | Juvenile density regulation | Supports `"no_competition"`, `"fixed"`, `"logistic"` (alias `"linear"`), `"beverton_holt"` (default) and `"ricker"` |
+
+The `competition_strength` scalar sets only the second juvenile age weight. The full-vector `pop.params.tensor_write("competition_weights", ...)` entry also accepts changes to the age-0 weight; that changes the equilibrium competition reference and can change the population trajectory. The default value of `1.0` is not enforced as an invariant by that entry.
 
 **Density-regulation curves** (`x` = actual competition strength / expected competition strength; `s` = expected survival; `r` = low-density growth rate):
 
@@ -224,7 +225,7 @@ The initialization path has three scenarios:
    - If $K$ is missing: uses the total count of age-1 individuals from the initial state
    - If expected egg production is missing: calculates expected egg production from the female distribution in the initial state
 
-Regardless of the path taken, the system will genuinely construct the equilibrium distribution, then compute all competition metrics from it. This ensures consistency among $K$, expected egg production, and the equilibrium survival rate.
+Regardless of the path taken, the system will genuinely construct the equilibrium distribution, then compute all competition metrics from it. This ensures consistency among $K$, expected egg production, and the equilibrium survival rate. The derived distribution splits the age-1 total by the *surviving* sex ratio — the offspring sex ratio filtered by each sex's own age-0 survival — so the calibrated equilibrium stays at $K$ even when the two sexes survive differently; with equal age-0 survival this reduces to the offspring sex ratio itself.
 
 **Expected egg production formula**:
 
@@ -360,15 +361,14 @@ Notes:
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `*hook_items` | `HookOp` / `Op` list / `Callable` | Declarative ops (or lists of them), `@hook`-decorated functions, or single-parameter callbacks | Empty | Event points (first / early / late / finish, etc.) | Declarative ops are passed directly; the event comes from `.hooks(..., event=...)` or the op's own fields. |
+| `*hook_items` | `HookOp` / `Op` list / `Callable` | Declarative ops (or lists of them), `@hook`-decorated functions, or single-parameter callbacks | Empty | Event points (first / early / late / finish, etc.) | Recommended: put `event` and `priority` on each declarative Op. Call-level metadata remains a compatibility default/override. |
 
 **Example**:
 
 ```python
 # ...
 .hooks(
-    nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
-    event="first",
+    nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10", event="first", priority=0),
 )
 ```
 

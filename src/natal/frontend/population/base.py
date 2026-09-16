@@ -1994,7 +1994,7 @@ class BasePopulation(ABC, Generic[T_State]):
                     allele_counts[gene.name] = 0.0
 
         # 2. Aggregate genotype counts.
-        # individual_count shape: (n_sexes, n_ages, n_genotypes)
+        # individual_count shape: (n_sexes, n_ages, n_ztypes)
         # Sum over sex and age to get total count per genotype.
         genotype_counts = state.individual_count.sum(axis=(0, 1))
 

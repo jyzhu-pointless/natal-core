@@ -15,7 +15,7 @@ import numpy as np
 import natal as nt
 from natal.frontend.hooks.entry.declarative import (
     Op,
-    _resolve_genotypes,
+    _resolve_ztypes,
     compile_declarative_hook,
 )
 from natal.frontend.hooks.entry.selector import _resolve_selector_to_array
@@ -49,20 +49,20 @@ class TestPhaseA_NSlabsOneRegression:
     def test_star_returns_all_ztypes(self):
         sp = _nslab_species()
         reg = _registry_for_species(sp)
-        result = _resolve_genotypes("*", reg, reg.index_to_genotype[0].species, reg.n_ztypes)
+        result = _resolve_ztypes("*", reg, reg.index_to_genotype[0].species, reg.n_ztypes)
         expected = np.arange(reg.n_ztypes, dtype=np.int32)
         assert np.array_equal(result, expected)
 
     def test_string_label_resolves_first_ztype(self):
         sp = _nslab_species()
         reg = _registry_for_species(sp)
-        result = _resolve_genotypes("A|A", reg, reg.index_to_genotype[0].species, reg.n_ztypes)
+        result = _resolve_ztypes("A|A", reg, reg.index_to_genotype[0].species, reg.n_ztypes)
         assert list(result) == [0]
 
     def test_list_of_strings(self):
         sp = _nslab_species()
         reg = _registry_for_species(sp)
-        result = _resolve_genotypes(
+        result = _resolve_ztypes(
             ["A|A", "a|a"], reg, reg.index_to_genotype[0].species, reg.n_ztypes,
         )
         # 3 unordered: A|A=0, A|a=1, a|a=2
@@ -71,7 +71,7 @@ class TestPhaseA_NSlabsOneRegression:
     def test_int_input_passthrough(self):
         sp = _nslab_species()
         reg = _registry_for_species(sp)
-        result = _resolve_genotypes([0, 2], reg, reg.index_to_genotype[0].species, reg.n_ztypes)
+        result = _resolve_ztypes([0, 2], reg, reg.index_to_genotype[0].species, reg.n_ztypes)
         assert list(result) == [0, 2]
 
     def test_selector_star_returns_all(self):
@@ -131,9 +131,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
             .build()
         )
 
-        @nt.hook(event="early")
-        def scale_all():
-            return [Op.scale(factor=0.5)]
+        scale_all = Op.scale(factor=0.5, event="early")
 
         pop = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_star_hook")
@@ -155,9 +153,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
     def test_specific_genotype_hook_affects_all_slabs(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
 
-        @nt.hook(event="early")
-        def kill_AA():
-            return [Op.kill(prob=1.0, genotypes="A|A")]
+        kill_AA = Op.kill(prob=1.0, genotypes="A|A", event="early")
 
         pop = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_kill_AA")
@@ -180,9 +176,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
     def test_add_hook_affects_correct_ztypes(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
 
-        @nt.hook(event="early")
-        def add_aA():
-            return [Op.add(delta=10, genotypes="a|A")]
+        add_aA = Op.add(delta=10, genotypes="a|A", event="early")
 
         pop = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_add_aA")
@@ -202,9 +196,7 @@ class TestPhaseC_HookSlabNSlabsGtOne:
     def test_sample_hook_affects_all_ztypes(self):
         sp = _nslab_species(somatic_labels=["normal", "exposed"])
 
-        @nt.hook(event="early")
-        def sample_hook():
-            return [Op.sample(size=10, genotypes="A|A")]
+        sample_hook = Op.sample(size=10, genotypes="A|A", event="early")
 
         pop = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="slab_sample_hook")
@@ -236,7 +228,7 @@ class TestPhaseD_MultiLocusSlab:
             somatic_labels=["normal", "exposed"],
         )
         reg = _registry_for_species(sp)
-        result = _resolve_genotypes("*", reg, reg.index_to_genotype[0].species, reg.n_ztypes)
+        result = _resolve_ztypes("*", reg, reg.index_to_genotype[0].species, reg.n_ztypes)
         assert len(result) == reg.n_ztypes
         # 9 unordered genotypes (alleles-at-locus only) × 2 slabs = 18
         assert reg.n_ztypes == 18
@@ -248,7 +240,7 @@ class TestPhaseD_MultiLocusSlab:
             somatic_labels=["normal", "exposed"],
         )
         reg = _registry_for_species(sp)
-        result = _resolve_genotypes(
+        result = _resolve_ztypes(
             "A1/B1|A1/B1", reg, reg.index_to_genotype[0].species, reg.n_ztypes,
         )
         assert len(result) == 2  # 2 slabs
@@ -269,9 +261,9 @@ class TestPhaseD_MultiLocusSlab:
             .build()
         )
 
-        @nt.hook(event="early")
-        def scale_AA_BB():
-            return [Op.scale(factor=0.5, genotypes="A1/B1|A1/B1")]
+        scale_AA_BB = Op.scale(
+            factor=0.5, genotypes="A1/B1|A1/B1", event="early"
+        )
 
         hooked = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False, name="phD_run_hooked")
@@ -287,4 +279,3 @@ class TestPhaseD_MultiLocusSlab:
         assert hooked.state.individual_count.sum() > 0
         pop.run(1)
         assert pop.state.individual_count.sum() > 0
-

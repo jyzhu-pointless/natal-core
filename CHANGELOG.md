@@ -1,5 +1,109 @@
 # Changelog
 
+## Unreleased
+
+## v0.3.0 (2026-09-16)
+
+The first final 0.3 release retains the Rust engine and public model interfaces
+from the beta series, with the numerical and spatial fixes below. Changes since
+`v0.3.0b1` are listed here; users upgrading from 0.2 should also read the breaking
+changes in the `v0.3.0b0` and `v0.3.0b1` sections.
+
+The Population/Landscape separation and the broader builder, runtime-update,
+preset, and hook redesign are deferred (TODO-020). Spatial Python callbacks
+still run serially per deme; cross-deme global hooks and hook-driven migration
+updates are not part of this release. The new density-regulation demo is an
+independent design sketch, not a supported NATAL API.
+
+Population-level readable exports currently require the registry genotype
+labels to match the state axis. Multi-somatic-label states can raise a dimension
+mismatch; use `pop.observe()` or project raw history through an Observation for
+those models (TODO-021).
+
+### Added
+
+- Selector-based `Op.convert(from_=..., to=...)` changes selected individuals'
+  genotype, label, age, or sex while conserving their counts and applying the
+  documented sperm-storage transfer rules. `Op.clear_sperm_storage` clears
+  selected females' stored sperm.
+- Cytoplasmic presets use conversion rules with explicit source labels for
+  gamete tagging and maternal inheritance.
+- An independent density-regulation demo illustrates reference calibration,
+  adult versus juvenile pressure, and interactions between two species.
+
+### Fixed
+
+- Homing-drive embryo editing is triggered by parental Cas9 deposition labels,
+  including editing in offspring that do not inherit the drive. Maternal and
+  enabled paternal channels act sequentially on the remaining target copies;
+  inherited drive/Cas9 alone does not activate embryo editing.
+- Staged discrete reproduction honors `fixed_egg_count`, disabling clutch
+  Poisson noise while retaining the other enabled stochastic processes. Spatial
+  discrete builders forward the flag and preserve a value supplied to `setup`
+  when `reproduction` does not override it.
+- The fused Wright-Fisher path applies ordinary age-0 survival and genotype
+  viability after density regulation, matching the staged lifecycle's ordering.
+  Its final-generation sampling still differs from staged sampling.
+- Compensatory growth modes reject non-finite or subunit
+  `low_density_growth_rate` values at construction and runtime updates.
+- Spatial parameter views reject unsupported attribute assignments instead of
+  accepting writes that leave the simulation unchanged. During spatial Python
+  callbacks, population/deme snapshot reads now fail explicitly; use `ctx.state`
+  and `ctx.metrics` to read the live callback state.
+- Age-structure rebuilding requires a species-backed builder and preserves the
+  species blueprint's genotype, label, and sex-chromosome layout.
+- The RIDL batch demo's `--smoke --check` validates smoke outputs without
+  comparing the reduced grid to the full-grid reference, including when the
+  repeat count matches the reference. Full-grid reference checks are unchanged.
+
+### Behavior Changes
+
+- **The derived equilibrium reference now splits age 1 by the surviving sex
+  ratio.** `equilibrium_metrics` divided the reference age-1 total with the raw
+  offspring `sex_ratio`, so a model whose sexes differ in age-0 survival (for
+  example `survival(female_age0_survival=0.9, male_age0_survival=0.8)`)
+  calibrated against a composition it never reaches: the realised equilibrium
+  missed `carrying_capacity` by 2.8%-37.5% (larger the closer
+  `low_density_growth_rate` is to 1), and `ricker` could settle *below* K. The
+  reference now uses `sex_ratio * s_f / (sex_ratio * s_f + (1 - sex_ratio) * s_m)`
+  for the female share of the age-1 total, which makes the deterministic
+  equilibrium exactly `K` for every compensatory curve in both engines. Models
+  whose two sexes survive equally are bit-for-bit unchanged; recorded results
+  for sex-asymmetric survival configurations shift once.
+- **A non-zero `migration_rate` that cannot move anybody now warns.**
+  Building a spatial population with a non-zero rate but no inter-deme edge —
+  no `topology`, `kernel`, or `adjacency`, so the default adjacency is the
+  identity matrix, or a kernel whose only non-zero weight is the excluded
+  center — emits a `UserWarning`. Migration behaviour is unchanged: nothing
+  mixed before and nothing mixes now.
+
+### Documentation
+
+- Declarative hook examples put `event` and `priority` on their `Op` objects;
+  Python callbacks continue to use `@hook`.
+- The bilingual developer guide covers the engine, model compilation, hooks,
+  runtime updates, observations, and spatial execution.
+- Initialization, spatial, and runtime-update examples include the required
+  imports and model setup. Runtime guidance distinguishes writable parameters
+  from build-time settings and documents per-deme fitness/preset declarations.
+- The Wolbachia preset is documented as what it implements — a maternal
+  cytoplasmic marker with optional per-slab fitness scaling — instead of
+  claiming cytoplasmic incompatibility, with a pointer to the modifier recipe
+  for building CI (`docs/*/4_index_registry.md`).
+- `PointMutation`'s cascade section states the consequence of stacking
+  single-target presets (a sequential model, `O(mu*nu)` away from the textbook
+  two-way mutation equilibrium) and the exact rate correction that recovers the
+  textbook recursion (`docs/*/2_genetic_presets.md`).
+- The Wright-Fisher extreme-speed section states that the fused tick is its own
+  model and that the staged path resamples the age-0 cohort, doubling the
+  per-generation drift variance (`docs/*/2_population.md`).
+- The population-initialization page records the surviving-sex-ratio
+  composition premise of the derived equilibrium distribution.
+- The conversion rule sets' docstring examples now show the working mount form
+  (compile against the built population, then `pop.add_gamete_modifier(...)` or
+  `add_zygote_modifier(...)`), which the pipeline accepts; the previous snippet
+  raised `TypeError` at build time.
+
 ## v0.3.0b1 (2026-09-14)
 
 This release turns three silent behaviors into explicit contracts: every engine
@@ -74,7 +178,7 @@ unchanged from `v0.3.0b0`.
 - **`PointMutation` preset for spontaneous point mutation**. The new built-in
   preset converts a source allele into one or more target alleles in every
   gamete carrying it (no parent-genotype filter). The mutation is germline-only
-  for now (the embryonic channel is deferred with TODO.md item #14).
+  for now (the embryonic channel is deferred with TODO.legacy.md ARCH-021).
   Multi-target declarations compete: the preset compensates for the conversion
   cascade internally (`r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)`), so each target's realized
   share equals its declared rate instead of the earlier-declared target taking

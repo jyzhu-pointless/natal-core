@@ -227,7 +227,7 @@ pop = (nt.AgeStructuredPopulation
 
 ## 4️⃣ 第四步：定义模拟逻辑 - Hook
 
-**Hook 系统**允许你在模拟循环的关键节点（如每步开始、生存筛选后等）注入自定义干预或监测逻辑。使用声明式 `Op` 语法最为高效直观——`Op` 对象直接传入构建链的 `.hooks()`：
+**Hook 系统**允许你在模拟循环的关键节点（如每步开始、生存筛选后等）注入自定义干预或监测逻辑。使用声明式 `Op` 语法最为高效直观——把事件和优先级写在每个 Op 上，再传入构建链的 `.hooks()`：
 
 ```python
 from natal.frontend.hooks import Op
@@ -241,9 +241,9 @@ pop = (nt.AgeStructuredPopulation
             ages=2,                  # 成年年龄（仅对年龄结构模型有效）
             sex='male',              # 仅释放雄性
             delta=500,               # 增加 500 只
-            when='tick == 10'        # 条件
+            when='tick == 10',       # 条件
+            event='first', priority=0,
         ),
-        event='first',               # 触发时机
     )
     .build()
 )
@@ -378,8 +378,7 @@ pop = (nt.DiscreteGenerationPopulation
                  juvenile_growth_mode="beverton_holt")   # 密度制约，避免种群指数爆炸
     .presets(drive)
     .hooks(                                   # 注册 Hook
-        Op.add(genotypes='Drive|WT', delta=50, when='tick == 10'),
-        event='first',
+        Op.add(genotypes='Drive|WT', delta=50, when='tick == 10', event='first', priority=0),
     )
     .build()
 )
@@ -430,8 +429,7 @@ pop = (nt.AgeStructuredPopulation
     .fitness(viability={"Drive|Drive": {"female": 0.0}})
     .presets(drive)
     .hooks(
-        Op.add(genotypes='Drive|WT', ages=[2,3,4,5,6,7], delta=100, when='tick == 10'),
-        event='first',
+        Op.add(genotypes='Drive|WT', ages=[2,3,4,5,6,7], delta=100, when='tick == 10', event='first', priority=0),
     )
     .build()
 )

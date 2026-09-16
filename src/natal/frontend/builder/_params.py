@@ -275,21 +275,34 @@ def build_equilibrium_distribution(
 ) -> NDArray[np.float64]:
     """Build equilibrium individual distribution by forward propagation from K.
 
-    Age-1 is allocated as ``(K * sex_ratio, K * (1-sex_ratio))`` for females
-    and males. Subsequent ages are propagated forward via survival rates.
+    Age-1 is allocated by the *surviving* sex ratio -- the offspring
+    ``sex_ratio`` filtered by each sex's own age-0 survival, which reduces to
+    ``sex_ratio`` when both sexes survive equally (see ``equilibrium_metrics``
+    in the Rust core, the single owner of this rule).  Subsequent ages are
+    propagated forward via survival rates.
 
     Args:
         K: Carrying capacity (total individuals at age=1).
-        sex_ratio: Female proportion.
-        age_based_survival_rates: (2, n_ages) survival array.
+        sex_ratio: Female proportion of offspring.
+        age_based_survival_rates: (2, n_ages) survival array; row 0 female,
+            row 1 male.  Only the age-0 entries drive the split.
         n_ages: Number of age classes.
 
     Returns:
         NDArray of shape (2, n_ages) with the equilibrium distribution.
     """
     dist = np.zeros((2, n_ages), dtype=np.float64)
-    dist[0, 1] = K * sex_ratio
-    dist[1, 1] = K * (1.0 - sex_ratio)
+    s_f0 = float(age_based_survival_rates[0, 0])
+    s_m0 = float(age_based_survival_rates[1, 0])
+    female_mass = sex_ratio * s_f0
+    male_mass = (1.0 - sex_ratio) * s_m0
+    if s_f0 == s_m0 or female_mass + male_mass <= 0.0:
+        dist[0, 1] = K * sex_ratio
+        dist[1, 1] = K * (1.0 - sex_ratio)
+    else:
+        surviving = female_mass + male_mass
+        dist[0, 1] = K * (female_mass / surviving)
+        dist[1, 1] = K * (male_mass / surviving)
     for age in range(2, n_ages):
         dist[0, age] = dist[0, age - 1] * age_based_survival_rates[0, age - 1]
         dist[1, age] = dist[1, age - 1] * age_based_survival_rates[1, age - 1]

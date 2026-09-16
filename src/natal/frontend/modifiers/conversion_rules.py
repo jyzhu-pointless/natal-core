@@ -40,6 +40,8 @@ import math
 from typing import TYPE_CHECKING, Mapping, Optional, cast
 
 from natal.frontend.genetics import Species
+from natal.frontend.patterns.elements._base import PatternParseError
+from natal.frontend.patterns.parser import GenotypePatternParser
 
 if TYPE_CHECKING:
     from natal.frontend.genetics.entities.haplotype import HaploidGenotype
@@ -143,22 +145,10 @@ def _parse_target(target: object, stage: str) -> tuple[str, str]:
     Raises:
         ValueError: If the target is malformed.
     """
-    if not isinstance(target, str):  # runtime boundary: user declaration
-        raise TypeError(f"{stage} rule target must be a string, got {type(target).__name__}")
-    if "@" not in target:
-        raise ValueError(
-            f"{stage} rule target {target!r} must be '[genotype or *]@[label or *]' "
-            "with both parts explicit"
-        )
-    genotype_part, label_part = target.rsplit("@", 1)
-    # Both parts must be explicit; "*" is resolved at compile time to mean
-    # "keep the input's corresponding part".
-    if not genotype_part or not label_part:
-        raise ValueError(
-            f"{stage} rule target {target!r} must be '[genotype or *]@[label or *]' "
-            "with both parts explicit"
-        )
-    return genotype_part, label_part
+    try:
+        return GenotypePatternParser.split_conversion_target(target, stage=stage)
+    except PatternParseError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 class _RuleBase:

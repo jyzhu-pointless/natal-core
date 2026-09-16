@@ -310,6 +310,33 @@ def test_competition_legacy_aliases_and_auto_k_are_parse_level() -> None:
     assert auto_pop.params.low_density_growth_rate == 1.5
 
 
+def test_runtime_competition_k_aliases_follow_priority_and_omission_preserves() -> None:
+    """Test runtime K precedence and that omitted K leaves the live value unchanged."""
+    pop = _build("RUKPriority")
+
+    pop.update().competition(old_juvenile_carrying_capacity=111.0)
+    assert pop.params.carrying_capacity == 111.0
+
+    pop.update().competition(
+        age_1_carrying_capacity=222.0,
+        old_juvenile_carrying_capacity=111.0,
+    )
+    assert pop.params.carrying_capacity == 222.0
+
+    pop.update().competition(
+        carrying_capacity=333.0,
+        age_1_carrying_capacity=222.0,
+        old_juvenile_carrying_capacity=111.0,
+    )
+    assert pop.params.carrying_capacity == 333.0
+
+    state = pop.state
+    state.individual_count[:] = 999.0
+    pop.import_state(state)
+    pop.update().competition()
+    assert pop.params.carrying_capacity == 333.0
+
+
 def test_runtime_reproduction_rejects_per_age_on_discrete() -> None:
     """The discrete per-age rejection is shared with the build chain."""
     pop = (

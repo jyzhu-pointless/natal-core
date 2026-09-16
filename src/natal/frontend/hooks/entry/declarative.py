@@ -44,7 +44,15 @@ from natal.frontend.hooks.types import (
     HookOp,
     OpType,
 )
-from natal.frontend.patterns import resolve_zygote_type as _resolve_zygote_type
+from natal.frontend.model import ModelDraft
+from natal.frontend.patterns import (
+    GenotypePatternParser,
+    IndividualSelector,
+    PatternParseError,
+)
+from natal.frontend.patterns import (
+    resolve_zygote_type as _resolve_zygote_type,
+)
 from natal.frontend.registry.index import IndexRegistry
 
 # Fast membership view of the fixed set_param target/operand table.
@@ -429,82 +437,117 @@ class Op:
 
     @staticmethod
     def convert(
-        source: str,
-        target: str,
-        probability: float,
+        source: Optional[str] = None,
+        target: Optional[str] = None,
+        probability: Optional[float] = None,
+        when: Optional[str] = None,
+        event: Optional[str] = None,
+        priority: int = 0,
+        *,
+        from_: Optional[IndividualSelector] = None,
+        to: Optional[IndividualSelector] = None,
+    ) -> HookOp:
+        """Convert selected individuals, preserving unspecified attributes.
+
+        Use ``from_`` and ``to`` together for selector conversion. Each
+        source coordinate maps to one legal destination; omitted target
+        fields and wildcards retain source values. One op reads all source
+        amounts before applying transfers. Separate ops form a cascade.
+
+        Female-to-female transfers carry stored sperm, including age
+        regression. Female-to-male transfers discard the moved carriers'
+        sperm; male-to-female transfers start unmated. Later lifecycle
+        stages, including aging, run normally after this event.
+
+        Args:
+            source: Legacy source string matching exactly one ZType.
+            target: Legacy target string matching one different ZType.
+            probability: Required conversion probability in [0, 1].
+                Deterministic mode moves this fraction; stochastic mode
+                samples sperm carriers and virgins consistently.
+            when: Optional condition controlling when the op executes.
+            event: Execution boundary (default early).
+            priority: Execution priority unless overridden at registration.
+            from_: Source selection over ZType, sex, and age.
+            to: Single target declaration; omitted attributes are retained.
+
+        Returns:
+            A symbolic operation resolved against the published layout.
+
+        Raises:
+            TypeError: If probability or endpoints are missing, endpoint
+                types are invalid, or legacy and selector arguments mix.
+            ValueError: If probability is invalid. Target ambiguity and
+                layout compatibility are checked during hook compilation.
+        """
+        if probability is None:
+            raise TypeError("Op.convert requires probability")
+        if not 0.0 <= probability <= 1.0:
+            raise ValueError(f"probability must be in [0, 1], got {probability}")
+        if from_ is not None or to is not None:
+            if source is not None or target is not None:
+                raise TypeError("Do not mix source/target with from_/to")
+            if not isinstance(from_, IndividualSelector) or not isinstance(to, IndividualSelector):
+                raise TypeError("from_ and to must both be IndividualSelector values")
+            return HookOp(
+                OpType.CONVERT, param=float(probability), condition=when,
+                event=event, priority=priority,
+                source_selector=from_, target_selector=to,
+            )
+        if not isinstance(source, str) or not isinstance(target, str):
+            raise TypeError("legacy Op.convert source and target must be strings")
+        return HookOp(
+            OpType.CONVERT, source, "*", "both", float(probability),
+            when, event, priority, target_z=target,
+        )
+
+    @staticmethod
+    def clear_sperm_storage(
+        *,
+        selector: IndividualSelector,
         when: Optional[str] = None,
         event: Optional[str] = None,
         priority: int = 0,
     ) -> HookOp:
-        """Create a one-to-one probabilistic zygote-type conversion (issue 35).
+        """Clear selected females' stored sperm without changing counts.
 
-        Each individual currently in the *source* zygote type moves to the
-        *target* zygote type with *probability*, independently per
-        individual (per age class).  Both patterns must each match exactly
-        one ZType; anything else raises ``ValueError`` at compile time.
-
-        Semantics by model:
-
-        - **Males**: only ``individual_count`` rows migrate (males carry
-          no sperm label).
-        - **Females (age-structured)**: the virgin part and *every sperm
-          bucket* ``(female_z, male_z)`` are binomially sampled and moved
-          atomically to ``(target_z, male_z)`` — the stored sperm genotype
-          label follows the female row, the male axis is untouched.
-          Total counts are conserved exactly in deterministic mode and in
-          expectation in stochastic mode.
-        - **Discrete-generation**: no sperm storage, so the op degenerates
-          to plain per-individual binomial migration.
-
-        Multiple ``convert`` ops execute in hook-priority order, so a
-        one-to-many split is expressed as a chain of conditional binomial
-        draws with a ``probability=1.0`` remainder step::
-
-            # 30 % of A|A become A|a, the rest become a|a
-            nt.Op.convert("A|A", "A|a", probability=0.3),
-            nt.Op.convert("A|A", "a|a", probability=1.0),
+        Selected males are ignored. Clearing is idempotent and has no
+        effect in models without sperm storage. Selection is evaluated for
+        this op, without tracking individuals moved by earlier operations.
 
         Args:
-            source: Genotype pattern that must match exactly one ZType.
-            target: Genotype pattern that must match exactly one ZType.
-            probability: Per-individual conversion probability in [0, 1].
-            when: Optional condition expression.
-            event: Event boundary at which the op fires (default early).
-            priority: Priority used when the registration call does not
-                assign one (a call-level ``priority`` sets it for the
-                whole declared group).
+            selector: Selection of carriers, not of stored sperm types.
+            when: Optional execution condition.
+            event: Execution boundary (default early).
+            priority: Execution priority unless overridden at registration.
 
         Returns:
-            HookOp: Operation descriptor for compilation.
+            A symbolic sperm-clearing operation.
 
         Raises:
-            ValueError: If *probability* is outside [0, 1] (pattern
-                resolution is validated at compile time).
+            TypeError: If selector is not an IndividualSelector.
         """
-        if not 0.0 <= probability <= 1.0:
-            raise ValueError(
-                f"probability must be in [0, 1], got {probability}"
-            )
+        selector = _require_individual_selector(selector)
         return HookOp(
-            OpType.CONVERT,
-            source,
-            "*",
-            "both",
-            float(probability),
-            when,
-            event,
-            priority,
-            target_z=target,
+            OpType.CLEAR_SPERM_STORAGE, condition=when, event=event,
+            priority=priority, clear_selector=selector,
         )
 
 
-def _resolve_genotypes(
+def _require_individual_selector(value: object) -> IndividualSelector:
+    """Validate an unknown runtime argument from an untyped Python caller."""
+    if not isinstance(value, IndividualSelector):
+        raise TypeError("clear_sperm_storage requires an IndividualSelector")
+    return value
+
+
+def _resolve_ztypes(
     selector: Union[str, List[str], Literal["*"]],
     index_registry: IndexRegistry,
     species: Species,
     n_ztypes: int,
 ) -> np.ndarray:
-    """Resolve genotype selector syntax into concrete ZType indices.
+    """Resolve ZType selector syntax into concrete ZType indices.
 
     Supported input forms:
     - ``"*"`` — all ZTypes
@@ -513,16 +556,16 @@ def _resolve_genotypes(
     - raw integer index or index list
 
     Args:
-        selector: Genotype selector expression
-        index_registry: Registry for genotype name resolution
-        species: Species for genotype pattern resolution
+        selector: ZType selector expression
+        index_registry: Registry for ZType name resolution
+        species: Species for ZType pattern resolution
         n_ztypes: Total number of ZType indices
 
     Returns:
         np.ndarray: Array of ZType indices (int32)
 
     Raises:
-        ValueError: If genotype cannot be resolved
+        ValueError: If a ZType cannot be resolved
     """
     if selector == "*":
         return np.arange(n_ztypes, dtype=np.int32)
@@ -1060,6 +1103,65 @@ def _compile_convert_endpoint(
     )
 
 
+def _compile_selector_conversion(
+    source: IndividualSelector,
+    target: IndividualSelector,
+    species: Species,
+    index_registry: IndexRegistry,
+    config: ModelDraft,
+) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
+    """Resolve each legal source coordinate to one structural destination.
+
+    Source sex restrictions remove impossible carriers before applying the
+    target. Target restrictions are checked rather than silently dropping
+    transfers. The full coordinate relation preserves selector unions.
+    """
+    if target.n_atoms != 1:
+        raise ValueError("Op.convert to selector must contain exactly one atom")
+    n_ages = config.n_ages
+    src_coords = sorted(source.compile_coordinates(index_registry, n_sexes=2, n_ages=n_ages))
+    atom = target.to_dict()["atoms"][0]
+    sexes, ages, ztypes = atom.get("sex", []), atom.get("age", []), atom.get("ztype", [])
+    if len(sexes) > 1 or len(ages) > 1 or len(ztypes) > 1:
+        raise ValueError("Op.convert to selector fields must specify at most one value")
+    target_sex = sexes[0] if sexes else None
+    target_age = ages[0] if ages else None
+    if target_sex is not None and target_sex not in (0, 1):
+        raise ValueError(f"Op.convert target sex index {target_sex} is invalid")
+    if target_age is not None and not 0 <= target_age < n_ages:
+        raise ValueError(f"Op.convert target age {target_age} is outside [0, {n_ages})")
+    try:
+        parsed = GenotypePatternParser(species).compile_conversion_target(ztypes[0]) if ztypes else None
+    except PatternParseError as exc:
+        raise ValueError(f"Op.convert target pattern is invalid: {exc}") from exc
+    sources: list[tuple[int, int, int]] = []
+    targets: list[tuple[int, int, int]] = []
+    for sex, age, src_z in src_coords:
+        if (sex == 0 and config.male_only_by_sex_chrom[src_z]) or (
+            sex == 1 and config.female_only_by_sex_chrom[src_z]
+        ):
+            continue
+        dst_age = age if target_age is None else target_age
+        dst_sex = sex if target_sex is None else target_sex
+        dst_z = src_z
+        if parsed is not None:
+            src_gt, src_slab = index_registry.index_to_ztype[src_z]
+            dst_gt, dst_slab = parsed.apply_zygote(src_gt, src_slab, species)
+            try:
+                dst_z = index_registry.ztype_index(dst_gt, dst_slab)
+            except KeyError as exc:
+                raise ValueError("Op.convert target produces an unregistered ZType") from exc
+        if (dst_sex == 0 and config.male_only_by_sex_chrom[dst_z]) or (
+            dst_sex == 1 and config.female_only_by_sex_chrom[dst_z]
+        ):
+            raise ValueError("Op.convert target sex is incompatible with its genotype")
+        sources.append((sex, age, src_z))
+        targets.append((dst_sex, dst_age, dst_z))
+    if not sources:
+        raise ValueError("Op.convert source selects no sex-compatible individuals")
+    return sources, targets
+
+
 def compile_declarative_hook(
     ops: List[HookOp],
     pop: HookLayout,
@@ -1098,7 +1200,7 @@ def compile_declarative_hook(
 
     # 2. Genotype selection data (CSR format)
     # zidx_offsets: CSR offsets defining genotype index ranges for each operation
-    # zidx_data: Flattened list of all genotype indices across all operations
+    # zidx_data: Flattened list of all ZType indices across all operations
     zidx_offsets: List[int] = [0]  # Start with offset 0 for the first operation
     zidx_data_list: List[int] = []
 
@@ -1135,28 +1237,45 @@ def compile_declarative_hook(
     # 7. OP_CONVERT data area: resolved single-ZType endpoints per op.
     convert_source_z: List[int] = []
     convert_target_z: List[int] = []
+    convert_offsets: List[int] = [0]
+    convert_source_coords: List[tuple[int, int, int]] = []
+    convert_target_coords: List[tuple[int, int, int]] = []
+    clear_offsets: List[int] = [0]
+    clear_coords: List[tuple[int, int, int]] = []
 
     # Process each hook operation and compile it into the packed arrays
     for op in ops:
         # 1) Operation type - convert enum to integer for efficient runtime lookup
         op_types_list.append(int(op.op_type))
 
-        # 2) Genotype span - resolve genotype selectors to actual genotype indices
-        # Examples: "A1|A1" -> [0], "*" -> [0, 1, 2, ..., n_genotypes-1]
-        zidx_array = _resolve_genotypes(op.genotypes, index_registry, species, n_ztypes)
+        # 2) ZType span - resolve selectors to active ZType indices.
+        # Examples: "A1|A1" -> [0], "*" -> all active ZTypes.
+        if op.source_selector is not None:
+            # Selector conversions use the coordinate CSR below; these legacy
+            # rectangular spans are inert placeholders for the native walker.
+            zidx_array = np.arange(n_ztypes, dtype=np.int32)
+        else:
+            zidx_array = _resolve_ztypes(op.genotypes, index_registry, species, n_ztypes)
         zidx_data_list.extend(zidx_array.tolist())
         zidx_offsets.append(len(zidx_data_list))  # Record end offset for this operation
 
         # 3) Age span - resolve age selectors to actual age indices
         # Examples: "0-5" -> [0, 1, 2, 3, 4, 5], "*" -> [0, 1, ..., n_ages-1]
-        age_array = _resolve_ages(op.ages, n_ages)
+        age_array = np.arange(n_ages, dtype=np.int32) if op.source_selector is not None else _resolve_ages(op.ages, n_ages)
         age_data_list.extend(age_array.tolist())
         age_offsets.append(len(age_data_list))  # Record end offset for this operation
 
         # 4) Sex mask + numeric parameter
         # Convert sex selector to boolean mask [female_selected, male_selected]
-        sex_masks_list.append(_resolve_sex(op.sex))
+        sex_masks_list.append(np.array([True, True], dtype=np.bool_) if op.source_selector is not None else _resolve_sex(op.sex))
         params_list.append(float(op.param))  # Convert parameter to float
+        if op.op_type == OpType.CLEAR_SPERM_STORAGE and op.clear_selector is None:
+            raise ValueError("Op.clear_sperm_storage requires a selector")
+        if op.clear_selector is not None:
+            clear_coords.extend(sorted(op.clear_selector.compile_coordinates(
+                index_registry, n_sexes=2, n_ages=n_ages
+            )))
+        clear_offsets.append(len(clear_coords))
 
         # 5) Compiled condition token span
         # Parse condition expression into RPN (Reverse Polish Notation) tokens
@@ -1201,25 +1320,32 @@ def compile_declarative_hook(
         # 7) OP_CONVERT payload: both endpoints must resolve to exactly
         # one ZType; anything else fails here with the match list.
         if op.op_type == OpType.CONVERT:
-            source_pattern = op.genotypes if isinstance(op.genotypes, str) else str(op.genotypes)
+            if op.source_selector is not None or op.target_selector is not None:
+                if op.source_selector is None or op.target_selector is None:
+                    raise TypeError("selector conversion requires both from_ and to")
+                src_coords, dst_coords = _compile_selector_conversion(
+                    op.source_selector, op.target_selector, species, index_registry, pop.config
+                )
+                convert_source_coords.extend(src_coords)
+                convert_target_coords.extend(dst_coords)
+                convert_offsets.append(len(convert_source_coords))
+                convert_source_z.append(-1)
+                convert_target_z.append(-1)
+                continue
             if op.target_z is None:
                 raise ValueError("Op.convert requires a target genotype pattern")
-            source_z = _compile_convert_endpoint(
-                source_pattern, species, index_registry, "source"
-            )
-            target_z = _compile_convert_endpoint(
-                op.target_z, species, index_registry, "target"
-            )
+            source_pattern = op.genotypes if isinstance(op.genotypes, str) else str(op.genotypes)
+            source_z = _compile_convert_endpoint(source_pattern, species, index_registry, "source")
+            target_z = _compile_convert_endpoint(op.target_z, species, index_registry, "target")
             if source_z == target_z:
-                raise ValueError(
-                    f"Op.convert source and target must differ, both "
-                    f"resolve to ztype {source_z}"
-                )
+                raise ValueError(f"Op.convert source and target must differ, both resolve to ztype {source_z}")
             convert_source_z.append(source_z)
             convert_target_z.append(target_z)
+            convert_offsets.append(len(convert_source_coords))
         else:
             convert_source_z.append(-1)
             convert_target_z.append(-1)
+            convert_offsets.append(len(convert_source_coords))
 
     # Create the compiled execution plan with all packed arrays
     plan = CompiledHookPlan(
@@ -1229,7 +1355,7 @@ def compile_declarative_hook(
         op_types=np.array(op_types_list, dtype=np.int32),
 
         # Genotype selection data in CSR format
-        # zidx_offsets[i] to zidx_offsets[i+1] defines genotype indices for operation i
+        # zidx_offsets[i] to zidx_offsets[i+1] defines ZType indices for operation i
         zidx_offsets=np.array(zidx_offsets, dtype=np.int32),
         zidx_data=np.array(zidx_data_list, dtype=np.int32) if zidx_data_list else np.array([], dtype=np.int32),
 
@@ -1264,6 +1390,11 @@ def compile_declarative_hook(
         # OP_CONVERT data area (single-ZType endpoints per op)
         convert_source_z=np.array(convert_source_z, dtype=np.int32),
         convert_target_z=np.array(convert_target_z, dtype=np.int32),
+        convert_offsets=np.array(convert_offsets, dtype=np.int32),
+        convert_source_coords=np.array(convert_source_coords, dtype=np.int32).reshape(-1),
+        convert_target_coords=np.array(convert_target_coords, dtype=np.int32).reshape(-1),
+        clear_offsets=np.array(clear_offsets, dtype=np.int32),
+        clear_coords=np.array(clear_coords, dtype=np.int32).reshape(-1),
     )
 
     # Return the complete hook descriptor with metadata

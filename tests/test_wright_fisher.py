@@ -23,9 +23,10 @@ class TestWFEndToEnd:
         """
         sp = nt.Species.from_dict("wfhooks2", {"c1": {"l1": ["A", "a"]}})
 
-        @nt.hook(event="first", priority=0)
-        def scale_hook():
-            return [nt.Op.scale(genotypes="*", ages=1, factor=0.5, when="tick == 2")]
+        scale_hook = nt.Op.scale(
+            genotypes="*", ages=1, factor=0.5, when="tick == 2",
+            event="first", priority=0,
+        )
 
         # Reference: no hooks
         pop_ref = (

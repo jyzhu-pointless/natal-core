@@ -467,8 +467,8 @@ def test_op_registers_as_declarative_hook() -> None:
         "s4_op_hook",
         hook_calls=[
             (
-                (Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=99.0),),
-                {"event": "first"},
+                (Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=99.0, event="first"),),
+                {},
             )
         ],
     )
@@ -490,10 +490,10 @@ def test_op_group_registers_single_descriptor() -> None:
         hook_calls=[
             (
                 ([
-                    Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=40.0),
-                    Op.add(genotypes="WT|WT", ages=0, sex="male", delta=2.0),
+                    Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=40.0, event="first"),
+                    Op.add(genotypes="WT|WT", ages=0, sex="male", delta=2.0, event="first"),
                 ],),
-                {"event": "first"},
+                {},
             )
         ],
     )
@@ -509,15 +509,15 @@ def test_duplicate_declaration_is_idempotent() -> None:
     def cb(pop: TickContext) -> int:
         return 0
 
-    op = Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=7.0)
+    op = Op.set_count(genotypes="WT|WT", ages=0, sex="male", value=7.0, event="first")
 
     pop = _build_discrete(
         "s4_idem",
         hook_calls=[
             ((cb,), {}),
             ((cb,), {}),  # deduped
-            ((op,), {"event": "first"}),
-            ((op,), {"event": "first"}),  # deduped
+            ((op,), {}),
+            ((op,), {}),  # deduped
         ],
     )
 

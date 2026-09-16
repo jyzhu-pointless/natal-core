@@ -22,6 +22,27 @@ pop = (nt.DiscreteGenerationPopulation.setup(species, name="TestPop")
 
 ## 内置预设
 
+### CytoplasmicPreset 与 Wolbachia：母系标签遗传
+
+`CytoplasmicPreset` 的配子标记和合子标签遗传都使用转换规则。仅限关键字的参数
+`default_glab` 和 `default_slab` 显式指定允许转换的来源配子标签和体细胞标签，
+两者默认都为名字 `default`。编译遗传规则时，这些名字必须存在于物种对应的标签列表中。
+
+对于带有映射中体细胞标签的雌性，只有仍带默认配子标签的配子会获得对应的母系标记。
+受精时，该标记将仍带默认体细胞标签的后代转到映射中的标签，保持基因型不变。
+已有的其他标签不会被覆盖。
+
+这些规则接着处理前面 modifier 留下的分布。因此，前面 modifier 对基因型的修改会保留，
+已经获得非默认体细胞标签的后代不会再被重新标记；modifier 的执行顺序会影响结果。
+`Wolbachia` 使用这一机制实现感染状态的遗传。它的 `default_glab` 指定来源配子标签
+（默认 `default`），已有的 `normal_slab` 也用于指定来源体细胞标签（默认 `normal`）。
+使用自定义名字时需显式传入；例如，物种的未感染体细胞标签叫 `default` 时，
+需传入 `normal_slab="default"`。
+
+这些 preset 参数不会重排标签，也不会改变物种基础遗传表仍向各列表第一项分配概率的行为。
+如果指定的来源标签不是第一项，规则只处理已经带有该标签的分支，例如前面的 modifier
+已经将它们标记为该标签的情况。
+
 ### HomingDrive - 同源重组基因驱动
 
 `HomingDrive` 实现 CRISPR/Cas9 类型的同源重组基因驱动：
@@ -46,14 +67,26 @@ population.apply_preset(drive)
 #### 高级配置
 
 ```python
+import natal as nt
+from natal.frontend.presets import HomingDrive
+
+species = nt.Species.from_dict(
+    name="DepositionExample",
+    structure={"chr1": {"drive": ["WT", "Drive", "Resistance", "FunctionalResistance"]}},
+    gamete_labels=["default", "Cas9_deposited"],
+)
+
 # 性别特异性参数
 drive = HomingDrive(
     name="SexSpecificDrive",
     drive_allele="Drive",
     target_allele="WT",
+    resistance_allele="Resistance",
+    functional_resistance_allele="FunctionalResistance",
     drive_conversion_rate={"female": 0.98, "male": 0.92},  # 性别差异
     late_germline_resistance_formation_rate=(0.02, 0.04),  # 元组形式 (female, male)
     embryo_resistance_formation_rate=0.01,
+    cas9_deposition_glab="Cas9_deposited",
     functional_resistance_ratio=0.2,  # 20%的抗性等位基因是功能性的
 
     # 适应度成本
@@ -61,7 +94,25 @@ drive = HomingDrive(
     fecundity_scaling=0.95,     # 5%繁殖力成本
     sexual_selection_scaling=0.85  # 15%性选择劣势
 )
+population = (
+    nt.DiscreteGenerationPopulation.setup(species, stochastic=False)
+    .initial_state({"female": {"WT|Drive": 100}, "male": {"WT|WT": 100}})
+    .presets(drive)
+    .build()
+)
+population.run(1)
 ```
+
+胚胎抗性仅由亲本 Cas9 沉积触发。必须在物种的 `gamete_labels` 中注册
+`cas9_deposition_glab` 指定的标签；未配置标签时，即使胚胎继承了 drive 或 Cas9，
+也不发生胚胎编辑。携带者母本会给所有输出配子加标签，因此未继承 drive 的胚胎
+也可以被编辑。对于 split drive，发生沉积的亲本必须同时携带 drive 和 Cas9。
+
+胚胎抗性率的 `female` 和 `male` 分别表示母源和父源，不表示子代性别。
+标量会同时设置两个率，但父源仅在 `use_paternal_deposition=True` 时启用。
+因此，上例仅由母源沉积对每个剩余目标拷贝施加 1% 的编辑率。
+两个已启用来源同时存在时，按顺序作用于剩余目标拷贝，总转换概率为
+`1 - (1 - e_m) * (1 - e_p)`。
 
 ### ToxinAntidoteDrive - 毒素-解毒剂驱动（TARE/TADE）
 
@@ -143,7 +194,7 @@ population.apply_preset(mutation)
 3. `rate_mode`：`"strict"`（默认）把速率当作概率，和超过 1 时报错；`"proportional"` 把速率当作比例并缩放到和为 1，因此 `[2, 3, 5]` 与 `[0.2, 0.3, 0.5]` 是同一个模型
 4. `viability_scaling` / `fecundity_scaling` / `sexual_selection_scaling` / `zygote_viability_scaling`（以及对应的 `*_mode`）：作用于整个目标等位基因组的适应度效应，默认中性
 
-突变只发生在生殖系（减数分裂产生配子时，受精之前）；预设不注册任何合子期修饰器。胚胎期通道已刻意暂缓（TODO.md #14），因此 `zygote_modifier()` 始终返回 `None`。
+在目前实现中，突变只发生在生殖系（减数分裂产生配子时，受精之前）；预设不注册任何合子期修饰器。
 
 同一个 ruleset 内的转换规则按级联执行：每条规则只能看到前一条规则剩下的源等位基因份额。若直接透传用户速率，`[0.3, 0.5, 0.1]` 中第二个目标的有效份额会变成 `0.5 × 0.7 = 0.35`。`PointMutation` 内部按 `r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)` 做补偿，因此 `A|A` 亲本的配子分布恰好是：
 
@@ -155,6 +206,8 @@ population.apply_preset(mutation)
 | A（未突变） | — | — | 0.1 |
 
 这种"同时竞争"语义正是单个多目标 `PointMutation` 与叠加多个单目标预设的区别：后者的规则按注册顺序级联（先声明先得）。补偿按性别分别计算，因此按性别的速率在各自性别内独立竞争。
+
+因此叠加多个单目标预设得到的是**顺序**模型，而不是同时模型。先声明 `W -> D`（速率 `mu`）、再声明 `D -> W`（速率 `nu`）时，级联给出 `q' = (1 - nu) (q + mu (1 - q))`，平衡 `mu (1 - nu) / (nu + mu (1 - nu))`；教科书"每条配子最多突变一次"的模型是 `q' = q (1 - nu) + mu (1 - q)`，平衡 `mu / (mu + nu)`。两者相差双突变项 `mu nu (1 - q)`：同一减数分裂内被转到 `D` 又转回 `W` 的配子，在级联里仍是 `W`，在同时模型里则算作 `D`（`mu = 0.02`、`nu = 0.06` 时为 0.2386 对 0.25）。要精确还原教科书模型，把**先声明**那条规则的速率放大：先声明 `mu / (1 - nu)`、再声明 `nu`（反向先声明则为 `nu / (1 - mu)` 加 `mu`），这样递推的斜率与截距同时配平。预设内部的 `r'ₖ = rₖ / (1 - Σᵢ₌₁ᵏ⁻¹ rᵢ)` 补偿不是跨预设配方——它只配平斜率，结果（0.2347）比不校正还远离教科书平衡点。速率在 `1e-3` 及以下时未校正偏差约 `1e-4`，可以忽略。
 
 ## 实用示例
 

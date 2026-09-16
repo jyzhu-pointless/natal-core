@@ -1302,7 +1302,11 @@ def _sessionless_age_container(name: str) -> SpatialPopulation:
                 male_age_based_mating_rate=[0.0, 0.0],
                 eggs_per_female=0.0,
             )
-            .competition(carrying_capacity=100000.0, low_density_growth_rate=0.0)
+            # This fixture tests cached reads; r is unused without competition.
+            .competition(
+                carrying_capacity=100000.0, low_density_growth_rate=0.0,
+                juvenile_growth_mode="no_competition",
+            )
             .build()
         )
         for i in range(2)
@@ -1345,12 +1349,12 @@ def test_derived_column_read_raises_keyerror_when_no_contract_is_available(
         _ = pop.params.survival_rates
 
 
-def test_deme_state_reader_reuses_fresh_cache_and_degrades_inside_run() -> None:
+def test_deme_state_reader_reuses_fresh_cache_and_rejects_callback_reads() -> None:
     """The per-deme state projection is lazy in both directions.
 
     A second read while the cache is fresh must not re-query the session;
     a read inside a container run (cache stale from the previous run)
-    must degrade to the last-published cache instead of borrowing the
+    must raise a descriptive error instead of borrowing the
     session; after the run the same read is fresh again.
     """
     observed: list[int] = []
@@ -1358,7 +1362,9 @@ def test_deme_state_reader_reuses_fresh_cache_and_degrades_inside_run() -> None:
 
     @nt.hook(event="first", priority=0, deme=0)
     def read_sibling(pop: object) -> int:
-        observed.append(int(holder["state_window"].deme(1).state.n_tick))
+        with pytest.raises(RuntimeError, match="ctx.state or ctx.metrics"):
+            _ = holder["state_window"].deme(1).state
+        observed.append(1)
         return 0
 
     pop = _build_two_allele_discrete("state_window", hook_calls=[((read_sibling,), {})])
@@ -1370,13 +1376,12 @@ def test_deme_state_reader_reuses_fresh_cache_and_degrades_inside_run() -> None:
     assert second.n_tick == first.n_tick
     assert not np.shares_memory(first.individual_count, second.individual_count)
     pop.run(1, record_every=0)  # invalidates; the hook fires with a stale cache
-    # First firing (tick 0): build-fresh cache; second (tick 1): the cache
-    # was just refreshed, so both degrade via the fresh-cache early return.
-    assert observed == [0, 1]
+    # Both initially fresh and explicitly refreshed caches must be rejected.
+    assert observed == [1, 1]
     # Third run without an intermediate read: the cache is stale from run 2's
     # invalidation, so the in-run refresh must stop at the run-window guard.
     pop.run(1, record_every=0)
-    assert observed == [0, 1, 1]
+    assert observed == [1, 1, 1]
     assert pop.deme(1).state.n_tick == 3  # fresh again after the run
 
 

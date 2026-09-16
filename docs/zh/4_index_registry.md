@@ -50,7 +50,7 @@ GType = (HaploidGenotype, glab_label)
 - 如果未指定，会自动创建一个单一的 `"default"` 标签。
 - 引擎会将每个基因型/单倍型与每个标签做叉积，生成完整的 ZType/GType 空间。
 
-Slab 被具体的 Preset 使用，例如 **Wolbachia**（默认使用 `infected` / `normal` slab 建模细胞质不兼容性，并要求 gamete label `wolbachia`）和 **TransgenicBackground**（按个体追踪标记表达）。如果没有这些 Preset，大多数模拟只有一个 `"default"` slab，slab 系统对用户不可见。
+Slab 被具体的 Preset 使用，例如 **Wolbachia**（母系细胞质标记：`wolbachia` 配子标签把感染母本的全部子代转到 `infected` slab，另有可选的按 slab 的 `viability_scaling` / `fecundity_scaling`）和 **TransgenicBackground**（按个体追踪标记表达）。该 preset 只建模母系遗传与标记适合度，不实现细胞质不兼容；这一交叉效应需用 zygote modifier 搭建（见[Modifier 机制](3_modifiers.md) 5.2 节）。如果没有这些 Preset，大多数模拟只有一个 `"default"` slab，slab 系统对用户不可见。
 
 ### 索引注册表结构
 
@@ -147,10 +147,10 @@ registry.register_gamete_label("cas9_deposited")           # 返回 glab 索引
 
 ```python
 # 典型用法——无 slab，仅基因型
-Op.add(genotypes="Drive|WT", delta=500)
+Op.add(genotypes="Drive|WT", delta=500, event="early", priority=0)
 
 # 进阶用法——slab 约束
-Op.add(genotypes="Drive|WT@infected", delta=500)
+Op.add(genotypes="Drive|WT@infected", delta=500, event="early", priority=0)
 ```
 
 ### `@` 缺失的行为：两种不同的规则

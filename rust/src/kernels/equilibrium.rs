@@ -21,7 +21,10 @@ use crate::model::ecology::EcologyParams;
 /// a user-declared equilibrium distribution (non-empty
 /// ``EcologyParams::equilibrium_distribution``) is used as-is, otherwise the
 /// distribution is derived from the carrying capacity (age 1 total = K,
-/// females split by the sex ratio, later ages decayed by survival).
+/// females split by the *surviving* sex ratio — the offspring sex ratio
+/// filtered by each sex's own age-0 survival, which reduces to the offspring
+/// sex ratio when both sexes survive equally — and later ages decayed by
+/// survival).
 /// ``external_expected_eggs`` overrides the egg production used for the
 /// survival rate only, never for the competition strength.  A negative
 /// ``external_expected_eggs`` means "unused" (the materialization
@@ -149,10 +152,30 @@ pub fn equilibrium_metrics_core(
         // 2. Derive the equilibrium distribution with age-1 total = K.
         total_age_1 = carrying_capacity;
         let mut dist = vec![0.0_f64; 2 * n_ages];
-        // Age 1 baseline allocation: females by sex ratio, males by the rest.
-        // Python: dist[0, 1] = K * sex_ratio; dist[1, 1] = K * (1 - sex_ratio).
-        dist[1] = total_age_1 * sex_ratio;
-        dist[n_ages + 1] = total_age_1 * (1.0 - sex_ratio);
+        // Age 1 baseline allocation.  The reference composition has to be the
+        // one the model actually reaches: offspring are produced at
+        // `sex_ratio` and each sex then survives its own age-0 rate, so the
+        // age-1 female share is
+        //     sex_ratio * s_f0 / (sex_ratio * s_f0 + (1 - sex_ratio) * s_m0).
+        // Splitting by the raw sex ratio instead misstated the reference
+        // female count whenever the sexes survive differently, which moved the
+        // calibrated equilibrium off K by up to tens of percent (the survival
+        // rate the calibration solves for follows the same reference).
+        // Equal age-0 survival keeps the historical expression bit-for-bit, so
+        // no model that survives equally moves.
+        let female_mass = sex_ratio * survival_rates[0];
+        let male_mass = (1.0 - sex_ratio) * survival_rates[n_ages];
+        if survival_rates[0] == survival_rates[n_ages] || female_mass + male_mass <= 0.0 {
+            // Historical split; also the degenerate case where no juvenile
+            // survives at all, which has no composition to derive (the
+            // survival-rate guard below already collapses the calibration).
+            dist[1] = total_age_1 * sex_ratio;
+            dist[n_ages + 1] = total_age_1 * (1.0 - sex_ratio);
+        } else {
+            let surviving = female_mass + male_mass;
+            dist[1] = total_age_1 * (female_mass / surviving);
+            dist[n_ages + 1] = total_age_1 * (male_mass / surviving);
+        }
         // Later ages decay by the previous age's survival rate.
         for age in 2..n_ages {
             dist[age] = dist[age - 1] * survival_rates[age - 1];

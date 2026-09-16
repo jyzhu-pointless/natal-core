@@ -1066,7 +1066,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             return self._live_state().individual_count.sum(axis=(0, 2))
 
     def get_genotype_count(self, genotype: Genotype) -> Tuple[float, float]:
-        """Return total counts for a genotype as (female_count, male_count).
+        """Return counts for a genotype in the first slab as (female, male).
 
         .. deprecated::
             Use ``self.registry.ztype_index()`` + manual array sum instead.
@@ -1078,12 +1078,12 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             DeprecationWarning,
             stacklevel=2,
         )
-        genotype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
+        ztype_idx = self.registry.ztype_index(genotype, self.registry.slab_labels[0])
         female_count = (
-            self._live_state().individual_count[Sex.FEMALE.value, :, genotype_idx].sum()
+            self._live_state().individual_count[Sex.FEMALE.value, :, ztype_idx].sum()
         )
         male_count = (
-            self._live_state().individual_count[Sex.MALE.value, :, genotype_idx].sum()
+            self._live_state().individual_count[Sex.MALE.value, :, ztype_idx].sum()
         )
         return (female_count, male_count)
 

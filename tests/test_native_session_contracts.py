@@ -57,7 +57,7 @@ def test_explicit_native_event_records_parameter_provenance(model: Model, event:
     pop = _population(
         f"NativeEventLog_{model}_{event}",
         model,
-        hook_calls=[(([Op.set_param("carrying_capacity", 321.0)],), {"event": event})],
+        hook_calls=[(([Op.set_param("carrying_capacity", 321.0, event=event)],), {})],
     )
     before = pop.export_state().copy()
     assert pop.trigger_event(event) == 0

@@ -228,7 +228,7 @@ pop = (nt.AgeStructuredPopulation
 
 ## 4️⃣ Step 4: Define Simulation Logic -- Hooks
 
-The **Hook system** allows you to inject custom intervention or monitoring logic at key points in the simulation loop (e.g., at the start of each step, after survival screening). Using the declarative `Op` syntax is the most efficient and intuitive approach — `Op` objects go straight into `.hooks()` on the build chain:
+The **Hook system** allows you to inject custom intervention or monitoring logic at key points in the simulation loop (e.g., at the start of each step, after survival screening). Using the declarative `Op` syntax is the most efficient and intuitive approach — put each Op's event and priority on the Op itself, then pass it to `.hooks()`:
 
 ```python
 from natal.frontend.hooks import Op
@@ -242,9 +242,9 @@ pop = (nt.AgeStructuredPopulation
             ages=2,                  # Adult age (only effective for age-structured models)
             sex='male',              # Release only males
             delta=500,               # Add 500 individuals
-            when='tick == 10'        # Condition
+            when='tick == 10',       # Condition
+            event='first', priority=0,
         ),
-        event='first',               # Firing event
     )
     .build()
 )
@@ -379,8 +379,7 @@ pop = (nt.DiscreteGenerationPopulation
                  juvenile_growth_mode="beverton_holt")   # Density dependence keeps the population bounded
     .presets(drive)
     .hooks(                              # Register Hook
-        Op.add(genotypes='Drive|WT', delta=50, when='tick == 10'),
-        event='first',
+        Op.add(genotypes='Drive|WT', delta=50, when='tick == 10', event='first', priority=0),
     )
     .build()
 )
@@ -431,8 +430,7 @@ pop = (nt.AgeStructuredPopulation
     .fitness(viability={"Drive|Drive": {"female": 0.0}})
     .presets(drive)
     .hooks(
-        Op.add(genotypes='Drive|WT', ages=[2,3,4,5,6,7], delta=100, when='tick == 10'),
-        event='first',
+        Op.add(genotypes='Drive|WT', ages=[2,3,4,5,6,7], delta=100, when='tick == 10', event='first', priority=0),
     )
     .build()
 )

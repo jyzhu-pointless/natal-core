@@ -329,9 +329,10 @@ class TestNSlabsFullRepair:
             somatic_labels=["normal", "exposed"],
         )
 
-        @nt.hook(event="first", priority=0)
-        def inject_exposed():
-            return [nt.Op.add(genotypes="A|A@exposed", ages=1, sex="female", delta=50)]
+        inject_exposed = nt.Op.add(
+            genotypes="A|A@exposed", ages=1, sex="female", delta=50,
+            event="first", priority=0,
+        )
 
         pop = (
             nt.DiscreteGenerationPopulation.setup(species=sp, stochastic=False)

@@ -180,8 +180,8 @@ Rust 原生引擎是唯一的执行后端。声明式 Op 编译为 CSR 计划，
 from natal.frontend.hooks import hook, Op
 
 
-# 声明式 Hook：定期释放个体（priority 由调用赋给这个 Op）
-release_op = Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 10 == 0")
+# 声明式 Hook：定期释放个体（元数据写在 Op 上）
+release_op = Op.add(genotypes="Var|WT", ages=[2, 3, 4], delta=100, when="tick % 10 == 0", event="first", priority=10)
 
 
 # Selector-based Hook：基于选择器的操作
@@ -203,8 +203,7 @@ def custom_process_hook(pop):
 
 pop = (
     nt.AgeStructuredPopulation.setup(species=sp)
-    .hooks(release_op, check_drive_threshold, custom_process_hook,
-           event="first", priority=10)
+    .hooks(release_op, check_drive_threshold, custom_process_hook)
     .build()
 )
 ```

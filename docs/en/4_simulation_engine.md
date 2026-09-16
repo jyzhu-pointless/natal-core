@@ -119,6 +119,19 @@ Additionally, the reproduction stage is affected by `fixed_egg_count`:
 - `True`: Eggs are produced at a fixed expected count.
 - `False`: Eggs are produced via a Poisson mechanism (resulting in random egg counts in stochastic mode).
 
+In both model families' staged reproduction, fixed egg counts disable only
+clutch Poisson noise. Mating, reproductive participation, inheritance, and
+survival remain stochastic when enabled. Integer sampling rounds the expected
+clutch after reproductive participation; continuous sampling retains its
+fractional value. WF modes instead sample the final generation according to
+`extreme_speed_mode`; this flag does not disable that sampling.
+
+For `linear`/`logistic`, `beverton_holt`, and `ricker`,
+`low_density_growth_rate` must be finite and at least 1. This preserves the
+non-increasing density response and avoids undefined Beverton–Holt denominators.
+`no_competition` and `fixed` do not use this rate and retain its ordinary parameter
+bounds. The same constraint applies to configuration updates and mode switches.
+
 ## 4. Engine Implementation Layout
 
 The native Rust extension `natal._engine_rs` is the only execution

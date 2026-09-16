@@ -116,11 +116,11 @@ def hook(
 
     Examples:
 
-        Declarative hook (returns ops):
+        Declarative Op (recommended; metadata is local to the Op):
 
-            @hook(event="early", priority=0)
-            def cull_juveniles():
-                return [Op.scale(ages=[0, 1], factor=0.9)]
+            cull_juveniles = Op.scale(
+                ages=[0, 1], factor=0.9, event="early", priority=0
+            )
 
         Callback hook (single parameter):
 

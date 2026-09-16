@@ -926,7 +926,7 @@ class SpatialPopulationBuilder:
         # Shared params (accept BatchSetting for per-deme variation)
         eggs_per_female: Union[float, BatchSetting[Any]] = 50.0,
         sex_ratio: Union[float, BatchSetting[Any]] = 0.5,
-        fixed_egg_count: bool = False,
+        fixed_egg_count: bool | None = None,
         # Age-structured params
         female_age_based_mating_rate: Optional[Any] = None,
         male_age_based_mating_rate: Optional[Any] = None,
@@ -942,7 +942,8 @@ class SpatialPopulationBuilder:
         Args:
             eggs_per_female: Expected offspring per adult female. Accepts ``BatchSetting``.
             sex_ratio: Proportion of female offspring.
-            fixed_egg_count: If True, egg count is deterministic.
+            fixed_egg_count: If True, egg count is deterministic. If omitted,
+                preserve the setup value (False by default).
             female_age_based_mating_rate: Female mating rates (age-structured).
             male_age_based_mating_rate: Male mating rates (age-structured).
             age_based_reproduction_rate: Reproduction participation rates.
@@ -973,6 +974,7 @@ class SpatialPopulationBuilder:
                 "reproduction",
                 {
                     "eggs_per_female": eggs_per_female,
+                    "fixed_egg_count": fixed_egg_count,
                     "sex_ratio": sex_ratio,
                     "female_adult_mating_rate": female_adult_mating_rate,
                     "male_adult_mating_rate": male_adult_mating_rate,

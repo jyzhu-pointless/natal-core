@@ -27,6 +27,7 @@ import numpy as np
 if TYPE_CHECKING:
     from natal.frontend.genetics import Species
     from natal.frontend.model import ModelDraft
+    from natal.frontend.patterns import IndividualSelector
     from natal.frontend.registry.index import IndexRegistry
 
 
@@ -78,6 +79,7 @@ class OpType(IntEnum):
     STOP_IF_EXTINCTION = 9
     SET_PARAM = 10
     CONVERT = 11
+    CLEAR_SPERM_STORAGE = 12
 
 
 # Canonical id table for ``Op.set_param`` targets and RPN operands.  The
@@ -116,8 +118,9 @@ class HookOp:
     The compiler resolves all symbolic fields into concrete integer arrays.
 
     An ``HookOp`` can be registered directly as a declarative hook via
-    ``.hooks(op, ...)``. *event* rides on the op or comes from the
-    registration call (op-level wins when both are given); *priority*
+    ``.hooks(op, ...)``. Recommended declarations put *event* and
+    *priority* on the Op itself. *event* rides on the op or comes from
+    the registration call (op-level wins when both are given); *priority*
     is op-level data — a call-level ``priority`` assigns one shared
     value to the ops of that item (packing ops into one list is
     declaring them with one priority).
@@ -141,6 +144,9 @@ class HookOp:
     # ``Op.convert`` payload: target zygote-type pattern (the source lives
     # in ``genotypes``); ``param`` carries the conversion probability.
     target_z: Optional[str] = None
+    source_selector: Optional[IndividualSelector] = None
+    target_selector: Optional[IndividualSelector] = None
+    clear_selector: Optional[IndividualSelector] = None
 
 
 DemeSelector = Union[int, List[int], Tuple[int, ...], range, Literal["*"]]
@@ -224,6 +230,13 @@ class CompiledHookPlan:
     # -- OP_CONVERT data area (per-op ztype ids; -1 = not a convert op) --
     convert_source_z: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
     convert_target_z: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    # Coordinate mappings for selector-based conversions.  Each row is
+    # ``(sex, age, ztype)``; offsets are per operation.
+    convert_offsets: np.ndarray = field(default_factory=lambda: np.array([0], dtype=np.int32))
+    convert_source_coords: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.int32))
+    convert_target_coords: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.int32))
+    clear_offsets: np.ndarray = field(default_factory=lambda: np.array([0], dtype=np.int32))
+    clear_coords: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.int32))
 
     def to_tuple(self) -> Tuple[object, ...]:
         """Convert this plan to a flat tuple for HDF5 / array storage.
@@ -252,6 +265,11 @@ class CompiledHookPlan:
             self.sp_literals,
             self.convert_source_z,
             self.convert_target_z,
+            self.convert_offsets,
+            self.convert_source_coords,
+            self.convert_target_coords,
+            self.clear_offsets,
+            self.clear_coords,
         )
 
 
@@ -323,6 +341,11 @@ class HookProgram(NamedTuple):
     sp_literals: np.ndarray = np.array([], dtype=np.float64)
     convert_source_z: np.ndarray = np.array([], dtype=np.int32)
     convert_target_z: np.ndarray = np.array([], dtype=np.int32)
+    convert_offsets: np.ndarray = np.array([0], dtype=np.int32)
+    convert_source_coords: np.ndarray = np.array([], dtype=np.int32)
+    convert_target_coords: np.ndarray = np.array([], dtype=np.int32)
+    clear_offsets: np.ndarray = np.array([0], dtype=np.int32)
+    clear_coords: np.ndarray = np.array([], dtype=np.int32)
     # True when any op is OP_SET_PARAM: populations carrying such ops route
     # to the Python lifecycle orchestration so writes reach the route
     # table / dirty bridge / params snapshot log (single write channel).
@@ -377,6 +400,11 @@ def empty_hook_program(n_events: int = NUM_EVENTS) -> HookProgram:
         sp_literals=np.array([], dtype=np.float64),
         convert_source_z=np.array([], dtype=np.int32),
         convert_target_z=np.array([], dtype=np.int32),
+        convert_offsets=np.array([0], dtype=np.int32),
+        convert_source_coords=np.array([], dtype=np.int32),
+        convert_target_coords=np.array([], dtype=np.int32),
+        clear_offsets=np.array([0], dtype=np.int32),
+        clear_coords=np.array([], dtype=np.int32),
         has_set_param=False,
         python_callback_slots=np.array([], dtype=np.int32),
     )

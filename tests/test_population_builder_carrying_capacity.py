@@ -46,6 +46,25 @@ class TestCarryingCapacityResolution:
         )
         assert result == 1000.0
 
+    def test_carrying_capacity_aliases_follow_documented_priority(self) -> None:
+        """Test the two legacy aliases resolve from highest to lowest priority."""
+        assert resolve_carrying_capacity(300.0, 200.0) == 300.0
+        assert resolve_carrying_capacity(None, 200.0) == 200.0
+
+    def test_initial_state_fallback_accepts_exact_half_individual(self) -> None:
+        """Test the documented 0.5 threshold and one-age fallback boundary."""
+        age_one = np.array([[[0.0], [0.25]], [[0.0], [0.25]]])
+        assert resolve_carrying_capacity(None, None, age_one) == 0.5
+
+        one_age = np.array([[[0.25]], [[0.25]]])
+        assert resolve_carrying_capacity(None, None, one_age) == 0.5
+
+    def test_initial_state_fallback_rejects_counts_below_half(self) -> None:
+        """Test that no initial-state fallback is accepted below 0.5 total."""
+        initial = np.array([[[0.24]], [[0.25]]])
+        with pytest.raises(ValueError, match="No valid carrying capacity source"):
+            resolve_carrying_capacity(None, None, initial)
+
     def test_initial_state_fallback(self) -> None:
         """Test fallback to initial_individual_count when no explicit capacity given."""
         init = np.array([[[100.0]], [[100.0]]])  # shape (2, 1, 1)
@@ -83,6 +102,50 @@ class TestCarryingCapacityResolution:
         # Age-0 should remain 0 (not part of forward propagation)
         assert dist[0, 0] == 0.0
         assert dist[1, 0] == 0.0
+
+    def test_build_equilibrium_distribution_uses_the_surviving_sex_ratio(self) -> None:
+        """Age-1 follows each sex's own age-0 survival, matching the engine rule.
+
+        survival row 0 (female) age 0 = 0.9 and row 1 (male) age 0 = 0.8, so
+        with sex_ratio 0.5 the masses are 0.5 * 0.9 = 0.45 and 0.5 * 0.8 = 0.4
+        over 0.85 surviving.  Age 1 is therefore 529.4117647058823 females and
+        470.5882352941176 males (sum = K); the raw offspring split would give
+        500 / 500 and misstate the female count the calibration uses.
+        """
+        n_ages = 4
+        survival = np.array([
+            [0.9, 0.9, 0.8, 0.7],
+            [0.8, 0.8, 0.7, 0.6],
+        ], dtype=np.float64)
+        dist = build_equilibrium_distribution(
+            K=1000.0, sex_ratio=0.5, age_based_survival_rates=survival, n_ages=n_ages,
+        )
+        assert dist[0, 1] == 529.4117647058823
+        assert dist[1, 1] == 470.5882352941176
+        assert dist[0, 1] + dist[1, 1] == 1000.0
+        assert dist[0, 1] / (dist[0, 1] + dist[1, 1]) == pytest.approx(0.9 / 1.7)
+        # Older ages keep the per-sex forward propagation.
+        assert dist[0, 2] == pytest.approx(dist[0, 1] * 0.9)
+        assert dist[1, 2] == pytest.approx(dist[1, 1] * 0.8)
+
+    def test_build_equilibrium_distribution_keeps_the_historical_split(self) -> None:
+        """Equal age-0 survival, and the empty surviving mass, keep the old split."""
+        equal = build_equilibrium_distribution(
+            K=1000.0,
+            sex_ratio=0.4,
+            age_based_survival_rates=np.array([[0.3, 0.3], [0.3, 0.3]]),
+            n_ages=2,
+        )
+        assert equal[0, 1] == 400.0
+        assert equal[1, 1] == 600.0
+        empty_mass = build_equilibrium_distribution(
+            K=1000.0,
+            sex_ratio=0.0,
+            age_based_survival_rates=np.array([[0.9, 0.9], [0.0, 0.0]]),
+            n_ages=2,
+        )
+        assert empty_mass[0, 1] == 0.0
+        assert empty_mass[1, 1] == 1000.0
 
     def test_compute_expected_eggs_from_females(self) -> None:
         """Test expected egg computation from adult female count."""
@@ -190,6 +253,53 @@ class TestCarryingCapacityResolution:
 
         cfg = pop.export_config()
         assert cfg.carrying_capacity == 5000.0
+
+    def test_builder_primary_k_wins_over_both_aliases(self) -> None:
+        """Test build resolves carrying_capacity before either legacy alias."""
+        sp = _make_species("TestPrimaryK")
+
+        pop = (
+            nt.AgeStructuredPopulation
+            .setup(species=sp, name="PrimaryKTest", stochastic=False)
+            .age_structure(n_ages=3, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 40.0, 0.0]},
+                    "male": {"WT|WT": [0.0, 30.0, 0.0]},
+                }
+            )
+            .competition(
+                carrying_capacity=300.0,
+                age_1_carrying_capacity=200.0,
+                old_juvenile_carrying_capacity=100.0,
+            )
+            .build()
+        )
+
+        assert pop.export_config().carrying_capacity == 300.0
+
+    def test_builder_age_one_alias_wins_when_primary_k_is_omitted(self) -> None:
+        """Test age_1_carrying_capacity wins over the older alias at build time."""
+        sp = _make_species("TestAgeOneAlias")
+
+        pop = (
+            nt.AgeStructuredPopulation
+            .setup(species=sp, name="AgeOneAliasTest", stochastic=False)
+            .age_structure(n_ages=3, new_adult_age=1)
+            .initial_state(
+                individual_count={
+                    "female": {"WT|WT": [0.0, 40.0, 0.0]},
+                    "male": {"WT|WT": [0.0, 30.0, 0.0]},
+                }
+            )
+            .competition(
+                age_1_carrying_capacity=200.0,
+                old_juvenile_carrying_capacity=100.0,
+            )
+            .build()
+        )
+
+        assert pop.export_config().carrying_capacity == 200.0
 
     def test_equilibrium_distribution_consistency(self) -> None:
         """Test equilibrium distribution + external eggs produce self-consistent metrics."""

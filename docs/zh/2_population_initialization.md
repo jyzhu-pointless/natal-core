@@ -9,7 +9,7 @@
 ```python
 import natal as nt
 
-sp = nt.Species.from_dict(...)
+sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT", "Var"]}})
 
 # 年龄结构化种群
 pop = (
@@ -22,7 +22,6 @@ pop = (
     .survival(female_age_based_survival=0.85)
     .reproduction(eggs_per_female=50.0)
     .competition(age_1_carrying_capacity=1000)
-    .hooks(my_hook)
     .build()
 )
 ```
@@ -76,6 +75,8 @@ NATAL Core 提供两种主要的种群类型：
 ### `age_structure(...)` – 年龄结构
 
 配置种群的年龄结构，包括年龄阶段总数和幼年/成年的划分等。
+
+builder 必须关联 `Species`，因为调整年龄也会重建遗传维度和性别约束。仅包装 draft、没有 Species 的 builder 会在修改前拒绝此操作。
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
@@ -175,8 +176,10 @@ NATAL Core 提供两种主要的种群类型：
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `competition_strength` | `float` | 第二个幼体龄（age=1）的竞争权重。 | `1.0` | 幼体密度调节 | age=0 固定为 `1.0`；不设置时 age=1 与 age=0 同权重。仅当 `new_adult_age >= 2` 时有效；模型只有 age 0 这个幼体龄时，显式传入会报错而不是被忽略。 |
+| `competition_strength` | `float` | 第二个幼体龄（age=1）的竞争权重。 | `1.0` | 幼体密度调节 | age=0 默认为 `1.0`，此标量参数不修改它；不设置时 age=1 与 age=0 同权重。仅当 `new_adult_age >= 2` 时有效；模型只有 age 0 这个幼体龄时，显式传入会报错而不是被忽略。 |
 | `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"beverton_holt"` | 幼体密度调节 | 支持 `"no_competition"`、`"fixed"`、`"logistic"`（别名 `"linear"`）、`"beverton_holt"`（默认）、`"ricker"`。 |
+
+`competition_strength` 标量只设置第二个幼体龄的竞争权重。整向量入口 `pop.params.tensor_write("competition_weights", ...)` 也允许修改 age-0 权重；这会改变均衡竞争参考量，并可能改变种群轨迹。该入口没有将默认值 `1.0` 强制为不变量。
 
 **密度调节曲线**（`x` = 实际竞争强度 / 期望竞争强度；`s` = 平衡存活率；`r` = 低密度增长率）：
 
@@ -221,7 +224,7 @@ NATAL Core 提供两种主要的种群类型：
    - 若缺少 $K$：使用初始状态的年龄-1 个体总数
    - 若缺少期望产卵量：从初始状态的雌性分布计算期望产卵量
 
-无论走哪种途径，系统都会真正构建出平衡分布，然后从平衡分布计算出所有竞争相关指标。这确保了 $K$、期望产卵量和平衡存活率三者之间的一致性。
+无论走哪种途径，系统都会真正构建出平衡分布，然后从平衡分布计算出所有竞争相关指标。这确保了 $K$、期望产卵量和平衡存活率三者之间的一致性。自动构建的分布按**存活后的性比**拆分 age-1 总数——即出生性比经两性各自 age-0 存活率筛选后的比例——因此两性存活率不同时，标定出的平衡点仍精确落在 $K$；两性 age-0 存活率相等时它就退化为出生性比本身。
 
 **期望产卵量的计算公式**：
 
@@ -357,15 +360,14 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `*hook_items` | `HookOp` / `Op` 列表 / `Callable` | 声明式 Op（或其列表）、`@hook` 装饰的函数或单参数回调。 | 空 | 事件点（first / early / late / finish 等） | 声明式 Op 直接传入；事件由 `.hooks(..., event=...)` 或 Op 自带字段决定。 |
+| `*hook_items` | `HookOp` / `Op` 列表 / `Callable` | 声明式 Op（或其列表）、`@hook` 装饰的函数或单参数回调。 | 空 | 事件点（first / early / late / finish 等） | 推荐把 `event` 和 `priority` 写在每个声明式 Op 上；调用级元数据仍可作为兼容默认值或覆盖值。 |
 
 **示例**：
 
 ```python
 # ...
 .hooks(
-    nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
-    event="first",
+    nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10", event="first", priority=0),
 )
 ```
 

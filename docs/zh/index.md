@@ -16,6 +16,10 @@
 
 NATAL Core 是 NATAL 项目的一部分。完整项目还包括 **NATAL Inferencer**，这是一个基于 NATAL Core 的群体遗传学模型参数推断工具包。
 
+## 选择阅读路线
+
+学习建模与运行，请从[快速开始](1_quickstart.md)进入用户指南；理解架构、数据流和算法实现，请阅读独立的[开发者指南](developer/index.md)；查找对象签名和参数，请使用 [API 参考](api/index.md)。
+
 ## 主要特性
 
 - 🪲 支持前向时间模拟，可灵活配置种群的生命周期（年龄结构化种群与离散世代种群）
@@ -121,8 +125,7 @@ pop = (nt.DiscreteGenerationPopulation
     )
     .presets(drive)
     .hooks(
-        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10"),
-        event="first",
+        nt.Op.add(genotypes="WT|Dr", ages=1, sex="male", delta=500, when="tick == 10", event="first", priority=0),
     )
     .build())
 

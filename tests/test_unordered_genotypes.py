@@ -502,7 +502,7 @@ class TestUnorderedWithDrive:
             gamete_labels=["default", "wolbachia"],
             somatic_labels=["default", "infected"],
         )
-        wMel = nt.Wolbachia(name="wMel", infected_slab="infected", viability_scaling=0.9)
+        wMel = nt.Wolbachia(name="wMel", infected_slab="infected", normal_slab="default", viability_scaling=0.9)
         pop = nt.DiscreteGenerationPopulation.setup(
             species=sp, stochastic=False,
         ).initial_state(

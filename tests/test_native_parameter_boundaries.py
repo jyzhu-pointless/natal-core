@@ -77,9 +77,7 @@ def test_spatial_explicit_event_logs_before_first_run() -> None:
     import natal as nt
 
     species = nt.Species.from_dict(name="NativeExplicitSpatialLog", structure={"chr": {"loc": ["WT", "Dr"]}})
-    @nt.hook(event="early")
-    def set_capacity() -> list[object]:
-        return [nt.Op.set_param("carrying_capacity", 123)]
+    set_capacity = nt.Op.set_param("carrying_capacity", 123, event="early")
 
     spatial = (nt.SpatialPopulation.builder(species, n_demes=2, pop_type="discrete_generation")
                .competition(carrying_capacity=800)

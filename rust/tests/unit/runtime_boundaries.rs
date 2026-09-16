@@ -177,3 +177,37 @@ fn spatial_kernels_reject_inconsistent_deme_metadata_before_mutation() {
     assert!(journal.is_empty());
     assert_eq!(rngs[0].state_words(), words);
 }
+
+/// Scratch suffixes are outside the ecology schema and must never be committed.
+#[test]
+fn ecology_commit_ignores_extra_scratch_and_preserves_omitted_rate() {
+    use crate::hooks::interpreter::N_ECO_PARAMS;
+    use crate::kernels::age_structured::EcoCtx;
+
+    let (bp, mut params, genetics) = fixture();
+    let mut values: Vec<f64> = (0..N_ECO_PARAMS)
+        .map(|id| params.eco_value(id, 0))
+        .collect();
+    values[0] = 200.0;
+    // A trailing NaN must not be interpreted as another ecology parameter.
+    values.push(f64::NAN);
+    let mut context = EcoCtx {
+        bp: &bp,
+        params: &mut params,
+        genetics: &genetics,
+        updated_genetics: None,
+        phase: 0,
+        deme: 0,
+        tick: 0,
+        journal: Vec::new(),
+    };
+    context.commit(&values).unwrap();
+    assert_eq!(context.params.carrying_capacity[0], 200.0);
+    assert_eq!(context.params.low_density_growth_rate[0], 2.0);
+    assert_eq!(context.journal.len(), 1);
+    // A shorter scratch updates its prefix while retaining and validating r.
+    context.commit(&[300.0]).unwrap();
+    assert_eq!(context.params.carrying_capacity[0], 300.0);
+    assert_eq!(context.params.low_density_growth_rate[0], 2.0);
+    assert_eq!(context.journal.len(), 2);
+}

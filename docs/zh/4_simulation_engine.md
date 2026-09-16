@@ -119,6 +119,16 @@ pop.run_tick()
 - `True`：按固定期望卵数产卵。
 - `False`：按 Poisson 机制产卵（在随机模式下体现为随机卵数）。
 
+两类模型的分阶段繁殖中，固定产卵数仅禁用卵数的 Poisson 噪声；启用随机模式时，
+交配、繁殖参与、遗传分配和存活仍会抽样。整数抽样在繁殖参与之后对期望卵数取整，
+连续抽样保留小数值。WF 模式按 `extreme_speed_mode` 对最终下一代抽样，
+该开关不会关闭这种抽样。
+
+`linear`/`logistic`、`beverton_holt` 和 `ricker` 要求
+`low_density_growth_rate` 为有限值且至少为 1，以保持随密度增加而不增的响应，
+并避免 Beverton–Holt 分母无定义。`no_competition` 和 `fixed` 不使用此参数，
+保留其通常的参数范围。运行时更新和切换曲线时也执行同样的约束。
+
 ## 4. 引擎实现布局
 
 Rust 原生扩展 `natal._engine_rs` 是唯一的执行引擎。它在引擎会话内拥有

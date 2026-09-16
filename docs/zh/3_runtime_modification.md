@@ -1,6 +1,7 @@
 # 运行时参数修改
 
-种群构建完成后，所有参数都可以在模拟运行时动态修改——无需重建。覆盖三种场景：
+种群构建完成后，受支持的运行时参数可以动态修改，无需重建。
+构建期设置、类型和年龄维度仍受构建约束；派生均衡指标只读。覆盖三种场景：
 
 - **between-tick**：Python 侧通过 `pop.update()` 或 `pop.params.<name> = v` 修改
 - **hook 内**：通过回调 Hook 的 `pop.params`（`TickContext`）写入，或 `Op.set_param` 声明式调度
@@ -47,6 +48,8 @@ pop.update().custom(temperature=35.0)
 同时到达 draft、Rust 会话与参数快照日志。读取返回当前值：
 
 ```python
+import numpy as np
+
 pop.params.carrying_capacity = 5000.0
 print(pop.params.carrying_capacity)  # 当前值
 # 向量/张量参数走专用通道
@@ -162,12 +165,29 @@ print(pop.config.custom["temperature"])  # 35.0
 
 ### 6.1 `pop.params`（between-tick 批量写入推荐）
 
+空间容器的参数视图不支持属性赋值：`pop.params.carrying_capacity = 5` 会抛出
+`AttributeError`。请使用下面的 `tensor_write`，或已有的单 deme 写入接口。
+
+空间 Python hook 内，容器及 deme 的状态、计数和聚合查询会抛出 `RuntimeError`，
+不再返回上次发布的旧缓存；显式 `trigger_event` 触发的回调也遵循此规则。
+读取或修改当前 deme 请使用 `ctx.state`，统计请使用 `ctx.metrics`。
+跨 deme 查询应放在 `run()` 调用之间；这次修复没有增加跨 deme 实时读取能力。
+
 `pop.params` 按需派生 `(n_demes, ...)` 生态列并返回写保护视图（有会话时源自
 会话列，无会话时源自 deme draft）；`tensor_write` 校验形状后通过共享写入通道
 按 deme 路由（写入会话权威列与 deme draft 声明，读取随读随派生）：
 
 ```python
-from natal.frontend.spatial import batch_setting
+from natal import SpatialPopulation, SquareGrid
+
+pop = (
+    SpatialPopulation.builder(sp, n_demes=4, topology=SquareGrid(2, 2),
+                              pop_type="discrete_generation")
+    .setup(stochastic=False)
+    .initial_state({"female": {"WT|WT": 100}, "male": {"WT|WT": 100}})
+    .competition(carrying_capacity=1000)
+    .build()
+)
 
 # 全部 deme 同值：per-deme 形状广播
 pop.params.tensor_write("survival_rates", np.ones((2, 2)))
@@ -205,12 +225,12 @@ pop.deme(3).write_ecology("carrying_capacity", 8000.0)
 pop.deme(3).write_genetics("viability_fitness", new_table)
 ```
 
-### 6.3 batch_setting 单一入口
+### 6.3 batch_setting：按 deme 声明
 
-构建时 `batch_setting([...])` 是 per-deme 异构参数的**唯一**声明入口：kind 由值的
-种类推断（`"scalar"` / `"array"` / lambda 的 `"spatial"`），同构路径与异构路径在
-`build()` 时自动分叉。fitness/presets 不支持 `batch_setting`（它们修改 config 内部
-ndarray，不适合标量表达）；`spatial` kind 的 lambda 需要 builder 传入 topology。
+构建时 `batch_setting([...])` 声明各 deme 的值，也支持 fitness 映射和 preset 对象。
+builder 展开这些声明，并将相同配置分组。`(row, col)` 函数需要 topology，
+`(flat_idx)` 函数不需要。迁移率还接受显式的 per-deme 数组；形状与示例见
+[Spatial 模拟指南](3_spatial_simulation.md)。
 
 ---
 

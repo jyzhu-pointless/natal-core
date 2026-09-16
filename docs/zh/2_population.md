@@ -265,6 +265,8 @@ if pop.is_failed:
 
 离散世代引擎内置 Wright-Fisher 极速模式：用单次多项分布抽样替代逐步的 mate→fertilize→survive 管线，面向有效种群大小建模。
 
+融合模式是独立模型，不是分阶段管线的优化实现，两者不共享抽样方差。分阶段随机 tick 先抽子代基因型，再由密度阶段按"重采样 age-0 队列"的方式施加缩放，因此每代等位频率方差约为经典单次抽样的两倍（`2 * 2N p (1 - p)` 而非 `2N p (1 - p)`）：漂移标准差大 `√2` 倍，等普查规模下分阶段路径的等效种群大小只有融合模式的一半。`fixed_egg_count=True` 只关掉窝卵噪声，关不掉这次重采样；`no_competition` 也不会跳过它。要和教科书 Wright-Fisher 期望对照请用 `extreme_speed_mode=1`，对比分阶段结果时则要计入这次额外抽样。
+
 ### 三种采样模式
 
 | 模式 | 说明 |
@@ -287,9 +289,9 @@ pop = (
 
 ### 竞争与 Hook 支持
 
-极速模式支持三种密度调节模式（FIXED/LOGISTIC/BEVERTON_HOLT），与标准路径共用同一套 scaling 函数。仅支持 FIRST hooks（在 WF tick 之前触发），EARLY/LATE 在融合的 WF tick 中无自然插入点。
+极速模式支持所有内置密度调节模式（FIXED、LOGISTIC/LINEAR、BEVERTON_HOLT 和 RICKER），与标准路径共用同一套 scaling 函数。仅支持 FIRST hooks（在 WF tick 之前触发），EARLY/LATE 在融合的 WF tick 中无自然插入点。
 
-确定性 WF 模式与标准确定性路径 tick-by-tick 结果完全一致（NO_COMPETITION 模式下已验证）。
+确定性 WF 模式与标准确定性路径逐 tick 一致。合子期活力先作用，再计算幼体竞争量；普通存活和基因型活力在密度调节之后作用。WF 随机模式仍在最后统一抽样下一代，因此其方差不必与分阶段随机生命周期一致。
 
 ## 索引压缩
 

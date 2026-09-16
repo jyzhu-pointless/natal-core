@@ -166,10 +166,12 @@ print(dis_pop.config.n_ages, dis_pop.config.new_adult_age)  # 2, 1
 
 示例：
 
+当前 readable 翻译函数使用不含体细胞标签的基因型目录。以下示例适用于只有一个体细胞标签的种群；存在多个体细胞标签时，状态的 ZType 列数可能大于该目录长度，导致翻译抛出 `ValueError`。这类种群请使用 `pop.observe()` 和类型化的 `pop.history`。
+
 ```python
 import natal as nt
 
-# 假设 pop 是任意已构建 population（年龄结构或离散世代）
+# 假设 pop 已构建、只有一个体细胞标签，且已记录历史
 readable = nt.population_to_readable_dict(pop)
 print(readable["state_type"], readable["tick"])
 

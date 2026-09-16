@@ -30,8 +30,7 @@ def test_base_population_non_wildcard_deme_selector_warns_and_is_ignored() -> No
             .reproduction(eggs_per_female=0.0)
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
             .hooks(
-                Op.add(genotypes="WT|WT", ages=1, sex="male", delta=1.0),
-                event="first",
+                Op.add(genotypes="WT|WT", ages=1, sex="male", delta=1.0, event="first"),
                 deme=1,
             )
             .build()

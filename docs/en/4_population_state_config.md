@@ -164,12 +164,17 @@ Where:
 - `PopulationState` translation results include `individual_count` and `sperm_storage`
 - `DiscretePopulationState` translation results include `individual_count` (no `sperm_storage`)
 
+The readable translators currently use a genotype-only catalog. Use the following
+example with a single somatic label. With multiple somatic labels, the state can
+have more ZType columns than this catalog, causing translation to raise `ValueError`. Use
+`pop.observe()` and typed `pop.history` for those populations.
+
 Example:
 
 ```python
 import natal as nt
 
-# Assume pop is any constructed population (age-structured or discrete-generation)
+# Assume pop is a constructed, single-somatic-label population with recorded history
 readable = nt.population_to_readable_dict(pop)
 print(readable["state_type"], readable["tick"])
 

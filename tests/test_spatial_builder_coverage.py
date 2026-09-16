@@ -13,6 +13,8 @@ Covers:
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -1602,3 +1604,85 @@ class TestHeterogeneousAgeStructuredState:
         assert spatial.tick == 2
         assert spatial.get_total_count() > 0
         assert np.isfinite(spatial.get_total_count())
+
+
+class TestMigrationWithoutInterDemeEdges:
+    """A non-zero rate that cannot move anybody has to say so.
+
+    Both silent routes reach the same place: a missing topology / kernel /
+    adjacency resolves to the identity adjacency, and a kernel whose only
+    non-zero weight is the excluded center folds to nothing.  Migration then
+    re-samples each deme's outbound share back into the same deme, so nothing
+    mixes while the stochastic path still consumes RNG draws.
+    """
+
+    def _builder(self, name: str, **migration):
+        species = _simple_species(f"MigWarn{name}")
+        return (
+            nt.SpatialPopulation.builder(
+                species, n_demes=3, pop_type="discrete_generation"
+            )
+            .setup(name=f"mig_warn_{name}", stochastic=False)
+            .initial_state(
+                individual_count={"female": {"WT|WT": 60}, "male": {"WT|WT": 60}}
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(eggs_per_female=1.0, sex_ratio=0.5)
+            .competition(juvenile_growth_mode="no_competition")
+            .migration(**migration)
+        )
+
+    def test_missing_topology_warns(self) -> None:
+        with pytest.warns(UserWarning, match="no individual can move"):
+            self._builder("no_topo", migration_rate=0.3).build()
+
+    def test_self_only_kernel_warns(self) -> None:
+        with pytest.warns(UserWarning, match="no individual can move"):
+            self._builder(
+                "self_only_kernel",
+                kernel=np.array([[1.0]]),
+                migration_rate=0.3,
+                kernel_include_center=False,
+            ).build()
+
+    def test_single_deme_layout_stays_silent(self) -> None:
+        """One deme has no inter-deme edge by construction: nothing to warn about."""
+        species = _simple_species("MigWarnSingle")
+        builder = (
+            nt.SpatialPopulation.builder(
+                species, n_demes=1, pop_type="discrete_generation"
+            )
+            .setup(name="mig_warn_single", stochastic=False)
+            .initial_state(
+                individual_count={"female": {"WT|WT": 60}, "male": {"WT|WT": 60}}
+            )
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .reproduction(eggs_per_female=1.0, sex_ratio=0.5)
+            .competition(juvenile_growth_mode="no_competition")
+            .migration(migration_rate=0.3)
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            builder.build()
+
+    def test_zero_rate_stays_silent(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._builder("zero_rate", migration_rate=0.0).build()
+
+    def test_connected_adjacency_stays_silent(self) -> None:
+        adjacency = np.array([[0.0, 1.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 0.0]])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._builder("connected", adjacency=adjacency, migration_rate=0.3).build()
+
+    def test_deliberately_isolated_deme_stays_silent(self) -> None:
+        """Deme 2 is isolated on purpose while 0 and 1 exchange migrants.
+
+        The documented rule is that one connected pair silences the warning,
+        so a deliberately isolated deme is not misreported.
+        """
+        adjacency = np.array([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._builder("isolated_deme", adjacency=adjacency, migration_rate=0.3).build()

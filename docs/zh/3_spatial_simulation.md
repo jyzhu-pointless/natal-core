@@ -23,7 +23,7 @@ spatial = (
 ### 推荐：SpatialPopulationBuilder（链式 API）
 
 ```python
-from natal import Species, HexGrid, SpatialPopulation
+from natal import Species, HexGrid, SquareGrid, SpatialPopulation
 from natal.frontend.spatial import batch_setting
 
 species = Species.from_dict(name="demo", structure={"chr1": {"loc": ["A", "B"]}})
@@ -80,7 +80,7 @@ spatial = SpatialPopulation(
 - `migration_kernel`：迁移核，走 kernel 路径时使用。
 - `kernel_bank`：可选的 kernel 集合，用于不同 source deme 使用不同 kernel。
 - `deme_kernel_ids`：可选的 per-deme kernel id，索引到 `kernel_bank`。
-- `migration_rate`：每个 deme 每步参与迁移的比例。标量仅应用于成年年龄（>= `new_adult_age`），幼年迁移率为 0；`(n_ages,)` 数组按年龄精确配置；`(n_sexes, n_ages)` 表或按性别映射按性别配置；`(n_demes, n_sexes, n_ages)` 列（或 `(n_demes, n_ages)`，随后按性别广播）直接为每个 deme 指定；`batch_setting` 则为每个 deme 给出各自的比例声明。
+- `migration_rate`：每个 deme 每步参与迁移的比例。标量仅应用于成年年龄（>= `new_adult_age`），幼年迁移率为 0；`(n_ages,)` 数组按年龄精确配置；`(n_sexes, n_ages)` 表或按性别映射按性别配置；`(n_demes, n_sexes, n_ages)` 列（或 `(n_demes, n_ages)`，随后按性别广播）直接为每个 deme 指定；`batch_setting` 则为每个 deme 给出各自的比例声明。迁移还需要迁出目标：没有 `topology`、`kernel` 或 `adjacency` 时解析出的邻接是单位矩阵，此时非零速率不迁移任何人。只有多 deme 布局中**完全没有**跨 deme 边时构建期才给出警告；只要有任一 deme 能到达另一个就保持静默，因此故意孤立的单个 deme 不会被误报。单 deme 种群按定义没有跨 deme 边，不会触发警告。
 - `migration_strategy`：`auto`、`adjacency`、`kernel`、`hybrid`，默认 `auto`。
 - `kernel_include_center`：kernel 路径下是否把中心格也算进迁移目标。
 - `adjust_migration_on_edge`：历史位级兼容开关，默认 `False`。它不改变目的地方向分布（仅差 ~1 ulp 的浮点舍入）：迁出行无论取何值都会被归一化为相对权重，它选择的分母随之被约掉（见「migration_rate 与边界效应」一节）。
@@ -125,6 +125,9 @@ pop = (
 ```
 
 各方法的详细参数说明见 [种群初始化](2_population_initialization.md)（setup、initial_state、survival、reproduction、competition）、[Hook 系统](2_hooks.md)、[基因驱动预设](2_genetic_presets.md)。
+
+两种空间引擎的 `.reproduction(fixed_egg_count=True/False)` 都会应用显式设置；
+省略该参数或传入 `None` 时保留 `.setup()` 的值（初始默认为 `False`）。
 
 ### 空间特有：`.migration()`
 
@@ -215,7 +218,17 @@ pop = (
 为每个 deme 指定不同的初始基因型分布，常用于空间驱动释放场景：
 
 ```python
+import numpy as np
+from natal import Species, HexGrid, SpatialPopulation, HomingDrive
 from natal.frontend.spatial import batch_setting
+
+drive_species = Species.from_dict(
+    name="spatial_drive_release",
+    structure={"chr1": {"drive": ["WT", "Dr", "R1", "R2"]}},
+)
+drive_kernel = np.array([[0.0, 1.0, 0.0],
+                         [1.0, 0.0, 1.0],
+                         [0.0, 1.0, 0.0]])
 
 # 默认所有 deme 只有 WT
 n_demes = 100
@@ -229,7 +242,7 @@ states = [default_state] * n_demes
 states[n_demes // 2] = release_state
 
 pop = (
-    SpatialPopulation.builder(species, n_demes=n_demes, topology=HexGrid(10, 10))
+    SpatialPopulation.builder(drive_species, n_demes=n_demes, topology=HexGrid(10, 10))
     .setup(name="drive_release", stochastic=True, continuous_sampling=True)
     .initial_state(individual_count=batch_setting(states))
     .reproduction(eggs_per_female=50)
@@ -239,7 +252,7 @@ pop = (
                          resistance_allele="R2", functional_resistance_allele="R1",
                          drive_conversion_rate=0.95))
     .fitness(fecundity={"R2::!Dr": 1.0, "R2|R2": {"female": 0.0}})
-    .migration(kernel=kernel, migration_rate=0.2)
+    .migration(kernel=drive_kernel, migration_rate=0.2)
     .build()
 )
 ```
@@ -526,6 +539,9 @@ print(observed_history.values.shape)
 
 形状优先级：恰好为 `(n_sexes, n_ages)` 的二维输入按"所有 deme 共享的按性别表"解释；只有其他二维形状才表示 per-deme 的年龄向量。当 `n_demes == n_sexes` 时这两种形状无法区分，若要 per-deme 速率请显式传三维列。
 
+下面前两个示例假设 `demes` 中的年龄结构化种群共享同一个 Species，
+均有四个年龄且 `new_adult_age=2`。
+
 ```python
 # 标量 — age < new_adult_age 迁出 0%，成年迁出 10%（默认 new_adult_age=2）
 spatial = SpatialPopulation(demes, migration_rate=0.1)
@@ -535,15 +551,15 @@ spatial = SpatialPopulation(demes, migration_rate=[0.0, 0.0, 0.3, 0.1])
 
 # per-deme — 三 deme 链中中间 deme 的迁出量是两侧的四倍
 spatial = (
-    SpatialPopulation.builder(species, n_demes=3, topology=topo)
+    SpatialPopulation.builder(species, n_demes=3, topology=SquareGrid(1, 3))
+    .age_structure(n_ages=4, new_adult_age=2)
     .migration(migration_rate=batch_setting([0.1, 0.4, 0.1]))
-    # ... 其余链式调用 ...
     .build()
 )
 
 # 运行时修改
-spatial.migration_rate = 0.2                 # 仅成年年龄生效
-spatial.migration_rate = [0.0, 0.0, 0.3, 0.1]  # 按年龄精确设置
+spatial.params.tensor_write("migration_rate", 0.2)  # 仅成年年龄
+spatial.params.tensor_write("migration_rate", [0.0, 0.0, 0.3, 0.1])  # 四个年龄
 ```
 
 - `0.0`：不迁移（所有年龄）。

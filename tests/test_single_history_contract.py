@@ -39,14 +39,7 @@ def _noop_history_hook() -> list[Op]:
     return []
 
 
-@hook(event="first")
-def _stop_on_initial_population() -> list[Op]:
-    """Stop before lifecycle mutation whenever the initial population is nonzero.
-
-    Returns:
-        Single stop operation with a zero threshold.
-    """
-    return [Op.stop_if_above(threshold=0.0)]
+_stop_on_initial_population = Op.stop_if_above(threshold=0.0, event="first")
 
 
 def _species(name: str) -> nt.Species:
@@ -674,7 +667,7 @@ def test_compiled_stop_at_tick_zero_keeps_only_initial_boundary(
         model,
         "raw",
         f"compiled_stop_{model}",
-        hook_calls=[((_stop_on_initial_population(),), {"event": "first"})],
+        hook_calls=[((_stop_on_initial_population,), {})],
     )
     initial_count = population.state.individual_count.copy()
     initial_sperm = population.state.sperm_storage.copy() if model == "age" else None

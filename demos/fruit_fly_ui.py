@@ -68,8 +68,10 @@ population = (
     )
     .presets(drive)
     .hooks(
-        nt.Op.add(genotypes="WT|Dr", ages=2, sex="male", delta=500, when="tick == 10"),
-        event="first",
+        nt.Op.add(
+            genotypes="WT|Dr", ages=2, sex="male", delta=500,
+            when="tick == 10", event="first",
+        ),
     )
     .with_observation(
         groups={

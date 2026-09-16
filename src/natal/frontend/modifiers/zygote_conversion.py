@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union, 
 if TYPE_CHECKING:
     from natal.frontend.genetics.compile import RecipeHost
     from natal.frontend.genetics.entities.haplotype import HaploidGenome
+    from natal.frontend.patterns.parser import ConversionTarget
 
 import numpy as np
 from numpy.typing import NDArray
@@ -85,7 +86,13 @@ class ZygoteConversionRuleSet:
             from_allele="WT", to_allele="Dr", rate=0.4,
             filters={"maternal": "*@Cas9_deposited"},
         )
-        builder.modifiers(zygote_modifiers=[rs.to_zygote_modifier])
+        pop = builder.build()
+        pop.add_zygote_modifier(rs.to_zygote_modifier(pop))
+
+    The rule set is compiled against a population (the recipe host), so the
+    mount happens after ``build()``; a preset that owns the rule set can
+    instead hand out ``to_zygote_modifier(host)`` itself, which is what the
+    ``presets(...)`` path expects.
     """
 
     def __init__(self, name: Optional[str] = None) -> None:
@@ -236,6 +243,10 @@ class ZygoteConversionRuleSet:
             ValueError: When a declaration cannot be resolved.
         """
         from natal.frontend.patterns import ZygoteTypePattern
+        from natal.frontend.patterns.elements.diploid import GenotypePattern
+        from natal.frontend.patterns.parser import GenotypePatternParser
+
+        parser = GenotypePatternParser(species)
 
         compiled: List[_CompiledZygoteRule] = []
 
@@ -270,26 +281,35 @@ class ZygoteConversionRuleSet:
                     )
 
             if isinstance(rule, ZygoteZtypeConversionRule):
-                genotype_part, label_part = rule.target_parts
-                # `*` keeps the branch's own part, so "*@*" is the identity and
-                # "*@tag" only relabels without touching the genotype.
-                target_gt: Optional[Genotype] = None
-                if genotype_part != "*":
+                # Parse the target through the shared pattern grammar.  The
+                # declaration stores target_parts for compatibility, while
+                # this compile-time parse also validates ``@`` and wildcard
+                # syntax consistently with current filters.
+                try:
+                    target_spec = parser.compile_conversion_target(
+                        rule.to, stage="zygote conversion", require_label=True
+                    )
+                except Exception as exc:
+                    raise ValueError(
+                        f"{self.name}: invalid conversion target {rule.to!r}"
+                    ) from exc
+                for label in registry.slab_labels:
+                    if target_spec.label.lab == label:
+                        break
+                else:
+                    if not target_spec.label.is_wildcard():
+                        raise ValueError(f"{self.name}: rule {rule!r} target label is not registered")
+                target_pattern = cast(GenotypePattern, target_spec.genotype)
+                if "*" not in target_spec.genotype_text and all(
+                    part is not None for part in target_pattern.chromosome_patterns
+                ):
                     try:
-                        target_gt = species.get_genotype_from_str(genotype_part)
+                        species.get_genotype_from_str(target_spec.genotype_text)
                     except Exception as exc:
                         raise ValueError(
                             f"{self.name}: rule {rule!r} target genotype "
-                            f"{genotype_part!r} is not a valid diploid genotype"
+                            f"{target_spec.genotype_text!r} is not a valid diploid genotype"
                         ) from exc
-                target_slab: Optional[str] = None
-                if label_part != "*":
-                    if label_part not in registry.slab_labels:
-                        raise ValueError(
-                            f"{self.name}: rule {rule!r} target label "
-                            f"{label_part!r} is not a registered somatic label"
-                        )
-                    target_slab = label_part
 
                 def matches(
                     c1: int,
@@ -316,13 +336,11 @@ class ZygoteConversionRuleSet:
                 def convert_branches(
                     zidx: int,
                     prob: float,
-                    _tgt_gt: Optional[Genotype] = target_gt,
-                    _tgt_slab: Optional[str] = target_slab,
+                    _target: ConversionTarget = target_spec,
                     _rate: float = _rule_z.rate,
                 ) -> Dict[int, float]:
                     gt, slab = registry.index_to_ztype[zidx]
-                    new_gt = _tgt_gt if _tgt_gt is not None else gt
-                    new_slab = _tgt_slab if _tgt_slab is not None else slab
+                    new_gt, new_slab = _target.apply_zygote(gt, slab, species)
                     try:
                         target = registry.ztype_index(new_gt, new_slab)
                     except KeyError as exc:

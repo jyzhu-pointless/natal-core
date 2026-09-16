@@ -7,6 +7,7 @@ session; ``DemeSlice`` exposes the aligned population surface per deme.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import (
@@ -327,6 +328,10 @@ class DemeSlice:
         mutate the real run state.  State modifications belong to
         initial-state declarations or a callback's ``TickContext.state``
         transaction.
+
+        Raises:
+            RuntimeError: Inside any spatial callback; use ``ctx.state``
+                for the callback's current deme instead.
         """
         self._pop._refresh_deme_state(self._index)  # pyright: ignore[reportPrivateUsage]  # session-side per-deme refresh
         return self._deme().state
@@ -515,7 +520,11 @@ class SpatialParamsView:
     go through :meth:`SpatialParamsView.tensor_write`, which validates the
     shape and then routes the per-deme values through the deme write
     channel (draft declaration plus, when enabled, the session column).
+    Attribute assignment is unsupported and raises ``AttributeError``;
+    use ``tensor_write`` or the per-deme parameter writers instead.
     """
+
+    __slots__ = ("_pop",)
 
     def __init__(self, pop: SpatialPopulation) -> None:
         """Bind the view to its spatial population.
@@ -894,6 +903,7 @@ class SpatialPopulation:
         # Session structure staleness flag: set by execution-flag changes
         # and consumed by the next rust run boundary.
         self._rust_needs_rebuild = False
+        self._callback_active: bool = False
 
         migration_mode = resolve_migration_mode(
             strategy=migration_strategy,
@@ -955,6 +965,40 @@ class SpatialPopulation:
             adjust_on_edge=bool(adjust_migration_on_edge),
             mode=migration_mode,
         )
+        # A non-zero migration rate with no inter-deme edge sends every deme's
+        # outbound share back to itself: nothing mixes, and the stochastic path
+        # still consumes its outbound sampling draws.  Both silent routes land
+        # here — a defaulted identity adjacency (no topology / kernel /
+        # adjacency) and a kernel whose only non-zero weight is the excluded
+        # center — so name the remedy once.  The check stays silent whenever any
+        # deme does connect (deliberately isolated demes are not flagged) and
+        # for single-deme layouts, which have no inter-deme edge by construction.
+
+        # Warning placement: the constructor is reached through
+        # ``SpatialPopulationBuilder.build()``, so ``stacklevel=2`` reports the
+        # builder's build path (deeper levels land on other internal frames
+        # too).  The message names the remedy itself, so the reported line is
+        # not the user's only clue.
+        if n_demes > 1 and float(np.max(rate3d)) > 0.0:
+            indptr = np.asarray(migration_csr.indptr)
+            dest = np.asarray(migration_csr.dest_idx)
+            if dest.size:
+                sources = np.repeat(np.arange(n_demes), np.diff(indptr))
+                inter_deme = bool(np.any(dest != sources))
+            else:
+                inter_deme = False
+            if not inter_deme:
+                warnings.warn(
+                    "migration_rate is non-zero but no individual can move "
+                    "between demes: every resolved outbound edge stays inside "
+                    "its own deme. A missing topology / kernel / adjacency "
+                    "resolves to the identity adjacency, and a kernel whose "
+                    "only non-zero weight is the excluded center behaves the "
+                    "same way. Pass topology=, kernel= or adjacency= to "
+                    ".migration(...) to migrate between demes.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         self._migration_csr = migration_csr
         # Freeze the contract pair: the Blueprint carries the CSR the Rust
         # session consumes at handoff, the Params carry the rate column.
@@ -1948,6 +1992,15 @@ class SpatialPopulation:
             return self._demes[deme_id].trigger_event(event_name, deme_id)
         return 0  # RESULT_CONTINUE
 
+    def _require_state_query_boundary(self) -> None:
+        """Reject cached or borrowed-session state reads inside spatial callbacks."""
+        if getattr(self, "_callback_active", False):
+            raise RuntimeError(
+                "Spatial state queries are unavailable inside callbacks; "
+                "use ctx.state or ctx.metrics for the current deme, or query "
+                "the spatial population between runs."
+            )
+
     def _native_deme_counts(self, deme_index: int) -> tuple[float, float, float] | None:
         """Return one deme's native ``(total, female, male)`` sums, or ``None``.
 
@@ -1955,11 +2008,12 @@ class SpatialPopulation:
         state — no state array is exported.  ``None`` means the query
         must fall back to the deme slot's own (cache-based) reads: no
         session exists, or a container run currently holds the session
-        borrow (managed demes degrade to last-published values).
+        borrow outside a callback. Callback queries raise ``RuntimeError``.
 
         Args:
             deme_index: Zero-based deme index.
         """
+        self._require_state_query_boundary()
         if getattr(self, "_running", False):
             return None
         backend = self._rust_spatial_session()
@@ -2002,6 +2056,10 @@ class SpatialPopulation:
         Summed natively per deme over the session state when available;
         the evaluation order (per-deme sums, then a Python sum across
         demes) matches the historical cache-based query bitwise.
+
+        Raises:
+            RuntimeError: Inside a spatial callback; only the current
+                deme's ``ctx.metrics`` is available there.
         """
         # Native per-deme sums are the session authority; the Python sum over
         # the rows (not over one big array) preserves the historical order.
@@ -2194,10 +2252,10 @@ class SpatialPopulation:
         the build-time authority until the session handoff).
 
         Note:
-            During a container run the session borrow is held, so this
-            reader is not consulted on that path (callers fall back to
-            the last-published caches).
+            Callback queries raise ``RuntimeError``; callbacks must use
+            their current deme's ``ctx.state`` or ``ctx.metrics``.
         """
+        self._require_state_query_boundary()
         if getattr(self, "_running", False):
             return None
         backend = self._rust_spatial_session()
@@ -2536,9 +2594,9 @@ class SpatialPopulation:
         The returned reader refreshes the deme's Python state cache from
         the deme's own native plane when (and only when) the cache is
         stale — never the whole stacked state, and never the other demes'
-        planes.  During a container run (or without a session) it is a
-        no-op, so reads degrade to the last-published cache values
-        instead of touching the borrowed session.
+        planes. Callback reads raise ``RuntimeError`` rather than returning
+        a last-published cache or touching the borrowed session. Other
+        internal reads during a run (or without a session) are a no-op.
 
         Args:
             deme_index: Zero-based deme index the reader serves.
@@ -2547,6 +2605,7 @@ class SpatialPopulation:
             A zero-argument reader suitable for ``_runtime_state_reader``.
         """
         def refresh() -> None:
+            self._require_state_query_boundary()
             deme = self._demes[deme_index]
             if not getattr(deme, "_state_cache_stale", False):
                 return
@@ -2649,7 +2708,12 @@ class SpatialPopulation:
                     index = mapping[int(deme_id)]
                     if index is None:
                         return 0
-                    return int(adapters[int(deme_id)][index](ind, sperm, tick, deme_id, transaction))
+                    previous_active = getattr(self, "_callback_active", False)
+                    self._callback_active = True
+                    try:
+                        return int(adapters[int(deme_id)][index](ind, sperm, tick, deme_id, transaction))
+                    finally:
+                        self._callback_active = previous_active
 
                 bridge.__natal_transaction__ = True  # pyright: ignore[reportFunctionMemberAccess]  # native event transaction ABI
                 event_bridges.append(bridge)
@@ -2698,9 +2762,9 @@ class SpatialPopulation:
         """Run multiple spatial ticks through the Rust backend with recording.
 
         The run window is published on every managed deme
-        (``_rust_run_active``): lifecycle/config/state reads that arrive
-        from inside a callback degrade to last-published values instead
-        of touching the session borrow.
+        (``_rust_run_active``): lifecycle/config reads avoid the session
+        borrow. State queries inside callbacks are rejected; the callback's
+        ``TickContext`` supplies its current deme's state and metrics.
         """
         if clear_history_on_start:
             self.clear_history()

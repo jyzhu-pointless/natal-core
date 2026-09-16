@@ -1099,10 +1099,10 @@ def test_compact_plan_csr_then_callback_ordering() -> None:
         pop.state.individual_count[0, 1, 0] += 1.0  # type: ignore[attr-defined]  # duck-typed double: intentionally violates the typed surface
         return 0
 
-    @nt.hook(event="early", priority=1)
-    def mul2_csr() -> list[object]:
-        """Scale age-1 females by two."""
-        return [Op.scale(genotypes="WT|WT", ages=1, sex="female", factor=2.0)]
+    mul2_csr = Op.scale(
+        genotypes="WT|WT", ages=1, sex="female", factor=2.0,
+        event="early", priority=1,
+    )
 
     sp = _build_quiescent_age_pop(
         species,
@@ -1407,16 +1407,15 @@ def test_spatial_builder_custom_slots_reach_all_demes() -> None:
 
 
 # -----------------------------------------------------------------------
-# Container run window: cross-deme reads degrade to last-published values
+# Container run window: cross-deme state reads fail explicitly
 # -----------------------------------------------------------------------
-def test_cross_deme_reads_inside_a_run_window_degrade_safely() -> None:
+def test_cross_deme_reads_inside_a_run_window_reject_stale_state() -> None:
     """A hook in deme 0 reading deme 1 never touches the borrowed session.
 
     During a container run the native session is mutably borrowed; the
     run window is published on every managed deme, so cross-deme
-    lifecycle/state/count reads resolve to the last-published values
-    (pre-run: the build state) instead of raising ``Already mutably
-    borrowed``.  After the run ends, the same reads are fresh.
+    state/count reads raise a descriptive error. Lifecycle metadata
+    remains available. After the run ends, state reads are fresh.
     """
     species = _make_species("run_window_reads")
     holder: dict[str, SpatialPopulation] = {}
@@ -1426,10 +1425,12 @@ def test_cross_deme_reads_inside_a_run_window_degrade_safely() -> None:
     def cross_deme_reader(pop: object) -> int:
         """Read sibling-deme values through the container inside the window."""
         container = holder["run_window_reads"]
+        with pytest.raises(RuntimeError, match="ctx.state or ctx.metrics"):
+            container.deme(1).get_total_count()
+        with pytest.raises(RuntimeError, match="ctx.state or ctx.metrics"):
+            _ = container.deme(1).state
         observed.append(
             {
-                "total": container.deme(1).get_total_count(),
-                "state_tick": container.deme(1).state.n_tick,
                 "slot_tick": container._deme_object(1).tick,  # pyright: ignore[reportPrivateUsage]  # lifecycle projection lives on the slot
                 "slot_finished": container._deme_object(1).is_finished,  # pyright: ignore[reportPrivateUsage]
             }
@@ -1445,12 +1446,9 @@ def test_cross_deme_reads_inside_a_run_window_degrade_safely() -> None:
     assert initial_total == 200.0
     pop.run(2, record_every=0)
 
-    # Two firings (two ticks x one deme-0 slot): every in-window read saw
-    # the last-published boundary, and no native borrow error surfaced.
+    # Each firing rejects stale state; lifecycle projections remain available.
     assert len(observed) == 2
     for snapshot in observed:
-        assert snapshot["total"] == 200.0
-        assert snapshot["state_tick"] == 0
         assert snapshot["slot_tick"] == 0
         assert snapshot["slot_finished"] is False
     # After the run the same reads are fresh and match the session state.

@@ -111,9 +111,8 @@ def _build_finishing_population(name: str) -> DiscreteGenerationPopulation:
         .reproduction(eggs_per_female=2)
         .competition(carrying_capacity=10_000)
         .hooks(
-            nt.Op.add(genotypes="WT|WT", ages=1, sex="both", delta=-10_000),
-            nt.Op.stop_if_extinction(),
-            event="first",
+            nt.Op.add(genotypes="WT|WT", ages=1, sex="both", delta=-10_000, event="first"),
+            nt.Op.stop_if_extinction( event="first"),
         )
         .build()
     )
@@ -454,14 +453,13 @@ def test_hooks_payload_covers_declarative_and_callback() -> None:
     pop = (
         _population_builder("hooks_payload")
         .hooks(
-            nt.Op.add(genotypes="WT|WT", ages=1, sex="male", delta=10.0),
-            event="first",
+            nt.Op.add(genotypes="WT|WT", ages=1, sex="male", delta=10.0, event="first"),
         )
         .hooks(
             nt.Op.scale(
-                genotypes=["WT|WT", "WT|Dr"], ages=[1, 2], sex="both", factor=0.5
+                genotypes=["WT|WT", "WT|Dr"], ages=[1, 2], sex="both", factor=0.5,
+                event="early",
             ),
-            event="early",
         )
         .hooks(watcher, event="late")
         .build()

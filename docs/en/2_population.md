@@ -263,6 +263,8 @@ if pop.is_failed:
 
 The discrete-generation engine ships a Wright-Fisher extreme speed mode: a single multinomial draw per tick replaces the step-by-step mate→fertilize→survive pipeline, aimed at effective population size modeling.
 
+The fused tick is its own model, not an optimized staged pipeline, and the two do not share a sampling variance. The staged stochastic tick draws the offspring genotypes and then applies density regulation by resampling the age-0 cohort, so its per-generation allele-frequency variance is about twice the classical single-draw value (`2 * 2N p (1 - p)` instead of `2N p (1 - p)`): the drift standard deviation is `sqrt(2)` times larger and the staged path's effective population size is half the fused mode's at equal census size. `fixed_egg_count=True` removes clutch noise but not that resampling, and `no_competition` does not skip it either. Compare runs against textbook Wright-Fisher expectations with `extreme_speed_mode=1`, or account for the extra draw when comparing staged runs.
+
 ### Sampling Modes
 
 | Mode | Description |
@@ -286,7 +288,7 @@ pop = (
 
 ### Competition and Hooks
 
-All three competition modes (FIXED/LOGISTIC/BEVERTON_HOLT) are supported, sharing the same scaling functions as the standard path. Only FIRST hooks are supported (fired before the WF tick). Deterministic WF mode matches the standard deterministic path tick-by-tick.
+All built-in competition modes (FIXED, LOGISTIC/LINEAR, BEVERTON_HOLT, and RICKER) are supported, sharing the same scaling functions as the standard path. Only FIRST hooks are supported (fired before the WF tick). Deterministic WF mode matches the standard deterministic path tick-by-tick. Embryonic viability is applied before measuring juvenile competition; ordinary survival and genotype viability are applied after density regulation. WF stochastic modes retain their single final-generation sampling step, so their variance need not match the staged stochastic lifecycle.
 
 ## Index Compression
 

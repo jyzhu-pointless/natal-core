@@ -549,16 +549,15 @@ def test_op_identity_dedup_across_build_and_runtime() -> None:
     broke, a double registration would double the delta and the exact
     arithmetic below would fail.
     """
-    op = Op.add(genotypes="WT|WT", ages=0, sex="male", delta=7.0)
-    op.event = "first"
-    distinct = Op.add(genotypes="Dr|Dr", ages=0, sex="both", delta=5.0)
+    op = Op.add(genotypes="WT|WT", ages=0, sex="male", delta=7.0, event="first")
+    distinct = Op.add(genotypes="Dr|Dr", ages=0, sex="both", delta=5.0, event="first")
 
     pop = _build(
         "s4x_dedup",
         hooks=[op],  # build-time declaration
         hook_calls=[
-            ((op,), {"event": "first"}),  # duplicate declaration: deduped
-            ((distinct,), {"event": "first"}),
+            ((op,), {}),  # duplicate declaration: deduped
+            ((distinct,), {}),
         ],
     )
     assert len(pop.get_compiled_hooks("first")) == 2  # 1 deduped + 1 distinct
@@ -588,10 +587,10 @@ def test_op_group_set_then_add_stacks_exactly() -> None:
         hook_calls=[
             (
                 ([
-                    Op.set_count(genotypes="WT|WT", ages=0, sex="both", value=30.0),
-                    Op.add(genotypes="WT|WT", ages=0, sex="both", delta=12.0),
+                    Op.set_count(genotypes="WT|WT", ages=0, sex="both", value=30.0, event="first"),
+                    Op.add(genotypes="WT|WT", ages=0, sex="both", delta=12.0, event="first"),
                 ],),
-                {"event": "first"},
+                {},
             )
         ],
     )
@@ -807,14 +806,14 @@ def test_plain_callable_without_event_rejected() -> None:
 def test_op_group_dedup_by_tuple_identity() -> None:
     """Declaring the same op list twice yields one group descriptor."""
     group = [
-        Op.set_count(genotypes="WT|WT", ages=0, sex="both", value=5.0),
-        Op.add(genotypes="Dr|Dr", ages=0, sex="both", delta=1.0),
+        Op.set_count(genotypes="WT|WT", ages=0, sex="both", value=5.0, event="first"),
+        Op.add(genotypes="Dr|Dr", ages=0, sex="both", delta=1.0, event="first"),
     ]
     pop = _build(
         "s4x_group_dedup",
         hook_calls=[
-            ((group,), {"event": "first"}),
-            ((list(group),), {"event": "first"}),  # same op objects, new list
+            ((group,), {}),
+            ((list(group),), {}),  # same op objects, new list
         ],
     )
 
@@ -990,13 +989,13 @@ class TestRustDiscreteFemaleOp:
             structure={"chr1": {"loc": ["A"]}},
             gamete_labels=["default"],
         )
-        op = nt.Op.scale("A|A", factor=0.5)
+        op = nt.Op.scale("A|A", factor=0.5, event="early")
         pop = (
             nt.DiscreteGenerationPopulation.setup(sp, stochastic=False)
             .initial_state(
                 individual_count={"female": {"A|A": 500}, "male": {"A|A": 500}}
             )
-            .hooks(op, event="early")
+            .hooks(op)
             .build()
         )
         pop._initialize_session(seed=0)
