@@ -52,8 +52,15 @@ const statusType = computed(() => {
         justify="space-between"
       >
         <NSpace align="center">
+          <img
+            class="brand-logo"
+            src="/natal-brand.svg"
+            alt="NATAL"
+            width="126"
+            height="36"
+          >
           <NText strong>
-            🧬 {{ sim.meta?.title ?? "NATAL Dashboard" }}
+            {{ sim.meta?.title ?? "Dashboard" }}
           </NText>
           <NText
             v-if="sim.meta"
@@ -135,6 +142,11 @@ const statusType = computed(() => {
 </template>
 
 <style scoped>
+.brand-logo {
+  display: block;
+  object-fit: contain;
+}
+
 .tab-bar {
   margin-bottom: 16px;
 }
