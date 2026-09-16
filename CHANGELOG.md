@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+### Behavior Changes
+
+- **The derived equilibrium reference now splits age 1 by the surviving sex
+  ratio.** `equilibrium_metrics` divided the reference age-1 total with the raw
+  offspring `sex_ratio`, so a model whose sexes differ in age-0 survival (for
+  example `survival(female_age0_survival=0.9, male_age0_survival=0.8)`)
+  calibrated against a composition it never reaches: the realised equilibrium
+  missed `carrying_capacity` by 2.8%-37.5% (larger the closer
+  `low_density_growth_rate` is to 1), and `ricker` could settle *below* K. The
+  reference now uses `sex_ratio * s_f / (sex_ratio * s_f + (1 - sex_ratio) * s_m)`
+  for the female share of the age-1 total, which makes the deterministic
+  equilibrium exactly `K` for every compensatory curve in both engines. Models
+  whose two sexes survive equally are bit-for-bit unchanged; recorded results
+  for sex-asymmetric survival configurations shift once.
+- **A non-zero `migration_rate` that cannot move anybody now warns.**
+  Building a spatial population with a non-zero rate but no inter-deme edge —
+  no `topology`, `kernel`, or `adjacency`, so the default adjacency is the
+  identity matrix, or a kernel whose only non-zero weight is the excluded
+  center — emits a `UserWarning`. Migration behaviour is unchanged: nothing
+  mixed before and nothing mixes now.
+
+### Documentation
+
+- The Wolbachia preset is documented as what it implements — a maternal
+  cytoplasmic marker with optional per-slab fitness scaling — instead of
+  claiming cytoplasmic incompatibility, with a pointer to the modifier recipe
+  for building CI (`docs/*/4_index_registry.md`).
+- `PointMutation`'s cascade section states the consequence of stacking
+  single-target presets (a sequential model, `O(mu*nu)` away from the textbook
+  two-way mutation equilibrium) and the exact rate correction that recovers the
+  textbook recursion (`docs/*/2_genetic_presets.md`).
+- The Wright-Fisher extreme-speed section states that the fused tick is its own
+  model and that the staged path resamples the age-0 cohort, doubling the
+  per-generation drift variance (`docs/*/2_population.md`).
+- The population-initialization page records the surviving-sex-ratio
+  composition premise of the derived equilibrium distribution.
+- The conversion rule sets' docstring examples now show the working mount form
+  (compile against the built population, then `pop.add_gamete_modifier(...)` or
+  `add_zygote_modifier(...)`), which the pipeline accepts; the previous snippet
+  raised `TypeError` at build time.
+
 ## v0.3.0b1 (2026-09-14)
 
 This release turns three silent behaviors into explicit contracts: every engine

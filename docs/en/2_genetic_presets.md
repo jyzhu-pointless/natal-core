@@ -216,6 +216,8 @@ The conversion rules of one ruleset run as a cascade: each rule only sees the so
 
 This "simultaneous competition" semantics is what distinguishes one multi-target `PointMutation` from several stacked single-target presets, whose rules cascade in registration order (first declared, first served). The compensation is computed per sex, so sex-specific rates compete independently within each sex.
 
+Stacking presets therefore builds a *sequential* model, not the simultaneous one. A forward rule `W -> D` at `mu` declared before a reverse rule `D -> W` at `nu` gives `q' = (1 - nu) (q + mu (1 - q))` with equilibrium `mu (1 - nu) / (nu + mu (1 - nu))`, whereas the textbook "each gamete mutates at most once" model gives `q' = q (1 - nu) + mu (1 - q)` with equilibrium `mu / (mu + nu)`. The two differ by the double-mutation term `mu nu (1 - q)`: a gamete converted to `D` and back to `W` within one meiosis stays `W` in a cascade but counts as `D` when both rules act simultaneously (0.2386 against 0.25 for `mu = 0.02`, `nu = 0.06`). To recover the textbook model exactly, scale the *first-declared* rule: declare `mu / (1 - nu)` first and `nu` second (reverse-first: `nu / (1 - mu)` then `mu`), which matches both the slope and the intercept of the recursion. The preset's internal `r'k = rk / (1 - sum(ri, i < k))` compensation is not the cross-preset recipe — it matches the slope only and lands further from the textbook equilibrium (0.2347) than leaving the rates alone. With realistic rates (at most `1e-3`) the uncorrected offset is around `1e-4` and can be ignored.
+
 ## Practical Examples
 
 ### Simple Point Mutation

@@ -86,7 +86,13 @@ class ZygoteConversionRuleSet:
             from_allele="WT", to_allele="Dr", rate=0.4,
             filters={"maternal": "*@Cas9_deposited"},
         )
-        builder.modifiers(zygote_modifiers=[rs.to_zygote_modifier])
+        pop = builder.build()
+        pop.add_zygote_modifier(rs.to_zygote_modifier(pop))
+
+    The rule set is compiled against a population (the recipe host), so the
+    mount happens after ``build()``; a preset that owns the rule set can
+    instead hand out ``to_zygote_modifier(host)`` itself, which is what the
+    ``presets(...)`` path expects.
     """
 
     def __init__(self, name: Optional[str] = None) -> None:

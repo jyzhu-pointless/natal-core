@@ -80,7 +80,7 @@ spatial = SpatialPopulation(
 - `migration_kernel`：迁移核，走 kernel 路径时使用。
 - `kernel_bank`：可选的 kernel 集合，用于不同 source deme 使用不同 kernel。
 - `deme_kernel_ids`：可选的 per-deme kernel id，索引到 `kernel_bank`。
-- `migration_rate`：每个 deme 每步参与迁移的比例。标量仅应用于成年年龄（>= `new_adult_age`），幼年迁移率为 0；`(n_ages,)` 数组按年龄精确配置；`(n_sexes, n_ages)` 表或按性别映射按性别配置；`(n_demes, n_sexes, n_ages)` 列（或 `(n_demes, n_ages)`，随后按性别广播）直接为每个 deme 指定；`batch_setting` 则为每个 deme 给出各自的比例声明。
+- `migration_rate`：每个 deme 每步参与迁移的比例。标量仅应用于成年年龄（>= `new_adult_age`），幼年迁移率为 0；`(n_ages,)` 数组按年龄精确配置；`(n_sexes, n_ages)` 表或按性别映射按性别配置；`(n_demes, n_sexes, n_ages)` 列（或 `(n_demes, n_ages)`，随后按性别广播）直接为每个 deme 指定；`batch_setting` 则为每个 deme 给出各自的比例声明。迁移还需要迁出目标：没有 `topology`、`kernel` 或 `adjacency` 时解析出的邻接是单位矩阵，此时非零速率不迁移任何人。只有多 deme 布局中**完全没有**跨 deme 边时构建期才给出警告；只要有任一 deme 能到达另一个就保持静默，因此故意孤立的单个 deme 不会被误报。单 deme 种群按定义没有跨 deme 边，不会触发警告。
 - `migration_strategy`：`auto`、`adjacency`、`kernel`、`hybrid`，默认 `auto`。
 - `kernel_include_center`：kernel 路径下是否把中心格也算进迁移目标。
 - `adjust_migration_on_edge`：历史位级兼容开关，默认 `False`。它不改变目的地方向分布（仅差 ~1 ulp 的浮点舍入）：迁出行无论取何值都会被归一化为相对权重，它选择的分母随之被约掉（见「migration_rate 与边界效应」一节）。

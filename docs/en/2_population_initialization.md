@@ -226,7 +226,7 @@ The initialization path has three scenarios:
    - If $K$ is missing: uses the total count of age-1 individuals from the initial state
    - If expected egg production is missing: calculates expected egg production from the female distribution in the initial state
 
-Regardless of the path taken, the system will genuinely construct the equilibrium distribution, then compute all competition metrics from it. This ensures consistency among $K$, expected egg production, and the equilibrium survival rate.
+Regardless of the path taken, the system will genuinely construct the equilibrium distribution, then compute all competition metrics from it. This ensures consistency among $K$, expected egg production, and the equilibrium survival rate. The derived distribution splits the age-1 total by the *surviving* sex ratio — the offspring sex ratio filtered by each sex's own age-0 survival — so the calibrated equilibrium stays at $K$ even when the two sexes survive differently; with equal age-0 survival this reduces to the offspring sex ratio itself.
 
 **Expected egg production formula**:
 

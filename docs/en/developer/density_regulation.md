@@ -28,14 +28,16 @@ Note that `fixed` is a **ceiling**, not compensation: below equilibrium it does 
 The equilibrium competition strength `C*` and equilibrium survival rate `s*` are derived on demand from the current parameters and are never stored as derived state:
 
 ```text
-distribution: age-1 total = K; females = K x sex ratio; older ages decay by the previous age's survival
+distribution: age-1 total = K; females = K x sex_ratio x s_f / (sex_ratio x s_f + (1 - sex_ratio) x s_m)
+              (the surviving sex ratio -- equal age-0 survival reduces it to sex_ratio);
+              older ages decay by the previous age's survival
 production:   produced = sum over breeding ages of (females x reproduction rate x fertility x eggs_per_female)
 C*  = produced x juvenile competition weight + sum over juvenile ages of (counts x weight)
 s_0 = sex ratio x female age-0 survival + (1 - sex ratio) x male age-0 survival
 s*  = K / (produced x s_0)
 ```
 
-Verified: with K = 100, two eggs per female, sex ratio 0.5 and age-0 survival 0.5, the derived equilibrium distribution is 50 females and 50 males, production is 100, so `C* = 100` and `s* = 100 / (100 × 0.5) = 2`. Raising the clutch to four eggs makes production and `C*` 200 while `s*` becomes 1.
+Verified: with K = 100, two eggs per female, sex ratio 0.5 and age-0 survival 0.5 for both sexes, the derived equilibrium distribution is 50 females and 50 males, production is 100, so `C* = 100` and `s* = 100 / (100 × 0.5) = 2`. Raising the clutch to four eggs makes production and `C*` 200 while `s*` becomes 1.
 
 Two easy misreadings:
 

@@ -50,7 +50,7 @@ Both systems are **symmetric** in design:
 - If unspecified, a single `"default"` label is created automatically.
 - The engine cross-products every genotype/haplotype with every label, producing the full ZType/GType space.
 
-Slabs are used by concrete Presets such as **Wolbachia** (cytoplasmic incompatibility modelled with the default `infected` / `normal` slabs and a `wolbachia` gamete label) and **TransgenicBackground** (marker expression tracked per individual). Without these Presets, most simulations have a single `"default"` slab and the slab system is invisible.
+Slabs are used by concrete Presets such as **Wolbachia** (a maternal cytoplasmic marker: the `wolbachia` gamete label routes every offspring of an infected mother onto the `infected` slab, with optional per-slab `viability_scaling` / `fecundity_scaling`) and **TransgenicBackground** (marker expression tracked per individual). The preset models maternal inheritance and marker fitness only — it does not implement cytoplasmic incompatibility; build that cross effect with a zygote modifier (see [Modifier Mechanism](3_modifiers.md), section 5.2). Without these Presets, most simulations have a single `"default"` slab and the slab system is invisible.
 
 ### Index Registry Structure
 
