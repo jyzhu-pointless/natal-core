@@ -23,11 +23,12 @@ const english = {
   geneticsAlt: 'Create chromosomes, add loci, then define the alleles at each locus in a repeating sequence', geneticsAxes: 'Chromosomes · Loci · Alleles', geneticsHeading: 'Configurable genetic architecture', geneticsText: "Define chromosomes, loci, and their alleles to configure the genetic structure of a model.",
   apiAlt: 'Chained configuration highlights in sequence: initial state, presets, and population construction',
   mutationLabel: 'Point mutation', homingLabel: 'Homing', toxinLabel: 'Toxin–antidote · TARE',
+  websiteSource: 'Website source ↗', uiSource: 'Dashboard source ↗',
   copy: 'Copy'
 };
 const elements = [...document.querySelectorAll('[data-i18n]')];
 const chinese = Object.fromEntries(elements.map(element => [element.dataset.i18n, element.textContent]));
-let language = navigator.language.startsWith('zh') ? 'zh' : 'en';
+let language = 'en';
 try {
   language = localStorage.getItem('natal-site-language') || language;
 } catch { /* Language switching remains available when storage is disabled. */ }
