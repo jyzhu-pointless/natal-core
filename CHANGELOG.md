@@ -10,7 +10,7 @@ from the beta series, with the numerical and spatial fixes below. Changes since
 changes in the `v0.3.0b0` and `v0.3.0b1` sections.
 
 The Population/Landscape separation and the broader builder, runtime-update,
-preset, and hook redesign are deferred (TODO-020). Spatial Python callbacks
+preset, and hook redesign are deferred (TODO-019). Spatial Python callbacks
 still run serially per deme; cross-deme global hooks and hook-driven migration
 updates are not part of this release. The new density-regulation demo is an
 independent design sketch, not a supported NATAL API.
@@ -18,7 +18,7 @@ independent design sketch, not a supported NATAL API.
 Population-level readable exports currently require the registry genotype
 labels to match the state axis. Multi-somatic-label states can raise a dimension
 mismatch; use `pop.observe()` or project raw history through an Observation for
-those models (TODO-021).
+those models (TODO-020).
 
 ### Added
 
