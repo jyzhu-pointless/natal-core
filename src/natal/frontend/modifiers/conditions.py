@@ -317,11 +317,12 @@ def slab(name: str) -> Condition:
 
 
 def is_maternal() -> Condition:
-    """Marker for maternal-side gamete rules (zygote pipeline only).
+    """Marker for maternal-side gamete rules.
 
-    Currently a placeholder that always returns ``True``; the
-    maternal/paternal column split is handled at the zygote modifier
-    pipeline level via ``(c1, c2)`` column indexing.
+    In gamete-modifier context the maternal side is ``sex_idx == 0``
+    (female), so the condition matches those rows and excludes the male
+    ones.  In zygote-modifier context (``sex_idx == -1``) both parental
+    sides are present, so it matches unconditionally.
 
     Returns:
         ``_Maternal`` condition.
@@ -330,11 +331,12 @@ def is_maternal() -> Condition:
 
 
 def is_paternal() -> Condition:
-    """Marker for paternal-side gamete rules (zygote pipeline only).
+    """Marker for paternal-side gamete rules.
 
-    Currently a placeholder that always returns ``True``; the
-    maternal/paternal column split is handled at the zygote modifier
-    pipeline level via ``(c1, c2)`` column indexing.
+    In gamete-modifier context the paternal side is ``sex_idx == 1``
+    (male), so the condition matches those rows and excludes the female
+    ones.  In zygote-modifier context (``sex_idx == -1``) both parental
+    sides are present, so it matches unconditionally.
 
     Returns:
         ``_Paternal`` condition.

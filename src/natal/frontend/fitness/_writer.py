@@ -87,12 +87,21 @@ def write_fitness_field(
 
     Supported formats::
 
-        {genotype: val}                                        # scalar → both sexes, all ages
+        {genotype: val}                                        # scalar → both sexes, no age key
         {genotype: {"female": val, "male": val}}               # per-selector sex-keyed
         {genotype: {0: val, 1: val}}                           # per-selector age-keyed
         {genotype: {"female": {0: val}}}                       # per-selector sex+age keyed
         {"female": {genotype: val}, "male": {...}}             # top-level sex-keyed
         {female_g: {male_g: val}}                              # sexual_selection pair format
+
+    Note:
+        The scalar form applies to both sexes and carries no age key.  For
+        ``viability`` — the only field with an age axis — the missing age
+        key targets the last juvenile age, ``new_adult_age - 1``; an
+        explicit age keyed entry writes exactly that age.  The age-less
+        fields (``fecundity``, ``sexual_selection``, ``zygote_viability``)
+        have no age axis, so the absent age key carries no such meaning
+        there.
     """
     # ══════════════════════════════════════════════════════════════════════
     # BRANCH 1: top-level sex-keyed
@@ -202,7 +211,8 @@ def write_fitness_field(
     #
     # Detection: everything not caught by branches 1-3.
     # Each selector value may be:
-    #   - scalar → apply to both sexes, all ages
+    #   - scalar → apply to both sexes; viability writes the default age
+    #     (``new_adult_age - 1``), age-less fields ignore the age axis
     #   - Mapping → inspect the first key to decide the format
     # ══════════════════════════════════════════════════════════════════════
     for selector, value in patch.items():
@@ -254,7 +264,8 @@ def write_fitness_field(
                     f"Expected 'female'/'male' (sex-keyed) or int (age-keyed)."
                 )
         else:
-            # ---- scalar format: {genotype: val} → apply to both sexes, all ages ----
+            # ---- scalar format: {genotype: val} → both sexes; viability writes
+            # ---- the default age (``new_adult_age - 1``), age-less fields ignore it
             for sex_idx in (0, 1):
                 _write_fitness_field_flat(
                     config, field_name,
