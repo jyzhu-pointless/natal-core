@@ -56,8 +56,14 @@ Pattern strings are parsed in three layers, from outer to inner:
 A `@` suffix attaches a gamete-label (`glab`) or somatic-label (`slab`)
 constraint to the pattern. The label is parsed and stored with the pattern, but
 a bare `GenotypePattern` / `HaploidGenomePattern`'s `matches()` does **not**
-check it — label filtering takes effect only where the pattern is compiled
-through conversion-rule filters or `IndividualSelector`. Label syntax mirrors allele syntax:
+check it, and the content-only `Species` entries
+(`parse_genotype_pattern`, `enumerate_genotypes_matching_pattern`,
+`parse_haploid_genome_pattern`, `enumerate_haploid_genomes_matching_pattern`)
+reject a labelled pattern outright with a `PatternParseError` rather than
+accepting one and ignoring it. Label filtering takes effect where the pattern
+is compiled through conversion-rule filters, `ZygoteTypePattern`,
+`IndividualSelector`, or `GenotypePatternParser.parse_haplotype_pattern`.
+Label syntax mirrors allele syntax:
 
 | Pattern | Meaning | Example |
 |---------|---------|---------|

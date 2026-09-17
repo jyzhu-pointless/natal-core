@@ -82,6 +82,37 @@ def test_label_aware_entries_still_accept_labels(species: nt.Species) -> None:
     assert GenotypePatternParser(species).parse_haplotype_pattern("WT@cas9") is not None
 
 
+def test_haploid_filter_helper_rejects_a_label_too(species: nt.Species) -> None:
+    """The haploid collection filter parses through the same entry."""
+    genomes = list(species.iter_haploid_genotypes())
+    with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
+        species.filter_haploid_genomes_by_pattern(genomes, "WT@cas9")
+
+
+@pytest.mark.parametrize("pattern", ["WT|Dr@infected", "WT|Dr@*", "WT|Dr@cas9"])
+def test_enumerate_genotypes_entry_rejects_a_label(
+    species: nt.Species, pattern: str
+) -> None:
+    """enumerate_genotypes_matching_pattern is content-only as well.
+
+    FRONTEND_REFACTOR_PLAN.md §5.2 requires every pure Genotype input to
+    reject ``@label``.  This entry parses through ``parser.parse`` directly,
+    so the suffix is still stored and then ignored by ``matches()``: the
+    enumeration returns every slab's genotypes instead of failing.
+    """
+    with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
+        list(species.enumerate_genotypes_matching_pattern(pattern))
+
+
+@pytest.mark.parametrize("pattern", ["WT@cas9", "WT@*"])
+def test_enumerate_haploid_genomes_entry_rejects_a_label(
+    species: nt.Species, pattern: str
+) -> None:
+    """Same contract for the haploid enumeration entry."""
+    with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
+        list(species.enumerate_haploid_genomes_matching_pattern(pattern))
+
+
 def test_selector_resolution_rejects_a_labelled_mixed_input(species: nt.Species) -> None:
     """A label in a genotype-level selector fails instead of being dropped.
 

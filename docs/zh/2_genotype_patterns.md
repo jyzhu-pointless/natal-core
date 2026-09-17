@@ -53,7 +53,7 @@ NATAL 支持两种模式匹配：
 
 ### 标签匹配（@lab）
 
-模式字符串末尾可以用 `@` 附加配子标签（`glab`）或体细胞标签（`slab`）约束。标签会被解析并与模式一起存储，但裸 `GenotypePattern` / `HaploidGenomePattern` 的 `matches()` **不会**检查它——标签过滤只在模式经转换规则过滤器或 `IndividualSelector` 编译时才生效。标签语法与等位基因模式一致：
+模式字符串末尾可以用 `@` 附加配子标签（`glab`）或体细胞标签（`slab`）约束。标签会被解析并与模式一起存储，但裸 `GenotypePattern` / `HaploidGenomePattern` 的 `matches()` **不会**检查它；而且只匹配遗传内容的 `Species` 入口（`parse_genotype_pattern`、`enumerate_genotypes_matching_pattern`、`parse_haploid_genome_pattern`、`enumerate_haploid_genomes_matching_pattern`）对带标签的模式**直接报错**（`PatternParseError`），不再"接受后忽略"。标签过滤只在模式经转换规则过滤器、`ZygoteTypePattern`、`IndividualSelector` 或 `GenotypePatternParser.parse_haplotype_pattern` 编译时才生效。标签语法与等位基因模式一致：
 
 | 模式 | 含义 | 示例 |
 |---|---|---|

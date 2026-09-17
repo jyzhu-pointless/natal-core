@@ -251,13 +251,17 @@ class SpeciesPatternMixin:
             Genotype objects matching the pattern.
 
         Raises:
-            PatternParseError: If the pattern is invalid.
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  A ``Genotype`` has no label, so such a
+                suffix has nothing to match against; use
+                :meth:`ZygoteTypePattern.parse` or
+                ``IndividualSelector(ztype=...)`` to select by label.
         """
         self = cast(Species, self)
         from natal.frontend.patterns import GenotypePatternParser
 
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse(pattern)
+        pattern_obj = parser.parse(_require_unlabelled_pattern(pattern))
 
         count = 0
         seen: set[int] = set()
@@ -348,13 +352,20 @@ class SpeciesPatternMixin:
             HaploidGenome objects matching the pattern.
 
         Raises:
-            PatternParseError: If the pattern is invalid.
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  A ``HaploidGenome`` has no label, so such
+                a suffix has nothing to match against; use
+                ``GenotypePatternParser.parse_haplotype_pattern`` (a
+                ``GameteTypePattern``) or a conversion rule's ``filters`` to
+                select by gamete label.
         """
         self = cast(Species, self)
         from natal.frontend.patterns import GenotypePatternParser
 
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse_haploid_genome_pattern(pattern)
+        pattern_obj = parser.parse_haploid_genome_pattern(
+            _require_unlabelled_pattern(pattern)
+        )
 
         count = 0
         for haploid_genome in self.iter_haploid_genotypes():
