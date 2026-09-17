@@ -219,7 +219,7 @@ def test_frontend_build_stops_on_failed_check(monkeypatch, failed_stage):
     def run(command, **kwargs):
         index = len(commands)
         commands.append(command)
-        assert kwargs['cwd'] == ROOT / 'frontend'
+        assert kwargs['cwd'] == ROOT / 'ui'
         return SimpleNamespace(returncode=9 if index == failed_stage else 0)
     monkeypatch.setattr(builder.subprocess, 'run', run)
     assert builder.main() == (9 if failed_stage is not None else 0)
