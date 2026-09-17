@@ -368,6 +368,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             Supported formats for age_data (innermost value):
             - Dict[int, float]: Sparse mapping {age: count, ...}
             - List[float]: Dense list [count_age0, count_age1, ...]
+            - Tuple[float, ...]: Dense sequence in tuple form
             - float/int: Scalar value applied to all adult ages (>= new_adult_age)
 
         Args:
@@ -383,24 +384,28 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._live_state().sperm_storage.fill(0.0)
 
         # Type-check keys before resolution so a malformed mapping fails with a
-        # clear message rather than a registry lookup error.
+        # clear message rather than a registry lookup error.  Explicit raises,
+        # not asserts: these guard user input and must survive ``python -O``.
         for female_key, male_dict in sperm_storage_dist.items():
-            assert isinstance(female_key, (str, Genotype)), (
-                f"Female genotype key must be Genotype or str, got {type(female_key)}"
-            )
+            if not isinstance(female_key, (str, Genotype)):
+                raise TypeError(
+                    f"Female genotype key must be Genotype or str, got {type(female_key)}"
+                )
 
             f_z = resolve_genotype_key_ztype_index(female_key, species, self.registry)
 
             for male_key, age_data in male_dict.items():
-                assert isinstance(male_key, (str, Genotype)), (
-                    f"Male genotype key must be Genotype or str, got {type(male_key)}"
-                )
+                if not isinstance(male_key, (str, Genotype)):
+                    raise TypeError(
+                        f"Male genotype key must be Genotype or str, got {type(male_key)}"
+                    )
 
                 m_z = resolve_genotype_key_ztype_index(male_key, species, self.registry)
 
-                assert isinstance(age_data, (dict, list, tuple, int, float)), (
-                    f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}"
-                )
+                if not isinstance(age_data, (dict, list, tuple, int, float)):
+                    raise TypeError(
+                        f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}"
+                    )
 
                 # Parse age_data: supports multiple formats
                 if isinstance(age_data, dict):
