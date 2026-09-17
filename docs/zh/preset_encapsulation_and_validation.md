@@ -153,6 +153,7 @@ class ComplexDrive(GeneticPreset):
 
 ### 参数验证错误
 - 验证转换率是否在 [0, 1] 范围内
+- `fitness_patch` 中不支持的顶层键会抛 `ValueError`，消息给出该键并列出支持的键；模型保持不变，因此 `viability_allele`（正确写法是 `viability_per_allele`）这类拼写错误会直接报错而不是被忽略
 
 ### 物种绑定错误
 - 确保预设和种群使用相同的物种

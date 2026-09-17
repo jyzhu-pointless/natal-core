@@ -361,6 +361,27 @@ def _apply_zygote_slab_scaling(
                 arr[sex, z] = current * float(factor)
 
 
+#: Complete set of top-level keys ``apply_preset_fitness_patch`` accepts.
+#: Keep in sync with the patch schema documented on that function; an
+#: unknown key is rejected before any tensor is written.
+SUPPORTED_PRESET_FITNESS_PATCH_KEYS: frozenset[str] = frozenset(
+    {
+        "viability",
+        "fecundity",
+        "sexual_selection",
+        "viability_per_allele",
+        "fecundity_per_allele",
+        "sexual_selection_per_allele",
+        "zygote",
+        "zygote_per_allele",
+        "viability_per_slab",
+        "fecundity_per_slab",
+        "sexual_selection_per_slab",
+        "zygote_per_slab",
+    }
+)
+
+
 def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> None:
     """Apply a declarative preset fitness patch to population config tensors.
 
@@ -379,17 +400,33 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     - zygote_per_slab: Dict[slab_name, float]
 
     Per-allele keys accept a single allele name or several names joined
-    with ``+`` (e.g. ``"WT+Dr"``). Any key outside this schema is silently
-    skipped.
+    with ``+`` (e.g. ``"WT+Dr"``).  Every top-level key is validated
+    against this schema before any tensor is written, so a patch carrying
+    an unknown key changes nothing.
 
     Args:
         deps: Compilation host providing the species, index registry, and
             config tensors that receive the patch.
         patch: Declarative patch mapping schema keys to their scaling
             configurations.
+
+    Raises:
+        ValueError: If *patch* carries a top-level key outside the schema.
+            The message names the unknown keys and lists the supported
+            ones.
     """
     if not patch:
         return
+
+    unknown_keys = sorted(key for key in patch if key not in SUPPORTED_PRESET_FITNESS_PATCH_KEYS)
+    if unknown_keys:
+        raise ValueError(
+            "Unknown preset fitness patch key(s): "
+            + ", ".join(repr(key) for key in unknown_keys)
+            + ". Supported keys: "
+            + ", ".join(sorted(SUPPORTED_PRESET_FITNESS_PATCH_KEYS))
+            + "."
+        )
 
     all_genotypes = deps.index_registry.index_to_genotype
 

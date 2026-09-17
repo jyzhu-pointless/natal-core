@@ -301,5 +301,61 @@ class TestPresetFitnessPatch(unittest.TestCase):
         self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][idx_drive_drive], 0.25)
 
 
+class TestPresetFitnessPatchKeyValidation(unittest.TestCase):
+    """Unknown top-level patch keys are rejected before any tensor is written."""
+
+    def setUp(self) -> None:
+        self.species = _make_species()
+        self.pop = _FakePopulation(self.species)
+        self.idx_drive_wt = self.pop._index_registry.genotype_to_index[
+            self.species.get_genotype_from_str("Drive|WT")
+        ]
+
+    def test_unknown_key_only_is_rejected_and_reports_allowed_keys(self) -> None:
+        """A patch made only of unknown keys raises and names the supported set."""
+        # "viability_allele" is the historical misspelling that once shipped in a
+        # docstring example; it used to be skipped silently.
+        with self.assertRaises(ValueError) as ctx:
+            apply_preset_fitness_patch(self.pop, {"viability_allele": {"Drive": 0.8}})  # type: ignore
+
+        message = str(ctx.exception)
+        self.assertIn("'viability_allele'", message)
+        self.assertIn("viability_per_allele", message)
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][self.idx_drive_wt], 1.0)
+
+    def test_unknown_key_rejects_the_whole_patch_before_any_write(self) -> None:
+        """A mixed patch writes nothing: key validation precedes every setter."""
+        patch = {
+            "viability_per_allele": {"Drive": 0.5},
+            "not_a_patch_key": {"Drive": 0.1},
+        }
+        with self.assertRaises(ValueError) as ctx:
+            apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+
+        self.assertIn("'not_a_patch_key'", str(ctx.exception))
+        # The legal entry in the same patch must not have been applied.
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][self.idx_drive_wt], 1.0)
+        self.assertAlmostEqual(self.pop._config.fecundity_fitness[0][self.idx_drive_wt], 1.0)
+
+    def test_empty_patch_is_accepted_without_writes(self) -> None:
+        """The legal empty patch stays a no-op."""
+        apply_preset_fitness_patch(self.pop, {})  # type: ignore
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][self.idx_drive_wt], 1.0)
+
+    def test_every_supported_key_is_accepted(self) -> None:
+        """Each advertised key is recognised (empty value = no-op).
+
+        Guards against the key set drifting away from what the function
+        actually tolerates.
+        """
+        from natal.frontend.fitness._patch import SUPPORTED_PRESET_FITNESS_PATCH_KEYS
+
+        for key in sorted(SUPPORTED_PRESET_FITNESS_PATCH_KEYS):
+            with self.subTest(key=key):
+                apply_preset_fitness_patch(self.pop, {key: {}})  # type: ignore
+
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][self.idx_drive_wt], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -153,6 +153,7 @@ class ComplexDrive(GeneticPreset):
 
 ### Parameter Validation Errors
 - Verify the conversion rate is within the [0, 1] range
+- An unsupported top-level key in `fitness_patch` raises a `ValueError` naming the key and listing the supported keys; the model is left unchanged, so a typo such as `viability_allele` (instead of `viability_per_allele`) fails loudly instead of being ignored
 
 ### Species Binding Errors
 - Ensure the preset and population use the same species
