@@ -21,6 +21,7 @@ fn fixture() -> (
         continuous_sampling: false,
         fixed_egg_count: false,
         has_sex_chromosomes: false,
+        discrete_generation: false,
         extreme_speed_mode: 0,
         ztype_names: vec!["r0|r0".into(), "r0|r1".into()],
         gtype_names: vec!["r0".into(), "r1".into()],
@@ -209,4 +210,96 @@ fn deme_columns_feed_per_deme_metrics() {
     let (comp1_after, _) = equilibrium_metrics(&bp, &params, 1);
     assert_eq!(comp0_after, comp0);
     assert_ne!(comp1_after, comp1);
+}
+
+/// Sex-chromosome species determine offspring sex from the chromosomes, and
+/// the documented contract calls `sex_ratio` ignored there.  The calibration
+/// must follow the genetic split, so every stored ratio reproduces the
+/// balanced 0.5 metrics; feeding the parameter through moved the calibrated
+/// equilibrium by tens of percent (R4-05).
+#[test]
+fn sex_chromosome_models_ignore_the_sex_ratio_parameter() {
+    let (mut bp, mut params, _) = fixture();
+    bp.has_sex_chromosomes = true;
+    bp.female_only_by_sex_chrom = vec![true, false];
+    bp.male_only_by_sex_chrom = vec![false, true];
+    params.sex_ratio = vec![0.5];
+    let (comp_balanced, surv_balanced) = equilibrium_metrics(&bp, &params, 0);
+    // 0.0 and 1.0 also exercise the degenerate surviving-mass guard: with the
+    // parameter ignored, neither is degenerate.
+    for sex_ratio in [0.0, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0] {
+        params.sex_ratio = vec![sex_ratio];
+        let (comp, surv) = equilibrium_metrics(&bp, &params, 0);
+        assert_eq!(
+            comp, comp_balanced,
+            "derived comp moved at sex_ratio={sex_ratio}"
+        );
+        assert_eq!(
+            surv, surv_balanced,
+            "derived s* moved at sex_ratio={sex_ratio}"
+        );
+    }
+    // The declared branch consumes the same ratio through `s_0_avg`; the
+    // declared composition itself is untouched, so C* stays put while s*
+    // must too.
+    params.equilibrium_distribution = vec![
+        0.0,
+        205.71428571428572,
+        150.0,
+        100.0,
+        0.0,
+        194.28571428571428,
+        150.0,
+        100.0,
+    ];
+    params.equilibrium_declared = vec![true];
+    params.sex_ratio = vec![0.5];
+    let (comp_declared, surv_declared) = equilibrium_metrics(&bp, &params, 0);
+    for sex_ratio in [0.2, 0.3, 0.8] {
+        params.sex_ratio = vec![sex_ratio];
+        let (comp, surv) = equilibrium_metrics(&bp, &params, 0);
+        assert_eq!(
+            comp, comp_declared,
+            "declared comp moved at sex_ratio={sex_ratio}"
+        );
+        assert_eq!(
+            surv, surv_declared,
+            "declared s* moved at sex_ratio={sex_ratio}"
+        );
+    }
+}
+
+/// The per-age fertility weight must be read the way the owning tick reads it:
+/// discrete generations have no age-dependent fertility (implicit 1.0), while
+/// the age-structured tick clamps the stored weight to [0, 1].  Reading the
+/// stored value verbatim let a raw tensor write move the calibrated
+/// equilibrium by exactly the written factor (R4-11).
+#[test]
+fn fertility_weight_follows_the_owning_engine() {
+    let (mut bp, mut params, _) = fixture();
+    // Discrete: the stored vector is inert, including out-of-domain values.
+    bp.discrete_generation = true;
+    params.fertility = vec![0.0, 1.0, 1.0, 1.0];
+    let (comp_unit, surv_unit) = equilibrium_metrics(&bp, &params, 0);
+    params.fertility = vec![0.0, 0.5, 2.0, 0.0];
+    let (comp_inert, surv_inert) = equilibrium_metrics(&bp, &params, 0);
+    assert_eq!(comp_inert, comp_unit);
+    assert_eq!(surv_inert, surv_unit);
+    // Age-structured with unit weights: clamping leaves them untouched, so the
+    // two engines agree — the discrete rule is exactly "unit fertility".
+    bp.discrete_generation = false;
+    params.fertility = vec![0.0, 1.0, 1.0, 1.0];
+    let (comp_age_unit, surv_age_unit) = equilibrium_metrics(&bp, &params, 0);
+    assert_eq!(comp_age_unit, comp_unit);
+    assert_eq!(surv_age_unit, surv_unit);
+    // Age-structured clamps out-of-domain weights to 1 rather than reading
+    // them raw, so they match the unit run and differ from in-domain weights.
+    params.fertility = vec![0.0, 1.0, 2.0, 3.0];
+    let (comp_clamped, surv_clamped) = equilibrium_metrics(&bp, &params, 0);
+    assert_eq!(comp_clamped, comp_age_unit);
+    assert_eq!(surv_clamped, surv_age_unit);
+    params.fertility = vec![0.0, 1.0, 0.9, 0.8];
+    let (comp_default, surv_default) = equilibrium_metrics(&bp, &params, 0);
+    assert_ne!(comp_default, comp_clamped);
+    assert_ne!(surv_default, surv_clamped);
 }

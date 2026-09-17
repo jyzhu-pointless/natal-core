@@ -14,6 +14,45 @@ use crate::kernels::rng::clamp01;
 use crate::model::blueprint::Blueprint;
 use crate::model::ecology::EcologyParams;
 
+/// Offspring female fraction of a balanced sex-chromosome system.
+///
+/// A heterogametic parent (XY male, ZW female) segregates its sex chromosomes
+/// 1:1 under ordinary Mendelian meiosis, so a species whose sex is determined
+/// by sex chromosomes produces an even split regardless of the ``sex_ratio``
+/// parameter — the documented contract calls that parameter "ignored" there.
+const BALANCED_SEX_CHROMOSOME_FEMALE_FRACTION: f64 = 0.5;
+
+/// Resolve the offspring female fraction the owning engine actually uses.
+///
+/// Models without sex chromosomes split offspring by the ``sex_ratio``
+/// parameter.  Models with sex chromosomes ignore it and follow the genetic
+/// split above; feeding the parameter into the calibration moved the
+/// calibrated equilibrium off ``K``, because both the age-1 reference split
+/// and ``s_0_avg`` consumed it.
+///
+/// This is a wild-type property: the calibration reads the species structure
+/// and the ecology columns only, never the genetics tables.  A modifier or
+/// preset that rewrites the transmission tables (a sex-ratio distorter
+/// included) is an overlay, exactly like fitness: it changes the realized
+/// composition without changing what ``K`` anchors.  A model whose anchor
+/// should be something other than the wild-type equilibrium declares it
+/// explicitly through ``equilibrium_distribution``.
+///
+/// ## Parameters
+/// - `has_sex_chromosomes`: Whether the species determines sex from sex chromosomes.
+/// - `sex_ratio`: The stored reproduction parameter.
+///
+/// ## Returns
+/// The offspring female fraction the tick's sex allocation produces.
+#[must_use]
+pub(crate) fn effective_offspring_sex_ratio(has_sex_chromosomes: bool, sex_ratio: f64) -> f64 {
+    if has_sex_chromosomes {
+        BALANCED_SEX_CHROMOSOME_FEMALE_FRACTION
+    } else {
+        sex_ratio
+    }
+}
+
 /// Compute the equilibrium competition strength C* and survival rate s*
 /// for one deme's ecology column.
 ///
@@ -30,8 +69,15 @@ use crate::model::ecology::EcologyParams;
 /// ``external_expected_eggs`` means "unused" (the materialization
 /// convention), matching Python's ``None``.
 ///
+/// Two inputs are read through the owning engine's semantics rather than
+/// verbatim, so the reference state is the one the tick actually reaches:
+/// the offspring sex ratio follows the genetic split for sex-chromosome
+/// species (see [`effective_offspring_sex_ratio`]), and the per-age fertility
+/// weight is the implicit 1.0 of the discrete-generation tick or the
+/// age-structured tick's ``clamp01``.
+///
 /// ## Parameters
-/// - `bp`: The frozen blueprint (dimensions).
+/// - `bp`: The frozen blueprint (dimensions and execution flags).
 /// - `params`: Current runtime parameters (columnized).
 /// - `deme`: Deme whose ecology column feeds the computation.
 ///
@@ -49,7 +95,11 @@ pub fn equilibrium_metrics(bp: &Blueprint, params: &EcologyParams, deme: usize) 
     let deme_idx = deme.min(params.n_demes.saturating_sub(1));
     let carrying_capacity = params.carrying_capacity[deme_idx];
     let eggs_per_female = params.eggs_per_female[deme_idx];
-    let sex_ratio = params.sex_ratio[deme_idx];
+    // Sex-chromosome species determine offspring sex from the chromosomes, so
+    // the calibration must follow the genetic split instead of the parameter
+    // the engine ignores there.
+    let sex_ratio =
+        effective_offspring_sex_ratio(bp.has_sex_chromosomes, params.sex_ratio[deme_idx]);
 
     // Python falls back to the female mating-rate row when the reproduction
     // vector is not supplied; the contract always carries one, so the
@@ -82,6 +132,7 @@ pub fn equilibrium_metrics(bp: &Blueprint, params: &EcologyParams, deme: usize) 
         external,
         new_adult_age,
         n_ages,
+        bp.discrete_generation,
     )
 }
 
@@ -96,11 +147,13 @@ pub fn equilibrium_metrics(bp: &Blueprint, params: &EcologyParams, deme: usize) 
 /// ## Parameters
 /// - `survival_rates`: Flat ``(2 * n_ages)`` row-major survival matrix.
 /// - `reproduce_rates`: Resolved ``(n_ages,)`` reproduction participation.
-/// - `fertility`: ``(n_ages,)`` relative female fertility.
+/// - `fertility`: ``(n_ages,)`` stored relative female fertility.
 /// - `competition_weights`: ``(n_ages,)`` juvenile competition weights.
 /// - `declared`: Flat ``(2 * n_ages)`` declared distribution, or empty.
 /// - `external_expected_eggs`: Champer egg override (negative = unused).
 /// - `new_adult_age` / `n_ages`: Age-structure bounds.
+/// - `discrete_generation`: True when the owning tick is the discrete-
+///   generation engine, whose reproduction reads no per-age fertility.
 ///
 /// ## Returns
 /// ``(expected_competition_strength, expected_survival_rate)``.
@@ -121,7 +174,21 @@ pub fn equilibrium_metrics_core(
     external_expected_eggs: f64,
     new_adult_age: usize,
     n_ages: usize,
+    discrete_generation: bool,
 ) -> (f64, f64) {
+    // Per-age fertility weight as the owning engine consumes it.  Discrete
+    // generations have no age-dependent fertility (their tick uses an implicit
+    // 1.0); the age-structured tick clamps the stored weight to [0, 1].
+    // Reading the raw stored value here made the calibration disagree with the
+    // tick whenever a raw tensor write left the builder's [0, 1] domain, which
+    // moved the calibrated equilibrium by exactly the written factor.
+    let age_fertility = |age: usize| -> f64 {
+        if discrete_generation {
+            1.0
+        } else {
+            clamp01(fertility[age])
+        }
+    };
     // Reproduction participation is a probability; clamp to [0, 1].  Only ages
     // >= new_adult_age can reproduce, so juvenile entries stay exactly 0.
     let mut p_reproducing = vec![0.0_f64; n_ages];
@@ -144,7 +211,7 @@ pub fn equilibrium_metrics_core(
             let n_f = expected_distribution[age]; // row 0 = female
                                                   // Contribution of this age to age-0 production:
                                                   // n_f * P(reproducing_this_tick) * relative_fertility * eggs_per_female
-            produced_age_0 += n_f * p_reproducing[age] * fertility[age] * eggs_per_female;
+            produced_age_0 += n_f * p_reproducing[age] * age_fertility(age) * eggs_per_female;
         }
         // Python: expected_distribution[0, 1] + expected_distribution[1, 1].
         total_age_1 = expected_distribution[1] + expected_distribution[n_ages + 1];
@@ -153,8 +220,10 @@ pub fn equilibrium_metrics_core(
         total_age_1 = carrying_capacity;
         let mut dist = vec![0.0_f64; 2 * n_ages];
         // Age 1 baseline allocation.  The reference composition has to be the
-        // one the model actually reaches: offspring are produced at
-        // `sex_ratio` and each sex then survives its own age-0 rate, so the
+        // one the model actually reaches: offspring are produced at the
+        // engine's offspring sex ratio (``sex_ratio``, or the balanced genetic
+        // split for sex-chromosome species) and each sex then survives its own
+        // age-0 rate, so the
         // age-1 female share is
         //     sex_ratio * s_f0 / (sex_ratio * s_f0 + (1 - sex_ratio) * s_m0).
         // Splitting by the raw sex ratio instead misstated the reference
@@ -185,7 +254,7 @@ pub fn equilibrium_metrics_core(
         // female distribution.
         for age in new_adult_age..n_ages {
             let n_f = dist[age];
-            produced_age_0 += n_f * p_reproducing[age] * fertility[age] * eggs_per_female;
+            produced_age_0 += n_f * p_reproducing[age] * age_fertility(age) * eggs_per_female;
         }
         expected_distribution = dist;
     }
