@@ -133,14 +133,42 @@ def embryo_rescue_modifier(pop):
 
 ### 5.2 Cytoplasmic Incompatibility
 
+The built-in `Wolbachia` preset composes gamete and zygote conversion rules.
+This example applies 30% embryonic mortality only to incompatible offspring:
+
 ```python
-def ci_modifier(pop):
-    return {
-        (("Allele1", "uninfected"), ("Allele1", "Wolbachia")): {
-            # This combination can be mapped to low survival or no offspring as needed
-        },
-    }
+import natal as nt
+
+species = nt.Species.from_dict(
+    "WolbachiaCI", {"chr1": {"locus": ["A"]}},
+    somatic_labels=["normal", "infected", "incompatible"],
+    gamete_labels=["default", "wolbachia", "wolbachia_ci"],
+)
+wolbachia = nt.Wolbachia(
+    "wMel",
+    incompatibility_cost=0.3,
+    incompatibility_effect="zygote_viability",
+)
+population = (
+    nt.DiscreteGenerationPopulation.setup(species, stochastic=False)
+    .initial_state(individual_count={
+        "female": {"A|A@normal": 100},
+        "male": {"A|A@infected": 100},
+    })
+    .reproduction(eggs_per_female=2)
+    .survival(female_age0_survival=1, male_age0_survival=1)
+    .competition(juvenile_growth_mode="no_competition")
+    .presets(wolbachia)
+    .build()
+)
+population.run(1)
+assert abs(population.state.individual_count.sum() - 140.0) < 1e-10
 ```
+
+Select `"viability"` for ordinary juvenile viability or `"fecundity"` for the
+CI individual's own fecundity when it later reproduces. With `"fecundity"`,
+the first generation contains 200 individuals, not 140. See
+[Genetic Presets](2_genetic_presets.md) for label and inheritance semantics.
 
 ## 6. Gamete Labels
 

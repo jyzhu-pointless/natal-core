@@ -49,6 +49,44 @@ distribution, which still assigns probability to the first label in each list.
 Selecting a different source label only processes branches already carrying
 that label, for example after an earlier modifier has assigned it.
 
+#### Optional incompatibility costs
+
+`Wolbachia` assumes one strain, perfect maternal transmission, and complete
+rescue by infected mothers. `incompatibility_cost` defaults to `0`, preserving
+maternal inheritance without additional labels. A positive cost marks offspring
+of an uninfected mother and an infected father with `incompatibility_slab`
+(default `incompatible`), then multiplies their own selected fitness by
+`1 - incompatibility_cost`. The cost must be finite and in `[0, 1]`.
+
+| `incompatibility_effect` | Effect on the marked individual |
+|---|---|
+| `"zygote_viability"` (default) | Embryonic survival before juvenile competition |
+| `"viability"` | Ordinary viability at the last juvenile age (`new_adult_age - 1`; age 0 in discrete generations) |
+| `"fecundity"` | Its own reproductive output when it reproduces, without reducing its birth or survival |
+
+The scalar cost applies to both sexes. With `fecundity`, one CI parent contributes
+one multiplier; two CI parents contribute its square, following the framework's
+existing parental fecundity rules. This is not a reduction of the original
+incompatible parents' clutch. `viability_scaling` and `fecundity_scaling` remain
+separate costs of infected carriers and must be finite and nonnegative.
+
+For positive costs, declare the additional somatic label `incompatible` and
+gamete label `wolbachia_ci`, or supply custom `incompatibility_slab` and
+`paternal_glab` names. The latter labels gametes from infected males as CI-inducing;
+it does not transmit infection. Source gamete and somatic labels must still
+match `default_glab` and `normal_slab`, and other modifiers' labels are preserved.
+The origin label persists on surviving individuals but is not inherited:
+CI-marked mothers are uninfected, provide no rescue, and can produce new
+CI-marked offspring when paired with infected fathers. Their compatible
+crosses produce normal-label offspring. Explicit fitness selectors targeting
+only `*@normal` do not include the distinct `*@incompatible` group; include
+both or use a broader selector when both should share another fitness effect.
+
+Setting cost to zero disables CI marking and its fitness patch; it does not
+relabel existing individuals. Runtime reconfiguration follows the existing
+fixed-layout rules and cannot introduce offspring types pruned at build time.
+For a runnable example, see [Modifier Mechanism, section 5.2](3_modifiers.md#52-cytoplasmic-incompatibility).
+
 ### HomingDrive -- Homing-based Gene Drive
 
 `HomingDrive` implements CRISPR/Cas9-type homing-based gene drive:

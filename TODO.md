@@ -41,6 +41,7 @@
 | TODO-019 | 发布后重构路线 | Population/Landscape、配置声明与 Hook 统一重构 | 待设计 |
 | TODO-020 | 观测、历史与状态存储 | Readable 导出支持多 somatic label 状态 | 待设计 |
 | TODO-021 | 种群模型与竞争语义 | 声明均衡分布的可达性校验 | 待设计 |
+| TODO-022 | 种群模型与竞争语义 | viability 显式年龄配置与实际生效范围不一致 | 待设计 |
 
 ## 遗传规则与预设
 
@@ -190,6 +191,26 @@
 - 基准是**野生型模型**：标定只读物种结构与 ecology 列。用户 hook、fitness 系数与改写遗传传递表的 modifier/preset 都属于 overlay，它们造成的实际偏离与 fitness 同性质，不应判为声明错误。注册了改状态 hook 的模型应降级为一次性警告，避免误杀有意用 hook 维持状态的模型；声明是否包含 overlay 效果需要在该次重构中一并决定。
 - modifier/preset（含性比扭曲与结构性不可育）同样落在 overlay 一侧：判定时如何取得未被 overlay 改写的基准组成、或在 overlay 存在时降级为提示，是本次重构需要确定的实现问题。`equilibrium_distribution` 本身就是"锚点不是野生型平衡态"时的入口。
 - 竞争权重第 0 项（TODO-006）与本条同类：标定使用的参考压力与 tick 实际测量口径需要在此一并核对。
+
+### TODO-022 viability 显式年龄配置与实际生效范围不一致
+
+**状态：待设计（2026-09-17 已复现；本项仅登记问题，未改变运行行为）**
+
+#### 现状与证据
+
+- 前端 `.fitness(viability=...)` 接受年龄及性别嵌套年龄配置，将值写入 `(sex, age, ztype)` 数组；preset 的年龄映射也能写入对应行。入口见 `fitness/_writer.py::_write_fitness_field_flat`、`fitness/_patch.py`。中英文 `2_population_initialization.md` 展示了显式年龄配置，并仅要求年龄位于 `[0, n_ages)`。
+- 年龄结构后端 `rust/src/kernels/age_structured.rs` 的存活计算只读取 `new_adult_age - 1` 行，其余年龄强制使用 viability 系数 `1.0`。显式配置其他幼体或成年年龄时，值虽保存却不参与存活计算；确定性和随机路径共用这一系数构造逻辑。
+- 确定性最小探针已通过 `.venv/bin/python` 实际运行：单基因型 `A|A`，`n_ages=4`、`new_adult_age=2`，雌雄各在年龄 1、2 放入 100 个体，基础年龄存活率均为 `[1, 1, 1, 0]`，关闭产卵，竞争模式为 `no_competition`。显式将年龄 1、2 的 viability 均设为 `0.5`，读取配置确认两行均为 `0.5`；运行一拍后，每个性别的年龄 2、3 数量分别为 **50、100**。若按显式年龄配置执行，应为 **50、50**：成年年龄 2 的系数被忽略。
+- 同一探针的默认值对照：不指定年龄、仅设标量 `0.5` 时，配置为 `[1, 0.5, 1, 1]`，结果也是 50、100。默认标量只写最后一个幼体年龄，并非广播到全部年龄；应保留这种单次施加的语义。
+- 现有 `tests/test_population_builder.py::TestFitnessAdvanced::test_viability_per_age` 只验证数组写入；`tests/qc/test_r4_09_multi_age.py::TestViabilityAppliedOnceAtTheLastJuvenileAge` 验证默认单次施加。两者没有建立“显式非默认年龄配置 → 实际存活变化”的端到端合同。
+- 离散世代后端 `rust/src/kernels/discrete_generation.rs` 的分阶段和 Wright–Fisher 路径只读取年龄 0。其世代模型语义须单独确定，不能直接照搬年龄结构模型的逐年龄存活。`zygote_viability_fitness` 是另一独立阶段，不属于本问题。
+- 对 Wolbachia 而言，当前普通 `viability` 成本仍只作用于最后一个幼体年龄；本问题妨碍的是指定其他年龄的存活成本，不影响现有默认阶段和 CI 个体自身的 fecundity 成本。
+
+#### 设计与待决定事项
+
+- 明确显式年龄配置的合同：支持对应年龄的存活系数，或限制可配置年龄并在入口拒绝无效配置；不应继续静默接受后忽略。同步 builder、运行时更新、preset、中英文文档及离散世代模型的限制。
+- 若支持逐年龄生效，应保留未指定年龄时仅在最后一个幼体年龄施加一次的默认行为，并明确显式多年龄成本随存活历程累乘。核对各年龄与竞争、繁殖和年龄推进的顺序，避免意外改变科学模型语义。
+- 修复时补充非默认幼体年龄和成年年龄的端到端测试，覆盖两性、随机与确定性路径、运行时更新及 preset；保留默认单次施加和胚胎存活阶段的回归验证。涉及后端存活公式时按高风险修改执行独立审查与完整门禁。
 
 ## 观测、历史与状态存储
 

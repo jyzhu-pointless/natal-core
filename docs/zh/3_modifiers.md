@@ -133,14 +133,41 @@ def embryo_rescue_modifier(pop):
 
 ### 5.2 细胞质不兼容
 
+内置 `Wolbachia` preset 组合配子与合子转换规则。下例只对不相容子代施加
+30% 胚胎死亡代价：
+
 ```python
-def ci_modifier(pop):
-    return {
-        (("Allele1", "uninfected"), ("Allele1", "Wolbachia")): {
-            # 该组合可按模型需求映射为低存活或无后代
-        },
-    }
+import natal as nt
+
+species = nt.Species.from_dict(
+    "WolbachiaCI", {"chr1": {"locus": ["A"]}},
+    somatic_labels=["normal", "infected", "incompatible"],
+    gamete_labels=["default", "wolbachia", "wolbachia_ci"],
+)
+wolbachia = nt.Wolbachia(
+    "wMel",
+    incompatibility_cost=0.3,
+    incompatibility_effect="zygote_viability",
+)
+population = (
+    nt.DiscreteGenerationPopulation.setup(species, stochastic=False)
+    .initial_state(individual_count={
+        "female": {"A|A@normal": 100},
+        "male": {"A|A@infected": 100},
+    })
+    .reproduction(eggs_per_female=2)
+    .survival(female_age0_survival=1, male_age0_survival=1)
+    .competition(juvenile_growth_mode="no_competition")
+    .presets(wolbachia)
+    .build()
+)
+population.run(1)
+assert abs(population.state.individual_count.sum() - 140.0) < 1e-10
 ```
+
+选择 `"viability"` 可作用于普通幼体存活；选择 `"fecundity"` 则作用于 CI 个体
+之后自身繁殖时的生育力。选择 `"fecundity"` 时，第一代为 200 个体而不是 140。
+标签与遗传语义见[遗传预设](2_genetic_presets.md)。
 
 ## 6. 配子标签（Gamete Labels）
 

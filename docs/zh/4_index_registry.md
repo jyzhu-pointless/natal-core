@@ -50,7 +50,7 @@ GType = (HaploidGenotype, glab_label)
 - 如果未指定，会自动创建一个单一的 `"default"` 标签。
 - 引擎会将每个基因型/单倍型与每个标签做叉积，生成完整的 ZType/GType 空间。
 
-Slab 被具体的 Preset 使用，例如 **Wolbachia**（母系细胞质标记：`wolbachia` 配子标签把感染母本的全部子代转到 `infected` slab，另有可选的按 slab 的 `viability_scaling` / `fecundity_scaling`）和 **TransgenicBackground**（按个体追踪标记表达）。该 preset 只建模母系遗传与标记适合度，不实现细胞质不兼容；这一交叉效应需用 zygote modifier 搭建（见[Modifier 机制](3_modifiers.md) 5.2 节）。如果没有这些 Preset，大多数模拟只有一个 `"default"` slab，slab 系统对用户不可见。
+Slab 被具体的 Preset 使用，例如 **Wolbachia**（母系细胞质标记：`wolbachia` 配子标签把感染母本仍带正常来源标签的子代转到 `infected` slab，另有可选的按 slab 的 `viability_scaling` / `fecundity_scaling`）和 **TransgenicBackground**（按个体追踪标记表达）。可选的不相容机制将未感染母本与感染父本的子代标记为独立 slab，再作用于这些个体自身的胚胎存活、普通存活或生育力（见[Modifier 机制](3_modifiers.md) 5.2 节）。如果没有这些 Preset，大多数模拟只有一个 `"default"` slab，slab 系统对用户不可见。
 
 ### 索引注册表结构
 

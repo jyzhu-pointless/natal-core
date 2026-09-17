@@ -20,24 +20,17 @@ Requirements under attack:
    parameter.  An unbalanced population must return to 1:1 in one
    generation.
 
-3. Wolbachia contract (docs/en/4_index_registry.md: "slabs are used by
-   concrete Presets such as **Wolbachia** (cytoplasmic incompatibility
-   modelled with the default infected/normal slabs and a wolbachia
-   gamete label)").  Cytoplasmic incompatibility means an infected male
-   crossed with an uninfected female has reduced or zero offspring,
-   while the reciprocal cross is fertile; a strain with perfect maternal
-   transmission and incompatibility spreads to fixation above the
-   Caspari-Watson threshold.  FINDING F3 (marked EVIDENCE below): the
-   preset implements only maternal slab inheritance plus per-slab
-   fitness scaling -- there is no incompatibility cross effect and no
-   transmission-fidelity parameter.  The documented CI is absent from
-   the implementation.
+3. Wolbachia retains neutral maternal inheritance with its default zero
+   incompatibility cost. Optional CI marks offspring from an uninfected
+   mother and an infected father and applies the selected offspring
+   fitness cost. Both languages must describe that contract; dedicated
+   CI behavior and lifecycle tests cover positive costs separately.
 
 Wrong results rejected: migration that mixes without any decay law or
 loses mass-weighted frequency, migration that changes the global
 frequency, an XY species whose offspring sex ratio follows the
-`sex_ratio` parameter instead of the chromosomes, and a documented CI
-capability that silently does nothing.
+`sex_ratio` parameter instead of the chromosomes, and drift from the
+documented default Wolbachia inheritance contract.
 """
 
 from __future__ import annotations
@@ -244,26 +237,25 @@ def _wol_cross(name: str, *, female_key: str, male_key: str, viability: float = 
     return _slab_totals(population)
 
 
-def test_docs_and_preset_agree_that_ci_is_not_implemented() -> None:
-    """The Wolbachia contract now matches the preset.
-
-    The index-registry docs used to claim the preset models cytoplasmic
-    incompatibility while the preset only implements maternal slab inheritance
-    plus per-slab fitness scaling; the docs were corrected (both languages).
-    This guard fails if the false claim returns, and the companion test below
-    pins what the preset actually does.
-    """
+def test_docs_describe_optional_ci_as_offspring_fitness() -> None:
+    """Both languages describe optional CI and the affected offspring fitness."""
     root = Path(__file__).resolve().parents[2]
     for relative in ("docs/en/4_index_registry.md", "docs/zh/4_index_registry.md"):
         text = (root / relative).read_text(encoding="utf-8")
         assert "cytoplasmic incompatibility modelled with the default" not in text, relative
         assert "建模细胞质不兼容性，并要求" not in text, relative
-        marker = "does not implement cytoplasmic incompatibility" if "en/" in relative else "不实现细胞质不兼容"
-        assert marker in text, relative
+        retired = "does not implement cytoplasmic incompatibility" if "en/" in relative else "不实现细胞质不兼容"
+        assert retired not in text, relative
+        markers = (
+            ("Optional incompatibility", "their own embryonic viability, ordinary viability, or fecundity")
+            if "en/" in relative else
+            ("可选的不相容机制", "这些个体自身的胚胎存活、普通存活或生育力")
+        )
+        assert all(marker in text for marker in markers), relative
 
 
 def test_implemented_wolbachia_is_a_neutral_maternal_marker() -> None:
-    """What the preset does implement: exact maternal slab inheritance.
+    """The default zero CI cost retains exact maternal slab inheritance.
 
     With no fitness cost the infection frequency is invariant (each
     infected mother transmits to every offspring, no paternal effect), and

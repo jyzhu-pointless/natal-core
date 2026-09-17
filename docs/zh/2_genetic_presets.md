@@ -43,6 +43,37 @@ pop = (nt.DiscreteGenerationPopulation.setup(species, name="TestPop")
 如果指定的来源标签不是第一项，规则只处理已经带有该标签的分支，例如前面的 modifier
 已经将它们标记为该标签的情况。
 
+#### 可选的不相容代价
+
+`Wolbachia` 假设单菌株、完全母系传播，以及感染母本提供完全救援。
+`incompatibility_cost` 默认 `0`，保留原有母系遗传行为且不需要额外标签。
+正代价会把未感染母本与感染父本产生的子代标为 `incompatibility_slab`
+（默认 `incompatible`），再将这些个体自身所选的 fitness 乘以
+`1 - incompatibility_cost`。代价必须为有限值且在 `[0, 1]` 内。
+
+| `incompatibility_effect` | 对标记个体的作用 |
+|---|---|
+| `"zygote_viability"`（默认） | 幼体竞争之前的胚胎存活 |
+| `"viability"` | 最后一个幼体年龄的普通存活适合度（`new_adult_age - 1`；离散世代中为年龄 0） |
+| `"fecundity"` | 该个体自身繁殖时的繁殖输出，不减少它的出生数量或存活率 |
+
+标量代价作用于两性。选择 `fecundity` 时，一个 CI 亲本贡献一个乘数，两个 CI 亲本
+贡献其平方，沿用框架现有的双亲生育力规则；它不减少最初那次不相容交配的产卵量。
+`viability_scaling` 和 `fecundity_scaling` 仍独立作用于感染个体，且必须为有限非负值。
+
+使用正代价时，需额外声明体细胞标签 `incompatible` 和配子标签 `wolbachia_ci`，
+或用 `incompatibility_slab` 和 `paternal_glab` 指定自定义名字。
+后者表示感染雄虫的配子具有 CI 诱导效应，不代表父系传播感染。
+来源配子与体细胞标签仍须对应 `default_glab` 和 `normal_slab`，其他 modifier
+已赋予的标签不会被覆盖。存活个体保留来源标记，但不会遗传该标记：
+CI 母本仍未感染、不能救援，与感染父本交配可再次产生 CI 子代；相容交配产生正常标签子代。
+仅选择 `*@normal` 的显式 fitness 配置不包含独立的 `*@incompatible` 群体；
+若两组还需承担相同的其他代价，应同时指定两组或使用更宽的选择器。
+
+将代价改为零会关闭 CI 标记规则及相应 fitness patch，但不会重标现有个体。
+运行时重配置沿用固定布局规则，不能引入构建时已被压缩删除的子代类型。
+可运行示例见 [Modifier 机制 5.2 节](3_modifiers.md#52-细胞质不兼容)。
+
 ### HomingDrive - 同源重组基因驱动
 
 `HomingDrive` 实现 CRISPR/Cas9 类型的同源重组基因驱动：

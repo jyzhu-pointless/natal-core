@@ -5,7 +5,7 @@ Public module — provides CytoplasmicPreset, Wolbachia, and TransgenicBackgroun
 
 # pyright: reportPrivateUsage=false
 
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -222,14 +222,11 @@ class CytoplasmicPreset(GeneticPreset):
 
 
 class Wolbachia(CytoplasmicPreset):
-    """Maternally-inherited endosymbiont with explicit source labels.
+    """Maternal infection inheritance with optional cross-specific incompatibility.
 
-    Infected mothers tag offspring that still carry ``normal_slab``,
-    regardless of the father. Other somatic labels are preserved.
-
-    Requires Species with:
-      - gamete_labels including ``default_glab`` and ``"wolbachia"``
-      - somatic_labels including ``normal_slab`` and ``infected_slab``
+    Offspring of uninfected mothers paired with infected fathers carry the
+    incompatibility cost. Infected mothers provide complete rescue. The
+    incompatible offspring label records origin, not an inherited infection.
     """
 
     def __init__(
@@ -243,20 +240,37 @@ class Wolbachia(CytoplasmicPreset):
         priority: int = 0,
         *,
         default_glab: str = "default",
+        incompatibility_cost: float = 0.0,
+        incompatibility_effect: Literal["zygote_viability", "viability", "fecundity"] = "zygote_viability",
+        incompatibility_slab: str = "incompatible",
+        paternal_glab: str = "wolbachia_ci",
     ) -> None:
-        """Initialize a Wolbachia cytoplasmic preset.
+        """Configure infection costs and a separate incompatible-cross loss.
 
         Args:
             name: Preset name.
-            infected_slab: Somatic slab label for infected individuals.
-            normal_slab: Somatic label for uninfected individuals and the
-                source label eligible for offspring infection tagging.
-            viability_scaling: Viability multiplier for infected carriers.
-            fecundity_scaling: Fecundity multiplier for infected carriers.
-                ``None`` means no fecundity effect.
-            species: Optional species for validation.
+            infected_slab: Somatic label for infected individuals.
+            normal_slab: Uninfected label and source of offspring relabeling.
+            viability_scaling: Finite nonnegative infected-carrier multiplier.
+            fecundity_scaling: Finite nonnegative infected-carrier multiplier;
+                ``None`` leaves fecundity unchanged.
+            species: Optional species binding.
             priority: Modifier and fitness application priority.
-            default_glab: Source gamete label eligible for maternal tagging.
+            default_glab: Source gamete label eligible for tagging.
+            incompatibility_cost: Fraction lost, finite and in [0, 1]. Zero
+                disables incompatibility without requiring additional labels.
+            incompatibility_effect: Fitness of the incompatible offspring:
+                embryo survival before competition, ordinary viability at the
+                last juvenile age, or its own fecundity when reproducing.
+                The scalar multiplier applies to both sexes.
+            incompatibility_slab: Uninfected offspring-origin label required
+                for positive incompatibility costs. Carriers do not pass
+                this label maternally and remain susceptible to incompatibility.
+            paternal_glab: Gamete tag required for positive incompatibility costs;
+                signals paternal induction, never paternal infection inheritance.
+
+        Raises:
+            ValueError: If costs, effect, or label roles are invalid.
         """
         super().__init__(
             name=name, species=species, priority=priority,
@@ -267,18 +281,95 @@ class Wolbachia(CytoplasmicPreset):
         self.normal_slab = normal_slab
         self.viability_scaling = viability_scaling
         self.fecundity_scaling = fecundity_scaling
+        self.incompatibility_cost = incompatibility_cost
+        self.incompatibility_effect = incompatibility_effect
+        self.incompatibility_slab = incompatibility_slab
+        self.paternal_glab = paternal_glab
+        self._validate_options()
+
+    def _validate_options(self) -> None:
+        # Revalidate on compilation: runtime preset reconfiguration replaces
+        # attributes without invoking the constructor.
+        for name, value in (("viability_scaling", self.viability_scaling),
+                            ("fecundity_scaling", self.fecundity_scaling)):
+            if value is not None and (not np.isfinite(value) or value < 0):
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if not np.isfinite(self.incompatibility_cost) or not 0 <= self.incompatibility_cost <= 1:
+            raise ValueError("incompatibility_cost must be finite and in [0, 1]")
+        if self.incompatibility_effect not in ("zygote_viability", "viability", "fecundity"):
+            raise ValueError("Unknown incompatibility_effect")
+        if self.incompatibility_cost > 0:
+            if self.infected_slab == self.normal_slab:
+                raise ValueError("infected_slab and normal_slab must differ for incompatibility")
+            if self.incompatibility_slab in (self.infected_slab, self.normal_slab):
+                raise ValueError("incompatibility_slab must differ from infection labels")
+            if self.default_glab == "wolbachia":
+                raise ValueError("default_glab must differ from the maternal infection tag")
+            if self.paternal_glab in (self.default_glab, "wolbachia"):
+                raise ValueError("paternal_glab must differ from source and maternal tags")
+
+    def _validate_host(self, host: "RecipeHost") -> None:
+        self._validate_options()
+        if self.incompatibility_cost > 0:
+            if self.paternal_glab not in host.registry.glab_labels:
+                raise ValueError(f"Unknown paternal_glab {self.paternal_glab!r}")
+            if self.incompatibility_slab not in host.registry.slab_labels:
+                raise ValueError(f"Unknown incompatibility_slab {self.incompatibility_slab!r}")
+
+    def gamete_modifier(self, host: "RecipeHost") -> Optional[GameteModifier]:
+        """Tag infection maternally and incompatible-cross induction paternally."""
+        self._validate_host(host)
+        maternal = super().gamete_modifier(host)
+        if self.incompatibility_cost == 0:
+            return maternal
+        rules = GameteConversionRuleSet()
+        rules.add_gtype_convert(
+            to="*@wolbachia", rate=1.0,
+            filters={"parent_sex": "female", "parent": f"*@{self.infected_slab}",
+                     "current": f"*@{self.default_glab}"},
+        )
+        rules.add_gtype_convert(
+            to=f"*@{self.paternal_glab}", rate=1.0,
+            filters={"parent_sex": "male", "parent": f"*@{self.infected_slab}",
+                     "current": f"*@{self.default_glab}"},
+        )
+        return rules.to_gamete_modifier(host)  # type: ignore[return-type]  # compiled rule structurally implements GameteModifier
+
+    def zygote_modifier(self, host: "RecipeHost") -> Optional[ZygoteModifier]:
+        """Retain maternal inheritance and mark incompatible uninfected offspring."""
+        self._validate_host(host)
+        maternal = super().zygote_modifier(host)
+        if self.incompatibility_cost == 0:
+            return maternal
+        rules = ZygoteConversionRuleSet()
+        rules.add_ztype_convert(
+            to=f"*@{self.infected_slab}", rate=1.0,
+            filters={"maternal": "*@wolbachia", "current": f"*@{self.normal_slab}"},
+        )
+        rules.add_ztype_convert(
+            to=f"*@{self.incompatibility_slab}", rate=1.0,
+            filters={"maternal": f"*@{self.default_glab}",
+                     "paternal": f"*@{self.paternal_glab}", "current": f"*@{self.normal_slab}"},
+        )
+        return rules.to_zygote_modifier(host)  # type: ignore[return-type]  # compiled rule structurally implements ZygoteModifier
 
     def fitness_patch(self) -> PresetFitnessPatch:
-        """Build fitness patch applying viability and fecundity scaling.
-
-        Returns:
-            A fitness patch dict with optional ``viability_per_slab`` and
-            ``fecundity_per_slab`` entries for the infected slab.
-        """
-        patch: PresetFitnessPatch = {}
-        patch['viability_per_slab'] = {self.infected_slab: self.viability_scaling}
+        """Apply carrier fitness separately from the incompatible-cross effect."""
+        self._validate_options()
+        patch: PresetFitnessPatch = {
+            "viability_per_slab": {self.infected_slab: self.viability_scaling},
+        }
         if self.fecundity_scaling is not None:
-            patch['fecundity_per_slab'] = {self.infected_slab: self.fecundity_scaling}
+            patch["fecundity_per_slab"] = {self.infected_slab: self.fecundity_scaling}
+        if self.incompatibility_cost == 0:
+            return patch
+        factor = 1.0 - self.incompatibility_cost
+        if self.incompatibility_effect == "zygote_viability":
+            patch["zygote_per_slab"] = {self.incompatibility_slab: factor}
+        elif self.incompatibility_effect == "viability":
+            patch["viability_per_slab"][self.incompatibility_slab] = factor
+        else:
+            patch.setdefault("fecundity_per_slab", {})[self.incompatibility_slab] = factor
         return patch
 
 
