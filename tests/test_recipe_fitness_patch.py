@@ -335,6 +335,7 @@ class TestPresetFitnessPatchKeyValidation(unittest.TestCase):
         self.assertIn("'not_a_patch_key'", str(ctx.exception))
         # The legal entry in the same patch must not have been applied.
         self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][self.idx_drive_wt], 1.0)
+        self.assertAlmostEqual(self.pop._config.fecundity_fitness[0][self.idx_drive_wt], 1.0)
 
     def test_uncomparable_unknown_keys_still_report_a_value_error(self) -> None:
         """Reporting the bad keys must not depend on them being sortable.
@@ -350,7 +351,6 @@ class TestPresetFitnessPatchKeyValidation(unittest.TestCase):
         self.assertIn("1", message)
         self.assertIn("(2,)", message)
         self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][self.idx_drive_wt], 1.0)
-        self.assertAlmostEqual(self.pop._config.fecundity_fitness[0][self.idx_drive_wt], 1.0)
 
     def test_unknown_key_leaves_every_tensor_family_unwritten(self) -> None:
         """The key check precedes every setter, not only the first tensor family.

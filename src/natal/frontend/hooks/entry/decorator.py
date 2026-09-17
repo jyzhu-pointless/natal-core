@@ -197,7 +197,8 @@ def hook(
                     deme_selector=actual_deme_selector,
                 )
             elif required == 0:
-                # Declarative: called ONCE at compile time; its return value
+                # Declarative: invoked at build time (once for reference
+                # collection, once for compilation); its return value
                 # (list of HookOp) is compiled into a CSR plan.  An empty list
                 # is a legal no-op; a non-list return, or a list carrying an
                 # element that is not a HookOp, is a declaration error.
