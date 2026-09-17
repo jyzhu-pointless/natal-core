@@ -242,6 +242,8 @@ class TickMetrics:
             n_ages=n_ages,
             declared_distribution=distribution,
             external_expected_eggs=None,
+            has_sex_chromosomes=bool(config.has_sex_chromosomes),
+            discrete_generation=bool(config.discrete_generation),
         )
 
 

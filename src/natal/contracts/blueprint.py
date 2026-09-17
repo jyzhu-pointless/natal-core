@@ -70,6 +70,10 @@ class Blueprint(NamedTuple):
         fixed_egg_count: Deterministic expected egg count when True
             (reproduction-side flag; unrelated to the density curve).
         has_sex_chromosomes: Sex-chromosome constraints active.
+        discrete_generation: True for the non-overlapping
+            discrete-generation engine.  The equilibrium calibration reads it
+            to consume per-age fertility the way the owning tick does
+            (discrete: implicit 1.0; age-structured: ``clamp01``).
         extreme_speed_mode: 0 off, 1 multinomial, 2 poisson,
             3 deterministic Wright-Fisher fused tick.
         ztype_names: Canonical ``"<genotype>:<slab>"`` string per ztype
@@ -111,6 +115,7 @@ class Blueprint(NamedTuple):
     continuous_sampling: bool
     fixed_egg_count: bool
     has_sex_chromosomes: bool
+    discrete_generation: bool
     extreme_speed_mode: int
     # Symbolic name directory
     ztype_names: tuple[str, ...]

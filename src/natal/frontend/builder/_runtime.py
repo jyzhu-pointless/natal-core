@@ -294,6 +294,11 @@ def fitness_writes(
 def expected_females_eggs(draft: ModelDraft, target_females: float) -> float:
     """Derive the total-egg override equivalent to *target_females*.
 
+    The override feeds the calibration's survival-rate numerator, so it must
+    count eggs the way the owning tick counts them: the discrete engine reads
+    no per-age fertility and the age-structured engine clamps it.  Passing the
+    draft's engine through keeps this anchor consistent with ``C*``.
+
     Args:
         draft: The working draft supplying the current demographics.
         target_females: Target number of new adult females.
@@ -311,6 +316,7 @@ def expected_females_eggs(draft: ModelDraft, target_females: float) -> float:
         sex_ratio=float(draft.sex_ratio),
         new_adult_age=int(draft.new_adult_age),
         n_ages=int(draft.n_ages),
+        discrete_generation=bool(draft.discrete_generation),
     )
 
 

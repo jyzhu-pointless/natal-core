@@ -704,6 +704,8 @@ class TestRustKernelSingleDispatch:
                     3,
                     None,
                     None,
+                    has_sex_chromosomes=False,
+                    discrete_generation=False,
                 )
         finally:
             if saved is None:
@@ -1132,6 +1134,8 @@ class TestEquilibriumKernelParity:
                 np.ascontiguousarray(comp),
                 1,
                 n,
+                False,
+                False,
                 None,
                 None,
             )
@@ -1162,6 +1166,8 @@ class TestEquilibriumKernelParity:
             np.ascontiguousarray(comp),
             1,
             n,
+            False,
+            False,
             None,
             None,
         )
@@ -1209,6 +1215,8 @@ class TestEquilibriumKernelParity:
                 np.ascontiguousarray(c),
                 na,
                 ages,
+                False,
+                False,
                 declared,
                 external,
             )
@@ -1246,6 +1254,8 @@ class TestEquilibriumKernelParity:
                 np.ascontiguousarray(comp),
                 1,
                 n,
+                False,
+                False,
                 None,
                 None,
             )
@@ -1263,6 +1273,8 @@ class TestEquilibriumKernelParity:
                 np.ascontiguousarray(comp),
                 1,
                 n,
+                False,
+                False,
                 np.asfortranarray(wide[:, :n]),
                 None,
             )
@@ -1357,6 +1369,8 @@ class TestEquilibriumKernelParity:
                     ),
                     int(d.new_adult_age),
                     int(d.n_ages),
+                    bool(d.has_sex_chromosomes),
+                    bool(d.discrete_generation),
                     (
                         np.ascontiguousarray(declared, dtype=np.float64)
                         if declared is not None
@@ -1691,6 +1705,8 @@ class TestBuildPathEquilibriumDispatch:
                 3,
                 declared,
                 external,
+                has_sex_chromosomes=False,
+                discrete_generation=False,
             )
             assert result is not None  # extension guarded above
             return result
@@ -1763,6 +1779,8 @@ class TestBuildPathEquilibriumDispatch:
                 3,
                 declared,
                 None,
+                has_sex_chromosomes=False,
+                discrete_generation=False,
             )
             assert result is not None  # extension guarded above
             return result

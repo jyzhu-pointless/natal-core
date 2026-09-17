@@ -22,6 +22,7 @@ fn fixture() -> (Blueprint, EcologyParams, GeneticsTensors) {
         continuous_sampling: false,
         fixed_egg_count: false,
         has_sex_chromosomes: false,
+        discrete_generation: false,
         extreme_speed_mode: 0,
         ztype_names: vec!["A|A".into(), "A|B".into()],
         gtype_names: vec!["A".into(), "B".into()],

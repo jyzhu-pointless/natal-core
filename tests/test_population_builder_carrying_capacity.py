@@ -166,6 +166,7 @@ class TestCarryingCapacityResolution:
             sex_ratio=0.5,
             new_adult_age=2,
             n_ages=n_ages,
+            discrete_generation=False,
         )
         # N_f[2] = 500, N_f[3] = 500 * 0.8 = 400
         # Eggs = 500*1.0*1.0*100 + 400*1.0*0.8*100 = 50000 + 32000 = 82000
@@ -188,6 +189,7 @@ class TestCarryingCapacityResolution:
             female_age_based_fertility=fertility,
             new_adult_age=2,
             n_ages=n_ages,
+            discrete_generation=False,
         )
         # N_f[2] = 400, eggs = 400 * 1.0 * 1.0 * 100 = 40000
         assert eggs == pytest.approx(40000.0)
@@ -332,6 +334,7 @@ class TestCarryingCapacityResolution:
             female_age_based_fertility=fertility,
             new_adult_age=new_adult_age,
             n_ages=n_ages,
+            discrete_generation=False,
         )
 
         from natal.frontend.model import build_population_config
@@ -349,6 +352,8 @@ class TestCarryingCapacityResolution:
             n_ages,
             dist,
             None,
+            has_sex_chromosomes=False,
+            discrete_generation=False,
         )
 
         assert comp >= 0.0
@@ -397,6 +402,7 @@ class TestCarryingCapacityResolution:
             sex_ratio=sex_ratio,
             new_adult_age=new_adult_age,
             n_ages=n_ages,
+            discrete_generation=False,
         )
 
         from natal.frontend.model.ecology import equilibrium_metrics_dispatch
@@ -413,6 +419,8 @@ class TestCarryingCapacityResolution:
             n_ages,
             dist,
             external_eggs,
+            has_sex_chromosomes=False,
+            discrete_generation=False,
         )
 
         # The survival rate should use external_eggs, not distribution's eggs
@@ -672,6 +680,7 @@ class TestChamperModel:
             sex_ratio=self.sex_ratio,
             new_adult_age=self.new_adult_age,
             n_ages=self.n_ages,
+            discrete_generation=False,
         )
         # Female dist: [0,0,21,17.5,14,10.5,7,3.5]
         # Sum = 73.5, eggs = 73.5 * 50 = 3675
@@ -690,6 +699,7 @@ class TestChamperModel:
             sex_ratio=self.sex_ratio,
             new_adult_age=self.new_adult_age,
             n_ages=self.n_ages,
+            discrete_generation=False,
         )
         # female_dist: [0,0,21,17.5,14,10.5,7,3.5]
         # eggs = 21*0.5*50 + 17.5*1.0*50 + 14*1.0*50 + 10.5*0.8*50 + 7*0.5*50 + 3.5*0.0*50
@@ -710,6 +720,7 @@ class TestChamperModel:
             sex_ratio=self.sex_ratio,
             new_adult_age=self.new_adult_age,
             n_ages=self.n_ages,
+            discrete_generation=False,
         )
         # female_dist: [0,0,21,17.5,14,10.5,7,3.5]
         # eggs = 21*0.8*50 + 17.5*1.0*50 + 14*1.0*50 + 10.5*0.8*50 + 7*0.5*50 + 3.5*0.0*50
@@ -728,6 +739,7 @@ class TestChamperModel:
             female_age_based_fertility=np.ones(self.n_ages, dtype=np.float64),
             new_adult_age=self.new_adult_age,
             n_ages=self.n_ages,
+            discrete_generation=False,
         )
         # Adult females: 6+5+4+3+2+1 = 21
         # eggs = 21 * 1.0 * 1.0 * 50 = 1050
@@ -758,6 +770,8 @@ class TestChamperModel:
             self.n_ages,
             dist,
             None,
+            has_sex_chromosomes=False,
+            discrete_generation=False,
         )
 
         assert comp == pytest.approx(1110.0)
@@ -793,6 +807,8 @@ class TestChamperModel:
             self.n_ages,
             dist,
             external_eggs,
+            has_sex_chromosomes=False,
+            discrete_generation=False,
         )
 
         # Competition still uses distribution's eggs (1050)

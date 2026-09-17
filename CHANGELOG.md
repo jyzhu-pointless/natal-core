@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Changed
+
+- `natal.Blueprint` carries a new `discrete_generation` flag, positioned
+  between `has_sex_chromosomes` and `extreme_speed_mode` (23 fields, up from
+  22). The frozen spec must say which engine it describes, because the
+  equilibrium kernel reads per-age `fertility` differently in each (implicit
+  1.0 vs `clamp01`). Keyword construction is unaffected; positional
+  construction of the previously 22-field tuple is not. The field is derived
+  from the draft the population was built from, not a user-settable parameter.
+- The private `natal._engine_rs.equilibrium_metrics_flat` helper gained two
+  required positional arguments (`has_sex_chromosomes`, `discrete_generation`)
+  before its two defaulted sentinels; `src/natal/_engine_rs.pyi` matches the
+  new order.
+
+### Fixed
+
+- The equilibrium calibration reads the offspring sex ratio the way the owning
+  engine does: a species whose sex is determined by sex chromosomes ignores
+  `sex_ratio` exactly as its tick already did, instead of letting a non-0.5
+  value split the reference composition and move the equilibrium away from the
+  declared carrying capacity (up to +56.9 % at 0.2 and -28.2 % at 0.7 in the
+  reported probes; both engines shared the error).
+- The equilibrium calibration consumes per-age `fertility` as the owning tick
+  does: discrete generations use an implicit 1.0 (their tick reads no
+  age-dependent fertility at all) and the age-structured path clamps the
+  stored weight to `[0, 1]`. A raw `params.tensor_write("fertility", ...)`
+  value outside the builder's domain no longer moves the equilibrium by the
+  written factor.
+- The Champer egg override (`competition(expected_num_new_adult_females=...)`)
+  derives its total from the same per-age fertility weights the owning tick
+  reads, so a discrete model ignores the stored tensor there and the
+  age-structured path clamps it. Previously the raw stored values moved the
+  override — and through it the realized equilibrium — by the written factor.
+
 ## v0.3.0 (2026-09-16)
 
 The first final 0.3 release retains the Rust engine and public model interfaces

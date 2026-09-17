@@ -227,6 +227,13 @@ The initialization path has three scenarios:
 
 Regardless of the path taken, the system will genuinely construct the equilibrium distribution, then compute all competition metrics from it. This ensures consistency among $K$, expected egg production, and the equilibrium survival rate. The derived distribution splits the age-1 total by the *surviving* sex ratio — the offspring sex ratio filtered by each sex's own age-0 survival — so the calibrated equilibrium stays at $K$ even when the two sexes survive differently; with equal age-0 survival this reduces to the offspring sex ratio itself.
 
+Two inputs are read exactly as the owning engine reads them, so the reference state is one the model can actually reach:
+
+- **Offspring sex ratio.** A species whose sex is determined by sex chromosomes ignores `sex_ratio` (see the parameter table above); the calibration follows the same rule and splits the reference composition by the balanced genetic 1:1 split, so a non-0.5 value stays inert instead of moving the calibrated equilibrium.
+- **Per-age fertility.** Discrete generations have no age-dependent fertility, so the calibration uses an implicit 1.0 there, while the age-structured path clamps the stored weight to `[0, 1]` — in both cases matching its tick.
+
+The derived reference is the **wild-type** background: it is built from the species structure and the ecology parameters only. Fitness coefficients and the modifier/preset rule sets — which rewrite the transmission tables — are overlays: they change the realized composition, and, when they carry a cost, the realized total, without changing what $K$ anchors. Applying `viability`, `fecundity`, or `zygote_viability` fitness therefore moves the realized equilibrium away from $K$; that is the cost taking effect, not a calibration error. `sexual_selection` is the exception: mating preferences redistribute paternities but preserve each female's total pair weight, so the total stays at $K$. A model whose anchor should be something other than the wild-type equilibrium declares it explicitly with `equilibrium_distribution`.
+
 **Expected egg production formula**:
 
 Total expected egg production is calculated as:

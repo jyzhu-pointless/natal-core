@@ -240,7 +240,7 @@ def test_model_draft_schema_has_no_legacy_fields() -> None:
 
 
 def test_blueprint_field_schema_is_exact() -> None:
-    # The frozen blueprint carries exactly the 7 dimensions, 5 execution
+    # The frozen blueprint carries exactly the 7 dimensions, 6 execution
     # flags, 2 name directories, 2 sex-chromosome masks, 2 initial states
     # and the slice-5 spatial block (deme count + migration CSR) —
     # nothing else (genetics tensors, equilibrium, Champer override must
@@ -249,7 +249,7 @@ def test_blueprint_field_schema_is_exact() -> None:
         "n_sexes", "n_ages", "n_ztypes", "n_gtypes", "n_glabs",
         "new_adult_age", "adult_ages",
         "stochastic", "continuous_sampling", "fixed_egg_count",
-        "has_sex_chromosomes", "extreme_speed_mode",
+        "has_sex_chromosomes", "discrete_generation", "extreme_speed_mode",
         "ztype_names", "gtype_names",
         "female_only_by_sex_chrom", "male_only_by_sex_chrom",
         "initial_individual_count", "initial_sperm_storage",

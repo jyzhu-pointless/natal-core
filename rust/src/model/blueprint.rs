@@ -26,6 +26,13 @@ pub struct Blueprint {
     pub continuous_sampling: bool,
     pub fixed_egg_count: bool,
     pub has_sex_chromosomes: bool,
+    /// True for the non-overlapping discrete-generation engine.
+    ///
+    /// The equilibrium calibration reads per-age fertility the way the owning
+    /// tick does: discrete generations have no age-dependent fertility (their
+    /// tick uses an implicit 1.0), while the age-structured tick clamps the
+    /// stored weight to ``[0, 1]``.
+    pub discrete_generation: bool,
     pub extreme_speed_mode: i64,
     // -- symbolic name directory --
     pub ztype_names: Vec<String>,
@@ -49,11 +56,12 @@ impl Blueprint {
     #[allow(clippy::too_many_arguments)] // from_parts handoff mirrors the Python contract 1:1
     #[pyo3(signature = (n_sexes, n_ages, n_ztypes, n_gtypes, n_glabs, new_adult_age,
                         adult_ages, stochastic, continuous_sampling, fixed_egg_count,
-                        has_sex_chromosomes, extreme_speed_mode, ztype_names, gtype_names,
+                        has_sex_chromosomes, discrete_generation, extreme_speed_mode,
+                        ztype_names, gtype_names,
                         female_only_by_sex_chrom, male_only_by_sex_chrom,
                         initial_individual_count, initial_sperm_storage,
                         n_demes, migration_indptr, migration_dest_idx, migration_weights))]
-    #[allow(clippy::fn_params_excessive_bools)] // the contract itself has five flags
+    #[allow(clippy::fn_params_excessive_bools)] // the contract itself has six flags
     fn new(
         n_sexes: usize,
         n_ages: usize,
@@ -66,6 +74,7 @@ impl Blueprint {
         continuous_sampling: bool,
         fixed_egg_count: bool,
         has_sex_chromosomes: bool,
+        discrete_generation: bool,
         extreme_speed_mode: i64,
         ztype_names: Vec<String>,
         gtype_names: Vec<String>,
@@ -90,6 +99,7 @@ impl Blueprint {
             continuous_sampling,
             fixed_egg_count,
             has_sex_chromosomes,
+            discrete_generation,
             extreme_speed_mode,
             ztype_names,
             gtype_names,
@@ -283,6 +293,7 @@ impl Blueprint {
             continuous_sampling: extract_bool(obj, "continuous_sampling")?,
             fixed_egg_count: extract_bool(obj, "fixed_egg_count")?,
             has_sex_chromosomes: extract_bool(obj, "has_sex_chromosomes")?,
+            discrete_generation: extract_bool(obj, "discrete_generation")?,
             extreme_speed_mode: extract_i64(obj, "extreme_speed_mode")?,
             ztype_names: extract_string_vec(obj, "ztype_names")?,
             gtype_names: extract_string_vec(obj, "gtype_names")?,
