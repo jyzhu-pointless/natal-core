@@ -502,3 +502,105 @@ def test_runtime_lifts_compressed_fitness_baselines_without_aliasing(invalid: bo
             expected[..., z] = source
         np.testing.assert_array_equal(actual, expected)
         assert not np.shares_memory(actual, source)
+
+
+# ---------------------------------------------------------------------------
+# Fitness baseline shape contract (FRONTEND_REFACTOR_PLAN.md item 5)
+# ---------------------------------------------------------------------------
+
+
+def _uncompiled_draft(name: str):
+    """Species plus its uncompiled products (draft and complete registry agree).
+
+    The shape mismatch in these tests is constructed directly on
+    ``ModelDefinition``.  That does not show the ordinary builder chain can
+    produce one — it asserts the compiler's contract when it is handed an
+    inconsistent declaration.
+    """
+    species = _species(name)
+    full = _builder(species, compress=False)._compile_products()
+    return species, full
+
+
+def _definition(
+    species: object,
+    full: object,
+    values: tuple[np.ndarray, ...] = (),
+):
+    from natal.frontend.builder._registry_builder import build_registry
+    from natal.frontend.model.definition import ModelDefinition
+
+    return ModelDefinition(
+        species,  # type: ignore[arg-type]
+        True,
+        draft=full.config,  # type: ignore[attr-defined]
+        registry=build_registry(species),  # type: ignore[arg-type]
+        fitness_base=values,
+    )
+
+
+def _baseline_values(full: object) -> tuple[np.ndarray, ...]:
+    """One distinct non-default value per fitness field."""
+    from natal.frontend.model.definition_compiler import FITNESS_FIELDS
+
+    return tuple(
+        np.full_like(getattr(full.config, field), (index + 1) / 5)  # type: ignore[attr-defined]
+        for index, field in enumerate(FITNESS_FIELDS)
+    )
+
+
+def test_matching_non_default_fitness_baseline_is_preserved() -> None:
+    """A baseline whose shapes match is re-seeded verbatim, not neutralized."""
+    from natal.frontend.model.definition_compiler import FITNESS_FIELDS, compile_definition
+
+    species, full = _uncompiled_draft("baseline_match")
+    values = _baseline_values(full)
+
+    compiled = compile_definition(_definition(species, full, values))
+
+    for field, expected in zip(FITNESS_FIELDS, values, strict=True):
+        np.testing.assert_array_equal(getattr(compiled.config, field), expected)
+
+
+def test_mismatched_fitness_baseline_shape_is_rejected() -> None:
+    """A wrong-shaped baseline raises instead of rewriting the field to ones.
+
+    Previously ``compile_definition`` wrote ``np.ones_like(target)`` for a
+    mismatched field, so a declared 0.25 baseline silently became a neutral
+    1.0.
+    """
+    from natal.frontend.model.definition_compiler import compile_definition
+
+    species, full = _uncompiled_draft("baseline_mismatch")
+    values = list(_baseline_values(full))
+    values[0] = np.full((7, 9), 0.25)
+
+    with pytest.raises(ValueError, match="Fitness baseline shape") as excinfo:
+        compile_definition(_definition(species, full, tuple(values)))
+
+    message = str(excinfo.value)
+    assert "viability_fitness" in message
+    assert "(7, 9)" in message
+    assert "(2, 2, 12)" in message
+
+
+def test_mismatched_fitness_baseline_leaves_declaration_and_model_untouched() -> None:
+    """A rejected compile must not re-seed the declaration or a live model."""
+    from natal.frontend.model.definition_compiler import FITNESS_FIELDS, compile_definition
+
+    species, full = _uncompiled_draft("baseline_isolated")
+    values = list(_baseline_values(full))
+    values[0] = np.full((7, 9), 0.25)
+    definition = _definition(species, full, tuple(values))
+
+    published = publish_products(full, projection=plan_projection(full))
+    declared_before = getattr(definition.draft, FITNESS_FIELDS[1]).copy()
+    published_before = getattr(published.config, FITNESS_FIELDS[0]).copy()
+
+    with pytest.raises(ValueError, match="Fitness baseline shape"):
+        compile_definition(definition)
+
+    np.testing.assert_array_equal(
+        getattr(definition.draft, FITNESS_FIELDS[1]), declared_before
+    )
+    np.testing.assert_array_equal(getattr(published.config, FITNESS_FIELDS[0]), published_before)

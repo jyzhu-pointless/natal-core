@@ -174,7 +174,10 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
         native commit.
 
     Raises:
-        ValueError: If the declaration carries no normalized draft.
+        ValueError: If the declaration carries no normalized draft, or if a
+            declared fitness baseline does not match the working draft's
+            shape for that field. The message names each mismatched field
+            with both shapes.
     """
     from natal.frontend.fitness import apply_preset_fitness_patch
 
@@ -191,9 +194,27 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
         raise ValueError("Compilation requires the complete species registry.")
     species = definition.species
     host = CompileHost(species, registry, draft)
+    # Validate every baseline shape before the first assignment.  A mismatch
+    # used to fall back to ``np.ones_like(target)``, which silently turned a
+    # declared baseline into a neutral one; and checking up front guarantees a
+    # failure cannot leave the working draft partially re-seeded.
+    working = host.draft
+    mismatches: list[tuple[str, tuple[int, ...], tuple[int, ...]]] = [
+        (name, base.shape, getattr(working, name).shape)
+        for name, base in zip(FITNESS_FIELDS, definition.fitness_base)
+        if base.shape != getattr(working, name).shape
+    ]
+    if mismatches:
+        details = "; ".join(
+            f"{name}: baseline {base_shape} vs draft {draft_shape}"
+            for name, base_shape, draft_shape in mismatches
+        )
+        raise ValueError(
+            "Fitness baseline shape does not match the declaration's draft: " + details
+        )
     for name, base in zip(FITNESS_FIELDS, definition.fitness_base):
-        target: NDArray[np.float64] = getattr(host.draft, name)
-        target[...] = base if base.shape == target.shape else np.ones_like(target)
+        target: NDArray[np.float64] = getattr(working, name)
+        target[...] = base
     gametes: GameteList = []
     zygotes: ZygoteList = []
     presets = definition.presets
