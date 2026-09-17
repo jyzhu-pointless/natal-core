@@ -174,10 +174,12 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
         native commit.
 
     Raises:
-        ValueError: If the declaration carries no normalized draft, or if a
-            declared fitness baseline does not match the working draft's
-            shape for that field. The message names each mismatched field
-            with both shapes.
+        ValueError: If the declaration carries no normalized draft; if a
+            declared fitness baseline does not cover every field in
+            ``FITNESS_FIELDS`` (an empty baseline means "derive it" and is
+            accepted), naming the expected field order; or if a baseline does
+            not match the working draft's shape for that field, naming each
+            mismatched field with both shapes.
     """
     from natal.frontend.fitness import apply_preset_fitness_patch
 
