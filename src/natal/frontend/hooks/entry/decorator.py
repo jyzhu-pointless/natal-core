@@ -94,9 +94,10 @@ def hook(
     * ``selectors=`` is set → **Selector callback** (selector values
       injected as keyword arguments after the context).
     * function takes no required parameters → **Declarative hook**
-      (called once; must return ``List[HookOp]`` — an empty list is a
-      legal no-op, but any other return value, or a list containing a
-      non-``HookOp`` element, raises :class:`TypeError`).
+      (invoked at build time — it may be called twice, once for reference
+      collection and once for compilation; must return ``List[HookOp]`` —
+      an empty list is a legal no-op, but any other return value, or a
+      list containing a non-``HookOp`` element, raises :class:`TypeError`).
     * function takes exactly one required parameter → **Callback**
       (``def hook(pop) -> int``; ``0``/``None`` continues, nonzero stops).
     * anything else → :class:`TypeError` (the legacy

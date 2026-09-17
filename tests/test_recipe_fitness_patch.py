@@ -335,7 +335,61 @@ class TestPresetFitnessPatchKeyValidation(unittest.TestCase):
         self.assertIn("'not_a_patch_key'", str(ctx.exception))
         # The legal entry in the same patch must not have been applied.
         self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][self.idx_drive_wt], 1.0)
+
+    def test_uncomparable_unknown_keys_still_report_a_value_error(self) -> None:
+        """Reporting the bad keys must not depend on them being sortable.
+
+        An int and a tuple cannot be ordered against each other, so a plain
+        ``sorted`` over the unknown keys would raise a sort ``TypeError``
+        instead of the promised ``ValueError``.
+        """
+        with self.assertRaises(ValueError) as ctx:
+            apply_preset_fitness_patch(self.pop, {1: {}, (2,): {}})  # type: ignore
+
+        message = str(ctx.exception)
+        self.assertIn("1", message)
+        self.assertIn("(2,)", message)
+        self.assertAlmostEqual(self.pop._config.viability_fitness[0][0][self.idx_drive_wt], 1.0)
         self.assertAlmostEqual(self.pop._config.fecundity_fitness[0][self.idx_drive_wt], 1.0)
+
+    def test_unknown_key_leaves_every_tensor_family_unwritten(self) -> None:
+        """The key check precedes every setter, not only the first tensor family.
+
+        The patch carries one legal entry for each of the four tensor
+        families plus an unknown key; a per-branch key check (or a check
+        placed after the first writer) would already have rewritten the
+        tensors whose entries come first.
+        """
+        fields = (
+            "viability_fitness",
+            "fecundity_fitness",
+            "sexual_selection_fitness",
+            "zygote_viability_fitness",
+        )
+        before = {name: getattr(self.pop._config, name).copy() for name in fields}
+        patch = {
+            "viability": {"WT|WT": 0.5},
+            "fecundity": {"WT|WT": 0.5},
+            "sexual_selection": {"WT|WT": 0.5},
+            "zygote": {"WT|WT": 0.5},
+            "viability_per_allele": {"Drive": 0.5},
+            "fecundity_per_allele": {"Drive": 0.5},
+            "sexual_selection_per_allele": {"Drive": 0.5},
+            "zygote_per_allele": {"Drive": 0.5},
+            "unknown_top_level_key": {},
+        }
+
+        with self.assertRaises(ValueError):
+            apply_preset_fitness_patch(self.pop, patch)  # type: ignore
+
+        # Every tensor (and every dtype/shape) is byte-identical: nothing was
+        # written before the rejection.
+        for name in fields:
+            np.testing.assert_array_equal(
+                getattr(self.pop._config, name),
+                before[name],
+                err_msg=f"{name} was modified before the key check",
+            )
 
     def test_empty_patch_is_accepted_without_writes(self) -> None:
         """The legal empty patch stays a no-op."""

@@ -604,3 +604,30 @@ def test_mismatched_fitness_baseline_leaves_declaration_and_model_untouched() ->
         getattr(definition.draft, FITNESS_FIELDS[1]), declared_before
     )
     np.testing.assert_array_equal(getattr(published.config, FITNESS_FIELDS[0]), published_before)
+
+
+def test_late_fitness_baseline_mismatch_does_not_partially_reseed() -> None:
+    """Every baseline shape is checked before the first assignment.
+
+    Only the last field is mismatched while the earlier fields carry valid
+    non-default values, so a per-field check that validated just before each
+    assignment would already have rewritten the earlier fields when the last
+    one failed.  The promise is "all shapes first, then assign".
+    """
+    from natal.frontend.model.definition_compiler import FITNESS_FIELDS, compile_definition
+
+    species, full = _uncompiled_draft("baseline_late_mismatch")
+    before = {name: getattr(full.config, name).copy() for name in FITNESS_FIELDS}
+    values = list(_baseline_values(full))
+    values[-1] = np.full((3, 5), 0.25)
+
+    with pytest.raises(ValueError, match="Fitness baseline shape") as excinfo:
+        compile_definition(_definition(species, full, tuple(values)))
+
+    assert FITNESS_FIELDS[-1] in str(excinfo.value)
+    for name in FITNESS_FIELDS:
+        np.testing.assert_array_equal(
+            getattr(full.config, name),
+            before[name],
+            err_msg=f"{name} was re-seeded before the shape check rejected the compile",
+        )

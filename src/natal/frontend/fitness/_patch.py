@@ -418,7 +418,14 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     if not patch:
         return
 
-    unknown_keys = sorted(key for key in patch if key not in SUPPORTED_PRESET_FITNESS_PATCH_KEYS)
+    # Sort by ``repr`` so the ordering stays total even when a caller passes
+    # keys that are not mutually comparable (an int and a tuple, say): the
+    # contract is a ValueError naming the bad keys, and a plain ``sorted``
+    # would raise a sort TypeError instead.
+    unknown_keys = sorted(
+        (key for key in patch if key not in SUPPORTED_PRESET_FITNESS_PATCH_KEYS),
+        key=repr,
+    )
     if unknown_keys:
         raise ValueError(
             "Unknown preset fitness patch key(s): "
