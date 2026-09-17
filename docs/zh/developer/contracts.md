@@ -25,7 +25,7 @@
 | `age_based_mating_rates` | `mating_rates` | `(sex, age)` |
 | `female_age_based_fertility` | `fertility` | `(age,)` |
 | `zygotes_to_gametes_map` | `meiosis_map` | `(2, Z, G)` |
-| `gametes_to_zygotes_map` | `fusion`（由 P 与 M 组合后使用） | `(G, G, Z)` |
+| `gametes_to_zygotes_map` | 无对应合同字段——留在 Python 侧，构建期作为派生 `offspring_tensor` 的后代张量内核输入 | `(G, G, Z)` |
 | `offspring_tensor` | `offspring_tensor` | `(Z, Z, Z)` |
 | `initial_individual_count` | `initial_individual_count`（Blueprint） | `(2, A, Z)` |
 

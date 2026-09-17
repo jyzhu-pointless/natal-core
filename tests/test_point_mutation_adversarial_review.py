@@ -1,7 +1,7 @@
 """Adversarial-review regression tests for the PointMutation preset.
 
 These tests encode the declared contract of
-``src/natal/frontend/presets/point_mutation.py`` (TODO.md item #14) at the
+``src/natal/frontend/presets/point_mutation.py`` (TODO.legacy.md ARCH-021) at the
 points the author's suite does not exercise.  They are written to fail for
 the *claimed* contract, not to restate current behavior:
 
@@ -17,7 +17,7 @@ the *claimed* contract, not to restate current behavior:
    whenever a negative sibling rate kept the sum at or below 1.
 
 The embryonic channel (``zygotic_mutation_rate``) that this review also
-covered was subsequently withdrawn by the maintainer (TODO.md #14), so the
+covered was subsequently withdrawn by the maintainer (TODO.legacy.md ARCH-021), so the
 zygotic cases were removed together with the parameter; the preset is now
 germline-only and ``zygote_modifier`` always returns ``None``.
 """

@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 声明 | `PopulationBuilder` 的链式调用、`ModelDefinition` | 可重放、可重建，不含计算结果 |
 | 草稿 | `ModelDraft` | 已数值化的完整轴数组，仍在构建期 |
-| 候选人 | `CompiledProducts` | 遗传映射、目录与修饰器列表，尚未发布 |
+| 候选 | `CompiledProducts` | 遗传映射、目录与修饰器列表，尚未发布 |
 
 ## 一次构建的编排
 

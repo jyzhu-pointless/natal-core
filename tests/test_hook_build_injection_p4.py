@@ -61,7 +61,7 @@ def _build(
         # statement: production is 0, so the derived equilibrium competition
         # strength is 0 and the default curve would clear every age-0
         # individual the hooks install.  Pin the pre-fix no-competition
-        # behaviour explicitly.
+        # behavior explicitly.
         .competition(growth_mode="no_competition")
     )
     for hook in hooks or []:

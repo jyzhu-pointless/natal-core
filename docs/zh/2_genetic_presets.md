@@ -64,6 +64,8 @@ pop = (nt.DiscreteGenerationPopulation.setup(species, name="TestPop")
 使用正代价时，需额外声明体细胞标签 `incompatible` 和配子标签 `wolbachia_ci`，
 或用 `incompatibility_slab` 和 `paternal_glab` 指定自定义名字。
 后者表示感染雄虫的配子具有 CI 诱导效应，不代表父系传播感染。
+应用预设时还始终需要通过 `Species.gamete_labels` 声明固定的配子标签
+`wolbachia`（母系感染标记）；缺少必需标签会在应用预设时抛出 `ValueError`。
 来源配子与体细胞标签仍须对应 `default_glab` 和 `normal_slab`，其他 modifier
 已赋予的标签不会被覆盖。存活个体保留来源标记，但不会遗传该标记：
 CI 母本仍未感染、不能救援，与感染父本交配可再次产生 CI 子代；相容交配产生正常标签子代。
@@ -72,7 +74,7 @@ CI 母本仍未感染、不能救援，与感染父本交配可再次产生 CI �
 
 将代价改为零会关闭 CI 标记规则及相应 fitness patch，但不会重标现有个体。
 运行时重配置沿用固定布局规则，不能引入构建时已被压缩删除的子代类型。
-可运行示例见 [Modifier 机制 5.2 节](3_modifiers.md#52-细胞质不兼容)。
+可运行示例见 [Modifier 机制 5.2 节](3_modifiers.md#52)。
 
 ### HomingDrive - 同源重组基因驱动
 
@@ -173,10 +175,11 @@ population.apply_preset(ta_drive)
 
 1. `conversion_rate`：生殖系中 `target -> disrupted` 的转换概率，支持 `float`、`(female, male)` 或按性别字典
 2. `embryo_disruption_rate`：胚胎期转换概率，可与 `cas9_deposition_glab` / `use_paternal_deposition` 联合建模母源/父源沉积效应
-   - 如果设置了 `cas9_deposition_glab`，请确保 population 所属 species 在创建时通过 `gamete_labels` 注册了同名标签，否则应用预设时会触发 `KeyError`
+   - 如果设置了 `cas9_deposition_glab`，请确保 population 所属 species 在创建时通过 `gamete_labels` 注册了同名标签，否则应用预设时会触发 `ValueError`
 3. `viability_scaling` 与 `viability_mode`：用于定义 `disrupted` 等位基因的毒素效应；TARE 常用 `viability_scaling=0.0` 且 `viability_mode="recessive"`
 4. `fecundity_scaling` 与 `fecundity_mode`：定义繁殖力成本
 5. `sexual_selection_scaling`（可选）：定义性选择效应；支持标量或二元组 `(default_male, carrier_male)`，配合 `sexual_selection_mode` 使用
+6. `zygote_viability_scaling` 与 `zygote_viability_mode`：合子期对 disrupted 基因型的存活代价；默认 `0.0` / `"recessive"`——默认启用隐性胚胎致死，作用于新生个体、早于幼体竞争
 
 加入性选择成本的示例：
 

@@ -84,7 +84,7 @@ async def _pump(
     websocket: WebSocket,
     outbox: asyncio.Queue[object],  # object: outbound frames are heterogeneous TypedDict payloads
 ) -> None:
-    """Drain the outbound queue into the socket until cancelled."""
+    """Drain the outbound queue into the socket until canceled."""
     while True:
         frame = await outbox.get()
         await websocket.send_json(frame)

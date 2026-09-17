@@ -241,7 +241,7 @@ class PointMutation(GeneticPreset):
 
     Only the germline (gamete-stage) channel is implemented: the mutation
     happens while gametes are produced, before fertilization.  An embryonic
-    (zygote-stage) channel is deliberately deferred — see TODO.md item #14.
+    (zygote-stage) channel is deliberately deferred — see TODO.legacy.md ARCH-021.
 
     Attributes:
         mutation_rates (Tuple[Tuple[float, float], ...]): Declared

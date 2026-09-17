@@ -24,7 +24,7 @@ N_TICKS = 100
 REPEATS = 3
 
 
-def build(stochastic: bool, name: str):
+def build(stochastic: bool, name: str) -> nt.AgeStructuredPopulation:
     """Build a moderately sized 4-locus population."""
     species = nt.Species.from_dict(
         name=f"engine_bench_{stochastic}_{name}",
@@ -66,14 +66,14 @@ def build(stochastic: bool, name: str):
     return pop
 
 
-def measure_run(pop, n_steps: int) -> float:
+def measure_run(pop: nt.AgeStructuredPopulation, n_steps: int) -> float:
     """Measure the in-kernel ``run(n)`` path."""
     start = time.perf_counter()
     pop.run(n_steps, record_every=0)
     return time.perf_counter() - start
 
 
-def measure_tick_loop(pop, n_steps: int) -> float:
+def measure_tick_loop(pop: nt.AgeStructuredPopulation, n_steps: int) -> float:
     """Measure repeated ``run_tick()`` calls."""
     start = time.perf_counter()
     for _ in range(n_steps):

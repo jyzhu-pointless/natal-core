@@ -52,10 +52,10 @@ PanmicticState = Union[PopulationState, DiscretePopulationState]
 class GeneticStructureLike(Protocol):
     """Structural view of anything exposing the genetic dashboard surface.
 
-    Satisfied by panmictic populations and by ``DemeSlice`` (which forwards
-    genetic reads to its underlying deme), letting the config / hooks /
-    genetics / registry endpoints serve both dashboard kinds through one
-    serializer.
+    Satisfied by panmictic populations and by the spatial container's
+    internal deme slot (whose object exposes the shared genetic
+    structure), letting the config / hooks / genetics / registry
+    endpoints serve both dashboard kinds through one serializer.
     """
 
     @property
@@ -175,7 +175,15 @@ def serialize_state(
     mode: str,
     found: bool,
 ) -> StateSnapshot:
-    """Build a full inspection snapshot from *state*."""
+    """Build a full inspection snapshot from *state*.
+
+    Args:
+        population: Owning panmictic population supplying the registry,
+            config, and history length.
+        state: The live or raw-history state to serialize.
+        mode: Snapshot origin tag (``"live"`` or ``"history"``).
+        found: Whether the requested tick existed in history.
+    """
     counts = state.individual_count
 
     genotype_rows = genotype_rows_builder(population.registry, population.config, counts)
@@ -439,6 +447,8 @@ def history_series(
 
 
 class GrowthModeInfo(TypedDict):
+    """Labeled name for one juvenile growth-mode constant."""
+
     code: int
     name: str
 
@@ -471,6 +481,8 @@ class ConfigScalars(TypedDict):
 
 
 class FitnessRow(TypedDict):
+    """One genotype's fitness values shown in the config panel."""
+
     genotype: str
     age: float | None
     female: float
@@ -478,29 +490,39 @@ class FitnessRow(TypedDict):
 
 
 class SexualSelectionRow(TypedDict):
+    """One nontrivial female-genotype × male-genotype preference weight."""
+
     female_genotype: str
     male_genotype: str
     preference: float
 
 
 class PresetModifierItem(TypedDict):
+    """One registered modifier inside a preset group."""
+
     id: int
     name: str
     kind: str
 
 
 class PresetInfo(TypedDict):
+    """One preset and its registered gamete/zygote modifiers."""
+
     preset_name: str
     gamete_modifiers: list[PresetModifierItem]
     zygote_modifiers: list[PresetModifierItem]
 
 
 class PresetsSummary(TypedDict):
+    """Preset-centric summary of the registered genetic modifiers."""
+
     preset_count: int
     presets: list[PresetInfo]
 
 
 class ConfigPayload(TypedDict):
+    """Complete config-panel payload: scalars, fitness, and presets."""
+
     scalars: ConfigScalars
     full: dict[str, object]  # object: heterogeneous full ModelDraft dump
     presets: PresetsSummary
@@ -680,15 +702,19 @@ def presets_summary(population: GeneticStructureLike) -> PresetsSummary:
 
 
 class HookOpInfo(TypedDict):
+    """JSON view of one compiled declarative operation."""
+
     type: str
     genotypes: object  # object: mirrors HookOp.genotypes (str, list[str], or "*")
-    ages: object  # object: mirrors HookOp.ages (int, list[int], range, or "*")
+    ages: object  # object: ages_value form (float, list[float], or "*")
     sex: str
     param: object  # object: mirrors HookOp.param (float; symbolic forms possible)
     condition: str | None
 
 
 class HookInfo(TypedDict):
+    """One compiled hook as shown in the hooks panel."""
+
     event: str
     name: str
     priority: int
@@ -783,12 +809,16 @@ def hooks_payload(population: GeneticStructureLike) -> list[HookInfo]:
 
 
 class Matrix2D(TypedDict):
+    """Labeled 2D matrix payload (one meiosis table)."""
+
     row_labels: list[str]
     col_labels: list[str]
     data: list[list[float]]
 
 
 class FertilizationMatrix(TypedDict):
+    """Fertilization table annotated for heatmap display."""
+
     row_labels: list[str]
     col_labels: list[str]
     zygote_labels: list[str]
@@ -799,6 +829,8 @@ class FertilizationMatrix(TypedDict):
 
 
 class GeneticsPayload(TypedDict):
+    """Meiosis and fertilization structures for the genetics panel."""
+
     meiosis: list[Matrix2D]  # one per sex: female first
     fertilization: FertilizationMatrix
 
@@ -885,6 +917,8 @@ def genetics_matrices(population: GeneticStructureLike) -> GeneticsPayload:
 
 
 class GenotypeEntry(TypedDict):
+    """One genotype with its zygote-type expansion and cell SVG."""
+
     index: int
     label: str
     ztype_indices: list[int]
@@ -892,6 +926,8 @@ class GenotypeEntry(TypedDict):
 
 
 class ZTypeEntry(TypedDict):
+    """One zygote type with its parent genotype and slab label."""
+
     index: int
     genotype_index: int
     genotype_label: str
@@ -899,18 +935,24 @@ class ZTypeEntry(TypedDict):
 
 
 class GTypeEntry(TypedDict):
+    """One haplotype-gamete pair with its display label."""
+
     index: int
     label: str
     gamete_label: str
 
 
 class AlleleEntry(TypedDict):
+    """One allele with its locus and display color."""
+
     name: str
     locus: str
     color: str
 
 
 class RegistryPayload(TypedDict):
+    """Static genetic-structure tables the UI loads once."""
+
     genotypes: list[GenotypeEntry]
     ztypes: list[ZTypeEntry]
     gtypes: list[GTypeEntry]
@@ -1112,17 +1154,23 @@ def _semanticize_state(
 
 
 class ObservationGroupSpec(TypedDict, total=False):
+    """One observation group spec; all keys optional."""
+
     genotype: list[str] | str
     sex: str
     age: list[int]
 
 
 class ObservationRequestDict(TypedDict):
+    """Normalized observation request: group name to spec."""
+
     groups: dict[str, ObservationGroupSpec]
     collapse_age: bool
 
 
 class ObservationRow(TypedDict):
+    """One observation value row (group total, or group and age)."""
+
     group: str
     age: int | None
     female: float
@@ -1131,6 +1179,8 @@ class ObservationRow(TypedDict):
 
 
 class ObservationResultPayload(TypedDict):
+    """Observation panel result: labels plus per-group rows."""
+
     labels: list[str]
     collapse_age: bool
     rows: list[ObservationRow]
@@ -1141,7 +1191,7 @@ def apply_observation(
     groups: dict[str, dict[str, object]],  # object: legacy observation spec mapping (mixed value types)
     collapse_age: bool,
 ) -> ObservationResultPayload:
-    """Build an observation from group specs and apply it to the live state.
+    """Build an observation from group specs and project it over the live counts.
 
     Group spec keys mirror the legacy observation panel: ``genotype``
     (list of labels or ``"*"`` pattern), ``sex`` (``"female"``/``"male"``,
@@ -1195,6 +1245,8 @@ def apply_observation(
 
 
 class ParamChangeRow(TypedDict):
+    """One parameter-change audit row."""
+
     tick: int
     name: str
     old: float
@@ -1210,6 +1262,8 @@ def params_log_rows(population: PanmicticPopulation) -> list[ParamChangeRow]:
 
 
 class DiffGenotypeRow(TypedDict):
+    """Per-genotype comparison between the two diffed ticks."""
+
     label: str
     female_a: float
     female_b: float
@@ -1221,6 +1275,8 @@ class DiffGenotypeRow(TypedDict):
 
 
 class DiffPayload(TypedDict):
+    """Full state diff between two ticks from raw history."""
+
     tick_a: int
     tick_b: int
     found_a: bool

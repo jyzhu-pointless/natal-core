@@ -8,9 +8,12 @@ declarations in append order and compiles them into one gamete modifier.
 Compile semantics (single owner):
 
 - Every construction starts from the species' unmodified Mendelian
-  baseline projected onto the active registry. Within that construction,
-  each rule set receives the preceding modifier's result. Rebuilding
-  therefore never reapplies rules to an already-converted run matrix.
+  baseline, compiled against the complete species registry: a published
+  host registry is replaced by a rebuilt complete one, so the compiled
+  indices are complete species coordinates and never depend on a later
+  compressed runtime axis. Within that construction, each rule set
+  receives the preceding modifier's result. Rebuilding therefore never
+  reapplies rules to an already-converted run matrix.
 - Rules cascade strictly in declaration order: each rule sees the
   previous rule's branches; there is no priority, no type ordering, and
   no first-match stop.
@@ -78,7 +81,7 @@ class _CompiledGtypeRule:
 class GameteConversionRuleSet:
     """Ordered cascade of gamete conversion rules.
 
-    Example:
+    Examples:
         rs = GameteConversionRuleSet("drive")
         rs.add_allele_convert(
             from_allele="WT", to_allele="Dr", rate=0.9,
@@ -189,7 +192,10 @@ class GameteConversionRuleSet:
         and returns ``{(sex_idx, ztype_idx): {gtype_idx: probability}}`` —
         the complete post-cascade branch distribution of every non-empty
         baseline row, computed from the species' unmodified Mendelian
-        baseline projected onto *host*'s registry.
+        baseline. Compilation always uses complete species coordinates
+        (a published host registry is replaced by a rebuilt complete
+        one), so the returned indices never depend on a later compressed
+        runtime axis.
 
         Args:
             host: A :class:`~natal.frontend.genetics.compile.RecipeHost`
@@ -499,6 +505,8 @@ def _cascade_row(
                 )
         branches = next_branches
 
-    # Drop numerical dust below 1e-15; the retained mass may fall short of 1 by
-    # at most that tolerance.
+    # Drop numerical dust below 1e-15. Each discarded branch sheds at most
+    # that tolerance, and dust can be discarded once per path across the
+    # cascade, so the retained mass may fall short of 1 by up to
+    # k * tolerance, not by the tolerance alone.
     return {g: p for g, p in branches.items() if p > 1e-15}

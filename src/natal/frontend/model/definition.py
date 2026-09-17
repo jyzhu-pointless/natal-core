@@ -30,7 +30,17 @@ if TYPE_CHECKING:
 
 
 def copy_declaration_value(value: Any) -> Any:
-    """Copy owned arrays/containers while preserving opaque recipes and resources."""
+    """Copy owned arrays/containers while preserving opaque recipes and resources.
+
+    Args:
+        value: The declaration value to detach. NumPy arrays, dicts,
+            lists, and tuples are copied recursively; any other object
+            (recipes, hooks, and other opaque user resources) is returned
+            unchanged with its identity preserved.
+
+    Returns:
+        The detached copy, or *value* itself for unowned types.
+    """
     # Any: declaration values include heterogeneous recipes and user resources;
     # copying is deliberately restricted to NATAL-owned container types.
     import numpy as np
@@ -81,7 +91,16 @@ class SpatialInputs:
 
 
 def snapshot_spatial_inputs(inputs: SpatialInputs) -> SpatialInputs:
-    """Detach owned spatial values without re-running batches or recipes."""
+    """Detach owned spatial values without re-running batches or recipes.
+
+    Args:
+        inputs: The normalized spatial controls to snapshot.
+
+    Returns:
+        A new :class:`SpatialInputs` whose batch values, group calls,
+        migration mapping, and observation groups are detached copies;
+        every other field is shared unchanged.
+    """
     from dataclasses import replace
 
     return replace(

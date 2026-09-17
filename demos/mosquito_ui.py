@@ -57,12 +57,12 @@ initial_distribution: IndividualDistribution = {
     },
 }
 
-# 初始精子存储：测试多种格式
+# Initial sperm storage: exercise the accepted input formats.
 initial_sperm: SpermStorage = {
-    # 格式1: Dict - 稀疏映射 {age: count}
+    # Format 1: dict — sparse {age: count} mapping.
     "WT|WT": {
         "WT|WT": {2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.0, 7: 0.0},
-        # 格式2: List - 密集列表
+        # Format 2: list — dense per-age list.
         "WT|Dr": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     },
 }

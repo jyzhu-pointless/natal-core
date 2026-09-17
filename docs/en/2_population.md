@@ -1,6 +1,6 @@
 # Population Model (Panmictic)
 
-The `Population` class is the core component of NATAL Core, responsible for managing the genetic state and simulation process of the population.
+Population objects are the core component of NATAL Core, responsible for managing the genetic state and simulation process of the population. There is no `Population` class — the panmictic models are `DiscreteGenerationPopulation` and `AgeStructuredPopulation`, both subclasses of `BasePopulation`.
 
 > **Note**: `DiscreteGenerationPopulation` and `AgeStructuredPopulation` are **panmictic (single-deme, well-mixed)** models. For multi-deme spatial populations with migration topology and heterogeneous parameters, see [Spatial Simulation Guide](3_spatial_simulation.md).
 
@@ -9,7 +9,7 @@ The `Population` class is the core component of NATAL Core, responsible for mana
 NATAL Core provides two main population types:
 
 ### Discrete Generation Population
-`DiscreteGenerationPopulation` is suitable for species with non-overlapping generations, where each generation completely replaces the previous one. The simulation process is simple and efficient.
+`DiscreteGenerationPopulation` is suitable for species with non-overlapping generations, where each generation completely replaces the previous one. The simulation process is simple and efficient. It fixes 2 age classes: age-0 (juvenile) and age-1 (adult).
 
 ### Age-Structured Population
 `AgeStructuredPopulation` is suitable for species with overlapping generations, supporting age-dependent survival and fecundity, and configurable sperm storage mechanisms.
@@ -150,8 +150,10 @@ print(f"Var allele frequency: {var_freq}")
 
 ### History Configuration
 
-Choose the History mode and capacity before `build()`. Raw mode and unlimited
-capacity are the defaults:
+Choose the History mode and capacity before `build()`. Raw mode is the default;
+the default capacity is the population's bounded `max_history` (5000 rows) —
+once the limit is reached the oldest rows are evicted FIFO, and evicted rows
+take their paired restore checkpoints with them:
 
 ```python
 pop = (
@@ -288,7 +290,7 @@ pop = (
 
 ### Competition and Hooks
 
-All built-in competition modes (FIXED, LOGISTIC/LINEAR, BEVERTON_HOLT, and RICKER) are supported, sharing the same scaling functions as the standard path. Only FIRST hooks are supported (fired before the WF tick). Deterministic WF mode matches the standard deterministic path tick-by-tick. Embryonic viability is applied before measuring juvenile competition; ordinary survival and genotype viability are applied after density regulation. WF stochastic modes retain their single final-generation sampling step, so their variance need not match the staged stochastic lifecycle.
+All built-in competition modes (FIXED, LOGISTIC/LINEAR, BEVERTON_HOLT, and RICKER) are supported, sharing the same scaling functions as the standard path. Only FIRST hooks are supported (fired before the WF tick); EARLY/LATE hooks have no natural insertion point in the fused WF tick. Deterministic WF mode matches the standard deterministic path tick-by-tick. Embryonic viability is applied before measuring juvenile competition; ordinary survival and genotype viability are applied after density regulation. WF stochastic modes retain their single final-generation sampling step, so their variance need not match the staged stochastic lifecycle.
 
 ## Index Compression
 
@@ -305,6 +307,6 @@ pop = nt.DiscreteGenerationPopulation.setup(
 
 ### Effect
 
-- GType: single-locus with only A|A initially → HL from 2 to 1
-- ZType: only A|A reachable → G from 4 to 1. The offspring tensor is derived during publication on the resulting runtime axes.
+- GType: single-locus with only A|A initially → haplotypes from 2 to 1
+- ZType: only A|A reachable → genotypes from 3 to 1 (the default `unordered=True` registry keeps one canonical phase per heterozygote, so a two-allele single-locus species has 3 genotypes, not 4). The offspring tensor is derived during publication on the resulting runtime axes.
 - Combined: >98% reduction possible

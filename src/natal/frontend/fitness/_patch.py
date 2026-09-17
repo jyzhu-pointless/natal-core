@@ -47,7 +47,8 @@ def _apply_viability_allele_scaling(
     viability_arr = deps.config.viability_fitness
     default_age = int(deps.config.new_adult_age) - 1
 
-    # Resolve one or more alleles
+    # Resolve one or more alleles: a patch key may join several allele names
+    # with '+' (e.g. "WT+Dr"); their copies are counted together.
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
@@ -130,7 +131,8 @@ def _apply_fecundity_allele_scaling(
     # As with viability, this function multiplies current values.
     fecundity_arr = deps.config.fecundity_fitness
 
-    # Resolve one or more alleles
+    # Resolve one or more alleles: a patch key may join several allele names
+    # with '+' (e.g. "WT+Dr"); their copies are counted together.
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
@@ -185,7 +187,8 @@ def _apply_sexual_selection_allele_scaling(
     # Effect is computed from male allele copies, then applied per pair.
     sex_sel_arr = deps.config.sexual_selection_fitness
 
-    # Resolve one or more alleles
+    # Resolve one or more alleles: a patch key may join several allele names
+    # with '+' (e.g. "WT+Dr"); their copies are counted together.
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
@@ -233,7 +236,8 @@ def _apply_zygote_viability_allele_scaling(
     # so multiple presets/patches compose multiplicatively.
     zygote_arr = deps.config.zygote_viability_fitness
 
-    # Resolve one or more alleles
+    # Resolve one or more alleles: a patch key may join several allele names
+    # with '+' (e.g. "WT+Dr"); their copies are counted together.
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
@@ -364,6 +368,25 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     - viability: Dict[genotype_selector, ViabilityScalingConfig]
     - fecundity: Dict[genotype_selector, FecundityScalingConfig]
     - sexual_selection: Dict[female_selector, Union[float, Dict[male_selector, float]]]
+    - viability_per_allele: Dict[allele_name, ViabilityScalingConfig]
+    - fecundity_per_allele: Dict[allele_name, FecundityScalingConfig]
+    - sexual_selection_per_allele: Dict[allele_name, SexualSelectionScalingConfig]
+    - zygote: Dict[genotype_selector, ZygoteViabilityScalingConfig]
+    - zygote_per_allele: Dict[allele_name, ZygoteViabilityScalingConfig]
+    - viability_per_slab: Dict[slab_name, float]
+    - fecundity_per_slab: Dict[slab_name, float]
+    - sexual_selection_per_slab: Dict[slab_name, float]
+    - zygote_per_slab: Dict[slab_name, float]
+
+    Per-allele keys accept a single allele name or several names joined
+    with ``+`` (e.g. ``"WT+Dr"``). Any key outside this schema is silently
+    skipped.
+
+    Args:
+        deps: Compilation host providing the species, index registry, and
+            config tensors that receive the patch.
+        patch: Declarative patch mapping schema keys to their scaling
+            configurations.
     """
     if not patch:
         return

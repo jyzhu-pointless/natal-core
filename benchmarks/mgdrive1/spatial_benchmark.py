@@ -612,7 +612,7 @@ def benchmark_natal(
     )
     center_deme = ((rows - 1) // 2) * cols + (cols - 1) // 2
 
-    # Warm the compiled lifecycle and migration paths before timed replicates.
+    # Run one untimed warm-up step before the timed replicates.
     step_spatial(
         scenario.state,
         scenario.config,

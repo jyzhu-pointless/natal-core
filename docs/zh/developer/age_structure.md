@@ -28,7 +28,7 @@ AgeStructuredPopulation.setup(species=sp, stochastic=False) \
 ```mermaid
 flowchart TD
     V["未存储精子的雌性（virgin）"] --> M["按交配概率抽样本次交配的雄性"]
-    M --> D["已有精子的雌性以 sperm_displacement_rate 概率被替换"]
+    M --> D["只有本 tick 再次交配的已交配雌性才会替换存储精子：有效概率 = sperm_displacement_rate × 该年龄的交配概率"]
     D --> S["新精子按雄性类型的多项分布分配"]
     S --> F["把每条配对的存量转成 age-0 后代"]
 ```

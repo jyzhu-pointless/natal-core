@@ -85,6 +85,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             species: Species object describing genetic architecture.
             population_config: Fully initialized ModelDraft instance.
             name: Human-readable population name. If None, uses "AgeStructuredPop".
+            index_registry: Optional pre-built IndexRegistry (possibly
+                index-compressed) injected by the builder; ``None`` creates
+                a fresh registry from the Species.
             initial_individual_count: Initial population distribution.
                 Format: {sex: {genotype: counts_by_age}}
             initial_sperm_storage: Initial sperm storage state (if supported).
@@ -629,7 +632,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             sex: One of ``'female'``, ``'male'``, or ``'both'`` (aliases accepted).
 
         Returns:
-            float: Total number of adults for the requested sex(es).
+            int: Total number of adults for the requested sex(es).
 
         Raises:
             ValueError: If the sex identifier is not recognized.
@@ -723,7 +726,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         population unchanged.
 
         Args:
-            state: Flattened array, PopulationState object, or data dictionary.
+            state: One of: a flattened state array, a PopulationState
+                object, a data dictionary with ``individual_count`` and
+                ``sperm_storage`` entries, or a 2-tuple
+                ``(individual_count, sperm_storage)`` of arrays (the tick
+                stays at the current value).
         """
         self._require_standalone_owner("import_state")
         from natal.frontend.data import PopulationState, parse_flattened_state
@@ -792,7 +799,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             tick: The target tick number.
 
         Raises:
-            ValueError: If no record is found for the specified tick.
+            ValueError: If history is empty, if history is not in ``"raw"``
+                mode, or if no record is found for the specified tick.
         """
         self._require_standalone_owner("restore_checkpoint")
         super().restore_checkpoint(tick)
@@ -984,10 +992,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             AgeStructuredPopulation: Self for chaining.
 
         Raises:
-            RuntimeError: If the population is already finished and cannot
-                continue, or if the native engine extension is unavailable
-                (the session is created by ``build()`` or lazily at the
-                first run).
+            RuntimeError: If a run is already in progress (nested run is
+                forbidden), if the population has failed, if the
+                population is already finished and cannot continue, or if
+                the native engine extension is unavailable (the session is
+                created by ``build()`` or lazily at the first run).
         """
         self._require_standalone_owner("run")
         # Guards, in order: re-entrancy, then failed, then finished — each
@@ -1032,7 +1041,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             AgeStructuredPopulation: Self for chaining.
 
         Raises:
-            RuntimeError: If the population is already finished and cannot continue.
+            RuntimeError: If a run is already in progress (nested run is
+                forbidden), if the population has failed, or if the
+                population is already finished and cannot continue.
         """
         return self.run(
             n_steps=1, record_every=self.record_every, clear_history_on_start=False
@@ -1042,7 +1053,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """Return the age distribution for the requested sex.
 
         Args:
-            sex: One of ``'female'``, ``'male'``, or ``'both'``.
+            sex: One of ``'female'``, ``'male'``, or ``'both'`` (aliases
+                ``'F'`` and ``'M'`` accepted).
 
         Returns:
             NDArray[np.float64]: Age distribution array with shape (n_ages,).

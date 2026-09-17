@@ -172,10 +172,11 @@ def set_param(
     (:mod:`natal.frontend.builder._routes`): the name (full key,
     short name, or alias) resolves to a route entry, the value is
     parsed and validated according to the entry's ``kind``, and the
-    write is committed into the draft.  Entries flagged ``sensitive``
-    in ``parameters.jsonc`` (carrying capacity, eggs per female, sex
-    ratio, the Champer overrides) automatically refresh the equilibrium
-    metric caches unless ``_sync_equilibrium=False`` is passed.
+    write is committed into the draft.  There is no separate
+    equilibrium-cache refresh step: the equilibrium metrics
+    (``pop.params.expected_competition_strength`` /
+    ``expected_survival_rate``) are derived on read and nothing is
+    cached, so sensitive writes need no extra handling.
 
     Scalar NamedTuple slots (including the ecology scalars) are written
     through ``_replace``, so the returned draft must be rebound to the
@@ -183,8 +184,8 @@ def set_param(
 
         config = set_param(config, "competition.carrying_capacity", 5000.0)
 
-    Array-backed fields (custom slots and vector/tensor contents) are
-    mutated in place and the same draft is returned.
+    Custom slot writes (``config.custom`` entries) mutate the shared
+    slot dict in place and the same draft is returned.
 
     Usable from pure Python and PopulationBuilder chain methods.
 
@@ -251,6 +252,10 @@ def collect_hook_genotype_refs(hook_calls: list[HookCall]) -> set[str]:
     Ensures genotypes introduced only via hooks survive BFS pruning:
     declarative op lists contribute their ``op.genotypes`` strings, and
     selector hooks contribute their resolved ``selectors`` specs.
+
+    Args:
+        hook_calls: Stored ``.hooks()`` calls — ``(items, kwargs)`` pairs
+            as recorded by :meth:`PopulationBuilder.hooks`.
     """
     from natal.frontend.hooks.types import HookOp
 
@@ -488,10 +493,6 @@ class PopulationBuilder:
         # adds to this dict; build_custom_slots() normalizes it whenever
         # the values are (re)applied to the draft.
         self._custom_kwargs: dict[str, object] = {}
-
-        # Discrete-specific scalar overrides (stored here so build() can
-        # (discrete scalars now normalize into the unified draft vectors
-        # at write time — no end-of-build extraction exists anymore).
 
         # Index compression flag — enabled via setup(compress=True).
         # Applied during rebuild_config_maps (build-time) or
@@ -743,8 +744,9 @@ class PopulationBuilder:
 
         *compress* enables index compression at build time.  It enables both
         GType (gamete-axis) and ZType (genotype-axis) compression in one flag.
-        The older ``compress_gametes()`` / ``compress_genotypes()`` chain
-        methods have been removed — use this parameter instead.
+        The deprecated ``compress_gametes()`` / ``compress_genotypes()``
+        chain methods are still present but only emit deprecation
+        warnings — prefer this parameter.
 
         *declared_zygote_types* is a sequence of genotype strings (``"WT|WT"``) or
         integer indices that are treated as reachable by the BFS even if they
@@ -757,7 +759,11 @@ class PopulationBuilder:
             for ``declared_zygote_types`` and still works.
 
         Args:
-            name: Population name (falls back to ``"Population"`` at build time).
+            name: Population name stored for :meth:`build`.  When never
+                set, ``build()`` keeps the constructor's preset name —
+                ``"AgeStructuredPop"`` / ``"DiscreteGenerationPop"`` via
+                the factory methods, or ``"Population"`` for a
+                raw-constructor builder.
             stochastic: If ``False``, use deterministic (median) outcomes.
             continuous_sampling: If ``True``, sample from continuous
                 distributions instead of discrete counts.
@@ -945,6 +951,13 @@ class PopulationBuilder:
 
         Returns:
             Self for chaining.
+
+        Raises:
+            ValueError: If *competition_strength* is given while the
+                draft's ``new_adult_age < 2``.  The weight it sets
+                belongs to the second juvenile age class, so it only
+                takes effect when ``new_adult_age >= 2`` (build with
+                ``age_structure(..., new_adult_age >= 2)`` first).
         """
         self._has_domain_params = True
         # ---- carrying capacity (K) fallback chain ----
@@ -1124,7 +1137,7 @@ class PopulationBuilder:
         ]
         | None = None,
     ) -> Self:
-        """Set the initial population distribution (deferred — applied at build time).
+        """Set the initial population distribution.
 
         *individual_count* is a dict like
         ``{"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}}``.
@@ -1135,10 +1148,12 @@ class PopulationBuilder:
         discrete resolution and ignore sperm storage; age-structured
         drafts resolve per-age distributions.
 
-        The distribution is NOT written to config immediately.  Instead it is
-        stored in a deferred buffer and applied during :meth:`build` — after
-        index compression, so that genotype selectors resolve to compressed
-        indices.
+        The distribution is written to config immediately: genotype
+        selectors resolve against the complete (pre-compression) axis
+        and the draft's ``initial_individual_count`` (plus
+        ``initial_sperm_storage`` on age-structured drafts) is replaced
+        in the same call.  When ``build()`` applies index compression,
+        it projects the stored arrays onto the compressed axes.
 
         .. note::
 
@@ -1345,13 +1360,20 @@ class PopulationBuilder:
         writes = fitness_writes(viability, fecundity, sexual_selection, zygote_viability)
         if writes:
             # geno_tensor kind: pattern dicts delegate to
-            # write_fitness_field inside the writer; the writer also
-            # pushes the whole tensors to the live Rust session.
+            # write_fitness_field inside the writer.  This build-path
+            # writer is session-less (draft-only); pushing the tensors
+            # to the live Rust session happens only on the runtime
+            # writer (RuntimeUpdater.fitness()).
             writer = self._make_writer()
             writer.apply(writes, mode=mode)
             self._config = writer.draft
             step: dict[str, object] = {name: value for name, value in (("viability", viability), ("fecundity", fecundity), ("sexual_selection", sexual_selection), ("zygote_viability", zygote_viability)) if value is not None}
             step["mode"] = mode
+            # The leading int is a sort key: the number of presets
+            # registered when this step was declared.  Compilation
+            # interleaves explicit steps with preset fitness patches by
+            # that key — each step applies after the first
+            # ``min(key, len(presets))`` presets, in priority order.
             self._fitness_steps.append((len(self._presets), deepcopy(step)))
             if self._compiled_draft is not None:
                 # Fitness edits do not invalidate recipe products: the
@@ -1363,6 +1385,10 @@ class PopulationBuilder:
 
     def compress_gametes(self, enabled: bool = True) -> Self:
         """Enable GType compression (deprecated — use setup(compress=True)).
+
+        Args:
+            enabled: Whether to set the compression flag; ``False``
+                clears it.
 
         .. deprecated::
             Use ``setup(compress=True)`` instead.  This method will be
@@ -1380,6 +1406,10 @@ class PopulationBuilder:
 
     def compress_genotypes(self, enabled: bool = True) -> Self:
         """Enable ZType compression (deprecated — use setup(compress=True)).
+
+        Args:
+            enabled: Whether to set the compression flag; ``False``
+                clears it.
 
         .. deprecated::
             Use ``setup(compress=True)`` instead.  This method will be
@@ -1431,12 +1461,19 @@ class PopulationBuilder:
         Returns:
             Self for chaining.
 
+        Note:
+            The declarations are stored unvalidated; they are checked
+            only when ``build()`` compiles them (see
+            :meth:`_compile_hook_descriptors`).  ``hooks()`` itself
+            raises nothing.
+
         Raises:
-            TypeError: If an item has an unsupported shape (including the
-                removed ``(state, config, deme_id)`` signature).
-            ValueError: If an event name is unknown or cannot be resolved,
-                or a list mixes ops with differing priorities and no
-                ``priority`` is given.
+            TypeError: At ``build()`` time, if an item has an unsupported
+                shape (including the removed ``(state, config, deme_id)``
+                signature).
+            ValueError: At ``build()`` time, if an event name is unknown
+                or cannot be resolved, or a list mixes ops with differing
+                priorities and no ``priority`` is given.
         """
         self._hook_calls.append(
             (
@@ -1585,12 +1622,12 @@ class PopulationBuilder:
     # -- apply / build ---------------------------------------------------------
 
     def apply(self) -> Self:
-        """Sync derived values (equilibrium metrics).
+        """No-op, retained for chain compatibility.
 
-        All routed writes already refresh the equilibrium caches on
-        their own (driven by the jsonc ``sensitive`` column), so this is
-        only needed when you modify config arrays directly (outside
-        PopulationBuilder) or want to force a re-derivation before build.
+        The equilibrium metrics (``pop.params.expected_*``) are always
+        derived on read — there is nothing to sync or re-derive, so this
+        method performs no work.  It remains so existing ``...apply()``
+        chains keep running.
 
         Returns:
             Self for chaining.
@@ -1675,10 +1712,10 @@ class PopulationBuilder:
 
         This is the terminal method of the build chain::
 
-            PopulationBuilder.from_species()
+            PopulationBuilder.from_species(species)
                 .age_structure(5, 2)
-                .competition(K=5000)
-                .reproduction(eggs=100)
+                .competition(carrying_capacity=5000)
+                .reproduction(eggs_per_female=100)
                 .build(name="pop")
 
         Build finalizes the normalized declaration, reuses already compiled
@@ -1688,8 +1725,11 @@ class PopulationBuilder:
         methods run; build preserves those values on the final active axes.
 
         Args:
-            name: Population name (falls back to ``.setup(name=...)``
-                or ``"Population"``).
+            name: Population name.  Resolution order: this argument, then
+                ``.setup(name=...)``, then the factory-preset
+                granularity name (``"AgeStructuredPop"`` /
+                ``"DiscreteGenerationPop"``); a raw-constructor builder
+                falls back to ``"Population"``.
             hook_items: Additional hook declarations (same item shapes
                 as :meth:`hooks`); declaration sugar that feeds the same
                 build-time compilation as :meth:`hooks` calls.

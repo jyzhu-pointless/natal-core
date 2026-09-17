@@ -87,11 +87,11 @@ Configure the population's age structure, including the total number of age stag
 
 ### `initial_state(...)` – Initial State
 
-Initial state parameters take effect at the start of the simulation, providing base data for various sampling functions in `algorithms.py`. The initial individual count distribution directly affects subsequent reproduction and survival calculations; sperm storage data is used by the `sample_mating` function during the reproduction phase.
+Initial state parameters take effect at the start of the simulation, providing base data for the reproduction and survival sampling stages of the simulation kernels. The initial individual count distribution directly affects subsequent reproduction and survival calculations; sperm storage data is used during the mating step of the reproduction phase.
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `individual_count` | `Mapping` | Initial individual count distribution, format `{sex: {genotype: age_data}}` | Required | Initial state | If not set, `build()` will raise an error; supports scalar, sequence, mapping, and other formats |
+| `individual_count` | `Mapping` | Initial individual count distribution, format `{sex: {genotype: age_data}}` | Required | Initial state | If not set, `build()` still succeeds and produces an empty (zero-count) population; supports scalar, sequence, mapping, and other formats |
 | `sperm_storage` | `Optional[Mapping]` | Initial sperm storage for age-structured models | `None` | reproduction | Three-level mapping format; sperm storage is always enabled in age-structured models |
 
 **Age data (`age_data`) format** (all counts must be non-negative):
@@ -136,7 +136,7 @@ Validation rules:
 | `female_age_based_survival` | `Optional` | Female per-age survival rates | `None` | survival | Supports scalar, sequence, mapping, function, etc.; `None` uses default curve; range `[0, 1]` |
 | `male_age_based_survival` | `Optional` | Male per-age survival rates | `None` | survival | Same as above |
 
-**Code examples** (from `_resolve_survival_param`):
+**Code examples** (acceptance forms resolved by `resolve_age_param`):
 
 ```python
 # A) None → use default curve
@@ -166,7 +166,7 @@ Validation rules:
 | `male_age_based_mating_rate` | `Optional` | Male per-age mating rates | `None` | reproduction | Length must equal `n_ages`; default values used when not set |
 | `female_age_based_fertility` | `Optional` | Female per-age relative fertility weights | `None` | reproduction | Length must equal `n_ages`; used to modulate egg production contribution across ages |
 | `age_based_reproduction_rate` | `Optional` | Female per-age reproduction participation rates. | `None` | reproduction | Length must equal `n_ages`; defaults to all 1.0 when not set. Supports scalar, sequence, mapping, function. |
-| `eggs_per_female` | `float` | Base number of eggs per female | `50.0` | reproduction | Baseline for population egg production; start with neutral value during tuning |
+| `eggs_per_female` | `float` | Base number of eggs per female | `100.0` | reproduction | Baseline for population egg production; start with neutral value during tuning |
 | `fixed_egg_count` | `bool` | Whether egg count is fixed | `False` | reproduction | `True` for fixed egg count, `False` for random egg production |
 | `sex_ratio` | `float` | Proportion of female offspring | `0.5` | reproduction | Range `[0, 1]`; `0.5` means equal sex ratio. Ignored when sex chromosomes can determine offspring sex (e.g., XX/ZW for female, XY/ZZ for male) |
 | `sperm_displacement_rate` | `float` | Rate at which new sperm replaces old sperm | `0.05` | reproduction | Typical range `(0, 1]`; larger values mean faster replacement |
@@ -195,6 +195,9 @@ The `competition_strength` scalar sets only the second juvenile age weight. The 
 Three acceptance bottom lines: (1) at the equilibrium point x=1 all curves converge to `s` (g(1)=s); (2) at low density x->0, g(0)=r·s (the curves share values at the joint equilibrium point); (3) deterministic simulations produce bitwise-reproducible curve scaling.
 
 A fourth rule covers an unusable reference: when the expected competition strength `C*` is zero — a carrying capacity of zero, or a declared equilibrium distribution whose juvenile entries are all zero — the compensatory modes 2–4 recruit nothing (scaling `0`) instead of falling back to an unregulated scaling of `1.0`. A zero `eggs_per_female` is another trigger while `new_adult_age == 1`, because age 0 is then the only competing age. `fixed` (mode 1) is evaluated against the carrying capacity rather than `C*`, so a positive `K` still clamps at `K`. `no_competition` (mode 0) remains the way to say "do not regulate", including for models whose only recruitment comes from hooks.
+
+| Parameter | Type | Description | Default | Affected Stage | Notes |
+|---|---|---|---|---|---|
 | `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Must be finite and in [1, 1000000] in every mode; growth multiplier under no competition; overly large values can cause oscillations |
 | `age_1_carrying_capacity` | `Optional[int]` | Carrying capacity at the age=1 stage | `None` | Juvenile density regulation | If explicitly specified, takes highest priority |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | Legacy parameter name (deprecated) with same function as `age_1_carrying_capacity` | `None` | Juvenile density regulation | `age_1_carrying_capacity` recommended; when both are set, `age_1_carrying_capacity` takes precedence |
@@ -275,7 +278,7 @@ Similarly, when the system automatically constructs an equilibrium distribution 
 
 ### `fitness(...)` – Fitness Coefficients
 
-Fitness parameters take effect at different stages of the simulation. `sexual_selection` affects mating probabilities in `compute_mating_probability_matrix` during reproduction, `fecundity` affects egg production in `fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction`, `viability` combines with age-specific survival rates in `compute_viability_survival_rates` during the survival phase, and `zygote_viability` is applied to newborn individuals immediately after the reproduction phase.
+Fitness parameters take effect at different stages of the simulation. `sexual_selection` affects mating probabilities during the mating step of reproduction, `fecundity` affects egg production during fertilization, `viability` combines with age-specific survival rates during the survival phase, and `zygote_viability` is applied to newborn individuals immediately after the reproduction phase.
 
 NATAL supports flexible fitness configuration schemes. In simulation, the following fitness types take effect at different stages:
 
@@ -386,9 +389,9 @@ Common errors:
 
 ### `build()` – Compilation Build
 
-The `build()` method accepts optional `name` (population name) and `hooks` (hook registrations), with constraints:
+The `build()` method accepts optional `name` (population name) and `hook_items` (hook registrations), with constraints:
 
-- `initial_state(...)` must be called before it to set the initial state.
+- `initial_state(...)` is optional; without it `build()` succeeds and produces an empty (zero-count) population.
 - Execution order:
   1. Sync equilibrium metrics
   2. Merge stored + passed hooks
@@ -439,7 +442,7 @@ Validation rules:
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `eggs_per_female` | `float` | Number of eggs per female per generation | `50.0` | reproduction | Baseline for egg production; start with neutral value during tuning |
+| `eggs_per_female` | `float` | Number of eggs per female per generation | `100.0` | reproduction | Baseline for egg production; start with neutral value during tuning |
 | `sex_ratio` | `float` | Proportion of female offspring | `0.5` | reproduction | Range `[0, 1]`; `0.5` means equal sex ratio. Ignored when sex chromosomes can determine offspring sex (e.g., XX/ZW for female, XY/ZZ for male) |
 | `female_adult_mating_rate` | `float` | Adult female mating rate | `1.0` | reproduction | Proportion of females participating in mating; range `[0, 1]` |
 | `male_adult_mating_rate` | `float` | Adult male mating rate | `1.0` | reproduction | Proportion of males participating in mating; range `[0, 1]` |
@@ -494,7 +497,7 @@ The semantics of these methods are fully consistent with the age-structured mode
 
 | Error Symptom | Possible Cause | Solution |
 |---|---|---|
-| `build()` raises an error | Forgot to set `initial_state(...)` | Call `initial_state(...)` before `build()` |
+| Population is empty (all counts zero) | `initial_state(...)` was not called — `build()` succeeds with a zero-count population | Add `.initial_state(...)` to the chain before `build()` |
 | Error during initialization or compilation | Age vector length does not match `n_ages` | Ensure all age-related parameter lengths equal `n_ages` |
 | Abnormal results or runtime errors | `sex_ratio` or other probability parameters out of bounds | Check that parameters are within valid ranges (e.g., `[0, 1]`) |
 | Behavior does not match expectations | Same-named parameter set multiple times leading to overwrite | Note that `generation_time`, `equilibrium_distribution` etc. can be set in multiple methods; later calls override earlier ones |

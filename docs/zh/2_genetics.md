@@ -36,7 +36,7 @@ NATAL 采用分层架构来组织遗传学对象，将对象划分为两个主�
 
 - 所有遗传结构都继承自基类 `GeneticStructure`，所有遗传实体都继承自基类 `GeneticEntity`。
 - 遗传结构和 `Gene` 在创建时需要指定字符串名称 `name`（默认为第一个参数），用于唯一标识该对象，从而可以通过 `get_...` 方法获取。
-  - **注意**：同一类型的 `name` 不能重复。如果尝试创建同名对象，系统将返回缓存中的实例并发出警告。
+  - **注意**：同一类型的 `name` 不能重复。直接调用结构构造函数传入重复名称时，系统返回缓存中的实例并发出 `UserWarning`；链式 API（如 `sp.add(...)`）也会返回缓存实例，但不发出警告。
 - 创建遗传结构时（最顶层的 `Species` 除外），需要指定上级结构实例；可直接通过上级结构的 `add` 方法创建。
 - 创建 `Gene` 时，需要指定所属 `Locus` 实例；可直接通过 `Locus` 的 `add_alleles` 方法创建。
 - 其他各级遗传实体在种群初始化时自动创建，通常无需手动管理，可通过相应的字符串格式从 `Species` 中访问（或提前创建）实例。
@@ -105,7 +105,7 @@ sp = nt.Species.from_dict(
 # 检查染色体性质
 chr_x = sp.get_chromosome("chrX")
 if chr_x.is_sex_chromosome:
-    print(f"性染色体类型: {chr_x.sex_type}")  # 输出: "X"
+    print(f"性染色体类型: {chr_x.sex_type}")  # 输出: SexChromosomeType.X
     print(f"性染色体系统: {chr_x.sex_system}")  # 输出: "XY"
 ```
 
@@ -257,7 +257,7 @@ locus = sp.get_locus("A")
 chr1.remove_locus("A")
 ```
 
-删除后，该位点将从染色体上移除，但该 `Locus` 实例将保持存在。该位点两侧的位点成为新的相邻位点，其重组率自动设置为原位点两侧的重组率之和。
+删除后，该位点将从染色体上移除，但该 `Locus` 实例将保持存在。该位点两侧的位点成为新的相邻位点，其重组率自动设置为原位点两侧的重组率之和，上限为 $0.5$。
 
 #### 结构完整性校验
 
@@ -477,9 +477,9 @@ Pattern 语法保持了与精确字符串格式的兼容性，所有精确字符
 
 **模式匹配影响**
 
-- `|` 模式：严格顺序匹配（但 `Species.unordered` 规范化意味着 `A|a` 和 `a|A` 在注册表中解析为同一个 `Genotype`）
+- 传给 `parse_genotype_pattern` 的模式中，`|` 严格有序——`Dr|WT` 不会匹配规范的 `WT|Dr`，与 `Species.unordered` 无关（规范化只意味着存储的 `A|a` 和 `a|A` 在注册表中解析为同一个 `Genotype`）
 - `::` 模式：显式无序匹配，与顺序无关
-- `unordered=True`（默认）时：`|` 模式自动提升为 `::` 解析（因为规范化已标准化了存储的基因型）
+- `unordered=True`（默认）时：`|` 到 `::` 的改写只发生在**选择器层**——`IndividualSelector(ztype=...)` 与 `Species.resolve_single_genotype_selector()` 会先把 `|` 改写为 `::` 再解析，因此选择器字符串可以匹配任意相位
 
 **迁移说明**
 

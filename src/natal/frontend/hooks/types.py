@@ -83,9 +83,10 @@ class OpType(IntEnum):
 
 
 # Canonical id table for ``Op.set_param`` targets and RPN operands.  The
-# order is a cross-backend wire contract: the Python kernel, the
-# kernel, and the Rust interpreter all index their ecology-value array by
-# position in this tuple, so the order must never change once released.
+# order is a cross-backend wire contract: the Python compile/journal
+# layer, the Rust kernels, and the Rust interpreter all index their
+# ecology-value array by position in this tuple, so the order must never
+# change once released.
 # Membership rule: jsonc ecology-section scalars that are runtime-mutable
 # 0-d draft arrays *and* Rust session f64 columns — dimensions (n_ages …),
 # mode enums (growth_mode), derived caches (generation_time …), vectors,

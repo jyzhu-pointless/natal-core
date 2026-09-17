@@ -6,6 +6,7 @@ Hard gates (always required):
 * ``cargo fmt --check``
 * ``cargo clippy -- -D warnings``
 * ``cargo check --all-targets``
+* ``cargo test --lib``
 
 Optional diagnostic (skipped when rust-analyzer is unavailable):
 

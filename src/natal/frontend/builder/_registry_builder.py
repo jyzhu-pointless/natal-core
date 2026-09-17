@@ -102,8 +102,12 @@ def rebuild_config_maps(
         Updated complete maps with an empty offspring placeholder.
 
     Raises:
-        ValueError: If the catalog is published, incomplete, or reordered,
-            or a modifier declaration is invalid.
+        ValueError: If the catalog is published or does not match the
+            complete species registry (the check lives in
+            :func:`natal.frontend.genetics.compile.project_mendelian_maps`,
+            which this function delegates to), or a modifier declaration
+            is invalid.  An empty catalog is not an error: the function
+            returns *config* unchanged.
     """
     from natal.frontend.genetics.compile import (
         compile_modifier_maps,

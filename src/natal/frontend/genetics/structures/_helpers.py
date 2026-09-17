@@ -29,6 +29,12 @@ def canonical_haploid_pair(
     Sex chromosomes with different types (X|Y, Z|W) preserve their
     maternal/paternal ordering.  Same-type sex chromosomes (X|X, Z|Z)
     are canonicalized per-locus like autosomes.
+
+    Args:
+        species: Species whose chromosome order and sex groups drive the
+            comparison.
+        hg1: First haploid genome.
+        hg2: Second haploid genome.
     """
     from natal.frontend.genetics.entities.haplotype import HaploidGenotype, Haplotype
 
@@ -120,10 +126,10 @@ def build_compression_mask(
     (zygote) axes.
 
     Uses a unified gamete-set fixed-point BFS that simultaneously tracks
-    reachable GTypes and ZTypes.  Masks are boolean (``int32`` with -1
-    for pruned, >=0 for surviving).  Callers rebuild their own compressed
-    index maps from the mask — the mask values themselves are not consumed
-    downstream.
+    reachable GTypes and ZTypes.  Masks are ``int32`` sentinel arrays, not
+    booleans: 0 marks surviving entries and -1 marks pruned ones.  Callers
+    rebuild their own compressed index maps from the mask — the mask values
+    themselves are not consumed downstream.
 
     Both maps are assumed pre-expanded: the ZT dimension of *z2g_map* /
     *g2z_map* is ``n_ztypes`` (genotype × slab), and the GT dimension
@@ -132,8 +138,9 @@ def build_compression_mask(
     Args:
         z2g_map: ``zygotes_to_gametes_map``, shape ``(2, n_zt, n_gt)``.
         g2z_map: ``gametes_to_zygotes_map``, shape ``(n_gt, n_gt, n_zt)``.
-        initial_individual_count: ``(2, A, n_zt)`` — ztypes with
-            count > 0 are the BFS seeds.
+        initial_individual_count: ``(2, n_ages, n_zt)`` — axis 0 is sex and
+            axis 1 is age class; ztypes whose counts sum to a positive
+            value over both axes are the BFS seeds.
         declared_zygote_types: Manual override — these ZType indices
             are treated as reachable regardless of initial state.
 

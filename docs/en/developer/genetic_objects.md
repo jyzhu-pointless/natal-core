@@ -88,7 +88,7 @@ A diploid genotype records two haploid genomes, maternal and paternal, but many 
 get_genotype_from_str("a|A") is get_genotype_from_str("A|a")   # True
 ```
 
-An unordered species therefore has six genotypes; switching to `unordered=False` yields nine, with `A|a` and `a|A` as separate objects. The gap widens with more loci: a species with two loci on one chromosome has 64 ordered genotypes and only 27 unordered ones (each locus collapses independently).
+An unordered species therefore has six genotypes; switching to `unordered=False` yields nine, with `A|a` and `a|A` as separate objects. The gap widens with more loci: a species with three loci of two alleles each on one chromosome has 64 ordered genotypes and only 27 unordered ones (each locus collapses independently).
 
 Collapsing is **per locus**, not by sorting the string: when the sex-chromosome types differ (X|Y, Z|W), parental order is preserved because "the father contributed Y" carries information.
 

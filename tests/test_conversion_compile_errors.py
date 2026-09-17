@@ -341,7 +341,7 @@ class TestRemainingCompileBranches:
         wt = reg.gtype_index(sp.get_haploid_genotype_from_str("WT"), "default")
         dr = reg.gtype_index(sp.get_haploid_genotype_from_str("Dr"), "default")
         z = reg.ztype_index(sp.get_genotype_from_str("WT|WT"), "default")
-        # Every maternal gamete here is default-labelled: no branch converts.
+        # Every maternal gamete here is default-labeled: no branch converts.
         row = rows[(wt, wt)]
         assert row[z] == pytest.approx(1.0)
         assert row.get(dr, 0.0) == pytest.approx(0.0)

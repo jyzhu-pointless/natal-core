@@ -96,50 +96,54 @@ class HomingDrive(GeneticPreset):
         It can also generate resistance alleles through non-homologous end joining (NHEJ).
 
         Args:
-            name (str): Name of the gene drive.
-            drive_allele (str or Gene): The allele carrying the drive cassette.
-            target_allele (str or Gene): The wild-type allele targeted by the drive.
-            resistance_allele (str or Gene, optional): The non-functional resistance allele formed by NHEJ.
-            functional_resistance_allele (str or Gene, optional): The functional resistance allele
+            name: Name of the gene drive.
+            drive_allele: The allele carrying the drive cassette.
+            target_allele: The wild-type allele targeted by the drive.
+            resistance_allele: The non-functional resistance allele formed by NHEJ.
+            functional_resistance_allele: The functional resistance allele
                 formed by in-frame NHEJ. If not provided, assume no functional resistance.
-            cas9_allele (str or Gene, optional): The allele carrying Cas9 for cleavage, used
+            cas9_allele: The allele carrying Cas9 for cleavage, used
                 when modeling a split drive where Cas9 is separate from the drive locus.
-            drive_conversion_rate (float or dict): Probability of drive conversion caused by Cas9 cleavage
+            drive_conversion_rate: Probability of drive conversion caused by Cas9 cleavage
                 and homology-directed repair in heterozygotes. Can be a single float (applies to both sexes),
                 a dict with sex keys, or a tuple (female_rate, male_rate) for sex-specific rates.
-            late_germline_resistance_formation_rate (float or dict): Probability of resistance formation
+            late_germline_resistance_formation_rate: Probability of resistance formation
                 *after* drive conversion in the germline. Can be a single float (applies to both sexes),
                 a dict with sex keys, or a tuple (female_rate, male_rate) for sex-specific rates.
-            embryo_resistance_formation_rate (float or dict): Probability of resistance formation
+            embryo_resistance_formation_rate: Probability of resistance formation
                 in embryos per target copy due to maternal/paternal Cas9 deposition.
                 Can be a single float, dict, or tuple (maternal_rate, paternal_rate).
                 A scalar sets both rates; the paternal rate is used only when
                 use_paternal_deposition is True. Requires cas9_deposition_glab;
                 the embryo's own Cas9 genotype never triggers editing.
-            functional_resistance_ratio (float): Proportion of resistance alleles that are functional
-                (in-frame mutations). Range: 0.0 (all non-functional) to 1.0 (all functional).
-            fecundity_scaling (float or dict): Fitness multiplier for drive carriers affecting fecundity.
+            functional_resistance_ratio: Proportion of resistance alleles that are functional
+                (in-frame mutations). Intended range: 0.0 (all non-functional) to 1.0
+                (all functional). Not enforced: out-of-range values are accepted as-is
+                and silently distort the resistance split.
+            fecundity_scaling: Fitness multiplier for drive carriers affecting fecundity.
                 Applied multiplicatively based on allele copy number.
-            viability_scaling (float or dict): Fitness multiplier for drive carriers affecting viability.
+            viability_scaling: Fitness multiplier for drive carriers affecting viability.
                 Applied multiplicatively based on allele copy number.
-            sexual_selection_scaling (float or tuple): Fitness multiplier affecting sexual selection.
+            sexual_selection_scaling: Fitness multiplier affecting sexual selection.
                 Can be a single float or tuple (default_selection, carrier_selection).
-            zygote_viability_scaling (float or dict): Fitness multiplier affecting survival of zygotes before
+            zygote_viability_scaling: Fitness multiplier affecting survival of zygotes before
                 competition takes place. Applied multiplicatively based on allele copy number.
-            viability_mode (str): Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
+            viability_mode: Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
                 If "custom", scaling values must be tuples (het_val, hom_val).
-            fecundity_mode (str): Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
+            fecundity_mode: Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
                 If "custom", scaling values must be tuples (het_val, hom_val).
-            sexual_selection_mode (str): Scaling mode for scalar sexual_selection_scaling.
+            sexual_selection_mode: Scaling mode for scalar sexual_selection_scaling.
                 Note: if sexual_selection_scaling is a tuple, mode is ignored.
-            zygote_viability_mode (str): Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
+            zygote_viability_mode: Scaling mode: "multiplicative", "dominant", "recessive", or "custom".
                 If "custom", scaling values must be tuples (het_val, hom_val).
-            cas9_deposition_glab (str, optional): Gamete label for Cas9 deposition tracking.
+            cas9_deposition_glab: Gamete label for Cas9 deposition tracking.
                 Must be registered in the species. Without this label, embryo resistance
                 is inactive. Tagged gametes can edit embryos that did not inherit drive.
-            species (Species, optional): Species to bind at construction time. If None,
+            species: Species to bind at construction time. If None,
                 will be bound when applied to population.
-            use_paternal_deposition (bool): Whether to enable paternal Cas9 deposition.
+            priority: Execution order — lower values apply first.
+                Same priority uses registration order (stable sort).
+            use_paternal_deposition: Whether to enable paternal Cas9 deposition.
                 If True, fathers can deposit Cas9 in embryos. If False, the paternal
                 embryo resistance rate is inactive.
 

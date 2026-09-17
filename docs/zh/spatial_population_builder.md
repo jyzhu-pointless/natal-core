@@ -107,9 +107,9 @@ def _detect_and_delegate(self, method_name, kwargs):
 ### 同构路径（无 batch_setting）
 
 ```
-_build_homogeneous():
+_build_homogeneous_demes():
     1. template = self._template.build()     # 完整流程一次
-    2. config = template.export_config()      # 导出 ModelDraft
+    2. config = 模板自己的 draft               # 克隆按引用共享
     3. demes = [template]
     4. for i in 1..n_demes:
            demes.append(_clone_deme(template, config))
@@ -119,28 +119,33 @@ _build_homogeneous():
 ### 异构路径（有 batch_setting）
 
 ```
-_build_heterogeneous():
+_build_heterogeneous_demes():
     1. expanded = {name: batch.expand(n_demes, topology) for ...}
        # 把所有 BatchSetting 展开为 per-deme 值列表
 
-    2. 按 (参数名, 参数值) 元组计算每个 deme 的 config 签名
-       # 例如 deme 0: (("age_1_carrying_capacity", 10000.0),)
+    2. _genetics_batch_names() 选出影响遗传学部分的 batch kwarg，
+       deme 按该遗传学签名分组
+       # 例如：batch 的 fitness 行会拆分组；仅生态参数的差异
+       #（carrying capacity、初始状态等）不会拆分组
 
     3. 按签名分组 → {sig: [deme_index, ...]}
 
     4. 对每组:
-       a. _build_template_for_group(sig_map)
-          # 创建新模板 PopulationBuilder，重放 _declaration_log，替换 batch 参数为组值
-       b. 组内其余 deme = _clone_deme(group_template)
+       a. 首个 deme → 模板 builder 的副本（deme 0）
+          或 _builder_for_group(values[first]) 完整重放
+          → _compile_products() → 该组的基础 config
+       b. 组内其余 deme：仅生态差异的 variant 在 _can_use_replace()
+          允许时通过 ModelDraft._replace 从基础 config 派生；
+          否则由 _builder_for_group() 完整重放
 
     5. 按索引组装所有 deme，构造 SpatialPopulation
 ```
 
-`_build_template_for_group` 是回放的核心：
+`_builder_for_group` 是回放的核心：
 
 ```python
-def _build_template_for_group(self, sig_map):
-    # 为该组新建单 deme 模板（与 SpatialPopulationBuilder.__init__ 同一入口）
+def _builder_for_group(self, sig_map):
+    # 为该组新建单 deme builder（与 SpatialPopulationBuilder.__init__ 同一入口）
     template = PopulationBuilder.from_species(self._species, discrete=(self._pop_type != "age_structured"))
 
     for method_name, kwargs in self._declaration_log:
@@ -155,10 +160,10 @@ def _build_template_for_group(self, sig_map):
 
         getattr(template, method_name)(**resolved)
 
-    return template.build()
+    return template  # 完整轴的未发布 builder，由调用方编译
 ```
 
-组内第一个模板完整构建后，后续组的 variant config 通过 `ModelDraft._replace` 共享未替换字段的大数组；可替换参数的发现、平衡态重算与不支持异构的字段见 [异构 Config 共享机制](spatial_config_replace.md)。
+组内第一个候选编译完成后，后续仅生态差异的 variant 通过 `ModelDraft._replace` 共享未替换字段的大数组；可替换参数的发现、读取时派生的平衡态指标与不支持异构的参数见 [异构 Config 共享机制](spatial_config_replace.md)。
 
 ## `_clone_deme`：零编译开销的克隆
 
@@ -170,7 +175,7 @@ def _clone_deme(template, config, name):
     return template._clone(name=name, config=config)
 ```
 
-同构构建里，模板 deme（索引 0）保留自己的 draft，索引 1 起的克隆共享 `template.export_config()` 返回的同一份配置对象（大数组按引用共享）。
+同构构建里，模板 deme（索引 0）保留自己的 draft，索引 1 起的克隆共享模板的 config 对象（大数组按引用共享）。
 
 `_clone` 的共享与独立关系：
 
@@ -200,7 +205,15 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 三种 kind 在 `build()` 时通过 `expand(n_demes, topology)` 统一展开为 Python 列表。
 
-接受 `BatchSetting` 的参数有：`carrying_capacity`、`age_1_carrying_capacity`、`eggs_per_female`、`sex_ratio`、`low_density_growth_rate`、`juvenile_growth_mode`、`expected_num_new_adult_females`。
+接受 `BatchSetting` 的参数（按方法）：
+
+- `initial_state`：`individual_count`、`sperm_storage`
+- `survival`（离散世代标量）：`female_age0_survival`、`male_age0_survival`；`reproduction`（离散世代标量）：`female_adult_mating_rate`、`male_adult_mating_rate`
+- `reproduction`：`eggs_per_female`、`sex_ratio`
+- `competition`：`carrying_capacity` / `age_1_carrying_capacity`、`low_density_growth_rate`、`juvenile_growth_mode`、`expected_num_new_adult_females`、`equilibrium_distribution`
+- `presets`：位置参数形式的 preset 对象
+- `fitness`：`viability`、`fecundity`、`sexual_selection`、`zygote_viability`
+- `migration`：`kernel`、`migration_rate`
 
 ## 构造开销
 
@@ -218,6 +231,6 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 ## 边界与限制
 
-1. **`batch_setting` 不支持 fitness / presets** — fitness 和 presets 修改的是 config 内部的 NumPy 数组（in-place），不适合通过标量值表达。需要异构 fitness 时，在 build 后手动修改对应 deme 的 config 数组
-2. **spatial kind 需要 topology** — `batch_setting(lambda topo, i: ...)` 要求 builder 传入了 topology 参数，否则 expand 时报错
+1. **影响遗传学的 batch 值不走 `_replace` 快路径** — `fitness` 的行参数与 `presets` 都支持 `batch_setting`，但每个不同的取值都会形成自己的遗传学组、各走一次完整 builder 重放；只有仅生态差异的 variant 才通过 `ModelDraft._replace` 共享大数组（见[异构 Config 共享机制](spatial_config_replace.md)）
+2. **spatial kind 需要 topology** — `batch_setting(lambda row, col: ...)` 形式的回调要求 builder 传入了 topology 参数，否则 expand 时报错；`(flat_idx)` 形式不依赖 topology（按参数个数自动识别）
 3. **同构 deme 共享同一 `_config` 引用** — 这是构建期的数据去重，不代表运行期可以直接写 `_config`。直接改 `pop.demes[0]._config` 的数组字段既绕过会话同步，也会影响所有共享该 config 的 deme；运行期修改单个 deme 用 `deme(i).write_ecology(...)` / `write_genetics(...)`，批量修改用 `pop.params.tensor_write(...)`

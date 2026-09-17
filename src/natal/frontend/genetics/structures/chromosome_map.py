@@ -206,7 +206,7 @@ class RecombinationMap:
         """
         Set recombination rate(s).
 
-        Two forms are supported:
+        Three forms are supported:
 
         - Single specifier: Sets the rate between the locus and the next locus.
         - Tuple of two specifiers: Sets the rate between two adjacent loci.
@@ -303,6 +303,6 @@ class RecombinationMap:
         return arr
 
     @property
-    def dtype(self):
+    def dtype(self) -> np.dtype:
         """Return the NumPy dtype of the underlying rates array."""
         return self._rates.dtype

@@ -54,7 +54,7 @@ Slab 被具体的 Preset 使用，例如 **Wolbachia**（母系细胞质标记�
 
 ### 索引注册表结构
 
-注册表使用扁平的（实体, 标签）配对列表：
+旧注册表存储的是基因型和单倍型的扁平列表；现代注册表使用扁平的（实体, 标签）配对列表：
 
 ```python
 class IndexRegistry:
@@ -187,11 +187,11 @@ Op.add(genotypes="Drive|WT@infected", delta=500, event="early", priority=0)
 
 ### 动机
 
-完整的组合空间 `(基因型 × slabs) × (单倍型 × glabs)` 可能很大。大多数基因型和单倍型从未从初始条件可达——它们有零个体，也没有遗传修饰因子产生它们。索引压缩会修剪这些不可达的条目，减小数组大小和计算量。
+完整的组合空间 `(基因型 × slabs) × (单倍型 × glabs)` 可能很大。编译阶段会先为每个基因型和标签使用这套完整、稳定的布局。索引压缩是发布阶段的后置步骤，它裁剪不可达条目，从而减小运行时数组规模和计算量。
 
 ### BFS 算法
 
-完整布局会先为所有基因型和标签建立稳定索引，再在发布阶段使用不动点 BFS（在 `natal.frontend.genetics.structures._helpers` 的 `build_compression_mask` 中实现）裁剪不可达条目。该算法对 GType 和 ZType 层次是对称的：
+压缩使用不动点 BFS（在 `natal.frontend.genetics.structures._helpers` 的 `build_compression_mask` 中实现）。该算法对 GType 和 ZType 层次是对称的：
 
 ```
 1. 种子：收集可达基因型

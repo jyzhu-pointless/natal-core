@@ -250,8 +250,8 @@ class IndividualSelector:
                                              age=range(2, 5))
         union = drive_females | infected_adults
 
-    Attributes:
-        _atoms: Private tuple of normalized :class:`_SelectorAtom` instances.
+    Internally the selector is a private tuple of normalized
+    :class:`_SelectorAtom` instances (``_atoms``).
     """
 
     _atoms: Tuple[_SelectorAtom, ...]
@@ -468,6 +468,8 @@ class IndividualSelector:
 
             if species is not None:
                 if species.unordered:
+                    # Canonicalize | → :: for unordered species; the \x00
+                    # placeholder preserves any :: the user already wrote.
                     spec = spec.replace("::", "\x00").replace("|", "::").replace("\x00", "::")
                 pattern = ZygoteTypePattern.parse(spec, species)
                 indices = index_registry.resolve_ztype_indices(pattern)

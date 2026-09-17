@@ -1,8 +1,9 @@
-"""验证 discrete 模型 inline 均衡计算：hook 内改 K 后种群响应。
+"""Verify the discrete model's inline equilibrium computation: population response after a hook changes K.
 
-演示切片④的 hook 内参数写入：单参数 hook（def hook(pop) -> int）
-通过 pop.params 直接改 K，写入立即生效（下一次 run 使用新值），
-并记录到 pop.params_log 参数快照。
+Demonstrates the slice-4 in-hook parameter write: a single-parameter hook
+(``def hook(pop) -> int``) changes K directly through ``pop.params``.  The
+write takes effect immediately (the next run uses the new value) and is
+recorded in the ``pop.params_log`` snapshot.
 """
 
 import natal as nt
@@ -10,8 +11,10 @@ from natal.frontend.hooks.tick_context import TickContext
 
 sp = nt.Species.from_dict(name="demo", structure={"auto": {"A": ["WT"]}})
 
-# hook 内改 K：tick=7 时一次性把 K 减半（用闭包标志保证只触发一次）。
-# Hook 在构建链中声明：计划在 build() 时一次性编译注入，构建后不再注册。
+# Change K inside a hook: one-shot halving once tick >= 7 (a closure flag
+# guarantees it fires only once).
+# The hook is declared in the build chain: its plan is compiled and injected
+# once at build() time; nothing is registered afterwards.
 _fired = {"done": False}
 
 
@@ -34,10 +37,11 @@ pop = (
     .build()
 )
 
-# 跑 5 ticks 到平衡
+# Run 5 ticks to reach equilibrium.
 pop.run(5)
 
-# 再跑 10 ticks 观察：hook 每次触发都会检查并收紧 K
+# Run 10 more ticks to observe the response: the hook fires exactly once
+# (at tick 7, guarded by the closure flag) and K stays halved afterwards.
 print(f"{'tick':>4}  {'total':>10}  {'K':>10}")
 for i in range(10):
     pop.run(1)
@@ -45,6 +49,6 @@ for i in range(10):
     K = pop.params.carrying_capacity
     print(f"{5+i+1:>4}  {total:>10.0f}  {K:>10.0f}")
 
-print("\n参数快照（hook 内写入，(tick, 参数, 旧值 → 新值)）：")
+print("\nParameter snapshots (written inside the hook, (tick, parameter, old value -> new value)):")
 for row in pop.params_log:
     print(f"  tick={row[0]}  {row[1]}  {row[2]:.0f} → {row[3]:.0f}")

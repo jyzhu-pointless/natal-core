@@ -107,6 +107,12 @@ def competition_writes(
 
     Returns:
         The resolved writes dict (possibly empty).
+
+    Raises:
+        ValueError: If *competition_strength* is given and *draft* has
+            ``new_adult_age < 2`` — the second juvenile age class whose
+            weight it sets does not exist there, so the write could
+            never reach the kernels.
     """
     mode_value = (
         juvenile_growth_mode if juvenile_growth_mode is not None else growth_mode
@@ -1561,6 +1567,11 @@ class RuntimeUpdater:
             if value is not None
         }
         step["mode"] = mode
+        # The leading int is a sort key: the number of presets registered
+        # when this step was declared.  Compilation interleaves explicit
+        # steps with preset fitness patches by that key — each step
+        # applies after the first ``min(key, len(presets))`` presets, in
+        # priority order.
         declaration.fitness_steps.append((len(declaration.presets), deepcopy(step)))
         target.publish_definition(
             build_runtime_definition(target.species, new_draft, target.registry, declaration)
@@ -1572,7 +1583,9 @@ class RuntimeUpdater:
 
         Because ``presets()`` appends modifiers cumulatively, calling it
         again after changing a preset attribute would double-apply.
-        This method resets the fitness declaration to neutral, then
+        This method resets the fitness declaration to neutral — both the
+        baseline tensors (reset to all ones) and any explicit
+        ``fitness()`` steps the user declared are cleared — then
         re-applies the preset so it writes onto a clean slate.
 
         Validation happens entirely before any mutation: if the preset

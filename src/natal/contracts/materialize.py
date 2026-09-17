@@ -378,7 +378,7 @@ def ztype_names_from_registry(
         index_to_ztype: ``(genotype, slab_label)`` pairs in index order.
 
     Returns:
-        Canonical ``"<genotype>:<slab>"`` strings.
+        Canonical ``"<genotype>@<slab>"`` strings.
     """
     return tuple(format_type_name(gt, slab) for gt, slab in index_to_ztype)
 
@@ -393,6 +393,6 @@ def gtype_names_from_registry(
             index order.
 
     Returns:
-        Canonical ``"<haplotype>:<glab>"`` strings.
+        Canonical ``"<haplotype>@<glab>"`` strings.
     """
     return tuple(format_type_name(hg, glab) for hg, glab in index_to_gtype)

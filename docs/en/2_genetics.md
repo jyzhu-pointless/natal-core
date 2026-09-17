@@ -36,7 +36,7 @@ The layered design keeps the API clean while facilitating low-level indexing and
 
 - All genetic structures inherit from the base class `GeneticStructure`; all genetic entities inherit from the base class `GeneticEntity`.
 - Genetic structures and `Gene` require a string `name` (default is the first parameter) at creation time, which is used to uniquely identify the object and can be retrieved via `get_...` methods.
-  - **Note**: `name` must be unique within the same type. If an attempt is made to create an object with a duplicate name, the system will return the cached instance and issue a warning.
+  - **Note**: `name` must be unique within the same type. Calling a structure constructor with a duplicate name returns the cached instance and issues a `UserWarning`; the chain API (e.g. `sp.add(...)`) also returns the cached instance, but silently.
 - When creating genetic structures (except for the top-level `Species`), you need to specify the parent structure instance; you can create them directly via the parent structure's `add` method.
 - When creating a `Gene`, you need to specify the `Locus` instance it belongs to; you can create genes directly via the `Locus`'s `add_alleles` method.
 - Other genetic entities at various levels are automatically created during population initialization. Manual management is typically not required; instances can be accessed (or created in advance) through the corresponding string format from the `Species`.
@@ -105,7 +105,7 @@ You can check the nature of chromosomes:
 # Check chromosome nature
 chr_x = sp.get_chromosome("chrX")
 if chr_x.is_sex_chromosome:
-    print(f"Sex chromosome type: {chr_x.sex_type}")  # Output: "X"
+    print(f"Sex chromosome type: {chr_x.sex_type}")  # Output: SexChromosomeType.X
     print(f"Sex chromosome system: {chr_x.sex_system}")  # Output: "XY"
 ```
 
@@ -258,7 +258,7 @@ You can delete a `Locus` instance from a chromosome:
 chr1.remove_locus("A")
 ```
 
-After deletion, the locus will be removed from the chromosome, but the `Locus` instance itself will continue to exist. The loci on either side of the deleted locus become new adjacent loci, and the recombination rate between them is automatically set to the sum of the recombination rates on both sides of the original locus.
+After deletion, the locus will be removed from the chromosome, but the `Locus` instance itself will continue to exist. The loci on either side of the deleted locus become new adjacent loci, and the recombination rate between them is automatically set to the sum of the recombination rates on both sides of the original locus, capped at $0.5$.
 
 #### Structure Completeness Validation
 
@@ -479,9 +479,9 @@ Sex chromosomes with different types (`X|Y`, `Z|W`) preserve their maternal/pate
 
 **Pattern matching implications**
 
-- `|` in pattern: strict order (but `Species.unordered` canonicalization means both `A|a` and `a|A` resolve to the same `Genotype` in the registry)
+- `|` in a pattern passed to `parse_genotype_pattern`: strict order — `Dr|WT` does not match the canonical `WT|Dr`, regardless of `Species.unordered` (canonicalization only means the stored `A|a` and `a|A` resolve to the same `Genotype` in the registry)
 - `::` in pattern: explicitly unordered match, works regardless of order
-- With `unordered=True` (default): `|` in patterns is auto-promoted to `::` for resolution (because canonicalization already normalized the stored genotype)
+- With `unordered=True` (default): the promotion of `|` to `::` happens only at the **selector layer** — `IndividualSelector(ztype=...)` and `Species.resolve_single_genotype_selector()` rewrite `|` to `::` before parsing, so selector strings match either phase
 
 **Migration note**
 

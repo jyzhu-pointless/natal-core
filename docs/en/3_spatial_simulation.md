@@ -812,9 +812,9 @@ If the passed `migration_kernel` is not an odd-dimension 2D array, an error will
 
 `adjacency.shape` must equal `(n_demes, n_demes)`.
 
-### Error 5: kernel_bank Mismatch with topology
+### Error 5: kernel_bank Without topology Silently Disables Migration
 
-Heterogeneous kernels (`kernel_bank` + `deme_kernel_ids`) follow the kernel path and require `topology` to be present. If only `kernel_bank` is passed without `topology`, an error will be raised during construction.
+Heterogeneous kernels (`kernel_bank` + `deme_kernel_ids`) follow the kernel path and require `topology` to take effect. A missing `topology` is **not** caught as an error: construction succeeds, and the missing topology resolves to the identity adjacency — no individual moves between demes and the kernel bank is effectively ignored. With the default `migration_rate=0` this is completely silent; only when `migration_rate > 0` does the builder emit a warning that no individual can move between demes. Pass `topology=` (or an explicit `kernel=` / `adjacency=`) alongside `kernel_bank` to actually enable heterogeneous migration.
 
 ## Chapter Summary
 

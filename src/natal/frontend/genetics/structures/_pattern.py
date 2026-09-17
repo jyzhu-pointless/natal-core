@@ -42,6 +42,22 @@ class SpeciesPatternMixin:
             - Genotype object: exact match
             - String exact genotype syntax
             - String genotype pattern syntax
+
+        Args:
+            selector: Genotype object, exact genotype string, or genotype
+                pattern string.
+            all_genotypes: Candidate genotypes searched by the pattern
+                fallback; defaults to all genotypes of the species.
+            context: Label identifying the caller in error messages.
+
+        Returns:
+            List of matching genotypes: the selector itself for a
+            ``Genotype``, the single exact match for an exact string, or
+            every candidate matching the pattern.
+
+        Raises:
+            ValueError: If the selector is neither a valid genotype string
+                nor a valid pattern, or if the pattern matches no genotype.
         """
         self = cast(Species, self)
         from natal.frontend.genetics.entities.genotype import Genotype

@@ -19,9 +19,9 @@ flowchart TD
     R["繁殖：每对亲本的产卵数"] --> D1["离散：binomial / poisson；连续：连续型对应分布"]
     D1 --> G["后代基因型：按 P 的概率分布抽样"]
     G --> SX["性别分配：按 sex_ratio 或性染色体规则"]
-    SX --> SUR["生存：逐 (性别, ZType) binomial(round(count), 率)"]
-    SUR --> DEN["密度调节：按缩放的幼体总量做 multinomial 重分配"]
-    DEN --> MIG["空间：迁移目标按核/权重抽样"]
+    SX --> DEN["密度调节：按缩放的幼体总量做 multinomial 重分配"]
+    DEN --> SUR["生存：逐 (性别, ZType) binomial(round(count), 率)"]
+    SUR --> MIG["空间：迁移目标按核/权重抽样"]
 ```
 
 顺序值得注意：**密度调节的重抽样在生存之前**，因此"缩放后的整数总量"才是生存抽样的输入。空间迁移的抽样见[空间执行与迁移](spatial.md)。

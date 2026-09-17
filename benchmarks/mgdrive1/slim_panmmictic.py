@@ -411,7 +411,8 @@ def benchmark_natal_panmmictic(
         eggs=np.zeros(3, dtype=np.float64),
     )
 
-    # Exclude Numba compilation from timed replicates.
+    # Run one untimed warm-up step: one-time imports and lazy setup stay
+    # out of the timed replicates.
     seed_rng(seed)
     step_spatial(
         scenario.state,

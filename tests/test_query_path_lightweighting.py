@@ -488,7 +488,7 @@ def test_context_without_transaction_reads_the_draft() -> None:
 
 
 def _build_observed_age(name: str, groups: OrderedDict[str, IndividualSelector]) -> Any:
-    """Return a labelled age-structured population with an explicit rule."""
+    """Return a labeled age-structured population with an explicit rule."""
     return (
         nt.AgeStructuredPopulation.setup(species=_species(name), stochastic=False)
         .age_structure(n_ages=3, new_adult_age=1)

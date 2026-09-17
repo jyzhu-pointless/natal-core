@@ -44,7 +44,10 @@ def _resolve_sex_index(sex_key: Union[str, Sex]) -> int:
         0 for female, 1 for male.
 
     Raises:
-        TypeError: If sex_key is neither str nor Sex.
+        AssertionError: If sex_key is neither str, int, nor Sex (the type
+            check is the assertion inside :func:`resolve_sex_label`).
+        ValueError: If sex_key is an integer other than 0/1 or an
+            unrecognized sex label.
     """
     if isinstance(sex_key, Sex):
         return int(sex_key.value)
@@ -254,7 +257,10 @@ def resolve_age_structured_initial_sperm_storage(
         A 3D array ``[age, female_genotype, male_genotype]``.
 
     Raises:
-        TypeError: If storage value is not a dictionary.
+        AttributeError: If sperm_storage (or a per-female value) does not
+            provide ``.items()``. The mapping type is not validated: a
+            non-mapping input fails at the ``.items()`` access rather
+            than with a ``TypeError``.
     """
     registry = _fresh_species_registry(species)
     # Layout [age, female_genotype, male_genotype]: Rust stacks this into its

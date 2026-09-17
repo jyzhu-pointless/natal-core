@@ -143,9 +143,13 @@ class BasePopulation(ABC, Generic[T_State]):
         name (str): Human-readable population name.
         tick (int): Current simulation tick.
         registry (IndexRegistry): Index registry for genotype/haplotype mappings.
-        config (ModelDraft): Active static draft/config container.
-        state (T_State): Active population state container.
-        history (List[Tuple[int, np.ndarray]]): Recorded state snapshots by tick.
+        config (ModelDraft): Point-in-time snapshot of the static
+            draft/config; writes through it never reach the live
+            configuration.
+        state (T_State): Point-in-time snapshot of the population state;
+            writes through it never reach the live arrays.
+        history (History): Self-describing record of state snapshots; its
+            schema is frozen at build time.
         compiled_hook_descriptors (tuple[CompiledHookDescriptor, ...]): Read-only
             snapshot of the compiled hook descriptors (CSR plans and Python
             callbacks) injected at build time, in declaration order.
@@ -676,7 +680,7 @@ class BasePopulation(ABC, Generic[T_State]):
 
     @tick.setter
     def tick(self, value: int) -> None:
-        """Reject clock changes outside an owning lifecycle operation."""
+        """Reject every assignment: the tick is read-only."""
         self._require_standalone_owner("set tick")
         raise RuntimeError(
             "tick is read-only; use run(), reset(), or restore_checkpoint() "
@@ -1080,13 +1084,20 @@ class BasePopulation(ABC, Generic[T_State]):
             each concrete population class finalizes the builder type).
 
         Raises:
-            NotImplementedError: Always — concrete population classes
-                override this with their own builder entry point.
+            NotImplementedError: Always on this base class; only
+                :class:`SpatialPopulation` overrides ``builder()`` with a
+                working entry point. Construct the panmictic populations
+                through :meth:`PopulationBuilder.for_age_structured` or
+                :meth:`PopulationBuilder.for_discrete` instead.
 
         Examples:
-            >>> pop = (AgeStructuredPopulation.builder(species)
-            ...     .set_age_structure(n_ages=10)
-            ...     .add_preset(HomingModificationDrive(...))
+            >>> from natal.frontend.builder import PopulationBuilder
+            >>> from natal.frontend.presets import HomingDrive
+            >>> pop = (PopulationBuilder.for_age_structured(species)
+            ...     .age_structure(n_ages=10, new_adult_age=2)
+            ...     .presets(HomingDrive(name="MyDrive", drive_allele="Drive",
+            ...                          target_allele="WT",
+            ...                          drive_conversion_rate=0.95))
             ...     .build())
         """
         raise NotImplementedError(f"{cls.__name__} must implement builder()")
@@ -1613,7 +1624,7 @@ class BasePopulation(ABC, Generic[T_State]):
         pass
 
     def step(self) -> BasePopulation[T_State]:
-        """Alias for `BasePopulation.run_tick()`"""
+        """Alias for `BasePopulation.run_tick()`."""
         return self.run_tick()
 
     @abstractmethod

@@ -191,9 +191,9 @@ class DebugPreset(GeneticPreset):
 
 ## 小结
 
-🎉 恭喜！你已经完成了"设计自己的 Preset"的完整主线：
+恭喜！你已经完成了"设计自己的 Preset"的完整主线：
 
-1. 规则定义（Gamete 与 Zygote 转换
+1. 规则定义（Gamete 与 Zygote 转换）
 2. 规则生效范围精细化（filters）
 3. Preset 工程化、验证与发布
 

@@ -103,8 +103,9 @@ def count_combined_allele_copies(genotype: Genotype, target_genes: List[Gene]) -
     # We could optimize, but summing individual counts is safe and correct.
     for gene in target_genes:
         total += count_allele_copies(genotype, gene)
-    # Cap at 2 for diploid systems if they are alleles of the same locus,
-    # but logic holds generally (e.g. 2 means homozygous-equivalent cost).
+    # Not capped here: the total stays within 0..2 only when the alleles share
+    # one diploid locus; alleles at different loci can sum higher (each locus
+    # contributes up to 2 copies).
     return total
 
 def calculate_allele_effect(

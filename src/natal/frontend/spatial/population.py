@@ -679,14 +679,12 @@ class SpatialPopulation:
         name (str): Human-readable name for the spatial container.
         demes (Sequence[DemeSlice]): Immutable view of aligned per-deme slices.
         n_demes (int): Number of demes in the spatial system.
-        species (object): Shared species object used by all demes.
+        species (Species): Shared species object used by all demes.
         topology (GridTopology | None): Spatial topology used by the landscape.
         blueprint (Blueprint): Frozen spatial contract (dimensions, flags,
             migration CSR).
         params (SpatialParamsView): Validated runtime-parameter surface;
             the migration rate lives at ``params.migration_rate``.
-        migration_row (callable): Normalized outbound weight readout for
-            one source deme (derived from the CSR).
         tick (int): Current shared simulation tick across all demes.
     """
 
@@ -760,10 +758,14 @@ class SpatialPopulation:
                 existing behavior (kernel when ``migration_kernel`` is set,
                 otherwise adjacency). ``"hybrid"`` is accepted as a forward-
                 compatible alias of ``"auto"`` for now.
-            kernel_bank: Optional kernel bank reserved for future per-deme
-                heterogeneous-kernel routing.
-            deme_kernel_ids: Optional per-deme kernel id array reserved for
-                future heterogeneous-kernel routing.
+            kernel_bank: Optional bank of odd-shaped 2D kernels for
+                per-deme heterogeneous-kernel routing. When provided
+                together with *deme_kernel_ids*, migration resolves to
+                kernel mode and each source deme folds its own bank
+                kernel.
+            deme_kernel_ids: Optional per-deme kernel id array selecting
+                which *kernel_bank* entry routes each source deme;
+                requires *kernel_bank*.
             kernel_include_center: Whether kernel migration includes the kernel
                 center as an outbound target for the source deme.
             migration_rate: Fraction of each deme that migrates each tick.
@@ -1673,10 +1675,11 @@ class SpatialPopulation:
                 already-recorded current tick without writing a second row.
 
         Raises:
-            RuntimeError: If spatial History or Observation is not initialized.
-            ValueError: If a strict snapshot repeats or precedes the latest
-                tick, or an automatic boundary is stale or has a different
-                payload.
+            ValueError: If spatial History or Observation is not
+                initialized (practically unreachable: construction
+                installs the History schema), or if a strict snapshot
+                repeats or precedes the latest tick, or an automatic
+                boundary is stale or has a different payload.
         """
         backend = getattr(self, "_rust_spatial_backend", None)
         if backend is None:
@@ -2186,7 +2189,10 @@ class SpatialPopulation:
 
         The weights are scattered from the frozen Blueprint CSR and
         renormalized to sum to one (border demes included), matching the
-        historical readout semantics.
+        historical readout semantics.  A row folded to empty (e.g. a
+        kernel-mode deme with no in-grid outbound offsets) has total
+        weight zero and is returned as-is: an all-zero vector that sums
+        to 0 instead of 1.
 
         Args:
             source_idx: Source deme index.
@@ -2197,6 +2203,7 @@ class SpatialPopulation:
         """
         # Folded rows are not guaranteed to be distributions (adjacency stores
         # its raw weights), so the readout is renormalized to sum to one.
+        # The zero-total guard keeps empty rows (sum 0) from dividing by zero.
         weights = csr_dense_row(self._migration_csr, source_idx, self.n_demes)
         total = float(weights.sum())
         if total > 0.0:

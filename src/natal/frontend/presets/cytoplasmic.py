@@ -96,10 +96,12 @@ class CytoplasmicPreset(GeneticPreset):
 
         Returns:
             The subset of ``_maternal_map`` whose glab is registered.
+            Entries naming an unregistered glab are dropped silently as
+            long as at least one entry survives.
 
         Raises:
-            ValueError: If ``_maternal_map`` names a gamete label that the
-                species does not declare.
+            ValueError: If ``_maternal_map`` is non-empty but none of its
+                gamete labels are declared by the species.
         """
         available = set(glab_names)
         active = {
@@ -207,6 +209,15 @@ class CytoplasmicPreset(GeneticPreset):
             return
         glab_idx = gamete_labels.index(glab_name)
         slab_idx = somatic_labels.index(slab_name)
+        # Flat-index layout of z2g_expanded: the zygote axis interleaves the
+        # n_slabs somatic labels of each raw genotype, so a column is
+        # z = g_raw * n_slabs + slab_idx (g_raw = genotype, slab_idx = somatic
+        # label).  Each haploid-label axis interleaves the n_glabs gamete
+        # labels of each haploid genotype, so a row is hl = hg * n_glabs +
+        # glab_idx (hg = haploid genotype, glab_idx = gamete label).
+        # Redirecting maternal gametes tagged with glab_name to the target
+        # slab therefore means moving mass between the two slab columns of
+        # the same genotype across every maternal/paternal label pairing.
         for g_raw in range(n_genotypes_raw):
             z_dst = g_raw * n_slabs + slab_idx
             z_src = g_raw * n_slabs + 0

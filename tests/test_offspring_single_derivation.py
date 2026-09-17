@@ -380,7 +380,7 @@ class TestChannelAgreementMultiLabel:
         # Multi-label layout with live drive mass (3 ztypes × 4 gtypes).
         assert meiosis.shape == (2, 3, 4)
         np.testing.assert_array_equal(refreshed, _einsum_reference(meiosis, fusion))
-        # The drive really biases the cas9-labelled columns (non-trivial
+        # The drive really biases the cas9-labeled columns (non-trivial
         # input to the derivation, not the Mendelian baseline).
         assert meiosis[:, 1, 2:].sum() > 0.0
 

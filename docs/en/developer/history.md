@@ -48,8 +48,9 @@ The two formats are deliberately different: `@` is also the label suffix in the 
 | `record_every=2` | one row every second boundary: verified ticks `(0, 2, 4)` |
 | `record_every=0` | record nothing while the clock keeps advancing |
 | `max_rows=k` | keep only the newest k rows: verified ticks `(3, 4, 5)` for `max_rows=3` over five steps |
+| `max_rows` omitted | not unlimited: the default is a bounded rolling window of `max_history = 5000` rows per population (spatial populations use the same default) |
 
-Eviction removes the oldest rows first, and an evicted row also makes its checkpoint unrestorable — checkpoints are aligned with history rows.
+Eviction removes the oldest rows first (FIFO), and an evicted row also makes its checkpoint unrestorable — checkpoints are aligned with history rows.
 
 Consecutive `run()` calls continue one timeline (verified: two `run(1)` calls leave ticks `(0, 1, 2)`) instead of restarting it, while `reset()` clears the history and returns to the initial state.
 

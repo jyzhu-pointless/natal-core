@@ -89,10 +89,15 @@ pop.run(n_steps=10, record_every=1)
 pop.params.tensor_write("migration_rate", {"F": 0.2, "M": 0.05})  # runtime rate change
 ```
 
-After construction, runtime parameter writes have exactly two entries:
-`pop.params.tensor_write(...)` (bulk, recommended) and
-`deme(i).write_ecology(...)` / `write_genetics(...)` (single deme).
-**The `SpatialPopulation.update()` chain has been removed.**
+After construction, runtime parameter writes have three entries:
+`pop.params.tensor_write(...)` (bulk, recommended),
+`deme(i).write_ecology(...)` / `write_genetics(...)` (single deme), and
+`deme(i).update()` (single-deme `RuntimeUpdater`).
+**The container-level `SpatialPopulation.update()` chain has been removed;**
+`update()` survives only at the deme level — `pop.deme(i).update()` returns
+the same `RuntimeUpdater` type, committing through that deme's channel of the
+parent spatial session.
+
 > **Note**: every access to the spatial container's `pop.params` returns a **new**
 > `SpatialParamsView`. Attribute assignments such as
 > `pop.params.carrying_capacity = 5` raise `AttributeError` instead of silently

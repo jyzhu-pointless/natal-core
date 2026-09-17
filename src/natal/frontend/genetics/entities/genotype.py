@@ -87,9 +87,10 @@ class Genotype:
             mat, pat = canonical_haploid_pair(species, maternal, paternal)
         else:
             mat, pat = maternal, paternal
-        # Canonical name from each chromosome's maternal|paternal allele chains,
-        # so the key is stable across equal-but-distinct haplotype objects and
-        # matches the instance `name`/`__str__` form.
+        # Canonical name from each chromosome's maternal|paternal allele chains;
+        # it matches the instance `name`/`__str__` form. The id() parts scope
+        # the key to the specific haploid instances, so equal-but-distinct
+        # haplotype objects get distinct keys.
         canon_parts: list[str] = []
         for chrom in species.chromosomes:
             try:
@@ -131,9 +132,10 @@ class Genotype:
     ):
         """Initialize a diploid Genotype from two haploid genomes.
 
-        Validates that both haploid genomes belong to the same species,
-        stores maternal and paternal references, and caches gamete
-        frequencies.
+        Validates that both haploid genomes belong to the same species
+        and stores maternal and paternal references. Gamete frequencies
+        are not cached here; ``produce_gametes`` recomputes them on every
+        call.
 
         Args:
             species: The Species both haploid genomes belong to.
@@ -186,6 +188,9 @@ class Genotype:
     def get_alleles_at_locus(self, locus: Locus) -> Tuple[Optional[Gene], Optional[Gene]]:
         """
         Get the pair of alleles at a specific locus.
+
+        Args:
+            locus: Locus to query.
 
         Returns:
             Tuple of (maternal_allele, paternal_allele)
@@ -615,12 +620,12 @@ def compute_recombinant_haplotypes(
         >>> recomb_rates = np.array([0.1, 0.2])  # rate between 0-1 and 1-2
         >>> patterns, freqs = compute_recombinant_haplotypes(n_loci, recomb_rates, True)
         >>> patterns
-        array([[0, 0, 0],   # No crossovers: all maternal
-               [0, 0, 1],   # Crossover after locus 1: mat, mat, pat
-               [0, 1, 1],   # Crossover after locus 0: mat, pat, pat
-               [0, 1, 0]], dtype=int64)  # Two crossovers: mat, pat, mat
+        array([[0, 0, 0],   # pattern_idx 0 (no crossover bits): all maternal
+               [0, 1, 1],   # pattern_idx 1 (bit 0 set: crossover at boundary 0): mat, pat, pat
+               [0, 0, 1],   # pattern_idx 2 (bit 1 set: crossover at boundary 1): mat, mat, pat
+               [0, 1, 0]], dtype=int64)  # pattern_idx 3 (both bits: crossovers at both boundaries): mat, pat, mat
         >>> freqs
-        array([0.72, 0.02, 0.18, 0.08])  # 0.9*0.8, 0.9*0.2, 0.1*0.8, 0.1*0.2
+        array([0.72, 0.08, 0.18, 0.02])  # 0.9*0.8, 0.1*0.8, 0.9*0.2, 0.1*0.2
     """
     if n_loci < 1:
         raise ValueError("n_loci must be >= 1")

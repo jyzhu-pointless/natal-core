@@ -4,26 +4,26 @@
 
 ## Problem
 
-`SpatialPopulationBuilder._build_heterogeneous()` calls `_build_template_for_group()` for each config-equivalent group. This function fully replays the builder pipeline (`setup → … → build()`), calling `build_population_config()` each time to create a brand new `ModelDraft`.
+`SpatialPopulationBuilder._build_heterogeneous_demes()` compiles the builder pipeline once per **genetics** signature group (`_genetics_batch_names()` decides which batch kwargs belong to genetics; ecology-only differences do not split groups). Every additional variant inside a group still needs its own `ModelDraft`: either it is derived from the group's base config, or `_builder_for_group()` fully replays the builder pipeline (`setup → … → build()`), compiling a brand-new `ModelDraft` each time.
 
-If only a few parameters differ between groups, all large arrays (`zygotes_to_gametes_map`, `gametes_to_zygotes_map`, `viability_fitness`, `fecundity_fitness`, etc.) are still duplicated, causing memory waste.
+If the `_replace` fast path did not exist, every ecology-only variant would need a full replay, so all large arrays (`zygotes_to_gametes_map`, `gametes_to_zygotes_map`, `viability_fitness`, `fecundity_fitness`, etc.) would be duplicated, causing memory waste.
 
 ```
 2601 demes, each with a unique carrying_capacity
-→ 2601 full ModelDraft instances
+→ 2601 full ModelDraft instances (one full replay per deme)
 → Large arrays copied 2601 times
 ```
 
 ## Solution: `_replace` Fast Path
 
-`ModelDraft` is a `NamedTuple`, and its `_replace()` method creates a new instance while **sharing references to all fields that are not replaced**. Leveraging this property, the first group is built in full, and subsequent groups only replace the differing fields:
+`ModelDraft` is a `NamedTuple`, and its `_replace()` method creates a new instance while **sharing references to all fields that are not replaced**. Leveraging this property, the first variant of a group is compiled in full, and subsequent variants only replace the differing fields:
 
 ```
-Group 0: Full builder pipeline → base_config (all arrays)
-Group 1: base_config._replace(carrying_capacity=2000)       → shares all large arrays
-Group 2: base_config._replace(carrying_capacity=3000)       → shares all large arrays
+Variant 0: Full compile pipeline → base_config (all arrays)
+Variant 1: base_config._replace(carrying_capacity=2000)       → shares all large arrays
+Variant 2: base_config._replace(carrying_capacity=3000)       → shares all large arrays
 ...
-Group N: base_config._replace(initial_individual_count=arr) → rebuilds only initial_individual_count
+Variant N: base_config._replace(initial_individual_count=arr) → rebuilds only initial_individual_count
 ```
 
 ## Parameter Discovery Mechanism
@@ -36,13 +36,19 @@ Builder parameters that require dict → numpy array conversion, defined in `_AR
 
 | Builder kwarg | Config Field | Conversion Method |
 |---|---|---|
-| `individual_count` | `initial_individual_count` | `_params.resolve_*_initial_individual_count()` |
-| `sperm_storage` | `initial_sperm_storage` | `_params.resolve_age_structured_initial_sperm_storage()` |
+| `individual_count` | `initial_individual_count` | `initial_state.resolve_*_initial_individual_count()` |
+| `sperm_storage` | `initial_sperm_storage` | `initial_state.resolve_age_structured_initial_sperm_storage()` |
 
 ### 2. Multi-Field Mapping (Explicit)
 
-One builder kwarg mapping to multiple config fields (requiring special scaling), defined in `_KWARG_MULTI_FIELD`. No residual entries from deleted fields remain.
+Discrete-generation scalar builder kwargs that each write **one cell** of a unified `(2, n_ages)` vector config field, defined in `_DISCRETE_VECTOR_CELLS`. The target vector is copied before the write, so variants never alias the base:
 
+| Builder kwarg | Config Field | Cell |
+|---|---|---|
+| `female_age0_survival` | `age_based_survival_rates` | `(0, 0)` |
+| `male_age0_survival` | `age_based_survival_rates` | `(1, 0)` |
+| `female_adult_mating_rate` | `age_based_mating_rates` | `(0, 1)` |
+| `male_adult_mating_rate` | `age_based_mating_rates` | `(1, 1)` |
 
 ### 3. Renames (Explicit)
 
@@ -58,71 +64,68 @@ For kwargs not in the three categories above, `hasattr(base_config, kwarg_name)`
 
 Adding new batch-able scalar parameters typically does not require modifying the mapping tables — as long as the builder kwarg name matches the config field name.
 
-Parameters not in any of the above categories (`presets`, `fitness`, survival rate arrays, etc.) fall back to full builder replay.
+Genetics-affecting kwargs (`presets`, `fitness` rows such as `viability` / `fecundity`, custom modifiers, etc.) never go through `_replace`: they split demes into separate genetics groups, each compiled by a full builder replay. Within a group, a non-genetics kwarg that fails the `hasattr` check also falls back to full replay; the replayed variant then shares the group's genetic product fields with the base config.
 
 ### Deliberately Unsupportable Heterogeneous Parameters
 
-`stochastic` and `continuous_sampling` are simulation-mode-level parameters that should not vary between demes. The `setup()` method does not pass through `_detect_and_delegate`, so these parameters **cannot** be provided via `batch_setting`.
+`stochastic` and `continuous_sampling` are simulation-mode-level parameters that should not vary between demes. `setup()` takes them directly and does not route them through the batch machinery, so these parameters **cannot** be provided via `batch_setting`.
 
-## Equilibrium Recalculation
+## Equilibrium Metrics Are Derived on Read
 
-Changes to `carrying_capacity`, `eggs_per_female`, and `sex_ratio` affect `expected_competition_strength` and `expected_survival_rate`. These parameters are flagged in `_EQUILIBRIUM_SENSITIVE_KWARGS`, and after `_replace` completes, `compute_equilibrium_metrics()` is automatically called to recalculate.
+Changes to `carrying_capacity`, `eggs_per_female`, and `sex_ratio` affect `expected_competition_strength` and `expected_survival_rate`, but the draft stores neither value: `ModelDraft` has no equilibrium fields, and nothing is recomputed after `_replace`. Both metrics are derived fresh on read — `pop.params.expected_competition_strength` / `pop.params.expected_survival_rate` call `derive_equilibrium_metrics_from_draft()` (`src/natal/frontend/model/ecology.py`), so a `_replace` variant is automatically consistent without any sync step.
 
 ## Array Field Conversion
 
-The values for `individual_count` and `sperm_storage` are user-provided dicts (e.g., `{"female": {"WT|WT": 100}}`), which must be converted to numpy arrays before `_replace`. Conversion is done by the plain resolver functions in `natal.frontend.builder._params`:
+The values for `individual_count` and `sperm_storage` are user-provided dicts (e.g., `{"female": {"WT|WT": 100}}`), which must be converted to numpy arrays before `_replace`. Conversion is done by the plain resolver functions in `natal.frontend.model.initial_state`:
 
 - Age-structured: `resolve_age_structured_initial_individual_count(species, distribution, n_ages, new_adult_age)`
+- Age-structured sperm storage: `resolve_age_structured_initial_sperm_storage(species, sperm_storage, n_ages, new_adult_age)`
 - Discrete generation: `resolve_discrete_initial_individual_count(species, distribution)`
 
 The result matches builder behavior.
 
-## State Overwrite After Cloning
+## Cloning and Initial State
 
-`_clone_deme()` copies state data from the template. When `individual_count` or `sperm_storage` differs between groups, the `_replace` path additionally overwrites the corresponding state arrays after cloning:
+`_clone_deme()` delegates to `PopulationInstance._clone()` (`src/natal/frontend/population/base.py`), which copies the state arrays (`individual_count`, plus `sperm_storage` on age-structured states) from the template deme. A clone always shares the template's config object, so the copied state already matches the config — no post-clone overwrite is needed.
 
-```python
-group_template = _clone_deme(base_template, config=variant_config, name=...)
-# _clone copies state from base_template; overwrite with config values
-state = group_template._require_state()
-if "individual_count" in sig_map:
-    state.individual_count[:] = variant_config.initial_individual_count
-if "sperm_storage" in sig_map:
-    ss = getattr(state, 'sperm_storage', None)
-    if ss is not None:
-        ss[:] = variant_config.initial_sperm_storage
-```
+Demes whose initial state differs are never produced by cloning: their variant config (fresh `initial_individual_count` / `initial_sperm_storage` arrays computed by the resolvers) goes through the normal publish path (`_publish_and_build()`), which initializes the population state from the config.
 
-## `_build_heterogeneous` Flow
+## `_build_heterogeneous_demes` Flow
 
 ```
-_build_heterogeneous()
+_build_heterogeneous_demes()
   │
   ├─ 1. Expand all batch_settings into per-deme value lists
-  ├─ 2. Compute config signature (hash) for each deme
-  ├─ 3. Group by signature
+  ├─ 2. _genetics_batch_names() → batch kwargs that affect the genetics section
+  ├─ 3. Group demes by genetics-only signature
+  │     (ecology differences do not split groups)
   │
-  └─ 4. For each group:
+  └─ 4. Per genetics group — compile candidates:
        │
-       ├─ First group → _build_template_for_group()
-       │                 Full builder pipeline, produces base_config + base_template
+       ├─ First deme → copy of the template builder (deme 0)
+       │              or _builder_for_group() full replay
+       │              → _compile_products() → base_config
        │
-       ├─ Subsequent groups + _can_use_replace(sig_map, base_config)
-       │   │  All kwargs pass through explicit mapping or dynamic hasattr discovery
-       │   │
-       │   ├─ _build_variant_config(sig_map, base_config)
-       │   │   │
-       │   │   ├─ Array fields → _params resolve_* → _replace
-       │   │   ├─ Multi-field → _replace(base=raw, scaled=raw*pop_scale)
-       │   │   ├─ Renames → _replace(renamed_field=val)
-       │   │   ├─ Dynamic discovery → hasattr → _replace
-       │   │   └─ Equilibrium-sensitive → compute_equilibrium_metrics()
-       │   │
-       │   └─ _clone_deme(base_template, variant_config)
-       │        └─ Overwrite state corresponding to array-valued batch settings
-       │
-       └─ Subsequent groups + non-replaceable
-           └─ _build_template_for_group()  (full replay, behavior unchanged)
+       └─ Other demes in the group:
+            ├─ Same full signature as an earlier deme → reuse its candidate
+            ├─ _can_use_replace(ecology kwargs, base_config)
+            │   ├─ yes → _build_variant_config(sig_map, base_config)
+            │   │        │
+            │   │        ├─ Array fields → initial_state resolve_* → _replace
+            │   │        ├─ Discrete scalars → copy vector, write one cell → _replace
+            │   │        ├─ Renames → _replace(renamed_field=val)
+            │   │        └─ Dynamic discovery → hasattr → _replace
+            │   └─ no  → _builder_for_group() full replay, then
+            │            _replace the genetic product fields from base_config
+  │
+  ├─ 5. _spatial_projection() → shared registry projection
+  │     (union of every group's route tables)
+  │
+  └─ 6. Per genetics group — publish:
+       ├─ Each unique config → builder._publish_and_build()
+       │    (the first published deme becomes the genetics template)
+       └─ Demes sharing a signature → _clone_deme() → _clone()
+            (state arrays copied from the template; heavy arrays shared)
 ```
 
 ## Memory Impact
@@ -154,7 +157,11 @@ The relevant implementation lives in `src/natal/frontend/spatial/builder.py`:
 | Symbol | Role |
 |---|---|
 | `_ARRAY_KWARGS` | Set of parameters requiring dict→array conversion |
+| `_DISCRETE_VECTOR_CELLS` | Discrete scalar kwargs → one cell of a unified vector field |
 | `_KWARG_RENAMES` | Builder kwarg → config field renames |
+| `_genetics_batch_names()` | Selects the batch kwargs that split genetics groups |
 | `SpatialPopulationBuilder._build_heterogeneous_demes()` | Main heterogeneous build flow |
+| `SpatialPopulationBuilder._builder_for_group()` | Replays one group into a complete-axis unpublished builder |
 | `SpatialPopulationBuilder._can_use_replace(sig_map, base_config)` | Determines whether `_replace` can be used |
 | `SpatialPopulationBuilder._build_variant_config()` | Creates variant config |
+| `_clone_deme()` → `PopulationInstance._clone()` | Clones a published deme, sharing compiled state and config |

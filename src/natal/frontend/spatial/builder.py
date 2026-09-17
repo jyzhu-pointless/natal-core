@@ -109,10 +109,11 @@ class BatchSetting(Generic[_T]):
     ``SpatialPopulationBuilder`` detects ``BatchSetting`` values in builder method
     calls, stores them, and expands them during ``build()``.
 
-    Type Parameter:
-        _T: The element type of the per-deme sequence.  Inferred from the
-        ``Sequence[T]`` input; defaults to ``Any`` for ndarray/callable inputs
-        where element types cannot be statically determined.
+    Note:
+        The ``_T`` type parameter is the element type of the per-deme
+        sequence.  It is inferred from the ``Sequence[T]`` input;
+        ndarray/callable inputs default to ``Any`` because their element
+        types cannot be statically determined.
     """
 
     _KIND_SCALAR = "scalar"
@@ -456,14 +457,15 @@ def _clone_deme(
 #   1. *array kwarg* (individual_count, sperm_storage)
 #      → convert dict → array via the _params resolve_* initial-state
 #        functions, then _replace.
-#   2. *multi-field kwarg* (carrying_capacity variants)
-#      → _replace into both base_carrying_capacity and the scaled
-#        carrying_capacity.
+#   2. *discrete scalar kwarg* (entries of ``_DISCRETE_VECTOR_CELLS``)
+#      → write one cell of a **copied** unified (2, n_ages) vector, then
+#        _replace that vector field.
 #   3. *rename kwarg* (eggs_per_female → eggs_per_female, etc.)
 #      → _replace under the renamed config field.
 #   4. *any other kwarg*
-#      → try ``hasattr(base_config, kwarg)``; if the config field exists,
-#        _replace directly.  If not, fall back to full builder replay.
+#      → _replace directly by field name (0-d ndarray fields receive the
+#        scalar wrapped in an ndarray); ``_can_use_replace`` has already
+#        routed unknown names to a full builder replay.
 #
 # This means adding a new batch-able scalar parameter typically requires
 # zero changes here — as long as the builder kwarg and config field share
@@ -1811,6 +1813,11 @@ class SpatialPopulationBuilder:
                 self._species, products.registry,
                 collect_hook_genotype_refs(builder._hook_calls),  # pyright: ignore[reportPrivateUsage]  # declarations share the full catalog.
             ))
+        # Merge the per-group route tables with an elementwise maximum:
+        # the maps hold 0/1 routing flags, so the maximum is the union of
+        # every group's routes.  The unified projection registry must
+        # cover them all — a missing union entry would silently drop a
+        # genotype from the projection.
         z2g = np.zeros_like(first.config.zygotes_to_gametes_map)
         g2z = np.zeros_like(first.config.gametes_to_zygotes_map)
         for products in groups:
@@ -1832,7 +1839,7 @@ class SpatialPopulationBuilder:
 
         This check gates whether a group can use the fast ``_replace`` path
         or must fall back to a full builder replay.  A kwarg qualifies if it
-        appears in ``_ARRAY_KWARGS``, ``_KWARG_MULTI_FIELD``,
+        appears in ``_ARRAY_KWARGS``, ``_DISCRETE_VECTOR_CELLS``,
         ``_KWARG_RENAMES``, or exists as a direct field name on
         ``ModelDraft``.
         """
@@ -1869,15 +1876,15 @@ class SpatialPopulationBuilder:
         1. **Array kwargs** (individual_count, sperm_storage) —
            convert the per-group dict to a **new ndarray** (this array
            genuinely differs between groups), then ``_replace`` it.
-        2. **Multi-field kwargs** (carrying_capacity variants) —
-           ``_replace`` both the base and population-scale fields.
+        2. **Discrete scalar kwargs** (``_DISCRETE_VECTOR_CELLS``) —
+           write one cell of a **copied** unified ``(2, n_ages)`` vector
+           so variants never alias the base, then ``_replace`` that
+           vector field.
         3. **Rename kwargs** (eggs_per_female → eggs_per_female) —
            ``_replace`` under the config-side field name.
         4. **Any other kwarg** — direct ``_replace`` by field name
-           (pre-validated by ``_can_use_replace``).
-
-        Equilibrium metrics are recomputed when capacity / eggs / sex-ratio
-        change, since these affect the equilibrium competition strength.
+           (pre-validated by ``_can_use_replace``; 0-d ndarray fields
+           receive the scalar wrapped in an ndarray).
 
         Args:
             sig_map: Mapping from batch kwarg name to group's concrete value.
@@ -1888,6 +1895,12 @@ class SpatialPopulationBuilder:
         Returns:
             A new ``ModelDraft`` sharing all unchanged array references
             with *base_config*.
+
+        Note:
+            The draft stores no equilibrium metrics — ``ModelDraft``
+            carries a single scalar ``carrying_capacity``, and equilibrium
+            quantities are derived fresh on read via
+            ``pop.params.expected_*``.
         """
         replace_kwargs: Dict[
             str, Any

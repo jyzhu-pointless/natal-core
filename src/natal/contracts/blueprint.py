@@ -13,7 +13,7 @@ the draft.  This is what makes the blueprint trivially serializable for
 disk checkpoints.
 
 The name directory gives every zygote/gamete type index a canonical
-string (``"<genotype>:<label>"``, e.g. ``"A|a:wolb"``).  Consumers
+string (``"<genotype>@<label>"``, e.g. ``"A|a@wolb"``).  Consumers
 (hook selectors, the ``pop.params`` pattern indexer, Rust symbolic
 access) resolve names through it instead of threading indices around.
 """
@@ -32,19 +32,19 @@ _FrozenArrayT = TypeVar("_FrozenArrayT", bound=NDArray[np.generic])
 
 
 def frozen(array: _FrozenArrayT) -> _FrozenArrayT:
-    """Return *array* with its buffer marked read-only.
+    """Return a read-only copy of *array*.
 
-    The enforcement point of the frozen discipline: Blueprint arrays are
-    freshly copied by their constructors (``materialize`` and the
-    spatial test double), so flipping the write flag in place is free
-    and makes any later in-place write through any holder raise instead
-    of silently mutating the engine's frozen model arrays.
+    The enforcement point of the frozen discipline.  The copy owns an
+    independent buffer, so a later in-place write through any holder
+    raises instead of silently mutating the engine's frozen model
+    arrays.  The data is copied byte-wise, so the input array is never
+    aliased by the result.
 
     Args:
-        array: A freshly owned ndarray about to be stored on a Blueprint.
+        array: An ndarray about to be stored on a Blueprint.
 
     Returns:
-        The same array, now read-only.
+        A new read-only array with the same dtype and shape.
     """
     immutable = np.frombuffer(array.tobytes(order="C"), dtype=array.dtype).reshape(array.shape)
     return cast(_FrozenArrayT, immutable)
@@ -76,9 +76,9 @@ class Blueprint(NamedTuple):
             (discrete: implicit 1.0; age-structured: ``clamp01``).
         extreme_speed_mode: 0 off, 1 multinomial, 2 poisson,
             3 deterministic Wright-Fisher fused tick.
-        ztype_names: Canonical ``"<genotype>:<slab>"`` string per ztype
+        ztype_names: Canonical ``"<genotype>@<slab>"`` string per ztype
             index.
-        gtype_names: Canonical ``"<haplotype>:<glab>"`` string per gtype
+        gtype_names: Canonical ``"<haplotype>@<glab>"`` string per gtype
             index.
         female_only_by_sex_chrom: (z,) True where the ztype is
             female-only under sex-chromosome constraints.

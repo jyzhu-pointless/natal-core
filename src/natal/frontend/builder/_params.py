@@ -63,16 +63,20 @@ def resolve_age_param(
         - None: uses default.
         - numeric scalar: fills all ages with this value.
         - sequence/ndarray: truncated or padded with 0.
+        - sequence ending in ``None``: the sentinel holds the last explicit
+          value, so the entries before it are the prefix and the remainder is
+          filled with the last non-None value; an inner ``None`` is rejected
+          with ``TypeError`` and an all-``None`` list falls back to ``default``.
         - dict[int, float]: sparse age map, unspecified ages default to 1.0.
         - callable(age): returns float for each age.
 
     Args:
-        param (Optional[Any]): The flexible survival parameter to resolve.
-        expected_length (int): Required length of the output array.
-        default (List[float]): Default values to fallback to.
+        param: The flexible survival parameter to resolve.
+        expected_length: Required length of the output array.
+        default: Default values to fallback to.
 
     Returns:
-        NDArray[np.float64]: A 1D array of resolved survival rates.
+        A 1D array of resolved survival rates.
 
     Raises:
         ValueError: If rates are negative or out of range.

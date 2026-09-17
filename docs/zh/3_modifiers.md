@@ -90,12 +90,13 @@ def heg_drive_modifier(pop):
             ("Drive", "Cas9_deposited"): 0.98,
             ("WT", "Cas9_deposited"): 0.02,
         },
-        "WT|Drive": {
-            ("Drive", "Cas9_deposited"): 0.98,
-            ("WT", "Cas9_deposited"): 0.02,
-        },
     }
 ```
+
+> **注意**：第 3 节声明的物种使用默认的 `unordered=True`，其注册表对每个杂合子只保留
+> 一个相位——规范的键是 `Drive|Drive`、`Drive|WT` 和 `WT|WT`。写成另一相位的源键
+> （如 `"WT|Drive"`）会在构建阶段抛出 `ValueError: invalid source key`；
+> 单个规范的 `"Drive|WT"` 条目已经覆盖两个相位。
 
 ### 4.2 标记配子
 
@@ -103,10 +104,6 @@ def heg_drive_modifier(pop):
 def cas9_deposition_modifier(pop):
     return {
         "Drive|WT": {
-            ("Drive", "Cas9_deposited"): 0.5,
-            ("WT", "Cas9_deposited"): 0.5,
-        },
-        "WT|Drive": {
             ("Drive", "Cas9_deposited"): 0.5,
             ("WT", "Cas9_deposited"): 0.5,
         },

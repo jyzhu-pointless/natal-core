@@ -8,9 +8,12 @@ declarations in append order and compiles them into one zygote modifier.
 Compile semantics (single owner):
 
 - Every construction starts from the species' unmodified Mendelian
-  baseline projected onto the active registry. Within that construction,
-  each rule set receives the preceding modifier's result. Rebuilding
-  therefore never reapplies rules to an already-converted run matrix.
+  baseline, compiled against the complete species registry: a published
+  host registry is replaced by a rebuilt complete one, so the compiled
+  indices are complete species coordinates and never depend on a later
+  compressed runtime axis. Within that construction, each rule set
+  receives the preceding modifier's result. Rebuilding therefore never
+  reapplies rules to an already-converted run matrix.
 - Every ``(maternal gamete, paternal gamete)`` pair carries a joint
   branch distribution keyed by exact ``(Genotype, slab)`` ztype indices;
   there is no shared ``effective_slab`` and no genotype-argmax shortcut.
@@ -80,7 +83,7 @@ class _CompiledZygoteRule:
 class ZygoteConversionRuleSet:
     """Ordered cascade of zygote conversion rules.
 
-    Example:
+    Examples:
         rs = ZygoteConversionRuleSet("embryo")
         rs.add_allele_convert(
             from_allele="WT", to_allele="Dr", rate=0.4,
@@ -542,8 +545,8 @@ def _cascade_row(
 
     Args:
         row: The baseline ``(n_ztypes,)`` probability row.
-        c1: Maternal gamete compressed index.
-        c2: Paternal gamete compressed index.
+        c1: Maternal gamete index.
+        c2: Paternal gamete index.
         compiled: The compiled rule list, in declaration order.
 
     Returns:
@@ -576,6 +579,8 @@ def _cascade_row(
                 next_branches[target] = next_branches.get(target, 0.0) + mass
         branches = next_branches
 
-    # Drop numerical dust below 1e-15; the retained mass may fall short of 1 by
-    # at most that tolerance.
+    # Drop numerical dust below 1e-15. Each discarded branch sheds at most
+    # that tolerance, and dust can be discarded once per path across the
+    # cascade, so the retained mass may fall short of 1 by up to
+    # k * tolerance, not by the tolerance alone.
     return {z: p for z, p in branches.items() if p > 1e-15}

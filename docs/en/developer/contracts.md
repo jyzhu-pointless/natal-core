@@ -25,7 +25,7 @@ Field names are not always identical on the two sides; the conversion happens in
 | `age_based_mating_rates` | `mating_rates` | `(sex, age)` |
 | `female_age_based_fertility` | `fertility` | `(age,)` |
 | `zygotes_to_gametes_map` | `meiosis_map` | `(2, Z, G)` |
-| `gametes_to_zygotes_map` | `fusion` (combined with P) | `(G, G, Z)` |
+| `gametes_to_zygotes_map` | no contract field — it stays Python-side and feeds the build-time offspring-tensor kernel that derives `offspring_tensor` | `(G, G, Z)` |
 | `offspring_tensor` | `offspring_tensor` | `(Z, Z, Z)` |
 | `initial_individual_count` | `initial_individual_count` (Blueprint) | `(2, A, Z)` |
 

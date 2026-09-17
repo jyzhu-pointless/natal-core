@@ -79,16 +79,20 @@ When a builder parameter is a `batch_setting` object, the builder internally swi
 
 ### SpatialPopulationBuilder Chained API
 
+> **Note**: this page records an early design whose API was not implemented as written. The shipped builder takes `initial_state(individual_count=..., sperm_storage=...)`, and `batch_setting` callables receive `(flat_idx)` or `(row, col)`.
+
 ```python
 pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, cols=N)) \
     .setup(name="spatial_demo") \
     .initial_state(
-        female={"WT|WT": 5000, "Dr|WT": 50},      # Not batch → same for all demes
-        male={"WT|WT": 5000, "Dr|WT": 50},
+        individual_count={                         # Not batch → same for all demes
+            "female": {"WT|WT": 5000, "Dr|WT": 50},
+            "male": {"WT|WT": 5000, "Dr|WT": 50},
+        },
     ) \
     .reproduction(eggs_per_female=50) \
     .competition(
-        carrying_capacity=batch_setting(spatial=lambda i, x, y: 10000 if x < N//2 else 5000),
+        carrying_capacity=batch_setting(lambda row, col: 10000 if row < N//2 else 5000),
         juvenile_growth_mode="beverton_holt",
         low_density_growth_rate=6.0,
     ) \
@@ -278,7 +282,7 @@ for i in range(n_demes):
 | Config group key after batch expansion is unhashable (contains NumPy arrays) | Use `id(arr)` or serialized digest |
 | Sharing `compiled_hook_descriptors` / `hook_entries` reference when cloning demes leads to state leakage | Copy-on-write: duplicate on demand via subset `set_hook` |
 | Does `ModelDraft` support `_replace`? | It is a NamedTuple, confirmed usable |
-| Relationship between SpatialPopulationBuilder and existing `DiscreteGenerationPopulationBuilder` | SpatialPopulationBuilder holds per-deme builders internally, reuses their validation logic |
+| Relationship between SpatialPopulationBuilder and existing `PopulationBuilder` | SpatialPopulationBuilder holds per-deme builders internally, reuses their validation logic |
 
 ---
 

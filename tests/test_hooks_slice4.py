@@ -77,7 +77,7 @@ def _build_discrete(
         # statement: production is 0, so the derived equilibrium competition
         # strength is 0 and the default curve would clear every age-0
         # individual the hooks install.  Pin the pre-fix no-competition
-        # behaviour explicitly.
+        # behavior explicitly.
         builder = builder.competition(growth_mode="no_competition")
     if hook_items:
         builder = builder.hooks(*hook_items)

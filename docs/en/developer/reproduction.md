@@ -196,7 +196,7 @@ The ordinary discrete integer-stochastic path preserves these stage relationship
 
 Thus integer-stochastic execution does not enforce exactly 50 AA, 100 Aa, and 50 aa offspring. Total egg production itself fluctuates. A deterministic example checks formulas, not distributions, variances, or multistep mean trajectories. With density feedback especially, the mean of random trajectories must not be equated to a deterministic trajectory.
 
-The discrete `fertilize_discrete()` examined here directly uses Poisson or its continuous counterpart on its stochastic egg path. It does not contain the `fixed_egg_count` branch present in age-structured `fertilize()`. A shared Blueprint field does not guarantee identical use by both implementations.
+The discrete `fertilize_discrete()` examined here directly uses Poisson or its continuous counterpart on its stochastic egg path. It does contain a `fixed_egg_count` branch with the same semantics as the age-structured `fertilize()`: when the flag is set, the rounded expected clutch replaces the Poisson draw, in both sampling modes. A shared Blueprint field is used the same way only where the implementations were aligned deliberately.
 
 `continuous_sampling` is not an integer sample converted to float. Continuous binomial uses a Beta proportion but returns n·p directly for n≤1+EPS; continuous Poisson uses Gamma sampling; continuous multinomial normalizes Gamma draws. These are separate numerical rules. Fractional results alone establish neither deterministic equivalence nor automatic differentiability.
 

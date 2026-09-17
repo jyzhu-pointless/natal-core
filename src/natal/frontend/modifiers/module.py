@@ -227,11 +227,10 @@ def evaluate_genotype_filter(
 def _resolve_ztype_key(key: ZtypeKey, registry: IndexRegistry) -> list[int]:
     """Resolve a ztype selector to a list of ztype indices.
 
-    Accepted forms:
-        - ``int``: returned as-is (pre-resolved ztype index)
-        - ``str``: matched via ``genotype.to_string()``, then expanded
-          to all slab ztype indices via ``registry.ztype_indices_for()``
-        - ``Genotype``: expanded to all slab ztype indices
+    An ``int`` is returned as-is (pre-resolved ztype index); a ``str`` is
+    matched via ``genotype.to_string()`` and then expanded to all slab
+    ztype indices via ``registry.ztype_indices_for()``; a ``Genotype`` is
+    expanded to all slab ztype indices.
 
     Returns all matching ztype indices.  Callers typically iterate the
     result and write to each index.
@@ -249,13 +248,13 @@ def _resolve_ztype_key(key: ZtypeKey, registry: IndexRegistry) -> list[int]:
 def _resolve_gtype_key(key: GtypeKey, registry: IndexRegistry) -> int:
     """Resolve a gtype selector to a compressed gtype index.
 
-    Accepted forms:
-        - ``int``: returned as-is (pre-resolved compressed index)
-        - ``(int, int)``: ``(hg_idx, glab_idx)`` pair
-        - ``(HaploidGenotype, int|str)``: resolved via ``gtype_index()``
-        - ``(str, int|str)``: haploid found by name, then ``gtype_index()``
-        - ``HaploidGenotype``: ``gtype_index(hg, "default")``
-        - ``str``: haploid found by name, then ``gtype_index(hg, "default")``
+    An ``int`` is returned as-is (pre-resolved compressed index); an
+    ``(int, int)`` pair is an ``(hg_idx, glab_idx)`` pair; a
+    ``(HaploidGenotype, int|str)`` or ``(str, int|str)`` pair resolves via
+    ``gtype_index()`` (a string haploid is looked up by name); a bare
+    ``HaploidGenotype`` resolves as ``gtype_index(hg, "default")``; and a
+    bare ``str`` is looked up by name, then resolved as
+    ``gtype_index(hg, "default")``.
     """
     if isinstance(key, int):
         return key
@@ -343,11 +342,13 @@ def _normalize_zygote_val_to_distribution(
 ) -> dict[int, float]:
     """Normalize a zygote replacement value into ``{ztype_idx: prob}``.
 
-    Handles:
-        - ``(int|Genotype|str, float)``: single target + weight
-        - ``{int|Genotype|str: float}``: multi-target distribution
-        - ``int``: single ztype target (prob=1.0)
-        - ``Genotype|str``: expanded to all slab ztypes (prob split equally)
+    Supported values: an ``(int, float)`` pair targets a single ztype
+    with the given weight; a ``(Genotype|str, float)`` pair expands to
+    every slab ztype of that genotype and splits the weight evenly among
+    them; a ``{int|Genotype|str: float}`` mapping combines those per-key
+    rules into one multi-target distribution; a bare ``int`` targets a
+    single ztype with probability 1.0; and a bare ``Genotype|str``
+    expands to all its slab ztypes with probability split equally.
     """
     result: dict[int, float] = {}
     pair = _as_idx_prob_pair(val)

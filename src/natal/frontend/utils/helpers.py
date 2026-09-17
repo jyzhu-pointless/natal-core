@@ -9,6 +9,10 @@ def resolve_sex_label(sex_label: object) -> int:
     Convention follows ``Sex`` enum and ``ModelDraft``:
     - female/f -> 0
     - male/m -> 1
+
+    Args:
+        sex_label: ``Sex`` member, 0/1 integer index, or case-insensitive
+            ``"female"``/``"f"``/``"male"``/``"m"`` label.
     """
     assert isinstance(sex_label, (Sex, int, str)), (
         f"Invalid sex label type '{type(sex_label).__name__}'. Expected Sex, int, or str."
@@ -34,10 +38,10 @@ def validate_name(name: str) -> bool:
     A valid name consists of only letters, numbers, and underscores.
 
     Args:
-        name (str): The name to validate.
+        name: The name to validate.
 
     Returns:
-        bool: True if the name is valid, False otherwise.
+        True if the name is valid, False otherwise.
     """
     import re
 

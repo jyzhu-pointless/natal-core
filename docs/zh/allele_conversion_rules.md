@@ -99,7 +99,7 @@ ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.5)
 
 - **基因驱动的修复**：在合子中表达的修复系统（例如 Cas9 切割修复）
 - **等位基因特异性死亡**：某些基因型受精卵生活力降低
-- **分生组后期转换**：发育过程中的等位基因转换
+- **减数分裂后转换**：发育过程中的等位基因转换
 
 ### 从 Gamete 到 Zygote 的关键区别
 
@@ -138,7 +138,7 @@ pop.add_zygote_modifier(zygote_mod, name="zygote_repair")
 gamete_ruleset = GameteConversionRuleSet("gamete_drive")
 gamete_ruleset.add_allele_convert(from_allele="W", to_allele="D", rate=0.99)
 
-# 受精卵阶段：实现复制（确保纯和）
+# 受精卵阶段：实现复制（确保纯合）
 zygote_ruleset = ZygoteConversionRuleSet("zygote_copy")
 zygote_ruleset.add_allele_convert(
     from_allele="W", to_allele="D", rate=0.95,

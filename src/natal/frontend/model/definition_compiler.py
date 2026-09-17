@@ -51,7 +51,16 @@ class CompiledProducts(NamedTuple):
 
 
 def copy_registry(registry: IndexRegistry) -> IndexRegistry:
-    """Copy active index containers while preserving interned genetic identities."""
+    """Copy active index containers while preserving interned genetic identities.
+
+    Args:
+        registry: The registry to copy.
+
+    Returns:
+        A fresh registry holding copied label lists and re-registered
+        ztype/gtype entries; interned genetic identities are shared, and
+        the published lifecycle marker is carried over.
+    """
     from natal.frontend.registry.index import IndexRegistry
 
     result = IndexRegistry()
@@ -74,6 +83,14 @@ def detach_draft(draft: ModelDraft) -> ModelDraft:
     The copy detaches a draft from every previous holder so later in-place
     writes cannot alias; recipes, callables, and other user resources are
     never copied.
+
+    Args:
+        draft: The draft to detach.
+
+    Returns:
+        A new draft whose NumPy fields are fresh copies and whose
+        ``custom`` slot mapping is deep-copied; every other field is
+        shared by reference.
     """
     return draft._replace(
         **{name: value.copy() for name, value in draft._asdict().items() if isinstance(value, np.ndarray)},
@@ -185,6 +202,10 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
     try:
         ordered = sorted(presets, key=lambda item: item.priority)
         for position in range(len(ordered) + 1):
+            # `before` means "insert this explicit fitness step ahead of the
+            # N-th preset in priority order".  min(before, len(ordered))
+            # clamps out-of-range positions to the end, pinning such steps
+            # after every preset's patch.
             for before, step in fitness_steps:
                 if min(before, len(ordered)) == position:
                     _apply_fitness_step(host, step)  # normalized validated fitness keyword arguments.

@@ -46,7 +46,7 @@ class SpeciesConfigBlueprint(TypedDict):
     """Cached species-level arrays shared across population constructions.
 
     Built once per species by :meth:`Species.get_config_blueprint` and
-    consumed by ``PopulationBuilder`` / ``PopulationBuilder``.
+    consumed by ``PopulationBuilder`` and ``build_runtime_definition``.
     """
 
     n_genotypes: int
@@ -298,11 +298,11 @@ class Species(
         """
         Automatically infer valid sex chromosome genotype combinations from Chromosome.sex_type.
 
-        Rules include:
-            - XY system: X can come from either parent, Y is paternal only
-                    -> Valid combinations: (X, X), (X, Y)
-            - ZW system: Z can come from either parent, W is maternal only
-                    -> Valid combinations: (Z, Z), (W, Z)
+        Note:
+            In an XY system, X can come from either parent and Y is paternal
+            only, so the valid combinations are (X, X) and (X, Y). In a ZW
+            system, Z can come from either parent and W is maternal only, so
+            the valid combinations are (Z, Z) and (W, Z).
 
         Returns:
             List of valid (maternal_chrom, paternal_chrom) combinations

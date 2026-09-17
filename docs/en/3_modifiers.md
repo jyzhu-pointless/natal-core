@@ -90,12 +90,15 @@ def heg_drive_modifier(pop):
             ("Drive", "Cas9_deposited"): 0.98,
             ("WT", "Cas9_deposited"): 0.02,
         },
-        "WT|Drive": {
-            ("Drive", "Cas9_deposited"): 0.98,
-            ("WT", "Cas9_deposited"): 0.02,
-        },
     }
 ```
+
+> **Note**: The species declared in Section 3 uses the default `unordered=True`,
+> so its registry keeps only one phase of each heterozygote — the canonical
+> keys are `Drive|Drive`, `Drive|WT`, and `WT|WT`. A source key written in the
+> other phase (e.g. `"WT|Drive"`) raises `ValueError: invalid source key`
+> at build time; the single canonical `"Drive|WT"` entry already covers both
+> phases.
 
 ### 4.2 Tagging Gametes
 
@@ -103,10 +106,6 @@ def heg_drive_modifier(pop):
 def cas9_deposition_modifier(pop):
     return {
         "Drive|WT": {
-            ("Drive", "Cas9_deposited"): 0.5,
-            ("WT", "Cas9_deposited"): 0.5,
-        },
-        "WT|Drive": {
             ("Drive", "Cas9_deposited"): 0.5,
             ("WT", "Cas9_deposited"): 0.5,
         },

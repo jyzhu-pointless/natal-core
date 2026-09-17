@@ -91,7 +91,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.SCALE, genotypes, ages, sex, factor, when, event, priority)
 
@@ -120,7 +120,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.SET, genotypes, ages, sex, value, when, event, priority)
 
@@ -149,7 +149,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.ADD, genotypes, ages, sex, delta, when, event, priority)
 
@@ -178,7 +178,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.SUBTRACT, genotypes, ages, sex, delta, when, event, priority)
 
@@ -207,7 +207,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
 
         Raises:
             ValueError: If probability is not in [0, 1]
@@ -241,7 +241,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.SAMPLE, genotypes, ages, sex, float(size), when, event, priority)
 
@@ -268,7 +268,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.STOP_IF_ZERO, genotypes, ages, sex, 0.0, when, event, priority)
 
@@ -297,7 +297,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.STOP_IF_BELOW, genotypes, ages, sex, float(threshold), when, event, priority)
 
@@ -326,7 +326,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.STOP_IF_ABOVE, genotypes, ages, sex, float(threshold), when, event, priority)
 
@@ -347,7 +347,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.STOP_IF_EXTINCTION, "*", "*", "both", 0.0, when, event, priority)
 
@@ -410,7 +410,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation.
+            Operation descriptor for compilation.
 
         Raises:
             ValueError: If *every* < 1 or *start* < 0 (the target name
@@ -553,7 +553,7 @@ def _resolve_ztypes(
     - ``"*"`` — all ZTypes
     - genotype label (``"AA"``) or label list — resolved via ZygoteTypePattern
     - ``@slab`` syntax (``"AA@infected"``) — genotype with slab constraint
-    - raw integer index or index list
+    - index list (raw integer ZType indices)
 
     Args:
         selector: ZType selector expression
@@ -1180,11 +1180,18 @@ def compile_declarative_hook(
         ops: Declarative operations to compile.
         pop: Layout provider (a built population or the builder's
             build-time context); only its ``index_registry``, ``species``,
-            and ``config.n_ages`` are read.
+            and ``config`` are read — ``config.n_ages`` everywhere, plus
+            ``config.male_only_by_sex_chrom`` /
+            ``config.female_only_by_sex_chrom`` on the ``Op.convert``
+            selector path.
         event: Event this hook fires at.
         priority: Execution priority — lower values run first.
         deme_selector: Deme selector carried on the descriptor.
         name: Human-readable descriptor name.
+
+    Returns:
+        The compiled descriptor holding the packed CSR arrays and hook
+        metadata, ready for native registration.
     """
     # Get population configuration and registry for resolving genotype/age indices
     index_registry = pop.index_registry

@@ -387,6 +387,11 @@ def replace_allele_in_haploid(
     and a new (cached) ``HaploidGenotype`` is constructed.  Entity caching
     makes the result an identity-resolvable object.
 
+    Args:
+        hg: The haploid genotype to scan.
+        from_allele: Name of the source allele to replace.
+        to_allele: Name of the same-locus target allele.
+
     Returns:
         The converted haploid genotype, or ``None`` when *from_allele* is
         absent or the target allele is not registered at that locus.
@@ -479,6 +484,23 @@ def validate_filter_pattern(
     Labels use the existing exact/set/negated pattern syntax. Every named
     label must exist even when negated, so a typo cannot silently broaden
     or disable a rule.
+
+    Args:
+        species: Species providing the gene catalog.
+        pattern: The full filter pattern, with at most one ``@label``
+            suffix.
+        labels: The valid label set for the pattern's suffix (gamete or
+            somatic labels, depending on the calling stage).
+        context: Error-message prefix (ruleset name).
+
+    Returns:
+        The genotype part of the pattern, with the ``@label`` suffix
+        stripped.
+
+    Raises:
+        ValueError: If the pattern has more than one ``@``, an empty
+            genotype or label part, an unknown label, or an unregistered
+            allele name.
     """
     from natal.frontend.patterns.elements.atom import LabPattern
 

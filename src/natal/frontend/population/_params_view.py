@@ -1,8 +1,6 @@
 """``pop.params`` — the domain-A parameter surface.
 
-A live, validated view over a population's parameters.  Design points
-:
-
+A live, validated view over a population's parameters.  Design points:
 - **Ecology section**: attribute writes go through the route table with
   full bounds validation (``pop.params.carrying_capacity = 8000``) and
   name the jsonc parameter names — no invented shorthand.  Every write
@@ -392,7 +390,8 @@ class ParamsView:
                 (e.g. ``"viability_fitness"``, ``"survival_rates"``).
 
         Returns:
-            Scalars as Python numbers; vectors as copies; genetics
+            Scalars as Python numbers; routing-name vectors as copies;
+            contract-field vectors (e.g. ``survival_rates``) and genetics
             tensors as read-only :class:`TensorView` facades.
 
         Raises:
