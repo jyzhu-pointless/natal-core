@@ -569,3 +569,74 @@ def test_unknown_event_rejected() -> None:
 
     with pytest.raises(ValueError, match="not in"):
         _build_discrete("s4_bad_event", hook_calls=[((cb,), {"event": "midtick"})])
+
+
+# ---------------------------------------------------------------------------
+# Declarative hook return contract
+# ---------------------------------------------------------------------------
+
+
+def test_declarative_hook_empty_list_is_a_legal_no_op() -> None:
+    """An empty list declares a hook that does nothing, and is accepted."""
+
+    @nt.hook(event="first")
+    def empty_declaration():
+        return []
+
+    pop = _build_discrete("s4_decl_empty", hook_items=[empty_declaration])
+    descriptors = pop.get_compiled_hooks("first")
+    assert len(descriptors) == 1
+    assert descriptors[0].plan.n_ops == 0
+
+
+def test_declarative_hook_op_list_compiles() -> None:
+    """The supported return value still compiles into a real plan."""
+
+    @nt.hook(event="first")
+    def declaration():
+        return [Op.add(delta=1.0)]
+
+    pop = _build_discrete("s4_decl_ops", hook_items=[declaration])
+    descriptors = pop.get_compiled_hooks("first")
+    assert len(descriptors) == 1
+    assert descriptors[0].plan.n_ops == 1
+
+
+@pytest.mark.parametrize(
+    "returned",
+    [None, (), (Op.add(),), 7, "Op.add()"],
+    ids=["none", "empty-tuple", "tuple-of-ops", "int", "str"],
+)
+def test_declarative_hook_rejects_non_list_return(returned: object) -> None:
+    """Anything that is not a list is a declaration error, not a silent no-op.
+
+    Before the fix these returns were replaced by an empty list, so a hook
+    returning a tuple of ops compiled to zero operations and did nothing.
+    """
+
+    @nt.hook(event="first")
+    def bad_declaration():
+        return returned
+
+    with pytest.raises(TypeError, match="must return") as excinfo:
+        _build_discrete("s4_decl_bad", hook_items=[bad_declaration])
+
+    assert type(returned).__name__ in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "element",
+    [42, None, "Op.add()", {"op": "add"}],
+    ids=["int", "none", "str", "dict"],
+)
+def test_declarative_hook_rejects_non_hookop_element(element: object) -> None:
+    """A list carrying a non-HookOp element is a declaration error."""
+
+    @nt.hook(event="first")
+    def mixed_declaration():
+        return [Op.add(delta=1.0), element]
+
+    with pytest.raises(TypeError, match="must return") as excinfo:
+        _build_discrete("s4_decl_mixed", hook_items=[mixed_declaration])
+
+    assert type(element).__name__ in str(excinfo.value)

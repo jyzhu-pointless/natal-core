@@ -65,7 +65,7 @@ pop.run(n_steps=200, record_every=10)
 - **回调（Callback）**：单参数 `def hook(pop: TickContext) -> int`，用 `@nt.hook` 装饰后传入（也可直接传裸函数，事件在 `.hooks(..., event=...)` 上指定）。
 - **选择器回调（Selector）**：`@nt.hook(..., selectors={...})`，选择器值在构建期解析、调用时注入。
 
-`@nt.hook` 装饰器在构建期间按函数签名识别后两类形态；零参数、返回 `List[HookOp]` 的函数仍是声明式 Hook 的兼容入口：构建流程可能先调用它收集引用，再调用它进行编译，返回的 Op 都进入正常管线。推荐直接声明带有 Op 本地 `event` / `priority` 的 Op。只有需要动态组装列表时才使用工厂形式；其装饰器和调用级元数据仍遵循下文的优先级规则。
+`@nt.hook` 装饰器在构建期间按函数签名识别后两类形态；零参数、返回 `List[HookOp]` 的函数仍是声明式 Hook 的兼容入口：构建流程可能先调用它收集引用，再调用它进行编译，返回的 Op 都进入正常管线。空列表是合法的空声明；其他返回值，或列表中混入非 `HookOp` 元素，都会在构建期抛 `TypeError`（消息给出实际收到的类型），而不会静默编译成零个操作。推荐直接声明带有 Op 本地 `event` / `priority` 的 Op。只有需要动态组装列表时才使用工厂形式；其装饰器和调用级元数据仍遵循下文的优先级规则。
 
 旧的 `(state, config, deme_id)` 三参数签名已被显式拒绝（`TypeError` —— 该签名是 njit 时代的遗物，没有迁移通道）。回调 Hook 返回值 `0`（或 `RESULT_CONTINUE`）继续模拟，非零值（或 `RESULT_STOP`）停止模拟。
 
