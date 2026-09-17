@@ -130,6 +130,34 @@ def test_haploid_parser_entry_rejects_a_label(
         GenotypePatternParser(species).parse_haploid_genome_pattern(pattern)
 
 
+@pytest.mark.parametrize(
+    "attr,pattern,alternative",
+    [
+        ("parse_genotype_pattern", "WT|Dr@infected", "ZygoteTypePattern.parse"),
+        ("parse_haploid_genome_pattern", "WT@cas9", "parse_haplotype_pattern"),
+    ],
+)
+def test_guard_message_names_the_label_aware_entry_for_its_kind(
+    species: nt.Species, attr: str, pattern: str, alternative: str
+) -> None:
+    """Somatic and gamete entries must point at their own label-aware entry.
+
+    Both messages carry the shared "does not take an '@label' suffix" wording,
+    so only this assertion catches a swapped ``haploid=`` flag — which would
+    send a diploid caller to a gamete entry, or the reverse.
+    """
+    with pytest.raises(PatternParseError) as excinfo:
+        getattr(species, attr)(pattern)
+    message = str(excinfo.value)
+    assert alternative in message
+    other = (
+        "parse_haplotype_pattern"
+        if alternative == "ZygoteTypePattern.parse"
+        else "ZygoteTypePattern.parse"
+    )
+    assert other not in message
+
+
 def test_selector_resolution_rejects_a_labelled_mixed_input(species: nt.Species) -> None:
     """A label in a genotype-level selector fails instead of being dropped.
 
