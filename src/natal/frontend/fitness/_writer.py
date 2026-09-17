@@ -15,6 +15,8 @@ from natal.frontend.genetics import Species
 from natal.frontend.model import ModelDraft
 from natal.frontend.registry.index import IndexRegistry
 
+from ._selector_resolution import resolve_selector_ztypes
+
 if TYPE_CHECKING:
     from natal.frontend.genetics import Genotype
 
@@ -149,27 +151,23 @@ def write_fitness_field(
                         "must be dicts mapping male selectors to values."
                     )
                 for male_selector, value in male_map.items():         # inner: male genotype key → float
-                    # ---- resolve both selectors to genotype indices ----
-                    matched_f = species.resolve_genotype_selectors(
-                        selector=female_selector,
-                        all_genotypes=all_genotypes,
-                        context="sexual_selection (female)",
+                    # ---- resolve both selectors to ZType indices ----
+                    f_z_indices = resolve_selector_ztypes(
+                        species, registry, female_selector, all_genotypes,
+                        "sexual_selection (female)",
                     )
-                    matched_m = species.resolve_genotype_selectors(
-                        selector=male_selector,
-                        all_genotypes=all_genotypes,
-                        context="sexual_selection (male)",
+                    m_z_indices = resolve_selector_ztypes(
+                        species, registry, male_selector, all_genotypes,
+                        "sexual_selection (male)",
                     )
                     # ---- write every female×male combination ----
-                    for f_geno in matched_f:
-                        for f_z in registry.ztype_indices_for(f_geno):
-                            for m_geno in matched_m:
-                                for m_z in registry.ztype_indices_for(m_geno):
-                                    val = float(value)
-                                    if mode == "replace":
-                                        arr[f_z, m_z] = val
-                                    else:
-                                        arr[f_z, m_z] *= val
+                    for f_z in f_z_indices:
+                        for m_z in m_z_indices:
+                            val = float(value)
+                            if mode == "replace":
+                                arr[f_z, m_z] = val
+                            else:
+                                arr[f_z, m_z] *= val
             return
 
         # ═══════════════════════════════════════════════════════════════
@@ -187,19 +185,17 @@ def write_fitness_field(
                     "When using nested female→male pairs, all values "
                     "must be dicts."
                 )
-            # ---- resolve the male genotype to an index ----
-            matched_m = species.resolve_genotype_selectors(
-                selector=male_selector,
-                all_genotypes=all_genotypes,
-                context="sexual_selection (male)",
+            # ---- resolve the male selector to ZType indices ----
+            m_z_indices = resolve_selector_ztypes(
+                species, registry, male_selector, all_genotypes,
+                "sexual_selection (male)",
             )
-            for m_geno in matched_m:
-                for m_z in registry.ztype_indices_for(m_geno):
-                    val = float(value)
-                    if mode == "replace":
-                        arr[:, m_z] = val        # broadcast: all females × this male
-                    else:
-                        arr[:, m_z] *= val
+            for m_z in m_z_indices:
+                val = float(value)
+                if mode == "replace":
+                    arr[:, m_z] = val        # broadcast: all females × this male
+                else:
+                    arr[:, m_z] *= val
         return
 
     # ══════════════════════════════════════════════════════════════════════

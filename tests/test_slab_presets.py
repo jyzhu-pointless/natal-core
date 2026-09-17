@@ -253,3 +253,116 @@ class TestLabelledFitnessSelector:
             sp, "agree_chain", lambda s, n: self._build_with_chain(s, n, "WT|WT@infected")
         )
         assert preset == chain
+
+    @classmethod
+    def _viability_by_ztype(cls, sp: nt.Species, name: str, build) -> dict:
+        pop = build(sp, name)
+        return {
+            str(label): round(float(pop.config.viability_fitness[0, 0, index]), 3)
+            for index, label in enumerate(pop.config.ztype_names)
+        }
+
+    def test_label_must_not_narrow_the_genotype_match_set(self):
+        """A label restricts the slab only; the genotype part matches as before.
+
+        On an unordered species the species-level resolver reads ``|`` as
+        ``::`` (``SpeciesPatternMixin.resolve_single_genotype_selector``), so
+        ``*|WT`` addresses the WT|WT and WT|Dr genotypes.  Adding
+        ``@infected`` must keep both genotypes and only drop the default slab.
+        """
+        sp = self._species()
+        got = self._viability_by_ztype(
+            sp, "label_no_narrow", lambda s, n: self._build_with_preset(s, n, "*|WT@infected")
+        )
+        assert got == {
+            "WT|WT@default": 1.0,
+            "WT|WT@infected": 0.5,
+            "WT|Dr@default": 1.0,
+            "WT|Dr@infected": 0.5,
+            "Dr|Dr@default": 1.0,
+            "Dr|Dr@infected": 1.0,
+        }
+
+    def test_preset_and_chain_paths_agree_on_a_partial_match_labelled_selector(self):
+        """Plan §5.6 parity also covers ``|`` patterns on unordered species.
+
+        The chain path promotes a partial ordered ``|`` match to the unordered
+        ``::`` match (``write_fitness_field``'s documented retry, e.g.
+        ``*|WT`` -> WT|WT and WT|Dr).  The preset path must match the same
+        ZTypes for the same string.
+        """
+        sp = self._species()
+        preset = self._viability_by_ztype(
+            sp, "agree_pm_preset", lambda s, n: self._build_with_preset(s, n, "*|WT@infected")
+        )
+        chain = self._viability_by_ztype(
+            sp, "agree_pm_chain", lambda s, n: self._build_with_chain(s, n, "*|WT@infected")
+        )
+        assert preset == chain
+
+    @classmethod
+    def _sexual_selection_by_pair(cls, sp: nt.Species, name: str, build) -> dict:
+        pop = build(sp, name)
+        arr = pop.config.sexual_selection_fitness
+        labels = [str(label) for label in pop.config.ztype_names]
+        return {
+            (female, male): round(float(arr[i, j]), 3)
+            for i, female in enumerate(labels)
+            for j, male in enumerate(labels)
+        }
+
+    @classmethod
+    def _build_with_preset_patch(cls, sp: nt.Species, name: str, patch: dict):
+        class SexualPatch(nt.GeneticPreset):
+            def __init__(self) -> None:
+                super().__init__(name="sexual_patch")
+
+            def gamete_modifier(self, host: object) -> None:
+                return None
+
+            def zygote_modifier(self, host: object) -> None:
+                return None
+
+            def fitness_patch(self) -> dict:
+                return {"sexual_selection": patch}
+
+        return (
+            nt.DiscreteGenerationPopulation.setup(sp, name=name, stochastic=False)
+            .initial_state(
+                individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}}
+            )
+            .reproduction(eggs_per_female=2)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .presets(SexualPatch())
+            .build()
+        )
+
+    @staticmethod
+    def _build_with_chain_patch(sp: nt.Species, name: str, patch: dict):
+        return (
+            nt.DiscreteGenerationPopulation.setup(sp, name=name, stochastic=False)
+            .initial_state(
+                individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}}
+            )
+            .reproduction(eggs_per_female=2)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .fitness(sexual_selection=patch)
+            .build()
+        )
+
+    def test_preset_and_chain_paths_agree_on_a_labelled_sexual_selection_selector(self):
+        """The nested female→male form must match the same ZTypes on both entries.
+
+        Both entries read the same ``{female_selector: {male_selector: scale}}``
+        mapping, so a labelled selector on either side must select the same
+        female/male ZTypes (Plan §5.6).
+        """
+        sp = self._species()
+        patch = {"WT|WT@infected": {"WT|Dr@infected": 0.5}}
+        preset = self._sexual_selection_by_pair(
+            sp, "agree_ss_preset", lambda s, n: self._build_with_preset_patch(s, n, patch)
+        )
+        chain = self._sexual_selection_by_pair(
+            sp, "agree_ss_chain", lambda s, n: self._build_with_chain_patch(s, n, patch)
+        )
+        assert preset == chain

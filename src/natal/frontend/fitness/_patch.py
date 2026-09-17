@@ -31,6 +31,8 @@ from natal.frontend.presets._types import (
 )
 from natal.frontend.utils.helpers import resolve_sex_label
 
+from ._selector_resolution import resolve_selector_ztypes
+
 
 def _resolve_patch_selector_ztypes(
     deps: RecipeHost,
@@ -72,27 +74,13 @@ def _resolve_patch_selector_ztypes(
             )
         ]
 
-    from natal.frontend.patterns import ZygoteTypePattern
-
-    species = deps.species
-    pattern = ZygoteTypePattern.parse(selector, species)
-    ztypes = deps.index_registry.resolve_ztype_indices(pattern)
-    # Mirror the chain path: for ``|`` (ordered) patterns on an unordered
-    # species, retry with the unordered separator so both paths agree.
-    if not ztypes and species.unordered and "|" in selector and "::" not in selector:
-        try:
-            promoted = ZygoteTypePattern.parse(selector.replace("|", "::", 1), species)
-            promoted_ztypes = deps.index_registry.resolve_ztype_indices(promoted)
-            if len(promoted_ztypes) > len(ztypes):
-                ztypes = promoted_ztypes
-        except Exception:
-            pass
-    if not ztypes:
-        raise ValueError(
-            f"{context}: selector {selector!r} matches no ZType in species "
-            f"{species.name!r}."
+    # A labelled selector is one flat set of ZTypes, resolved by the same code
+    # the ``fitness()`` chain path uses so both entries select identically.
+    return [
+        resolve_selector_ztypes(
+            deps.species, deps.index_registry, selector, all_genotypes, context
         )
-    return [ztypes]
+    ]
 
 
 def _apply_viability_allele_scaling(
