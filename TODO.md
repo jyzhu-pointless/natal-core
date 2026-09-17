@@ -6,7 +6,7 @@
 - **部分完成**：已有相关能力，但仍有明确遗留。**未完成**：已有工作方向，尚未实现。**待设计**：需求或方案仍需确定。**暂缓**：已明确决定延期。
 - 每项先说明现状，再补充依据和限制，最后单列设计。设计部分不表示已实现，也不改变原有延期决定。
 - 未完成项以 2026-09-15 的工作区审计为基础，包含当时未提交的修改及本机相邻 inferencer 仓库。2026-09-16 完成的 K 值测试、个体转换、命名清理和 CytoplasmicPreset 迁移已移入 [归档与验证记录](TODO.legacy.md)；其中也记录了本轮发现的旧审计遗漏。
-- 2026-09-16 第三轮数值抽查（28 个抽查点 + 3 份文献复现）登记的问题已全部处理完毕：均衡标定、Wolbachia 文档、RuleSet 挂载示例、反向突变级联说明、分阶段采样说明，以及迁移速率的构建期警告（行为语义经确认不变）。条目与证据见 [归档与验证记录](TODO.legacy.md) 的 QC-020 至 QC-025；证据测试保留在本机 `.zcode/regular-quality-control/test_r3_01..07`（该目录在 `.gitignore` 内）。
+- 2026-09-16 第三轮数值抽查（28 个抽查点 + 3 份文献复现）登记的问题已全部处理完毕：均衡标定、Wolbachia 文档、RuleSet 挂载示例、反向突变级联说明、分阶段采样说明，以及迁移速率的构建期警告（行为语义经确认不变）。条目与证据见 [归档与验证记录](TODO.legacy.md) 的 QC-020 至 QC-025；证据测试已随各轮探针并入 `tests/qc/`（本机 `.zcode/regular-quality-control/` 保留原始副本，该目录在 `.gitignore` 内）。
 - 文中源码路径省略 `src/natal/frontend/` 前缀时，以该目录为起点；Rust 和测试路径从仓库根目录起算。
 
 ## 当前优先级：v0.3.x 维护与发布后重构
@@ -182,7 +182,7 @@
 - `equilibrium_distribution` 声明分支按原样读取声明表：用声明的 age-1 总量反解平衡存活率，用声明的雌性分布计算参考竞争强度，但不校验该声明是否是模型可达的状态。
 - 实测（XY 物种、雌/雄 age-0 存活 0.9/0.5、声明 1000 雌 + 1000 雄、K=2000）：第 1 拍总量仍为 2000（声明态恰落在标定参考点上），随后漂移到 2222.2（+11.1%，组成 1428.6/793.7）。组成一致的声明（1285.7/714.3）是精确不动点。
 - 声明分支的 `s_0_avg` 也消费 `sex_ratio`：性染色体物种即使声明组成一致，`sex_ratio != 0.5` 时也会漂移（修复前实测 sex_ratio=0.3 时 2000 → 2387.1）。这一半已随"标定按引擎机制读取 `sex_ratio`"的修复处理（修复后精确 2000.0）；本条只记声明组成本身的可达性校验。
-- 证据测试：本机 `.zcode/regular-quality-control/test_r4_11_calibration_inputs.py::TestDeclaredEquilibriumIsAFixedPointOnlyWhenConsistent`。
+- 证据测试：`tests/qc/test_r4_11_calibration_inputs.py::TestDeclaredEquilibriumIsAFixedPointOnlyWhenConsistent`（当前 `xfail(strict=True)`，关闭本项时移除该标记；一致声明的正对照在同文件内通过）。
 
 #### 设计与待决定事项
 
