@@ -198,10 +198,23 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
     # used to fall back to ``np.ones_like(target)``, which silently turned a
     # declared baseline into a neutral one; and checking up front guarantees a
     # failure cannot leave the working draft partially re-seeded.
+    # The baseline tuple is either empty — the documented default, where the
+    # compiler derives the baseline — or it covers every fitness field in
+    # ``FITNESS_FIELDS`` order.  A shorter tuple used to leave the surplus
+    # fields at the draft's own values, so part of the declaration was
+    # ignored without a signal; the runtime path (``build_runtime_definition``)
+    # already rejects that.  The check below is what enforces the length
+    # contract, so the pairing itself is a plain ``zip``.
     working = host.draft
+    if definition.fitness_base and len(definition.fitness_base) != len(FITNESS_FIELDS):
+        raise ValueError(
+            f"Fitness baseline has {len(definition.fitness_base)} entries; expected "
+            f"{len(FITNESS_FIELDS)} in the order {', '.join(FITNESS_FIELDS)}, or none."
+        )
+    baseline_fields = list(zip(FITNESS_FIELDS, definition.fitness_base))
     mismatches: list[tuple[str, tuple[int, ...], tuple[int, ...]]] = [
         (name, base.shape, getattr(working, name).shape)
-        for name, base in zip(FITNESS_FIELDS, definition.fitness_base)
+        for name, base in baseline_fields
         if base.shape != getattr(working, name).shape
     ]
     if mismatches:
@@ -212,7 +225,7 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
         raise ValueError(
             "Fitness baseline shape does not match the declaration's draft: " + details
         )
-    for name, base in zip(FITNESS_FIELDS, definition.fitness_base):
+    for name, base in baseline_fields:
         target: NDArray[np.float64] = getattr(working, name)
         target[...] = base
     gametes: GameteList = []

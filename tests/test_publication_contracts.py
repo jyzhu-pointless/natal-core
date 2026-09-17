@@ -631,3 +631,44 @@ def test_late_fitness_baseline_mismatch_does_not_partially_reseed() -> None:
             before[name],
             err_msg=f"{name} was re-seeded before the shape check rejected the compile",
         )
+
+
+def test_short_fitness_baseline_is_rejected() -> None:
+    """A baseline covering only some fitness fields is rejected, not truncated.
+
+    The surplus fields used to keep the draft's own values, so part of the
+    declaration was ignored without a signal. The runtime path
+    (``build_runtime_definition``) already rejects a short baseline.
+    """
+    from natal.frontend.model.definition_compiler import FITNESS_FIELDS, compile_definition
+
+    species, full = _uncompiled_draft("baseline_short")
+    before = {name: getattr(full.config, name).copy() for name in FITNESS_FIELDS}
+
+    with pytest.raises(ValueError, match="Fitness baseline has 2 entries") as excinfo:
+        compile_definition(_definition(species, full, _baseline_values(full)[:2]))
+
+    assert FITNESS_FIELDS[0] in str(excinfo.value)
+    for name in FITNESS_FIELDS:
+        np.testing.assert_array_equal(
+            getattr(full.config, name),
+            before[name],
+            err_msg=f"{name} was re-seeded while the baseline length was rejected",
+        )
+
+
+def test_empty_fitness_baseline_stays_legal() -> None:
+    """An empty baseline means "derive it", so it must keep working."""
+    from natal.frontend.model.definition_compiler import FITNESS_FIELDS, compile_definition
+
+    species, full = _uncompiled_draft("baseline_empty")
+    before = {name: getattr(full.config, name).copy() for name in FITNESS_FIELDS}
+
+    compiled = compile_definition(_definition(species, full))
+
+    for name in FITNESS_FIELDS:
+        np.testing.assert_array_equal(
+            getattr(compiled.config, name),
+            before[name],
+            err_msg=f"{name} changed even though no explicit baseline was declared",
+        )
