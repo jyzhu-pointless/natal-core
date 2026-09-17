@@ -47,6 +47,7 @@ from .conversion_rules import (
     ZygoteAlleleConversionRule,
     ZygoteZtypeConversionRule,
     replace_allele_in_haploid,
+    split_and_validate_filter_pattern,
     validate_filter_pattern,
 )
 
@@ -498,22 +499,15 @@ def _compile_gamete_matcher(
     Raises:
         ValueError: If the pattern cannot be parsed.
     """
-    from natal.frontend.patterns.elements.atom import LabPattern
     from natal.frontend.patterns.parser import GenotypePatternParser
 
-    base, lab = pattern, None
-    # Split the optional label qualifier off the genotype pattern; both parts are
-    # validated separately against the species catalog and gamete labels.
-    if "@" in pattern:
-        base, suffix = pattern.rsplit("@", 1)
-        if suffix and suffix != "*":
-            try:
-                lab = LabPattern.parse(suffix)
-            except Exception as exc:
-                raise ValueError(
-                    f"{rs_name}: invalid label pattern {pattern!r}"
-                ) from exc
-    validate_filter_pattern(species, pattern, species.gamete_labels, rs_name)
+    # The strict validator owns the single '@' scan: it returns the genotype
+    # part and the label matcher, so this function must not split the string a
+    # second time with a rule of its own.  Every malformed form — more than one
+    # '@', an empty part, an unknown label — is rejected there.
+    base, lab = split_and_validate_filter_pattern(
+        species, pattern, species.gamete_labels, rs_name
+    )
     parser = GenotypePatternParser(species)
     try:
         genome_pattern = parser.parse_haploid_genome_pattern(base)
