@@ -105,6 +105,6 @@ flowchart TD
 - 图表与正文一起更新：流程、所有权或阶段改变时，图里的箭头也要改。
 - 表格里写基因型注意管道符：反引号内直接写成 `A|a`（不要转义，转义会在页面上显示多余的反斜杠）；反引号外的正文里则要写成转义形式，否则该行会被断成多一列。该结论在本仓库实测得出。
 
-浏览器界面的独立代码位于 [根目录 frontend/](https://github.com/jyzhu-pointless/natal-core/tree/main/frontend)，Python 服务入口位于 [frontend/webui/](https://github.com/jyzhu-pointless/natal-core/tree/main/src/natal/frontend/webui)。核心模拟指南到这里结束；界面改动还应继续追踪 session、序列化、REST/WebSocket 协议与显示组件之间的数据链路。
+浏览器界面的独立代码位于 [根目录 ui/](https://github.com/jyzhu-pointless/natal-core/tree/main/ui)，Python 服务入口位于 [frontend/webui/](https://github.com/jyzhu-pointless/natal-core/tree/main/src/natal/frontend/webui)。核心模拟指南到这里结束；界面改动还应继续追踪 session、序列化、REST/WebSocket 协议与显示组件之间的数据链路。
 
 下一步阅读[如何验证数值、状态与跨语言行为](verification.md)，或回到[阅读路线](index.md)重新选择入口。

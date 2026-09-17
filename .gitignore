@@ -75,6 +75,6 @@ demos/test*
 .coverage
 
 # Frontend source files that the broad *.html / debug* rules above would swallow.
-!frontend/index.html
-!frontend/src/stores/debug.ts
-!frontend/src/components/panels/DebugPanel.vue
+!ui/index.html
+!ui/src/stores/debug.ts
+!ui/src/components/panels/DebugPanel.vue

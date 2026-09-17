@@ -209,7 +209,7 @@ stub 检查不会改写文件；有意变更导出后，使用
 `python scripts/generate_init_pyi.py` 重新生成。
 
 构建 wheel 需要 Node.js 24 和 Corepack。`python scripts/build_frontend.py`
-会安装锁定的前端依赖、运行 lint 和测试，并将面板构建到
+会安装锁定的 UI 依赖、运行 lint 和测试，并将面板构建到
 `src/natal/frontend/webui/dist`。wheel 构建脚本会自动调用它；CI 只构建一次，
 供全部 wheel 任务共用。发布的 wheel 内含这些资源，最终用户不需要 Node.js。
 

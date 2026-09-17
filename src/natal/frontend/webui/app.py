@@ -11,7 +11,7 @@ Handlers are module-level functions reading session state from
 type checker and directly testable without closures.
 
 Release wheels include a package-local ``dist`` served at ``/``. Source
-checkouts can also use ``frontend/dist`` or the Vite dev server, which
+checkouts can also use ``ui/dist`` or the Vite dev server, which
 proxies ``/api`` and ``/ws`` to this app.
 """
 
@@ -33,7 +33,7 @@ from .ws import session_from_app, websocket_endpoint
 # Installed wheels must not depend on a source checkout's directory layout.
 _PACKAGED_DIST = Path(__file__).resolve().parent / "dist"
 _DIST_DIR = (_PACKAGED_DIST if _PACKAGED_DIST.is_dir()
-             else Path(__file__).resolve().parents[4] / "frontend" / "dist")
+             else Path(__file__).resolve().parents[4] / "ui" / "dist")
 
 
 async def _get_meta(request: Request) -> dict[str, object]:  # object: heterogeneous JSON meta payload
@@ -55,7 +55,7 @@ async def _index_fallback() -> HTMLResponse:
     return HTMLResponse(
         "<h1>NATAL Vue dashboard</h1><p>Frontend build not found. "
         "Either run <code>corepack pnpm build</code> in "
-        "<code>frontend/</code> or start the Vite dev server "
+        "<code>ui/</code> or start the Vite dev server "
         "(<code>corepack pnpm dev</code>) which proxies to this app.</p>"
     )
 

@@ -105,6 +105,6 @@ The concrete practices for numeric and state verification are in [how to verify 
 - Update diagrams with the text: when a flow, ownership, or stage changes, the arrows change too.
 - Watch the pipe character in genotype tables: inside backticks write `A|a` plainly (do not escape it — the escape would show a stray backslash on the page); outside backticks, escape the pipe instead, or the row splits into an extra column. Both behaviours were measured on this site.
 
-The browser interface has its own code at [the repository-root frontend/](https://github.com/jyzhu-pointless/natal-core/tree/main/frontend), with the Python service entry at [frontend/webui/](https://github.com/jyzhu-pointless/natal-core/tree/main/src/natal/frontend/webui). The core simulation guide ends here; interface work continues into the data path from session through serialisation and REST/WebSocket protocols to the display components.
+The browser interface has its own code at [the repository-root ui/](https://github.com/jyzhu-pointless/natal-core/tree/main/ui), with the Python service entry at [frontend/webui/](https://github.com/jyzhu-pointless/natal-core/tree/main/src/natal/frontend/webui). The core simulation guide ends here; interface work continues into the data path from session through serialisation and REST/WebSocket protocols to the display components.
 
 Next, read [how to verify numerical, state, and cross-language behaviour](verification.md), or return to the [reading route](index.md) to pick another entry point.

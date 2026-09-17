@@ -4,9 +4,9 @@ A model travels through three different kinds of things on its way from declarat
 
 If only one sentence sticks: **Python turns biological declarations into arrays of a fixed layout, Rust executes on those arrays and owns the running state, and the two sides exchange copies rather than shared mutable data.**
 
-## Two different things named "frontend"
+## The model frontend and the browser UI
 
-`src/natal/frontend/` is the model frontend inside the Python package: species structures, population declarations, genetic compilation, hook compilation, and output layout live there. The repository-root `frontend/` is the browser interface. The two share a name and nothing else; confirm which one a discussion means. This chapter covers only the former.
+`src/natal/frontend/` is the model frontend inside the Python package: species structures, population declarations, genetic compilation, hook compilation, and output layout live there. The repository-root `ui/` is the browser interface. They are separate layers; this chapter covers only the former.
 
 ## Overall data flow
 
