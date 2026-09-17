@@ -386,8 +386,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         # Type-check keys before resolution so a malformed mapping fails with a
         # clear message rather than a registry lookup error.  Explicit raises,
         # not asserts: these guard user input and must survive ``python -O``.
+        # The parameter annotation states the supported contract; these checks
+        # are its runtime enforcement point for callers that static analysis
+        # never saw (hence the unnecessary-isinstance suppressions).
         for female_key, male_dict in sperm_storage_dist.items():
-            if not isinstance(female_key, (str, Genotype)):
+            if not isinstance(female_key, (str, Genotype)):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime enforcement of the declared contract
                 raise TypeError(
                     f"Female genotype key must be Genotype or str, got {type(female_key)}"
                 )
@@ -395,14 +398,14 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             f_z = resolve_genotype_key_ztype_index(female_key, species, self.registry)
 
             for male_key, age_data in male_dict.items():
-                if not isinstance(male_key, (str, Genotype)):
+                if not isinstance(male_key, (str, Genotype)):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime enforcement of the declared contract
                     raise TypeError(
                         f"Male genotype key must be Genotype or str, got {type(male_key)}"
                     )
 
                 m_z = resolve_genotype_key_ztype_index(male_key, species, self.registry)
 
-                if not isinstance(age_data, (dict, list, tuple, int, float)):
+                if not isinstance(age_data, (dict, list, tuple, int, float)):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime enforcement of the declared contract
                     raise TypeError(
                         f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}"
                     )
