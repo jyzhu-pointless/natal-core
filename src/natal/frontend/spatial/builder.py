@@ -656,6 +656,40 @@ class SpatialPopulationBuilder:
         else:
             bound(*args, **kwargs)
 
+    def _stage_batch_kwargs(
+        self, kwargs: Mapping[str, Any]
+    ) -> tuple[Dict[str, Any], Dict[str, BatchSetting[Any]]]:
+        """Split *kwargs* into concrete template values and staged batch specs.
+
+        ``BatchSetting`` values are **not** written to ``_batch_settings``
+        here.  The caller commits the returned staging dict only after the
+        template call succeeded, so a failing declaration leaves the spatial
+        batch configuration exactly as it was.
+
+        Args:
+            kwargs: Raw keyword arguments from a chaining call.
+
+        Returns:
+            ``(concrete, staged)`` — the kwargs with each ``BatchSetting``
+            replaced by its first value, plus the ``BatchSetting`` objects
+            keyed by their original kwarg name.
+        """
+        concrete: Dict[str, Any] = {}
+        staged: Dict[str, BatchSetting[Any]] = {}
+        for key, value in kwargs.items():
+            if isinstance(value, BatchSetting):
+                batch = cast(BatchSetting[Any], value)
+                staged[key] = batch
+                # Feed the first element to the template builder so it can
+                # proceed through setup() → … → build() without errors; the
+                # full per-deme list is expanded at build().
+                first = batch.first_value()
+                if first is not None:
+                    concrete[key] = first
+            else:
+                concrete[key] = value
+        return concrete, staged
+
     def _detect_and_delegate(
         self,
         method_name: str,
@@ -688,26 +722,16 @@ class SpatialPopulationBuilder:
         Returns:
             Self for chaining.
         """
-        concrete: Dict[str, Any] = {}
-        for key, value in kwargs.items():
-            if isinstance(value, BatchSetting):
-                # Store the full per-deme spec for later expansion.
-                self._batch_settings[key] = value
-                # Feed the first element to the template builder so it
-                # can proceed through setup() → … → build() without
-                # errors.  The full per-deme list is expanded at build().
-                first = cast(BatchSetting[Any], value).first_value()
-                if first is not None:
-                    concrete[key] = first
-            else:
-                concrete[key] = value
+        concrete, staged = self._stage_batch_kwargs(kwargs)
 
         # Delegate sanitized kwargs to the template (single store: the
-        # decorator's journaling is bypassed).  The journal entry lands
-        # only after the template call succeeded: a failed call must not
-        # pollute the replayable declaration log.
+        # decorator's journaling is bypassed).  The staged batch specs and
+        # the journal entry are committed only after the template call
+        # succeeded: a failed call must leave no trace, neither in the
+        # replayable declaration log nor in the batch configuration.
         filtered = {k: v for k, v in concrete.items() if v is not None}
         self._call_template(method_name, **filtered)
+        self._batch_settings.update(staged)
         # Record the original call with BatchSetting objects preserved,
         # for full replay in _builder_for_group.
         self._declaration_log.append((method_name, dict(kwargs)))
@@ -724,24 +748,13 @@ class SpatialPopulationBuilder:
         Positional args are assumed to never be BatchSetting; only kwargs
         are checked.
         """
-        concrete_kwargs: Dict[str, Any] = {}
-        for key, value in kwargs.items():
-            if isinstance(value, BatchSetting):
-                self._batch_settings[key] = value
-                # Template builder only understands scalar values —
-                # feed it the first element so it can proceed through
-                # its own build() pipeline. The full per-deme list is
-                # stored in _batch_settings for later expansion.
-                first = cast(BatchSetting[Any], value).first_value()
-                if first is not None:
-                    concrete_kwargs[key] = first
-            else:
-                concrete_kwargs[key] = value
+        concrete_kwargs, staged = self._stage_batch_kwargs(kwargs)
 
         filtered = {k: v for k, v in concrete_kwargs.items() if v is not None}
         self._call_template(method_name, *args, **filtered)
-        # Journal only after the template call succeeded — failed calls
-        # stay out of the replayable declaration log.
+        # Both the staged batch specs and the journal entry land only after
+        # the template call succeeded — a failed call leaves neither behind.
+        self._batch_settings.update(staged)
         self._declaration_log.append((method_name, dict(kwargs)))
         return self
 
@@ -1064,21 +1077,31 @@ class SpatialPopulationBuilder:
         Returns:
             Self for chaining.
         """
-        # Detect BatchSetting in positional args.
+        # Detect BatchSetting in positional args.  The per-deme specs are
+        # staged, not stored: a failing preset recipe must not leave a batch
+        # entry behind, and re-using a ``_preset_<i>`` key from an earlier
+        # call must keep the earlier value until this call succeeds.
+        staged: Dict[str, BatchSetting[Any]] = {}
         concrete_args: list[object] = []
         for i, item in enumerate(preset_list):
             if isinstance(item, BatchSetting):
-                self._batch_settings[f"_preset_{i}"] = item
-                first = cast(BatchSetting[Any], item).first_value()
+                batch = cast(BatchSetting[Any], item)
+                staged[f"_preset_{i}"] = batch
+                first = batch.first_value()
                 if first is not None:
                     concrete_args.append(first)
             else:
                 concrete_args.append(item)
 
-        self._declaration_log.append(("presets", {"preset_list": preset_list}))
+        # Template first: the batch specs and the journal entry are committed
+        # only after the recipe expanded successfully, so a failed call
+        # leaves neither the spatial batch configuration nor the replayable
+        # declaration log modified.
         # concrete_args contains GeneticPreset instances resolved from potential
         # BatchSetting wrappers; cast needed because first_value() returns object.
         self._call_template("presets", *cast("list[GeneticPreset]", concrete_args))
+        self._batch_settings.update(staged)
+        self._declaration_log.append(("presets", {"preset_list": preset_list}))
         return self
 
     def fitness(
@@ -1158,6 +1181,18 @@ class SpatialPopulationBuilder:
         Returns:
             Self for chaining.
         """
+        # Template first: the journal entry lands only after the call
+        # succeeded, so a failed declaration stays out of the replayable
+        # log.  (Hook validation itself is deferred to build(), so an
+        # immediate failure here can only come from the template.)
+        self._call_template(
+            "hooks",
+            *hook_items,
+            event=event,
+            priority=priority,
+            deme=deme,
+            name=name,
+        )
         self._declaration_log.append(
             (
                 "hooks",
@@ -1169,14 +1204,6 @@ class SpatialPopulationBuilder:
                     "name": name,
                 },
             )
-        )
-        self._call_template(
-            "hooks",
-            *hook_items,
-            event=event,
-            priority=priority,
-            deme=deme,
-            name=name,
         )
         return self
 
