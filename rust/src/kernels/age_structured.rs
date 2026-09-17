@@ -1096,11 +1096,8 @@ impl EcoCtx<'_> {
             .get(growth_rate_id)
             .copied()
             .unwrap_or_else(|| self.params.low_density_growth_rate[self.deme]);
-        crate::model::validation::validate_growth_contract(
-            self.params.growth_mode[self.deme],
-            growth_rate,
-        )
-        .map_err(|err| err.to_string())?;
+        crate::model::validation::validate_growth_contract(growth_rate)
+            .map_err(|err| err.to_string())?;
         for (id, value) in values.iter().enumerate() {
             if id >= crate::hooks::interpreter::N_ECO_PARAMS {
                 break;

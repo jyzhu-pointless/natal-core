@@ -58,11 +58,10 @@ def test_unit_growth_rate_is_legal(mode: str) -> None:
     assert counts.sum() > 0.0
 
 
-def test_fixed_mode_ignores_the_growth_rate() -> None:
-    """r is unused by the fixed curve, so a sub-unit value stays legal."""
-    pop = _builder("fixed_r", growth_mode="fixed", low_density_growth_rate=0.5)
-    pop.run(50)
-    assert np.asarray(pop.state.individual_count).sum() == pytest.approx(1000.0, rel=1e-6)
+def test_fixed_mode_requires_the_growth_rate_lower_bound() -> None:
+    """The rate retains its intrinsic domain even when the curve ignores it."""
+    with pytest.raises(ValueError, match="low_density_growth_rate"):
+        _builder("fixed_r", growth_mode="fixed", low_density_growth_rate=0.5)
 
 
 @pytest.mark.parametrize(

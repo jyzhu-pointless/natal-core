@@ -194,7 +194,7 @@ builder 必须关联 `Species`，因为调整年龄也会重建遗传维度和�
 三条验收底线：① 平衡点 x=1 时所有曲线收敛到 `s`（g(1)=s）；② 低密度 x→0 时 g(0)=r·s（三条曲线在同一平衡点共享数值）；③ 确定性模拟下曲线缩放逐位可复现。
 
 第四条规则处理"参考点不可用"：当期望竞争强度 `C*` 为 0 时（承载容量为 0，或声明的均衡分布中幼体条目全为 0），补偿型模式 2–4 的招募量为 0（缩放为 `0`），而不再回退到"不调节"的缩放 `1.0`；当 `new_adult_age == 1` 时，`eggs_per_female == 0` 也会触发该规则，因为此时 0 龄是唯一的竞争年龄。`fixed`（模式 1）以承载容量而非 `C*` 为基准，因此 `K` 为正时仍按 `K` 截断。`no_competition`（模式 0）仍是表达"不做密度调节"的方式，包括个体只来自 hook 投放的模型。
-| `low_density_growth_rate` | `float` | 低密度下的内禀增长率。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；取值过大容易导致种群振荡。 |
+| `low_density_growth_rate` | `float` | 低密度下的内禀增长率。 | `6.0` | 幼体密度调节 | 所有模式均须为有限值且在 [1, 1000000] 内；表示无竞争时的增长倍数；取值过大容易导致种群振荡。 |
 | `age_1_carrying_capacity` | `Optional[int]` | age=1 阶段的种群承载容量。 | `None` | 幼体密度调节 | 如果显式指定，会优先使用该值（优先级最高）。 |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | 与 `age_1_carrying_capacity` 功能相同的遗留参数名（已弃用）。 | `None` | 幼体密度调节 | 推荐使用 `age_1_carrying_capacity`，两者同时设置时以 `age_1_carrying_capacity` 为准。 |
 | `expected_num_new_adult_females` | `Optional[int]` | 预期的成体雌性数量，用于独立计算期望产卵量。 | `None` | 期望产卵量推导 | 与 `age_1_carrying_capacity` 解耦：一个定容量，一个定产卵量（详见下文）。 |
@@ -458,7 +458,7 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
 | `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"beverton_holt"` | 幼体密度调节 | 默认 `"beverton_holt"`；也可显式使用 `"logistic"`、`"ricker"` 等其他模式。 |
-| `low_density_growth_rate` | `float` | 低密度下的内禀增长倍数。 | `6.0` | 幼体密度调节 | 表示无竞争条件下的增长倍数；取值过大容易导致振荡。 |
+| `low_density_growth_rate` | `float` | 低密度下的内禀增长倍数。 | `6.0` | 幼体密度调节 | 所有模式均须为有限值且在 [1, 1000000] 内；表示无竞争条件下的增长倍数；取值过大容易导致振荡。 |
 | `carrying_capacity` | `Optional[int]` | 幼体的承载容量。 | `None` | 密度上限 | 如果未设置，系统会尝试自动推导；显式指定的值优先级最高。 |
 
 ### `presets(...)` / `fitness(...)` / `modifiers(...)` / `hooks(...)` / `build()`

@@ -126,11 +126,12 @@ clutch after reproductive participation; continuous sampling retains its
 fractional value. WF modes instead sample the final generation according to
 `extreme_speed_mode`; this flag does not disable that sampling.
 
-For `linear`/`logistic`, `beverton_holt`, and `ricker`,
-`low_density_growth_rate` must be finite and at least 1. This preserves the
-non-increasing density response and avoids undefined Beverton–Holt denominators.
-`no_competition` and `fixed` do not use this rate and retain its ordinary parameter
-bounds. The same constraint applies to configuration updates and mode switches.
+`low_density_growth_rate` must be finite and in [1, 1000000] in every growth
+mode, including `no_competition` and `fixed`, which do not use this rate.
+For `linear`/`logistic`, `beverton_holt`, and `ricker`, the lower bound preserves
+the non-increasing density response and avoids undefined Beverton–Holt
+denominators. The same constraint applies to construction, runtime updates,
+and hooks.
 
 ## 4. Engine Implementation Layout
 

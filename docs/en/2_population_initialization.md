@@ -195,7 +195,7 @@ The `competition_strength` scalar sets only the second juvenile age weight. The 
 Three acceptance bottom lines: (1) at the equilibrium point x=1 all curves converge to `s` (g(1)=s); (2) at low density x->0, g(0)=r·s (the curves share values at the joint equilibrium point); (3) deterministic simulations produce bitwise-reproducible curve scaling.
 
 A fourth rule covers an unusable reference: when the expected competition strength `C*` is zero — a carrying capacity of zero, or a declared equilibrium distribution whose juvenile entries are all zero — the compensatory modes 2–4 recruit nothing (scaling `0`) instead of falling back to an unregulated scaling of `1.0`. A zero `eggs_per_female` is another trigger while `new_adult_age == 1`, because age 0 is then the only competing age. `fixed` (mode 1) is evaluated against the carrying capacity rather than `C*`, so a positive `K` still clamps at `K`. `no_competition` (mode 0) remains the way to say "do not regulate", including for models whose only recruitment comes from hooks.
-| `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
+| `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Must be finite and in [1, 1000000] in every mode; growth multiplier under no competition; overly large values can cause oscillations |
 | `age_1_carrying_capacity` | `Optional[int]` | Carrying capacity at the age=1 stage | `None` | Juvenile density regulation | If explicitly specified, takes highest priority |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | Legacy parameter name (deprecated) with same function as `age_1_carrying_capacity` | `None` | Juvenile density regulation | `age_1_carrying_capacity` recommended; when both are set, `age_1_carrying_capacity` takes precedence |
 | `expected_num_new_adult_females` | `Optional[int]` | Expected number of adult females, used to independently calculate expected egg production | `None` | Expected egg production derivation | Decoupled from `age_1_carrying_capacity`: one sets capacity, the other sets egg production (see below) |
@@ -461,7 +461,7 @@ Modeling advice:
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
 | `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"beverton_holt"` | Juvenile density regulation | Defaults to `"beverton_holt"`; `"logistic"`, `"ricker"` and the other modes stay available |
-| `low_density_growth_rate` | `float` | Intrinsic growth multiplier at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
+| `low_density_growth_rate` | `float` | Intrinsic growth multiplier at low density | `6.0` | Juvenile density regulation | Must be finite and in [1, 1000000] in every mode; growth multiplier under no competition; overly large values can cause oscillations |
 | `carrying_capacity` | `Optional[int]` | Carrying capacity for juveniles | `None` | Density upper limit | If not set, the system will attempt automatic derivation; explicitly specified values take highest priority |
 
 ### `presets(...)` / `fitness(...)` / `modifiers(...)` / `hooks(...)` / `build()`

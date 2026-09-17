@@ -26,7 +26,7 @@ pub const ECO_PARAM_BOUNDS: [(f64, f64); N_ECO_PARAMS] = [
     (0.0, 1000000.0),
     (0.0, 1.0),
     (0.0, 1.0),
-    (0.0, 1000000.0),
+    (1.0, 1000000.0),
 ];
 
 /// Ecology scalar channel names of the params contract: the wire

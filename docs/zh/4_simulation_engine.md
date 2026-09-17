@@ -124,10 +124,10 @@ pop.run_tick()
 连续抽样保留小数值。WF 模式按 `extreme_speed_mode` 对最终下一代抽样，
 该开关不会关闭这种抽样。
 
-`linear`/`logistic`、`beverton_holt` 和 `ricker` 要求
-`low_density_growth_rate` 为有限值且至少为 1，以保持随密度增加而不增的响应，
-并避免 Beverton–Holt 分母无定义。`no_competition` 和 `fixed` 不使用此参数，
-保留其通常的参数范围。运行时更新和切换曲线时也执行同样的约束。
+所有增长模式都要求 `low_density_growth_rate` 为有限值且在 [1, 1000000] 内，
+包括不使用此参数的 `no_competition` 和 `fixed`。
+对于 `linear`/`logistic`、`beverton_holt` 和 `ricker`，下界 1 保持随密度增加而不增的响应，
+并避免 Beverton–Holt 分母无定义。构建、运行时更新和 hook 都执行同样的约束。
 
 ## 4. 引擎实现布局
 
