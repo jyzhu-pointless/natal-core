@@ -153,3 +153,103 @@ class TestPresetIntegration:
         for name in ("Wolbachia", "TransgenicBackground"):
             assert hasattr(nt, name), f"{name} not importable from natal"
             assert name in presets.__all__, f"{name} not in __all__"
+
+
+class TestLabelledFitnessSelector:
+    """A preset patch selector must honour its ``@slab`` label.
+
+    The preset path resolved selectors through the genotype-only resolver, so
+    a labelled key matched every slab of the matched genotypes and the declared
+    label was dropped in silence, while the ``fitness()`` chain path honoured
+    the same string.  These tests pin the shared behaviour.
+    """
+
+    @staticmethod
+    def _species() -> nt.Species:
+        return nt.Species.from_dict(
+            "labelled_fitness_selector",
+            {"c": {"l": ["WT", "Dr"]}},
+            somatic_labels=["default", "infected"],
+        )
+
+    @staticmethod
+    def _patch_preset(key: str) -> "nt.GeneticPreset":
+        class LabelledPatch(nt.GeneticPreset):
+            def __init__(self) -> None:
+                super().__init__(name="labelled_patch")
+
+            def gamete_modifier(self, host: object) -> None:
+                return None
+
+            def zygote_modifier(self, host: object) -> None:
+                return None
+
+            def fitness_patch(self) -> dict:
+                return {"viability": {key: 0.5}}
+
+        return LabelledPatch()
+
+    @classmethod
+    def _viability_by_slab(cls, sp: nt.Species, name: str, build) -> dict:
+        pop = build(sp, name)
+        return {
+            str(label): round(float(pop.config.viability_fitness[0, 0, index]), 3)
+            for index, label in enumerate(pop.config.ztype_names)
+            if "WT|WT" in str(label)
+        }
+
+    @classmethod
+    def _build_with_preset(cls, sp: nt.Species, name: str, key: str):
+        return (
+            nt.DiscreteGenerationPopulation.setup(sp, name=name, stochastic=False)
+            .initial_state(
+                individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}}
+            )
+            .reproduction(eggs_per_female=2)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .presets(cls._patch_preset(key))
+            .build()
+        )
+
+    @staticmethod
+    def _build_with_chain(sp: nt.Species, name: str, key: str):
+        return (
+            nt.DiscreteGenerationPopulation.setup(sp, name=name, stochastic=False)
+            .initial_state(
+                individual_count={"female": {"WT|WT": 100}, "male": {"WT|WT": 100}}
+            )
+            .reproduction(eggs_per_female=2)
+            .survival(female_age0_survival=1.0, male_age0_survival=1.0)
+            .fitness(viability={key: 0.5})
+            .build()
+        )
+
+    def test_labelled_preset_selector_writes_only_that_slab(self):
+        sp = self._species()
+        got = self._viability_by_slab(
+            sp, "labelled_only", lambda s, n: self._build_with_preset(s, n, "WT|WT@infected")
+        )
+        assert got == {"WT|WT@default": 1.0, "WT|WT@infected": 0.5}
+
+    def test_unlabelled_preset_selector_still_writes_every_slab(self):
+        sp = self._species()
+        got = self._viability_by_slab(
+            sp, "unlabelled_all", lambda s, n: self._build_with_preset(s, n, "WT|WT")
+        )
+        assert got == {"WT|WT@default": 0.5, "WT|WT@infected": 0.5}
+
+    def test_unknown_label_in_a_preset_selector_is_rejected(self):
+        sp = self._species()
+        with pytest.raises(ValueError, match="matches no ZType"):
+            self._build_with_preset(sp, "labelled_unknown", "WT|WT@nope")
+
+    def test_preset_and_chain_paths_agree_on_a_labelled_selector(self):
+        """The same selector must match the same ZTypes on both entries."""
+        sp = self._species()
+        preset = self._viability_by_slab(
+            sp, "agree_preset", lambda s, n: self._build_with_preset(s, n, "WT|WT@infected")
+        )
+        chain = self._viability_by_slab(
+            sp, "agree_chain", lambda s, n: self._build_with_chain(s, n, "WT|WT@infected")
+        )
+        assert preset == chain
