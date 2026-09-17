@@ -267,6 +267,27 @@ class GenotypePatternParser:
         return base.strip(), original.rsplit("@", 1)[1].strip()
 
     @staticmethod
+    def split_label_suffix(pattern_str: str) -> tuple[str, Optional[LabPattern]]:
+        """Split an optional ``@lab`` suffix off a pattern string.
+
+        The public spelling of the parser's own ``@`` analysis, for callers
+        that need to tell a labelled pattern from an unlabelled one without
+        running a second scan of their own.
+
+        Args:
+            pattern_str: Pattern possibly carrying one ``@lab`` suffix.
+
+        Returns:
+            ``(base, lab_pattern)`` where *lab_pattern* is ``None`` when no
+            ``@`` suffix was present.
+
+        Raises:
+            PatternParseError: If there is more than one ``@``, the suffix is
+                empty, or the suffix is not a valid label pattern.
+        """
+        return GenotypePatternParser._strip_lab(pattern_str)
+
+    @staticmethod
     def _strip_lab(pattern_str: str) -> tuple[str, Optional[LabPattern]]:
         """Extract an ``@lab`` suffix from a pattern string.
 

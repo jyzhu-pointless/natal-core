@@ -22,6 +22,39 @@ else:
     Species = object  # runtime stand-in for cast()
 
 
+def _require_unlabelled_pattern(pattern: str) -> str:
+    """Return *pattern* without a label suffix, rejecting a labelled one.
+
+    Genotype and haploid-genome patterns match genetic content only, so an
+    ``@label`` suffix has nothing to match.  It used to be parsed and then
+    ignored, which silently matched more than the caller asked for — a
+    labelled entry such as :meth:`ZygoteTypePattern.parse` is the one that
+    takes a label (FRONTEND_REFACTOR_PLAN.md §5.2).
+
+    Args:
+        pattern: Pattern string that may carry one ``@label`` suffix.
+
+    Returns:
+        The pattern with the (absent) suffix stripped.
+
+    Raises:
+        PatternParseError: If the pattern carries a label, or if the suffix is
+            malformed (more than one ``@``, or empty).
+    """
+    from natal.frontend.patterns.elements._base import PatternParseError
+    from natal.frontend.patterns.parser import GenotypePatternParser
+
+    base, lab = GenotypePatternParser.split_label_suffix(pattern)
+    if lab is not None:
+        raise PatternParseError(
+            f"A genotype or haploid-genome pattern does not take an '@label' "
+            f"suffix, got {pattern!r}. Use ZygoteTypePattern.parse / "
+            f"IndividualSelector(ztype=...) for a somatic label, or "
+            f"GenotypePatternParser.parse_haplotype_pattern for a gamete label."
+        )
+    return base
+
+
 class SpeciesPatternMixin:
     """Pattern matching and resolution methods for Species.
 
@@ -166,12 +199,16 @@ class SpeciesPatternMixin:
             A filter function that takes a Genotype and returns bool.
 
         Raises:
-            PatternParseError: If the pattern is invalid.
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  A ``Genotype`` has no label, so such a
+                suffix has nothing to match against; use
+                :meth:`ZygoteTypePattern.parse` or
+                ``IndividualSelector(ztype=...)`` to select by label.
         """
         self = cast(Species, self)
         from natal.frontend.patterns import GenotypePatternParser
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse(pattern)
+        pattern_obj = parser.parse(_require_unlabelled_pattern(pattern))
         return pattern_obj.to_filter()
 
     def filter_genotypes_by_pattern(
@@ -256,12 +293,19 @@ class SpeciesPatternMixin:
             A filter function that takes a HaploidGenome and returns bool.
 
         Raises:
-            PatternParseError: If the pattern is invalid.
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  A ``HaploidGenome`` has no label, so such
+                a suffix has nothing to match against; use
+                ``GenotypePatternParser.parse_haplotype_pattern`` (a
+                ``GameteTypePattern``) or a conversion rule's ``filters`` to
+                select by gamete label.
         """
         self = cast(Species, self)
         from natal.frontend.patterns import GenotypePatternParser
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse_haploid_genome_pattern(pattern)
+        pattern_obj = parser.parse_haploid_genome_pattern(
+            _require_unlabelled_pattern(pattern)
+        )
         return pattern_obj.to_filter()
 
     def filter_haploid_genomes_by_pattern(
