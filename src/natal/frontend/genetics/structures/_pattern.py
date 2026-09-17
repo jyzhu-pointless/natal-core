@@ -22,39 +22,6 @@ else:
     Species = object  # runtime stand-in for cast()
 
 
-def _require_unlabelled_pattern(pattern: str) -> str:
-    """Return *pattern* without a label suffix, rejecting a labelled one.
-
-    Genotype and haploid-genome patterns match genetic content only, so an
-    ``@label`` suffix has nothing to match.  It used to be parsed and then
-    ignored, which silently matched more than the caller asked for — a
-    labelled entry such as :meth:`ZygoteTypePattern.parse` is the one that
-    takes a label (FRONTEND_REFACTOR_PLAN.md §5.2).
-
-    Args:
-        pattern: Pattern string that may carry one ``@label`` suffix.
-
-    Returns:
-        The pattern with the (absent) suffix stripped.
-
-    Raises:
-        PatternParseError: If the pattern carries a label, or if the suffix is
-            malformed (more than one ``@``, or empty).
-    """
-    from natal.frontend.patterns.elements._base import PatternParseError
-    from natal.frontend.patterns.parser import GenotypePatternParser
-
-    base, lab = GenotypePatternParser.split_label_suffix(pattern)
-    if lab is not None:
-        raise PatternParseError(
-            f"A genotype or haploid-genome pattern does not take an '@label' "
-            f"suffix, got {pattern!r}. Use ZygoteTypePattern.parse / "
-            f"IndividualSelector(ztype=...) for a somatic label, or "
-            f"GenotypePatternParser.parse_haplotype_pattern for a gamete label."
-        )
-    return base
-
-
 class SpeciesPatternMixin:
     """Pattern matching and resolution methods for Species.
 
@@ -208,7 +175,9 @@ class SpeciesPatternMixin:
         self = cast(Species, self)
         from natal.frontend.patterns import GenotypePatternParser
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse(_require_unlabelled_pattern(pattern))
+        pattern_obj = parser.parse(
+            GenotypePatternParser.require_unlabelled_pattern(pattern, haploid=False)
+        )
         return pattern_obj.to_filter()
 
     def filter_genotypes_by_pattern(
@@ -261,7 +230,9 @@ class SpeciesPatternMixin:
         from natal.frontend.patterns import GenotypePatternParser
 
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse(_require_unlabelled_pattern(pattern))
+        pattern_obj = parser.parse(
+            GenotypePatternParser.require_unlabelled_pattern(pattern, haploid=False)
+        )
 
         count = 0
         seen: set[int] = set()
@@ -307,9 +278,7 @@ class SpeciesPatternMixin:
         self = cast(Species, self)
         from natal.frontend.patterns import GenotypePatternParser
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse_haploid_genome_pattern(
-            _require_unlabelled_pattern(pattern)
-        )
+        pattern_obj = parser.parse_haploid_genome_pattern(pattern)
         return pattern_obj.to_filter()
 
     def filter_haploid_genomes_by_pattern(
@@ -363,9 +332,7 @@ class SpeciesPatternMixin:
         from natal.frontend.patterns import GenotypePatternParser
 
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse_haploid_genome_pattern(
-            _require_unlabelled_pattern(pattern)
-        )
+        pattern_obj = parser.parse_haploid_genome_pattern(pattern)
 
         count = 0
         for haploid_genome in self.iter_haploid_genotypes():

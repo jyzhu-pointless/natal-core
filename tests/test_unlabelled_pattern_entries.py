@@ -114,6 +114,22 @@ def test_enumerate_haploid_genomes_entry_rejects_a_label(
         list(species.enumerate_haploid_genomes_matching_pattern(pattern))
 
 
+@pytest.mark.parametrize("pattern", ["WT@cas9", "WT@*", "WT@!default"])
+def test_haploid_parser_entry_rejects_a_label(
+    species: nt.Species, pattern: str
+) -> None:
+    """The parser's own haploid entry is content-only too.
+
+    ``GenotypePatternParser.parse_haploid_genome_pattern`` returns a
+    ``HaploidGenomePattern`` whose ``matches()`` never consults a label, and
+    unlike its ``parse`` sibling it does not even keep the suffix: the label
+    is dropped and the filter matches every gamete of the named content
+    (FRONTEND_REFACTOR_PLAN.md §5.2, §5.6 "HaploidGenome 不携带标签").
+    """
+    with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
+        GenotypePatternParser(species).parse_haploid_genome_pattern(pattern)
+
+
 def test_selector_resolution_rejects_a_labelled_mixed_input(species: nt.Species) -> None:
     """A label in a genotype-level selector fails instead of being dropped.
 

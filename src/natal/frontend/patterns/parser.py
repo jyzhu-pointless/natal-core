@@ -267,25 +267,41 @@ class GenotypePatternParser:
         return base.strip(), original.rsplit("@", 1)[1].strip()
 
     @staticmethod
-    def split_label_suffix(pattern_str: str) -> tuple[str, Optional[LabPattern]]:
-        """Split an optional ``@lab`` suffix off a pattern string.
+    def require_unlabelled_pattern(pattern_str: str, *, haploid: bool) -> str:
+        """Return *pattern_str* without a label suffix, rejecting a labelled one.
 
-        The public spelling of the parser's own ``@`` analysis, for callers
-        that need to tell a labelled pattern from an unlabelled one without
-        running a second scan of their own.
+        Entries that match genetic content only — a genotype or a
+        haploid-genome pattern — have nothing to match an ``@label`` against,
+        so they must reject one instead of parsing it and then ignoring it
+        (FRONTEND_REFACTOR_PLAN.md §5.2).  The grammar's own ``@`` analysis
+        runs here, so callers never need a second scan of their own.
 
         Args:
             pattern_str: Pattern possibly carrying one ``@lab`` suffix.
+            haploid: Whether the entry matches a haploid genome.  Only picks
+                which label-aware alternative the error message names.
 
         Returns:
-            ``(base, lab_pattern)`` where *lab_pattern* is ``None`` when no
-            ``@`` suffix was present.
+            The pattern with the (absent) suffix stripped.
 
         Raises:
-            PatternParseError: If there is more than one ``@``, the suffix is
-                empty, or the suffix is not a valid label pattern.
+            PatternParseError: If the pattern carries a label, or if the
+                suffix is malformed (more than one ``@``, or empty).
         """
-        return GenotypePatternParser._strip_lab(pattern_str)
+        base, lab = GenotypePatternParser._strip_lab(pattern_str)
+        if lab is None:
+            return base
+        alternatives = (
+            "GenotypePatternParser.parse_haplotype_pattern for a gamete label"
+            if haploid
+            else "ZygoteTypePattern.parse or IndividualSelector(ztype=...) "
+            "for a somatic label"
+        )
+        kind = "haploid-genome" if haploid else "genotype"
+        raise PatternParseError(
+            f"A {kind} pattern does not take an '@label' suffix, got "
+            f"{pattern_str!r}. Use {alternatives}."
+        )
 
     @staticmethod
     def _strip_lab(pattern_str: str) -> tuple[str, Optional[LabPattern]]:
@@ -703,9 +719,15 @@ class GenotypePatternParser:
             HaploidGenomePattern object.
 
         Raises:
-            PatternParseError: If the pattern is invalid.
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  A ``HaploidGenome`` has no label, so the
+                suffix has nothing to match against; use
+                :meth:`parse_haplotype_pattern` (a ``GameteTypePattern``) or a
+                conversion rule's ``filters`` to select by gamete label.
         """
-        pattern_str = pattern_str.strip()
+        pattern_str = GenotypePatternParser.require_unlabelled_pattern(
+            pattern_str.strip(), haploid=True
+        )
 
         try:
             # Split by semicolon, respecting parentheses
