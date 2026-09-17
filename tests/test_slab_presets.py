@@ -312,10 +312,10 @@ class TestLabelledFitnessSelector:
         }
 
     @classmethod
-    def _build_with_preset_patch(cls, sp: nt.Species, name: str, patch: dict):
-        class SexualPatch(nt.GeneticPreset):
+    def _build_with_preset_fitness_patch(cls, sp: nt.Species, name: str, fitness_patch: dict):
+        class PatchPreset(nt.GeneticPreset):
             def __init__(self) -> None:
-                super().__init__(name="sexual_patch")
+                super().__init__(name="patch_preset")
 
             def gamete_modifier(self, host: object) -> None:
                 return None
@@ -324,7 +324,7 @@ class TestLabelledFitnessSelector:
                 return None
 
             def fitness_patch(self) -> dict:
-                return {"sexual_selection": patch}
+                return fitness_patch
 
         return (
             nt.DiscreteGenerationPopulation.setup(sp, name=name, stochastic=False)
@@ -333,7 +333,7 @@ class TestLabelledFitnessSelector:
             )
             .reproduction(eggs_per_female=2)
             .survival(female_age0_survival=1.0, male_age0_survival=1.0)
-            .presets(SexualPatch())
+            .presets(PatchPreset())
             .build()
         )
 
@@ -355,14 +355,69 @@ class TestLabelledFitnessSelector:
 
         Both entries read the same ``{female_selector: {male_selector: scale}}``
         mapping, so a labelled selector on either side must select the same
-        female/male ZTypes (Plan §5.6).
+        female/male ZTypes (Plan §5.6) — and the selected pair must be the only
+        cell written, so a shared genotype-level fallback cannot pass by parity
+        alone.
         """
         sp = self._species()
         patch = {"WT|WT@infected": {"WT|Dr@infected": 0.5}}
         preset = self._sexual_selection_by_pair(
-            sp, "agree_ss_preset", lambda s, n: self._build_with_preset_patch(s, n, patch)
+            sp, "agree_ss_preset",
+            lambda s, n: self._build_with_preset_fitness_patch(
+                s, n, {"sexual_selection": patch}
+            ),
         )
         chain = self._sexual_selection_by_pair(
             sp, "agree_ss_chain", lambda s, n: self._build_with_chain_patch(s, n, patch)
         )
         assert preset == chain
+        written = {pair for pair, value in preset.items() if value != 1.0}
+        assert written == {("WT|WT@infected", "WT|Dr@infected")}
+        assert preset[("WT|WT@infected", "WT|Dr@infected")] == 0.5
+
+    def test_labelled_flat_sexual_selection_selector_writes_only_that_male_column(self):
+        """The chain's flat male-keyed branch honours the label as well.
+
+        ``fitness(sexual_selection={"male@slab": value})`` broadcasts over every
+        female row, but only for the labelled male ZType.
+        """
+        sp = self._species()
+        got = self._sexual_selection_by_pair(
+            sp, "chain_ss_flat", lambda s, n: self._build_with_chain_patch(
+                s, n, {"WT|WT@infected": 0.5}
+            ),
+        )
+        assert {male for (_, male), value in got.items() if value != 1.0} == {
+            "WT|WT@infected"
+        }
+        assert all(value == 0.5 for (_, male), value in got.items() if male == "WT|WT@infected")
+
+    @pytest.mark.parametrize(
+        ("patch_key", "array_name"),
+        [("fecundity", "fecundity_fitness"), ("zygote", "zygote_viability_fitness")],
+    )
+    def test_labelled_preset_selector_writes_only_that_slab_in_the_other_fields(
+        self, patch_key: str, array_name: str
+    ):
+        """Every selector-keyed patch branch honours the label, not just viability.
+
+        Covers the fecundity and zygote branches of ``apply_preset_fitness_patch``
+        and their shared resolver call sites.
+        """
+        sp = self._species()
+        pop = self._build_with_preset_fitness_patch(
+            sp, f"other_{patch_key}", {patch_key: {"WT|WT@infected": 0.5}}
+        )
+        arr = getattr(pop.config, array_name)
+        got = {
+            str(label): round(float(arr[0, index]), 3)
+            for index, label in enumerate(pop.config.ztype_names)
+        }
+        assert got == {
+            "WT|WT@default": 1.0,
+            "WT|WT@infected": 0.5,
+            "WT|Dr@default": 1.0,
+            "WT|Dr@infected": 1.0,
+            "Dr|Dr@default": 1.0,
+            "Dr|Dr@infected": 1.0,
+        }

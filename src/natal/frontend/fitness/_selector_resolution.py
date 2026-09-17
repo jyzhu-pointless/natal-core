@@ -5,7 +5,13 @@ label — so an ``@slab`` qualifier is part of the selection, not decoration.
 Two entry points write fitness tensors (the ``fitness()`` chain and a preset's
 ``fitness_patch()``) and they must agree: the same selector string has to
 select the same ZTypes on both (FRONTEND_REFACTOR_PLAN.md §5.6).  This module
-owns that resolution so neither entry re-implements it.
+is the resolution both entries call for a labelled selector; a selector
+without a label is resolved genotype-by-genotype at each call site.
+
+``_writer.py``'s flat viability/fecundity/zygote path still carries its own
+inline copy of the labelled logic.  A 252-case scan (3 species x 3 fields x 28
+labelled selectors, preset against chain) found no divergence, and folding
+that copy in is part of the §5 migration rather than a behaviour fix.
 
 Private module — not part of the public API.
 """

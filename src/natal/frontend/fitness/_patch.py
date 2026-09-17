@@ -58,8 +58,10 @@ def _resolve_patch_selector_ztypes(
         context: Error-message prefix naming the patch branch.
 
     Returns:
-        One ZType index list per matched genotype: the labelled slab only when
-        the selector carries a label, every slab of that genotype otherwise.
+        One ZType index list per matched genotype for a selector without a
+        label — every slab of that genotype.  A selector carrying a label is
+        resolved as one set, so the result is a single list holding only the
+        ZTypes whose label matches.
 
     Raises:
         ValueError: If a labelled selector matches no ZType.
