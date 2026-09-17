@@ -96,9 +96,10 @@ def test_enumerate_genotypes_entry_rejects_a_label(
     """enumerate_genotypes_matching_pattern is content-only as well.
 
     FRONTEND_REFACTOR_PLAN.md §5.2 requires every pure Genotype input to
-    reject ``@label``.  This entry parses through ``parser.parse`` directly,
-    so the suffix is still stored and then ignored by ``matches()``: the
-    enumeration returns every slab's genotypes instead of failing.
+    reject ``@label``.  This entry parses through ``parser.parse`` directly
+    rather than through ``parse_genotype_pattern``, so it needs the same
+    guard of its own.  The error surfaces on iteration: the entry is a
+    generator, exactly like its other pattern errors.
     """
     with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
         list(species.enumerate_genotypes_matching_pattern(pattern))
@@ -108,7 +109,7 @@ def test_enumerate_genotypes_entry_rejects_a_label(
 def test_enumerate_haploid_genomes_entry_rejects_a_label(
     species: nt.Species, pattern: str
 ) -> None:
-    """Same contract for the haploid enumeration entry."""
+    """Same contract for the haploid enumeration entry (also a generator)."""
     with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
         list(species.enumerate_haploid_genomes_matching_pattern(pattern))
 
