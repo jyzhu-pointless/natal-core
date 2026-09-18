@@ -207,8 +207,12 @@ class TestPopulationBuilderBuild:
             .age_structure(n_ages=2, new_adult_age=1)
             .initial_state({"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}})
         )
-        total = cfg._config.initial_individual_count.sum()
+        # The declaration resolves at capture/build time, not in the
+        # declaration call (a distribution valid for the final structure is
+        # never rejected against provisional dimensions).
+        total = cfg._definition_for_compile().draft.initial_individual_count.sum()
         assert total == 10000.0
+        assert cfg.build().state.individual_count.sum() == 10000.0
 
     def test_build(self, species):
         pop = (

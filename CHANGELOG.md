@@ -4,6 +4,13 @@
 
 ### Added
 
+- An internal compilation dependency graph (FRONTEND_REFACTOR_PLAN.md
+  §4.3): `model/dependencies.jsonc` declares every derived product and its
+  dependencies, and `model/dependency_graph.py` loads it, rejects unknown
+  nodes, missing compute implementations and cycles, and executes the
+  derivation nodes of `build()` in topological order (genetic products,
+  initial counts, initial sperm storage, type names; the publish-side
+  nodes declare their order of record).
 - Two semantic pattern entries, `natal.parse_selector` and
   `natal.parse_target`, are the only public ways to parse a selector or a
   conversion target (FRONTEND_REFACTOR_PLAN.md §5.1). `parse_selector`
@@ -18,6 +25,22 @@
 
 ### Changed
 
+- `initial_state()` stores the distribution as the authoritative
+  declaration instead of resolving it into the draft immediately
+  (FRONTEND_REFACTOR_PLAN.md §4.1/§4.5, the plan review's first blocking
+  finding).  The engine arrays are derived once the final dimensions are
+  known — on `age_structure()` rebuilds and at `build()` — so declaring
+  the distribution before locking the age structure no longer silently
+  zeroes the population (single and spatial builds alike; order-
+  equivalence is pinned by tests).  Two visible consequences: resolution
+  errors (unknown genotype or sex names, ages outside the final
+  structure) surface at those points rather than at the
+  `initial_state()` call, and reading `builder.config.initial_individual_count`
+  before a capture/build returns zeros.  Scalar counts keep their
+  documented meaning of one count per adult age.  Carrying-capacity
+  auto-detection (`competition()` without an explicit K) now reads the
+  derived declaration, and spatial group replays and rebuilds-from-
+  definition re-derive from the travelling declaration.
 - One selector spelling now means one match set everywhere. The fitness
   writer and the preset fitness patch used to promote only the first `|` to
   `::` on an unordered species while `IndividualSelector` promoted all of

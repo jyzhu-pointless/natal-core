@@ -124,4 +124,7 @@ manifest-path = "rust/Cargo.toml"
 module-name = "natal._engine_rs"
 python-source = "src"
 features = ["extension-module"]
-include = [{ path = "src/natal/frontend/webui/dist/**/*", format = "wheel" }]
+include = [
+  { path = "src/natal/frontend/webui/dist/**/*", format = "wheel" },
+  { path = "src/natal/frontend/model/dependencies.jsonc", format = "wheel" },
+]

@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, cast
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.frontend.model.initial_state import InitialDistributionDeclaration
+
 if TYPE_CHECKING:
     from natal.frontend.builder import PopulationBuilder
     from natal.frontend.genetics import Species
@@ -155,6 +157,7 @@ class ModelDefinition:
     history_max_rows: int | None = None
     compress: bool = False
     declared_zygote_types: frozenset[str] | frozenset[int] | None = None
+    initial_distribution: InitialDistributionDeclaration | None = None
     _draft: ModelDraft | None = field(default=None, repr=False)
     _registry: IndexRegistry | None = field(default=None, repr=False)
     _fitness_base: tuple[NDArray[np.float64], ...] = field(default=(), repr=False)
@@ -177,6 +180,7 @@ class ModelDefinition:
         history_max_rows: int | None = None,
         compress: bool = False,
         declared_zygote_types: frozenset[str] | frozenset[int] | None = None,
+        initial_distribution: InitialDistributionDeclaration | None = None,
         draft: ModelDraft | None = None,
         registry: IndexRegistry | None = None,
         fitness_base: tuple[NDArray[np.float64], ...] = (),
@@ -209,6 +213,10 @@ class ModelDefinition:
         object.__setattr__(self, "history_max_rows", history_max_rows)
         object.__setattr__(self, "compress", compress)
         object.__setattr__(self, "declared_zygote_types", declared_zygote_types)
+        # The raw initial-distribution declaration: an immutable
+        # InitialDistributionDeclaration whose containers were copied at
+        # capture time, so it is stored as-is (opaque references kept).
+        object.__setattr__(self, "initial_distribution", initial_distribution)
         object.__setattr__(self, "_draft", None if draft is None else detach_draft(draft))
         object.__setattr__(self, "_registry", None if registry is None else copy_registry(registry))
         # Any: declaration values include heterogeneous recipes and user resources.

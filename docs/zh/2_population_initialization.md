@@ -508,7 +508,7 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 链式 API 的底层通过 `PopulationBuilder` 对象管理配置。每个链式方法立即写入 `ModelDraft` 的 NumPy 数组——无延迟执行，无中间累积。配置的生效顺序：
 
 1. **基础配置**：`setup()` 和 `age_structure()` 设置基本参数和维度
-2. **状态配置**：`initial_state()` 解析字典为 3-D 数组写入 config
+2. **状态配置**：`initial_state()` 把分布存为权威声明；3-D 数组在维度最终确定后（`age_structure()` 重建与 `build()` 时）由声明推导，因此先声明再锁定年龄结构既不会丢失数量，也不会因临时维度被拒绝
 3. **动力学配置**：`survival()`、`reproduction()`、`competition()` 写入 per-age 数组和 0-d 标量
 4. **高级配置**：`presets()`、`fitness()`、`modifiers()` 立即写入 config（非延迟）
 5. **最终构建**：`build()` 执行 equilibrium sync 并创建 `Population` 对象

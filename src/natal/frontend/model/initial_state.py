@@ -3,12 +3,18 @@
 Extracted from the builder parameter helpers so the model assembly side
 owns the initial-input resolution; the builder chain and the spatial
 builder consume these as plain functions.
+
+The builder stores the user's initial distribution as an
+:class:`InitialDistributionDeclaration` — the authoritative input — and
+resolves it into engine arrays through these functions whenever the final
+dimensions are known (at declaration time, on ``age_structure()`` rebuilds,
+and at ``build()``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, Tuple, TypeAlias, Union, cast
+from typing import Any, Dict, NamedTuple, Tuple, TypeAlias, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -19,6 +25,7 @@ from natal.frontend.utils.helpers import resolve_sex_label
 from natal.frontend.utils.types import Sex
 
 __all__ = [
+    "InitialDistributionDeclaration",
     "resolve_age_structured_initial_individual_count",
     "resolve_age_structured_initial_sperm_storage",
     "resolve_discrete_initial_individual_count",
@@ -32,6 +39,43 @@ InitialAgeCountValue: TypeAlias = (
 )
 InitialIndividualCountInput: TypeAlias = Mapping[str, Mapping[Any, InitialAgeCountValue]]
 InitialSpermStorageInput: TypeAlias = Mapping[Any, Mapping[Any, InitialAgeCountValue]]
+
+
+class InitialDistributionDeclaration(NamedTuple):
+    """A user's raw initial-distribution declaration.
+
+    The authoritative input the builder keeps: containers are copied on
+    construction (per the ownership contract), while opaque references —
+    ``Genotype`` objects and arrays inside the nested values — are kept
+    as-is.  Resolution into engine arrays happens against whatever
+    dimensions are current when it is resolved.
+    """
+
+    individual_count: InitialIndividualCountInput
+    sperm_storage: InitialSpermStorageInput | None
+
+    @classmethod
+    def capture(
+        cls,
+        individual_count: InitialIndividualCountInput,
+        sperm_storage: InitialSpermStorageInput | None,
+    ) -> InitialDistributionDeclaration:
+        """Copy the declaration's containers, keeping opaque references.
+
+        Args:
+            individual_count: The ``{sex: {genotype: count}}`` mapping as
+                the user passed it.
+            sperm_storage: The optional sperm-storage mapping, ``None``
+                when the user declared none.
+
+        Returns:
+            The frozen declaration.
+        """
+        return cls(
+            {sex: dict(counts) for sex, counts in individual_count.items()},
+            None if sperm_storage is None
+            else {sex: dict(counts) for sex, counts in sperm_storage.items()},
+        )
 
 
 def _resolve_sex_index(sex_key: Union[str, Sex]) -> int:

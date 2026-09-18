@@ -508,7 +508,7 @@ The chainable API is powered by a `PopulationBuilder` object. Each chain method 
 `ModelDraft` NumPy arrays — no deferred execution, no intermediate accumulation.
 
 1. **Basic config**: `setup()` and `age_structure()` set flags and dimensions
-2. **State config**: `initial_state()` resolves dicts to 3-D arrays and writes to config
+2. **State config**: `initial_state()` stores the distribution as the authoritative declaration; the 3-D arrays are derived from it once the final dimensions are known (`age_structure()` rebuilds and `build()`), so declaring before locking the age structure neither loses the counts nor gets rejected against provisional dimensions
 3. **Dynamics config**: `survival()`, `reproduction()`, `competition()` write per-age arrays and 0-d scalars
 4. **Advanced config**: `presets()`, `fitness()`, `modifiers()` write immediately (not deferred)
 5. **Final build**: `build()` syncs equilibrium metrics and creates the Population object

@@ -82,6 +82,7 @@ from natal.frontend.model import (
     ModelDraft,
 )
 from natal.frontend.model.initial_state import (
+    InitialDistributionDeclaration,
     resolve_age_structured_initial_individual_count,
     resolve_age_structured_initial_sperm_storage,
     resolve_discrete_initial_individual_count,
@@ -518,6 +519,15 @@ class PopulationBuilder:
         # normalize non-wildcard selectors with a warning at compile time.
         self._spatial_template: bool = False
 
+        # The user's raw initial distribution — the authoritative input
+        # (FRONTEND_REFACTOR_PLAN.md §4.1/B1).  Declaration stores it as
+        # passed; engine arrays are derived from it only once the final
+        # dimensions are known: on ``age_structure()`` rebuilds and at
+        # build-time compile.  Nothing resolves at declaration time, so a
+        # distribution valid for the final structure is never rejected
+        # against provisional dimensions.
+        self._initial_distribution: InitialDistributionDeclaration | None = None
+
         # Declaration journal (ModelDefinition needs the semantic
         # declaration ORDER).  Every public chaining call records
         # ``(method_name, kwargs)`` with live object references preserved
@@ -913,6 +923,10 @@ class PopulationBuilder:
         self._compiled_draft = None
         self._cached_compilation_key = None
         self._registry = build_registry(self._species)
+        # Dimensions changed: re-derive the initial arrays from the stored
+        # declaration instead of leaving the rebuilt draft's zeros behind
+        # (a declared age outside the new structure fails here).
+        self._resolve_initial_distribution()
         return self
 
     @_declared
@@ -971,7 +985,10 @@ class PopulationBuilder:
             equilibrium_distribution=equilibrium_distribution,
             age_1_carrying_capacity=age_1_carrying_capacity,
             old_juvenile_carrying_capacity=old_juvenile_carrying_capacity,
-            draft=self._config,
+            # K auto-detection reads the declared initial counts; hand it
+            # the derived copy so a declaration stored before this call is
+            # honoured without mutating the builder's own draft.
+            draft=self._draft_with_initial_resolved(),
             allow_initial_k_detection=True,
         )
         if writes:
@@ -1148,12 +1165,17 @@ class PopulationBuilder:
         discrete resolution and ignore sperm storage; age-structured
         drafts resolve per-age distributions.
 
-        The distribution is written to config immediately: genotype
-        selectors resolve against the complete (pre-compression) axis
-        and the draft's ``initial_individual_count`` (plus
-        ``initial_sperm_storage`` on age-structured drafts) is replaced
-        in the same call.  When ``build()`` applies index compression,
-        it projects the stored arrays onto the compressed axes.
+        The declaration is authoritative: the user's distribution is
+        stored as passed (containers copied, ``Genotype`` references
+        kept) and resolved into the draft's ``initial_individual_count``
+        (plus ``initial_sperm_storage`` on age-structured drafts) only
+        once the final dimensions are known — on ``age_structure()``
+        rebuilds and at ``build()``.  Declaring the distribution before
+        locking the final age structure therefore neither loses it nor
+        gets rejected against provisional dimensions
+        (FRONTEND_REFACTOR_PLAN.md §4.5); resolution errors — unknown
+        genotype or sex names, ages outside the final structure —
+        surface at those points, not at declaration time.
 
         .. note::
 
@@ -1179,43 +1201,63 @@ class PopulationBuilder:
                 "Use PopulationBuilder.from_species() to create the instance."
             )
 
+        import warnings
+
+        if self._config.discrete_generation and sperm_storage is not None:
+            warnings.warn(
+                "sperm_storage is ignored for discrete-generation populations.",
+                UserWarning,
+                stacklevel=2,
+            )
+        self._initial_distribution = InitialDistributionDeclaration.capture(
+            individual_count, sperm_storage
+        )
+        return self
+
+    def _resolve_initial_distribution(self) -> None:
+        """Derive the initial arrays from the stored declaration.
+
+        Runs against whatever dimensions are current, so the same
+        declaration serves the declaration-time write, every
+        ``age_structure()`` rebuild, and the build-time compile.  Does
+        nothing when no distribution was declared.
+        """
+        self._resolve_initial_counts()
+        self._resolve_initial_sperm()
+
+    def _resolve_initial_counts(self) -> None:
+        """Derive ``initial_individual_count`` from the stored declaration."""
+        declaration = self._initial_distribution
+        if declaration is None or self._species is None:
+            return
         if self._config.discrete_generation:
             array = resolve_discrete_initial_individual_count(
                 species=self._species,
-                distribution=individual_count,
+                distribution=declaration.individual_count,
             )
-            overrides: dict[str, object] = {"initial_individual_count": array}
-            if sperm_storage is not None:
-                import warnings
+        else:
+            array = resolve_age_structured_initial_individual_count(
+                species=self._species,
+                distribution=declaration.individual_count,
+                n_ages=self._config.n_ages,
+                new_adult_age=self._config.new_adult_age,
+            )
+        self._config = self._config._replace(initial_individual_count=array)
 
-                warnings.warn(
-                    "sperm_storage is ignored for discrete-generation populations.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            self._config = self._config._replace(**overrides)
-            return self
-
-        n_ages = self._config.n_ages
-        new_adult_age = self._config.new_adult_age
-        array = resolve_age_structured_initial_individual_count(
+    def _resolve_initial_sperm(self) -> None:
+        """Derive ``initial_sperm_storage`` from the stored declaration."""
+        declaration = self._initial_distribution
+        if declaration is None or self._species is None:
+            return
+        if declaration.sperm_storage is None or self._config.discrete_generation:
+            return
+        array = resolve_age_structured_initial_sperm_storage(
             species=self._species,
-            distribution=individual_count,
-            n_ages=n_ages,
-            new_adult_age=new_adult_age,
+            sperm_storage=declaration.sperm_storage,
+            n_ages=self._config.n_ages,
+            new_adult_age=self._config.new_adult_age,
         )
-        overrides = {"initial_individual_count": array}
-        if sperm_storage is not None:
-            overrides["initial_sperm_storage"] = (
-                resolve_age_structured_initial_sperm_storage(
-                    species=self._species,
-                    sperm_storage=sperm_storage,
-                    n_ages=n_ages,
-                    new_adult_age=new_adult_age,
-                )
-            )
-        self._config = self._config._replace(**overrides)
-        return self
+        self._config = self._config._replace(initial_sperm_storage=array)
 
     # -- custom fields ---------------------------------------------------------
 
@@ -1548,9 +1590,45 @@ class PopulationBuilder:
         self._record_history_max_rows: Optional[int] = max_rows
         return self
 
+    def _draft_with_initial_resolved(self) -> ModelDraft:
+        """Return the draft with the declared initial arrays derived.
+
+        Pure with respect to the builder: the arrays the declaration
+        implies are resolved into a replacement draft (a copy), so
+        capturing a definition never mutates the draft other holders
+        alias.  With no declaration the draft passes through unchanged.
+        """
+        declaration = self._initial_distribution
+        if declaration is None or self._species is None:
+            return self._config
+        if self._config.discrete_generation:
+            counts = resolve_discrete_initial_individual_count(
+                species=self._species, distribution=declaration.individual_count,
+            )
+            return self._config._replace(initial_individual_count=counts)
+        counts = resolve_age_structured_initial_individual_count(
+            species=self._species, distribution=declaration.individual_count,
+            n_ages=self._config.n_ages, new_adult_age=self._config.new_adult_age,
+        )
+        overrides: dict[str, object] = {"initial_individual_count": counts}
+        if declaration.sperm_storage is not None:
+            overrides["initial_sperm_storage"] = resolve_age_structured_initial_sperm_storage(
+                species=self._species, sperm_storage=declaration.sperm_storage,
+                n_ages=self._config.n_ages, new_adult_age=self._config.new_adult_age,
+            )
+        return self._config._replace(**overrides)
+
     def _definition_for_compile(self, *, build_name: str | None = None) -> ModelDefinition:
-        """Capture the full declaration rather than reconstructing it from outputs."""
+        """Capture the full declaration rather than reconstructing it from outputs.
+
+        The captured draft carries the arrays the declared initial
+        distribution implies against the current dimensions (derived into
+        a copy), so every consumer of the definition — candidate compiles,
+        the spatial group compiler, runtime rebuilds — sees one consistent
+        declaration.
+        """
         from natal.frontend.model.definition import ModelDefinition
+
 
         return ModelDefinition(
             self.species, bool(self._config.discrete_generation),
@@ -1564,7 +1642,8 @@ class PopulationBuilder:
             history_max_rows=self._record_history_max_rows,
             compress=self._compress,
             declared_zygote_types=None if self._declared_zygote_types is None else cast("frozenset[str] | frozenset[int]", frozenset(self._declared_zygote_types)),
-            draft=self._config,
+            initial_distribution=self._initial_distribution,
+            draft=self._draft_with_initial_resolved(),
             registry=self.registry,
             fitness_base=self._fitness_base,
             fitness_steps=tuple(self._fitness_steps),
@@ -1746,6 +1825,10 @@ class PopulationBuilder:
     def _compile_products(self) -> CompiledProducts:
         """Compile complete unpublished axes without constructing a native model.
 
+        The derivation order comes from the internal dependency graph
+        (``model/dependencies.jsonc``): genetic products, the initial
+        arrays re-derived from their declaration, and the type names each
+        run as a node whose dependencies the graph declares and validates.
         Cached recipe products are reused only for the same declaration.
         The builder stays unpublished and can supply multiple isolated builds.
 
@@ -1757,20 +1840,37 @@ class PopulationBuilder:
             CompiledProducts,
             compile_definition,
         )
+        from natal.frontend.model.dependency_graph import (
+            DerivationPipeline,
+            load_dependency_graph,
+        )
 
         self.registry.require_unpublished()
-        if self._cached_compilation_key is self._compilation_key and self._compiled_draft is not None:
+
+        def _compile_genetic_products() -> None:
+            if self._cached_compilation_key is self._compilation_key and self._compiled_draft is not None:
+                self._config = self._config._replace(
+                    **{field: getattr(self._compiled_draft, field).copy() for field in GENETIC_PRODUCT_FIELDS}
+                )
+            else:
+                result = compile_definition(self._definition_for_compile())
+                self._accept_products(*result)
+
+        def _apply_type_names() -> None:
             self._config = self._config._replace(
-                **{field: getattr(self._compiled_draft, field).copy() for field in GENETIC_PRODUCT_FIELDS}
+                ztype_names=ztype_names_from_registry(self.registry.index_to_ztype),
+                gtype_names=gtype_names_from_registry(self.registry.index_to_gtype),
             )
-        else:
-            result = compile_definition(self._definition_for_compile())
-            self._accept_products(*result)
+
+        pipeline = DerivationPipeline(load_dependency_graph())
+        pipeline.register("genetic_products", _compile_genetic_products)
+        pipeline.register("initial_counts", self._resolve_initial_counts)
+        pipeline.register("initial_sperm_storage", self._resolve_initial_sperm)
+        pipeline.register("type_names", _apply_type_names)
+        pipeline.run((
+            "genetic_products", "initial_counts", "initial_sperm_storage", "type_names",
+        ))
         self.apply()
-        self._config = self._config._replace(
-            ztype_names=ztype_names_from_registry(self.registry.index_to_ztype),
-            gtype_names=gtype_names_from_registry(self.registry.index_to_gtype),
-        )
         self._compiled_draft = self._config
         return CompiledProducts(
             self._config, self.registry, list(self.gamete_modifiers), list(self.zygote_modifiers),

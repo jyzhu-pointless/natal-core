@@ -1642,6 +1642,10 @@ class SpatialPopulationBuilder:
         template._record_history_max_rows = definition.history_max_rows  # pyright: ignore[reportPrivateUsage]
         template._compress = definition.compress  # pyright: ignore[reportPrivateUsage]
         template._declared_zygote_types = None if definition.declared_zygote_types is None else cast("set[str] | set[int]", set(definition.declared_zygote_types))  # pyright: ignore[reportPrivateUsage]
+        # The declared initial distribution rides with the definition; a
+        # rebuilt template re-derives its arrays from it, so a rebuild
+        # reproduces the originally built populations.
+        template._initial_distribution = definition.initial_distribution  # pyright: ignore[reportPrivateUsage]  # declaration snapshot travels with the definition.
         compiler._template = template
         compiler._batch_settings = {name: BatchSetting(values) for name, values in controls.batch_values}
         compiler._declaration_log = list(controls.group_calls)
@@ -2066,6 +2070,10 @@ class SpatialPopulationBuilder:
                 filtered = {k: v for k, v in resolved.items() if v is not None}
                 method(**filtered)
 
+        # Replayed declarations store the initial distribution without
+        # resolving it (resolution waits for final dimensions); the group's
+        # dimensions are final here, so derive the arrays now.
+        template_cfg._resolve_initial_distribution()  # pyright: ignore[reportPrivateUsage]  # controlled replayed group builder.
         return template_cfg
 
     def _compile_recording_plan(self, spatial: SpatialPopulation) -> None:

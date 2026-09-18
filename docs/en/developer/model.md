@@ -79,7 +79,7 @@ The registry on a compilation product is the **complete catalog**, unpublished: 
 | --- | --- |
 | Edit `ModelDraft` arrays to change the model | The draft is a build-time candidate; edits need a recompile and a publication before the runtime sees them |
 | Keep editing a previous compilation product | A cache hit hands out copies; cross-declaration reuse goes through `ModelDefinition` |
-| Call `age_structure` after `initial_state` | Domain method ordering is constrained and normalisation reports it at build time |
+| Call `age_structure` after `initial_state` | Legal: the distribution is the authoritative declaration and its arrays re-derive on the final dimensions, so nothing is lost (rebuilding after *domain* methods stays forbidden) |
 | Read P as `(0, 0, 0)` meaning "cannot reproduce" | It means "not yet derived"; derivation happens at publication |
 | Treat the default `growth_mode` as "no density regulation" | The default is `BEVERTON_HOLT`; disabling it is explicit |
 
