@@ -14,7 +14,7 @@ and at ``build()``).
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, NamedTuple, Tuple, TypeAlias, Union, cast
+from typing import Any, Dict, Optional, Tuple, TypeAlias, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -41,18 +41,32 @@ InitialIndividualCountInput: TypeAlias = Mapping[str, Mapping[Any, InitialAgeCou
 InitialSpermStorageInput: TypeAlias = Mapping[Any, Mapping[Any, InitialAgeCountValue]]
 
 
-class InitialDistributionDeclaration(NamedTuple):
+class InitialDistributionDeclaration:
     """A user's raw initial-distribution declaration.
 
     The authoritative input the builder keeps: containers are copied on
     construction (per the ownership contract), while opaque references —
     ``Genotype`` objects and arrays inside the nested values — are kept
     as-is.  Resolution into engine arrays happens against whatever
-    dimensions are current when it is resolved.
+    dimensions are current; a resolution is a pure function of
+    (declaration, dimensions), so resolved arrays are memoized per
+    dimension key and shared between the builder, its definition
+    captures, and the spatial group projections.  They are treated as
+    read-only; drafts that may be written get fresh copies through
+    ``ModelDefinition``'s detachment.
     """
 
-    individual_count: InitialIndividualCountInput
-    sperm_storage: InitialSpermStorageInput | None
+    __slots__ = ("individual_count", "sperm_storage", "_resolved")
+
+    def __init__(
+        self,
+        individual_count: InitialIndividualCountInput,
+        sperm_storage: InitialSpermStorageInput | None,
+    ) -> None:
+        """Store the copied declaration containers."""
+        self.individual_count = individual_count
+        self.sperm_storage = sperm_storage
+        self._resolved: Dict[Tuple[bool, int, int], Tuple[ArrayF64, Optional[ArrayF64]]] = {}
 
     @classmethod
     def capture(
@@ -76,6 +90,62 @@ class InitialDistributionDeclaration(NamedTuple):
             None if sperm_storage is None
             else {sex: dict(counts) for sex, counts in sperm_storage.items()},
         )
+
+    def resolve(
+        self,
+        species: Species,
+        *,
+        discrete_generation: bool,
+        n_ages: int,
+        new_adult_age: int,
+    ) -> Tuple[ArrayF64, Optional[ArrayF64]]:
+        """Resolve the declared arrays against the given dimensions.
+
+        Memoized per dimension key: the same declaration resolved for the
+        same dimensions always yields the same arrays, so builders,
+        definition captures, and group projections share one resolution
+        instead of re-enumerating the species catalog each time.
+
+        Args:
+            species: Species whose catalog resolves genotype selectors.
+            discrete_generation: Whether the draft uses the flat discrete
+                layout.
+            n_ages: Age-class count of the current draft.
+            new_adult_age: First adult age of the current draft.
+
+        Returns:
+            ``(counts, sperm)`` engine arrays; *sperm* is ``None`` when
+            none was declared.
+
+        Raises:
+            ValueError: If a selector or an age key is invalid for the
+                dimensions (surfacing the resolvers' own messages).
+        """
+        key = (bool(discrete_generation), int(n_ages), int(new_adult_age))
+        cached = self._resolved.get(key)
+        if cached is not None:
+            return cached
+        counts = (
+            resolve_discrete_initial_individual_count(
+                species=species, distribution=self.individual_count,
+            )
+            if discrete_generation
+            else resolve_age_structured_initial_individual_count(
+                species=species, distribution=self.individual_count,
+                n_ages=n_ages, new_adult_age=new_adult_age,
+            )
+        )
+        sperm: Optional[ArrayF64] = (
+            None
+            if self.sperm_storage is None or discrete_generation
+            else resolve_age_structured_initial_sperm_storage(
+                species=species, sperm_storage=self.sperm_storage,
+                n_ages=n_ages, new_adult_age=new_adult_age,
+            )
+        )
+        self._resolved[key] = (counts, sperm)
+        return counts, sperm
+
 
 
 def _resolve_sex_index(sex_key: Union[str, Sex]) -> int:

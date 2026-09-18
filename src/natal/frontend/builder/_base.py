@@ -80,9 +80,6 @@ from natal.frontend.model import (
 )
 from natal.frontend.model.initial_state import (
     InitialDistributionDeclaration,
-    resolve_age_structured_initial_individual_count,
-    resolve_age_structured_initial_sperm_storage,
-    resolve_discrete_initial_individual_count,
 )
 from natal.frontend.registry.index import IndexRegistry
 
@@ -1237,34 +1234,28 @@ class PopulationBuilder:
         declaration = self._initial_distribution
         if declaration is None or self._species is None:
             return
-        if self._config.discrete_generation:
-            array = resolve_discrete_initial_individual_count(
-                species=self._species,
-                distribution=declaration.individual_count,
-            )
-        else:
-            array = resolve_age_structured_initial_individual_count(
-                species=self._species,
-                distribution=declaration.individual_count,
-                n_ages=self._config.n_ages,
-                new_adult_age=self._config.new_adult_age,
-            )
-        self._config = self._config._replace(initial_individual_count=array)
+        counts, _sperm = declaration.resolve(
+            self._species,
+            discrete_generation=bool(self._config.discrete_generation),
+            n_ages=int(self._config.n_ages),
+            new_adult_age=int(self._config.new_adult_age),
+        )
+        self._config = self._config._replace(initial_individual_count=counts.copy())
 
     def _resolve_initial_sperm(self) -> None:
         """Derive ``initial_sperm_storage`` from the stored declaration."""
         declaration = self._initial_distribution
         if declaration is None or self._species is None:
             return
-        if declaration.sperm_storage is None or self._config.discrete_generation:
-            return
-        array = resolve_age_structured_initial_sperm_storage(
-            species=self._species,
-            sperm_storage=declaration.sperm_storage,
-            n_ages=self._config.n_ages,
-            new_adult_age=self._config.new_adult_age,
+        _counts, sperm = declaration.resolve(
+            self._species,
+            discrete_generation=bool(self._config.discrete_generation),
+            n_ages=int(self._config.n_ages),
+            new_adult_age=int(self._config.new_adult_age),
         )
-        self._config = self._config._replace(initial_sperm_storage=array)
+        if sperm is None:
+            return
+        self._config = self._config._replace(initial_sperm_storage=sperm.copy())
 
     # -- custom fields ---------------------------------------------------------
 
@@ -1598,28 +1589,26 @@ class PopulationBuilder:
         """Return the draft with the declared initial arrays derived.
 
         Pure with respect to the builder: the arrays the declaration
-        implies are resolved into a replacement draft (a copy), so
-        capturing a definition never mutates the draft other holders
-        alias.  With no declaration the draft passes through unchanged.
+        implies are resolved (memoized per dimensions on the declaration)
+        into a replacement draft, so capturing a definition never mutates
+        the draft other holders alias.  With no declaration the draft
+        passes through unchanged.
         """
         declaration = self._initial_distribution
         if declaration is None or self._species is None:
             return self._config
-        if self._config.discrete_generation:
-            counts = resolve_discrete_initial_individual_count(
-                species=self._species, distribution=declaration.individual_count,
-            )
-            return self._config._replace(initial_individual_count=counts)
-        counts = resolve_age_structured_initial_individual_count(
-            species=self._species, distribution=declaration.individual_count,
-            n_ages=self._config.n_ages, new_adult_age=self._config.new_adult_age,
+        counts, sperm = declaration.resolve(
+            self._species,
+            discrete_generation=bool(self._config.discrete_generation),
+            n_ages=int(self._config.n_ages),
+            new_adult_age=int(self._config.new_adult_age),
         )
-        overrides: dict[str, object] = {"initial_individual_count": counts}
-        if declaration.sperm_storage is not None:
-            overrides["initial_sperm_storage"] = resolve_age_structured_initial_sperm_storage(
-                species=self._species, sperm_storage=declaration.sperm_storage,
-                n_ages=self._config.n_ages, new_adult_age=self._config.new_adult_age,
-            )
+        # Copies: the memoized arrays are shared read-only state; a draft
+        # holder that ever writes cells in place must not leak into the
+        # cache.
+        overrides: dict[str, object] = {"initial_individual_count": counts.copy()}
+        if sperm is not None:
+            overrides["initial_sperm_storage"] = sperm.copy()
         return self._config._replace(**overrides)
 
     def _definition_for_compile(self, *, build_name: str | None = None) -> ModelDefinition:

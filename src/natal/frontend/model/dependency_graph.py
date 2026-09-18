@@ -147,6 +147,9 @@ class DerivationPipeline:
         return results
 
 
+_cached_graph: DependencyGraph | None = None
+
+
 def load_dependency_graph(text: str | None = None) -> DependencyGraph:
     """Load and validate the compilation dependency graph.
 
@@ -161,6 +164,11 @@ def load_dependency_graph(text: str | None = None) -> DependencyGraph:
             also a computed node, or fails validation in
             :meth:`DependencyGraph.order`.
     """
+    if text is None:
+        # The packaged config is immutable; parse it once per process.
+        global _cached_graph  # noqa: PLW0603
+        if _cached_graph is not None:
+            return _cached_graph
     source = text if text is not None else _GRAPH_FILE.read_text(encoding="utf-8")
     data = json.loads(_strip_jsonc_comments(source))
     try:
@@ -178,4 +186,7 @@ def load_dependency_graph(text: str | None = None) -> DependencyGraph:
         raise ValueError(
             f"Dependency graph nodes are both inputs and computed: {overlap!r}"
         )
-    return DependencyGraph(inputs=inputs, dependencies=dependencies)
+    graph = DependencyGraph(inputs=inputs, dependencies=dependencies)
+    if text is None:
+        _cached_graph = graph
+    return graph

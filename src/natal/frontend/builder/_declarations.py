@@ -69,29 +69,17 @@ def _draft_with_initial(
     initial: InitialDistributionDeclaration | None,
 ) -> ModelDraft:
     """Derive the declared initial arrays into a replacement draft (pure)."""
-    from natal.frontend.model.initial_state import (
-        resolve_age_structured_initial_individual_count,
-        resolve_age_structured_initial_sperm_storage,
-        resolve_discrete_initial_individual_count,
-    )
 
     if initial is None or species is None:
         return draft
-    if draft.discrete_generation:
-        counts = resolve_discrete_initial_individual_count(
-            species=species, distribution=initial.individual_count
-        )
-        return draft._replace(initial_individual_count=counts)
-    counts = resolve_age_structured_initial_individual_count(
-        species=species, distribution=initial.individual_count,
-        n_ages=draft.n_ages, new_adult_age=draft.new_adult_age,
+    counts, sperm = initial.resolve(
+        species,
+        discrete_generation=bool(draft.discrete_generation),
+        n_ages=int(draft.n_ages), new_adult_age=int(draft.new_adult_age),
     )
-    overrides: dict[str, object] = {"initial_individual_count": counts}
-    if initial.sperm_storage is not None:
-        overrides["initial_sperm_storage"] = resolve_age_structured_initial_sperm_storage(
-            species=species, sperm_storage=initial.sperm_storage,
-            n_ages=draft.n_ages, new_adult_age=draft.new_adult_age,
-        )
+    overrides: dict[str, object] = {"initial_individual_count": counts.copy()}
+    if sperm is not None:
+        overrides["initial_sperm_storage"] = sperm.copy()
     return draft._replace(**overrides)
 
 

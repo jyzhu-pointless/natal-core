@@ -25,6 +25,18 @@
 
 ### Changed
 
+- Build-path performance restored after the declaration refactor: a
+  cross-version benchmark (v0.3.0/b1/b0 vs this series, release wheels,
+  unloaded, same seed) showed the spatial batch-build microbenchmark
+  ~62 % slower than v0.3.0 while the end-to-end demo was unaffected.
+  Two hot spots fixed: the initial-distribution declaration now memoizes
+  its resolved arrays per dimension key (a resolution is a pure function
+  of declaration + dimensions; drafts receive copies, and the species
+  catalog is no longer re-enumerated for every projection, capture, and
+  variant), and the packaged dependency graph is parsed once per process
+  instead of once per build.  The batch-build microbenchmark lands within
+  ~13 % of v0.3.0 and the full RIDL batch demo is at parity (34–36 s
+  wall across all four versions).
 - Spatial groups compile from projected declarations, not replayed
   methods (FRONTEND_REFACTOR_PLAN.md §4.4/§4.5-4, the plan's last open
   item).  A new pure projector (`builder/_declarations.py`) is the single
