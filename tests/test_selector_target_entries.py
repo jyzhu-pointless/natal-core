@@ -301,3 +301,5 @@ class TestLegacyConvertTarget:
                 registry.register_ztype(gt, slab)
         with _pytest.raises(ValueError, match="must match exactly one"):
             _compile_convert_target_legacy("A|A", species, registry)
+
+

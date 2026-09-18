@@ -162,3 +162,20 @@ def test_a_label_in_a_nested_position_is_rejected(
     """§5.4: a label the grammar does not accept as a suffix is not dropped."""
     with pytest.raises(PatternParseError):
         nt.parse_selector(pattern, species=species, kind="genotype")
+
+
+def test_retired_parse_paths_are_gone(species: nt.Species) -> None:
+    """§5.4/§5.6: the retired public parse paths stay retired."""
+    parser_cls = GenotypePatternParser
+    for name in (
+        "parse", "parse_haploid_genome_pattern", "parse_haplotype_pattern",
+        "parse_conversion_target", "compile_conversion_target",
+    ):
+        assert not hasattr(parser_cls, name), name
+    assert not hasattr(ZygoteTypePattern, "parse")
+    assert not hasattr(ZygoteTypePattern, "from_pair")
+    import natal as nt_
+
+    for name in ("GenotypePatternParser", "GenotypeSelector"):
+        assert not hasattr(nt_, name), name
+    assert hasattr(nt_, "parse_selector") and hasattr(nt_, "parse_target")

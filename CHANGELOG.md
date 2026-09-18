@@ -25,6 +25,12 @@
 
 ### Changed
 
+- The orphaned `natal.frontend.modifiers.conditions` module (the
+  `ztype_has`/`is_maternal`/`is_paternal` Condition DSL) is deleted: the
+  modifier system stopped constructing Condition objects in the CR-1
+  rework, nothing in `src`, the exports, the stub, or the docs referenced
+  the module, and its lazy pattern compile was unreachable.  Plan item 6
+  (fixing that DSL's docstrings) is thereby superseded by the removal.
 - `initial_state()` stores the distribution as the authoritative
   declaration instead of resolving it into the draft immediately
   (FRONTEND_REFACTOR_PLAN.md §4.1/§4.5, the plan review's first blocking
