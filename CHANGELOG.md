@@ -16,6 +16,23 @@
   before its two defaulted sentinels; `src/natal/_engine_rs.pyi` matches the
   new order.
 
+- The five pattern entries that match genetic content only —
+  `Species.parse_genotype_pattern`, `Species.enumerate_genotypes_matching_pattern`,
+  `Species.parse_haploid_genome_pattern`,
+  `Species.enumerate_haploid_genomes_matching_pattern` and
+  `GenotypePatternParser.parse_haploid_genome_pattern` — now reject an
+  `@label` suffix with `PatternParseError`. The suffix used to be parsed and
+  then never consulted, so a labelled query matched every label of the
+  genotypes it named. `filter_*` and the selector resolvers inherit the
+  rejection; the label-aware entries (`ZygoteTypePattern.parse`,
+  `IndividualSelector`, conversion-rule `filters`,
+  `GenotypePatternParser.parse_haplotype_pattern`) keep taking labels, and the
+  new `GenotypePatternParser.require_unlabelled_pattern` is their shared guard.
+- Conversion filter patterns are analysed once instead of three times: the
+  strict validator owns the `@` scan and returns the label matcher, so a
+  malformed label reports one message ("invalid filter label") on both the
+  gamete and zygote stages instead of each module's own wording.
+
 ### Fixed
 
 - The equilibrium calibration reads the offspring sex ratio the way the owning
@@ -35,6 +52,28 @@
   reads, so a discrete model ignores the stored tensor there and the
   age-structured path clamps it. Previously the raw stored values moved the
   override — and through it the realized equilibrium — by the written factor.
+
+- A preset's `fitness_patch()` now rejects an unknown top-level key with a
+  `ValueError` naming it and listing the supported keys. Unknown keys used to
+  be skipped in silence, so the misspelled `viability_allele` in the documented
+  example produced a completely ineffective patch.
+- A preset's `fitness_patch()` honours an `@slab` label in a selector key,
+  exactly as the `fitness()` chain does: only that slab is written, and a label
+  no ZType carries is rejected. The label used to be dropped and every slab of
+  the matched genotype was written.
+- A spatial `presets()` or `hooks()` call that fails leaves neither a
+  declaration-log entry nor a batch entry behind, and a failed call no longer
+  overwrites a batch entry an earlier successful call committed.
+- `initial_sperm_storage` input type errors raise `TypeError` instead of
+  tripping an `assert`, so `python -O` no longer skips the checks and lets a
+  malformed mapping reach an unrelated failure.
+- A declarative hook that returns something other than a list, or a list
+  carrying an element that is not a `HookOp`, raises `TypeError` at build time.
+  It used to compile to a zero-operation hook and silently do nothing; an empty
+  list is still a legal no-op.
+- `compile_definition` rejects a declared fitness baseline that does not cover
+  every field, and one whose shape does not match the draft, instead of
+  silently truncating it or replacing it with `np.ones_like`.
 
 ## v0.3.0 (2026-09-16)
 
