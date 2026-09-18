@@ -737,31 +737,6 @@ class SpatialPopulationBuilder:
         self._declaration_log.append((method_name, dict(kwargs)))
         return self
 
-    def _delegate_positional(
-        self,
-        method_name: str,
-        args: tuple[object, ...],
-        kwargs: Dict[str, Any],
-    ) -> SpatialPopulationBuilder:
-        """Like ``_detect_and_delegate`` but accepts positional args.
-
-        Positional args are assumed to never be BatchSetting; only kwargs
-        are checked.
-        """
-        concrete_kwargs, staged = self._stage_batch_kwargs(kwargs)
-
-        filtered = {k: v for k, v in concrete_kwargs.items() if v is not None}
-        self._call_template(method_name, *args, **filtered)
-        # Both the staged batch specs and the journal entry land only after
-        # the template call succeeded — a failed call leaves neither behind.
-        self._batch_settings.update(staged)
-        self._declaration_log.append((method_name, dict(kwargs)))
-        return self
-
-    # ------------------------------------------------------------------
-    # Chainable configuration methods
-    # ------------------------------------------------------------------
-
     def setup(
         self,
         name: str = "SpatialPopulation",
