@@ -157,8 +157,11 @@ def resolve_genotype_key_ztype_index(
     if isinstance(genotype_key, Genotype):
         gt = genotype_key
     elif isinstance(genotype_key, str):
-        # An optional "@slab" suffix pins the somatic label, mirroring
-        # ZygoteTypePattern.from_slab_key's key syntax.
+        # An optional "@slab" suffix pins the somatic label.  This is the
+        # remaining ad-hoc "@" split: it scans the string itself instead of
+        # the pattern grammar's shared analysis, so an empty suffix means
+        # "default slab" here where the pattern entries reject it
+        # (FRONTEND_REFACTOR_PLAN.md §5.3, initial-state row).
         slab_name: Optional[str] = None
         if "@" in genotype_key:
             base, suffix = genotype_key.rsplit("@", 1)

@@ -54,16 +54,17 @@ Pattern strings are parsed in three layers, from outer to inner:
 ### Label Matching (@lab)
 
 A `@` suffix attaches a gamete-label (`glab`) or somatic-label (`slab`)
-constraint to the pattern. The label is parsed and stored with the pattern, but
-a bare `GenotypePattern` / `HaploidGenomePattern`'s `matches()` does **not**
-check it, and the content-only `Species` entries
-(`parse_genotype_pattern`, `enumerate_genotypes_matching_pattern`,
-`parse_haploid_genome_pattern`, `enumerate_haploid_genomes_matching_pattern`)
-reject a labelled pattern outright with a `PatternParseError` rather than
-accepting one and ignoring it, and so does
-`GenotypePatternParser.parse_haploid_genome_pattern`. Label filtering takes effect where the pattern
-is compiled through conversion-rule filters, `ZygoteTypePattern`,
-`IndividualSelector`, or `GenotypePatternParser.parse_haplotype_pattern`.
+constraint to a pattern. Content patterns carry no label: a bare
+`GenotypePattern` or `HaploidGenomePattern` matches genetic content only, and
+every entry that returns one rejects a labelled pattern outright with a
+`PatternParseError` rather than accepting one and ignoring it —
+`GenotypePatternParser.parse`, `GenotypePatternParser.parse_haploid_genome_pattern`,
+and the `Species` helpers built on them (`parse_genotype_pattern`,
+`enumerate_genotypes_matching_pattern`, `parse_haploid_genome_pattern`,
+`enumerate_haploid_genomes_matching_pattern`). Label filtering takes effect
+where the pattern is composed with a label-aware type: conversion-rule
+filters, `ZygoteTypePattern`, `IndividualSelector`, or
+`GenotypePatternParser.parse_haplotype_pattern`.
 Label syntax mirrors allele syntax:
 
 | Pattern | Meaning | Example |
@@ -74,11 +75,12 @@ Label syntax mirrors allele syntax:
 | `@!{A,B}` | Exclude labels in set | `*|*@!{wildtype,default}` |
 | `@*` | Any label (same as omitting @) | `A\|a@*` |
 
-GenotypePattern uses `@` for somatic labels; HaploidGenomePattern uses `@` for gamete labels:
+A somatic label is carried by `ZygoteTypePattern` (genotype + slab); a gamete
+label by `GameteTypePattern` (haploid genome + glab):
 
 ```python
-parser.parse("A|a@Cas9_high")                      # somatic label
-parser.parse_haplotype_pattern("A@Cas9_deposited")  # gamete label
+ZygoteTypePattern.parse("A|a@Cas9_high", species)     # somatic label
+parser.parse_haplotype_pattern("A@Cas9_deposited")    # gamete label
 ```
 
 ## GenotypePattern: Diploid Genotype Matching

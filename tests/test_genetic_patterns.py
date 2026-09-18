@@ -563,7 +563,9 @@ class TestLabPatternParsing:
             LabPattern.parse("{}")
 
 
-class TestLabPatternOnGenotype:
+class TestLabPatternOnZygoteType:
+    """The somatic-label suffix belongs to ZygoteTypePattern, not the content."""
+
     @staticmethod
     def _species():
         return nt.Species.from_dict(
@@ -573,44 +575,46 @@ class TestLabPatternOnGenotype:
 
     def test_genotype_with_lab(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        p = parser.parse("A|a@cas9_high")
-        assert p.lab is not None
-        assert p.lab.matches("cas9_high")
-        assert not p.lab.matches("wildtype")
+        zt = nt.ZygoteTypePattern.parse("A|a@cas9_high", sp)
+        assert zt.slab is not None
+        assert zt.slab.matches("cas9_high")
+        assert not zt.slab.matches("wildtype")
 
     def test_genotype_without_lab_is_wildcard(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        p = parser.parse("A|a")
-        assert p.lab is None  # None means "any lab"
+        zt = nt.ZygoteTypePattern.parse("A|a", sp)
+        assert zt.slab is None  # None means "any lab"
 
     def test_genotype_with_negated_lab(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        p = parser.parse("A|a@!cas9_high")
-        assert p.lab is not None
-        assert not p.lab.matches("cas9_high")
-        assert p.lab.matches("cas9_low")
+        zt = nt.ZygoteTypePattern.parse("A|a@!cas9_high", sp)
+        assert zt.slab is not None
+        assert not zt.slab.matches("cas9_high")
+        assert zt.slab.matches("cas9_low")
 
     def test_genotype_with_lab_set(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        p = parser.parse("A|a@{high,low}")
-        assert p.lab.matches("high")
-        assert p.lab.matches("low")
-        assert not p.lab.matches("mid")
+        zt = nt.ZygoteTypePattern.parse("A|a@{high,low}", sp)
+        assert zt.slab.matches("high")
+        assert zt.slab.matches("low")
+        assert not zt.slab.matches("mid")
 
-    def test_cache_distinguishes_lab(self):
+    def test_content_entry_rejects_the_lab(self):
+        """The content pattern carries no label, so the entry refuses one."""
+        sp = self._species()
+        with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
+            nt.GenotypePatternParser(sp).parse("A|a@cas9_high")
+
+    def test_labelled_and_plain_share_one_content_pattern(self):
+        """The cache keys on the label-free spelling, the only form accepted."""
         sp = self._species()
         parser = nt.GenotypePatternParser(sp)
-        p1 = parser.parse("A|a@cas9_high")
-        p2 = parser.parse("A|a")
-        assert p1.lab is not None
-        assert p2.lab is None  # not cached from p1
+        assert parser.parse("A|a") is parser.parse("A|a")
 
 
-class TestLabPatternOnHaplotype:
+class TestLabPatternOnGameteType:
+    """The gamete-label suffix belongs to GameteTypePattern, not the content."""
+
     @staticmethod
     def _species():
         return nt.Species.from_dict(
@@ -622,22 +626,35 @@ class TestLabPatternOnHaplotype:
         sp = self._species()
         parser = nt.GenotypePatternParser(sp)
         hp = parser.parse_haplotype_pattern("A@cas9_deposited")
-        assert hp.lab is not None
-        assert hp.lab.matches("cas9_deposited")
-        assert not hp.lab.matches("default")
+        assert hp.glab is not None
+        assert hp.glab.matches("cas9_deposited")
+        assert not hp.glab.matches("default")
 
     def test_haplotype_without_glab(self):
         sp = self._species()
         parser = nt.GenotypePatternParser(sp)
         hp = parser.parse_haplotype_pattern("A")
-        assert hp.lab is None
+        assert hp.glab is None
 
     def test_haplotype_negated_glab(self):
         sp = self._species()
         parser = nt.GenotypePatternParser(sp)
         hp = parser.parse_haplotype_pattern("A@!default")
-        assert not hp.lab.matches("default")
-        assert hp.lab.matches("cas9_deposited")
+        assert not hp.glab.matches("default")
+        assert hp.glab.matches("cas9_deposited")
+
+    def test_gamete_content_keeps_each_chromosome_separate(self):
+        """A gamete selector is not flattened across chromosome groups."""
+        sp = nt.Species.from_dict(
+            "hlab_multi",
+            {"first": {"one": ["A", "B"]}, "second": {"two": ["X", "Y"]}},
+            gamete_labels=["default", "cas9_deposited"],
+        )
+        gt = nt.GenotypePatternParser(sp).parse_haplotype_pattern("A; X@cas9_deposited")
+        assert gt.glab is not None and gt.glab.matches("cas9_deposited")
+        patterns = gt.genome.haplotype_patterns
+        assert len(patterns) == 2
+        assert patterns[0] is not None and patterns[1] is not None
 
 
 class TestLabNameValidation:
@@ -648,9 +665,8 @@ class TestLabNameValidation:
 
     def test_invalid_names_rejected_in_genotype(self):
         sp = nt.Species.from_dict("vtest", {"c1": {"l1": ["A"]}})
-        parser = nt.GenotypePatternParser(sp)
         with pytest.raises(PatternParseError, match="Invalid lab name"):
-            parser.parse("A|A@bad name")
+            nt.ZygoteTypePattern.parse("A|A@bad name", sp)
 
     def test_invalid_names_rejected_in_haplotype(self):
         sp = nt.Species.from_dict("vtest2", {"c1": {"l1": ["A"]}})

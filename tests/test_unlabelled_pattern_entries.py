@@ -90,16 +90,42 @@ def test_haploid_filter_helper_rejects_a_label_too(species: nt.Species) -> None:
 
 
 @pytest.mark.parametrize("pattern", ["WT|Dr@infected", "WT|Dr@*", "WT|Dr@cas9"])
+def test_content_parser_entry_rejects_a_label(
+    species: nt.Species, pattern: str
+) -> None:
+    """The parser's own genotype entry is content-only too.
+
+    ``GenotypePatternParser.parse`` returns a ``GenotypePattern``, which
+    carries no label (FRONTEND_REFACTOR_PLAN.md §5.2, §5.6).  It is the entry
+    the ``Species`` genotype helpers funnel through, so the rejection lives
+    here rather than being re-checked by each caller.
+    """
+    with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
+        GenotypePatternParser(species).parse(pattern)
+
+
+@pytest.mark.parametrize(
+    "pattern,message", [("WT|Dr@", "Empty @lab suffix"), ("WT|Dr@a@b", "Only one @lab suffix")]
+)
+def test_content_parser_entry_keeps_the_suffix_diagnostics(
+    species: nt.Species, pattern: str, message: str
+) -> None:
+    """A malformed suffix is still reported by the shared ``@`` analysis."""
+    with pytest.raises(PatternParseError, match=message):
+        GenotypePatternParser(species).parse(pattern)
+
+
+@pytest.mark.parametrize("pattern", ["WT|Dr@infected", "WT|Dr@*", "WT|Dr@cas9"])
 def test_enumerate_genotypes_entry_rejects_a_label(
     species: nt.Species, pattern: str
 ) -> None:
     """enumerate_genotypes_matching_pattern is content-only as well.
 
     FRONTEND_REFACTOR_PLAN.md §5.2 requires every pure Genotype input to
-    reject ``@label``.  This entry parses through ``parser.parse`` directly
-    rather than through ``parse_genotype_pattern``, so it needs the same
-    guard of its own.  The error surfaces on iteration: the entry is a
-    generator, exactly like its other pattern errors.
+    reject ``@label``.  This entry parses through ``GenotypePatternParser.parse``,
+    which owns the rejection, so it inherits it; the error surfaces on
+    iteration because the entry is a generator, exactly like its other
+    pattern errors.
     """
     with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
         list(species.enumerate_genotypes_matching_pattern(pattern))

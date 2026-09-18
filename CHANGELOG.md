@@ -28,6 +28,31 @@
   `IndividualSelector`, conversion-rule `filters`,
   `GenotypePatternParser.parse_haplotype_pattern`) keep taking labels, and the
   new `GenotypePatternParser.require_unlabelled_pattern` is their shared guard.
+- `GenotypePatternParser.parse` joins that list: it returns a `GenotypePattern`,
+  which carries no label, so it now rejects `@label` instead of storing a
+  suffix nothing reads. Content patterns no longer keep it at all —
+  `GenotypePattern.lab` and `HaploidGenomePattern.lab` are gone (the latter was
+  always `None`), and with them the `lab=` constructor argument. The label
+  lives where it is matched: `ZygoteTypePattern.slab` and
+  `GameteTypePattern.glab`. One visible consequence: `parse` returns the same
+  cached object for `"A|a"` however a caller previously spelled the label,
+  because the cache keys on the label-free spelling.
+- `GameteTypePattern` pairs the gamete label with a complete
+  `HaploidGenomePattern` through its new `glab` and `genome` attributes,
+  replacing the flattened `HaplotypePath` + `lab` pair.
+  `parse_haplotype_pattern` shares its content parsing with
+  `parse_haploid_genome_pattern` (the new private `_parse_haploid_content`), so
+  a multi-chromosome gamete selector describes each chromosome the way a
+  content-only haploid pattern does; the old form merged every chromosome's
+  loci into one path. `ZygoteTypePattern.from_slab_key` is removed: it had no
+  callers, and `ZygoteTypePattern.parse` covers the form.
+- The `@` analysis has one spelling: `GenotypePatternParser.split_label_suffix`
+  (renamed from the private `_strip_lab`), used by the label-aware entries and
+  the conversion-target splitter. The `Species` genotype helpers no longer run
+  their own copy of the content-only guard — the parser entry owns it — and
+  the private `_parse_haplotype_path` no longer strips an `@label` it finds
+  nested inside a haplotype: a label there is now rejected as an invalid allele
+  pattern instead of being dropped.
 - Conversion filter patterns are analysed once instead of three times: the
   strict validator owns the `@` scan and returns the label matcher, so a
   malformed label reports one message ("invalid filter label") on both the

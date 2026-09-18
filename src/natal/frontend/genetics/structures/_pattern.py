@@ -175,9 +175,7 @@ class SpeciesPatternMixin:
         self = cast(Species, self)
         from natal.frontend.patterns import GenotypePatternParser
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse(
-            GenotypePatternParser.require_unlabelled_pattern(pattern, haploid=False)
-        )
+        pattern_obj = parser.parse(pattern)
         return pattern_obj.to_filter()
 
     def filter_genotypes_by_pattern(
@@ -230,9 +228,7 @@ class SpeciesPatternMixin:
         from natal.frontend.patterns import GenotypePatternParser
 
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse(
-            GenotypePatternParser.require_unlabelled_pattern(pattern, haploid=False)
-        )
+        pattern_obj = parser.parse(pattern)
 
         count = 0
         seen: set[int] = set()
