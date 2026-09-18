@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.1 (2026-09-19)
+
 ### Added
 
 - An internal compilation dependency graph (FRONTEND_REFACTOR_PLAN.md
