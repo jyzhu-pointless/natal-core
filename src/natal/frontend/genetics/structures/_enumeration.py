@@ -363,9 +363,13 @@ class SpeciesEnumerationMixin:
         """
         Iterate all possible diploid genotypes.
 
-        Maternal and paternal sides are ordered by default, so ``(A|B)`` and ``(B|A)``
-        are distinct genotypes. When ``unordered=True``, symmetric pairs are collapsed
-        via ``unordered_genotype()`` — ``A|a`` and ``a|A`` map to the same canonical
+        This generator visits ordered maternal/paternal pairs, so both
+        ``(A|B)`` and ``(B|A)`` are emitted. For a Species constructed with
+        ``unordered=True`` (the default), the ``Genotype`` constructor
+        canonicalizes the pair before caching, so both orderings resolve to
+        the same cached instance and symmetric pairs are yielded twice.
+        Passing ``unordered=True`` here collapses symmetric pairs via
+        ``unordered_genotype()`` — ``A|a`` and ``a|A`` map to the same canonical
         Genotype, halving the heterozygous genotype space.
 
         When ``valid_sex_genotypes`` or ``Chromosome.sex_type`` constraints are

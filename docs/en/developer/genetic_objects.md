@@ -82,17 +82,17 @@ So `A|a` is a round-trippable string: `Species.get_genotype_from_str()` restores
 
 ### Unordered: `A|a` and `a|A` are one object
 
-A diploid genotype records two haploid genomes, maternal and paternal, but many models do not care which parent contributed which. With `Species(unordered=True)` (the default), construction compares allele registration indices locus by locus and puts the smaller one on the maternal side:
+A diploid genotype records two haploid genomes, maternal and paternal, but many models do not care which parent contributed which. With `Species(unordered=True)` (the default), construction compares the allele-index tuples of the two whole homologous haplotypes on each chromosome and puts the lexicographically smaller tuple on the maternal side:
 
 ```text
 get_genotype_from_str("a|A") is get_genotype_from_str("A|a")   # True
 ```
 
-An unordered species therefore has six genotypes; switching to `unordered=False` yields nine, with `A|a` and `a|A` as separate objects. The gap widens with more loci: a species with two loci on one chromosome has 64 ordered genotypes and only 27 unordered ones (each locus collapses independently).
+An unordered species therefore has six genotypes; switching to `unordered=False` yields nine, with `A|a` and `a|A` as separate objects. The gap widens with more loci: a species with three loci of two alleles each on one chromosome has 64 ordered genotypes and 36 unordered ones (eight haplotypes give 8 × 9 / 2 unordered pairs).
 
-Collapsing is **per locus**, not by sorting the string: when the sex-chromosome types differ (X|Y, Z|W), parental order is preserved because "the father contributed Y" carries information.
+Canonicalization swaps **whole homologous chromosomes**, preserving linked phase: `A/B|a/b` and `A/b|a/B` remain different genotypes. Different chromosomes are canonicalized independently, so `A|a;B|b` and `A|a;b|B` are the same genotype. Two biallelic loci on one chromosome yield 10 unordered genotypes; on separate chromosomes they yield 3 × 3 = 9. This identity does not depend on the recombination rate, even at 0.5. Same-type sex chromosomes follow the same rule; different types (X|Y, Z|W) preserve parental order.
 
-One verified but unintuitive behaviour belongs here: identity is canonical, while the **rendered spelling depends on which construction happened first**. Parse `"a|A"` on a species before enumerating, and enumeration returns that same object — but its name is `a|A`, and the runtime catalog reads `a|A@default`. Indices and numbers are unaffected; only the symbol changes.
+The cache key and the stored parental haplotypes use the same canonical pair. Constructing a reversed pair first therefore does not change its rendered spelling or later enumeration.
 
 Names are therefore good for display and parsing, and unsuitable as identity across instances. To decide whether two models describe the same genotype, compare objects or indices, not strings.
 
@@ -147,7 +147,7 @@ Gene names are limited to letters, digits, and underscores; label names use the 
 | Keep an allele that is "currently unused" | It still enters the complete catalog; whether it survives into the runtime model depends on reachability, see [Reachability, index compression, and publication](publication.md) |
 | Delete an allele whose count is currently zero | Deleting changes enumeration, indices, and history names; zero count and unreachable are different things |
 | Represent infection status by a new allele | If infection does not change the genotype, `somatic_labels` is smaller; otherwise explain how genetic rules change per type |
-| Turn on `unordered=False` to track parental origin exactly | The type count doubles (6 → 9 here) and fitness, observation, and history axes all widen |
+| Turn on `unordered=False` to track parental origin exactly | The type count increases (6 → 9 here) and fitness, observation, and history axes all widen |
 | Rename an allele | The name directory and every string-based declaration change; object identity survives but observation and history names do not |
 
 The first two are not indexing details but decisions about which biological states can be represented; the third is model semantics; the last two are implementation and interface concerns. State which class a change belongs to before discussing how to implement it.
@@ -158,7 +158,7 @@ The first two are not indexing details but decisions about which biological stat
 | --- | --- |
 | [structures/_base.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/structures/_base.py) | Parent/child registration and lookup for structures |
 | [structures/_enumeration.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/structures/_enumeration.py) | Haploid and genotype enumeration, ordered versus unordered counts |
-| [structures/_helpers.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/structures/_helpers.py): `canonical_haploid_pair()` | Where per-locus canonicalisation happens |
+| [structures/_helpers.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/structures/_helpers.py): `canonical_haploid_pair()` | Where whole-homolog canonicalization happens |
 | [entities/_base.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/entities/_base.py) | Entity cache and auto-registration |
 | [entities/genotype.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/entities/genotype.py): `to_string()` | Genotype strings and cache keys |
 | [builder/_registry_builder.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/builder/_registry_builder.py): `build_registry()` | Expanding labels into the complete catalog |

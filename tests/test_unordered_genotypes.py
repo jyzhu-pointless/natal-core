@@ -90,12 +90,12 @@ class TestUnorderedGenotypeEnumeration:
         ordered = sp.get_all_genotypes(unordered=False)
         unordered = sp.get_all_genotypes(unordered=True)
         assert len(ordered) == 16
-        # 3×3 = 9 unordered (A/a × B/b), not 10 — per-locus allele-swapping
-        # collapses all 4 phase variants of AaBb into one unordered form.
+        # Each chromosome has three unordered genotypes: 3 × 3 = 9.
+        # Homolog order is canonicalized independently on each chromosome.
         assert len(unordered) == 9
 
-    def test_per_locus_phase_variants_collapse(self):
-        """All 4 phase variants of AaBb map to the same unordered genotype."""
+    def test_linked_phase_variants_remain_distinct(self):
+        """Only whole-homolog reversals share an unordered genotype."""
         sp = nt.Species.from_dict(
             "phase_test",
             {"c1": {"l1": ["A", "a"], "l2": ["B", "b"]}},
@@ -107,11 +107,16 @@ class TestUnorderedGenotypeEnumeration:
         gt2 = sp.unordered_genotype(Ab, aB)  # Ab|aB
         gt3 = sp.unordered_genotype(aB, Ab)  # aB|Ab
         gt4 = sp.unordered_genotype(ab, AB)  # ab|AB
-        # All must produce the same unordered form.
-        assert gt1 is gt2 is gt3 is gt4
-        # Verify the unordered form: maternal has smaller allele index at each locus.
+        assert gt1 is gt4
+        assert gt2 is gt3
+        assert gt1 is not gt2
+        assert len(sp.get_all_genotypes(unordered=True)) == 10
         assert str(gt1.maternal) == "A/B"
         assert str(gt1.paternal) == "a/b"
+        assert str(gt2.maternal) == "A/b"
+        assert str(gt2.paternal) == "a/B"
+        assert gt1.to_string() == "A/B|a/b"
+        assert gt2.to_string() == "A/b|a/B"
 
     def test_unordered_subset_of_ordered(self):
         """Every unordered genotype string appears in the ordered set."""

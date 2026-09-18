@@ -39,8 +39,8 @@ def ensure_type(obj: Any, expected_type: type) -> None:
     Ensures that an object is an instance of a given class, with lazy import.
 
     Args:
-        obj (any): The object to check
-        expected_type (type): The expected class type.
+        obj: The object to check
+        expected_type: The expected class type.
 
     Raises:
         TypeError: If obj is not an instance of the specified class.
@@ -109,7 +109,9 @@ class GeneticStructure(Generic[E]):
             A new or cached structure instance.
 
         Raises:
-            AssertionError: If *name* is not a string or is empty.
+            AssertionError: If *name* is not a string, or the *species* /
+                *parent* type checks fail.
+            ValueError: If *name* is empty or whitespace-only.
         """
         # Extract species and parent from kwargs
         species = kwargs.get('species')
@@ -176,7 +178,8 @@ class GeneticStructure(Generic[E]):
                 from *parent*.
 
         Raises:
-            AssertionError: If *name* is empty or *parent* validation fails.
+            AssertionError: If *name* is not a string or *parent* validation fails.
+            ValueError: If *name* is empty or whitespace-only.
         """
         # Prevent re-initialization of cached instances
         if hasattr(self, "_initialized") and self._initialized:
@@ -314,9 +317,10 @@ class GeneticStructure(Generic[E]):
 
     def clear_all_caches(self) -> None:
         """
-        Clear all caches including:
-        - Global fallback cache (for structures without Species)
-        - All Species-specific caches are cleared via Species.clear_all_caches()
+        Clear the global fallback cache (for structures without Species).
+
+        Species-specific structure caches are NOT cleared here; call
+        ``Species.clear_all_caches()`` separately for those.
 
         This method is primarily for testing and cleanup.
         """
@@ -484,9 +488,12 @@ class GeneticStructure(Generic[E]):
         Factory method to create a GeneticStructure instance and register entities by their identifiers.
 
         Args:
-            name (str): Name of the genetic structure.
-            entity_ids (str | Iterable[str]): Single identifier or iterable of identifiers for entities to register.
+            name: Name of the genetic structure.
+            entity_ids: Single identifier or iterable of identifiers for entities to register.
             **entity_kwargs: Additional keyword arguments to pass to the entity constructor.
+
+        Returns:
+            The new structure instance with the entities registered.
         """
         structure = cls(name)
         entity_type = structure.entity_type

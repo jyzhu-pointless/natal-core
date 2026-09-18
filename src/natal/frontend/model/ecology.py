@@ -32,6 +32,9 @@ def equilibrium_metrics_dispatch(
     n_ages: int,
     declared_distribution: NDArray[np.float64] | None,
     external_expected_eggs: float | None,
+    *,
+    has_sex_chromosomes: bool,
+    discrete_generation: bool,
 ) -> tuple[float, float]:
     """Run the Rust equilibrium kernel.
 
@@ -45,7 +48,8 @@ def equilibrium_metrics_dispatch(
     Args:
         carrying_capacity: Carrying capacity K (age-1 total).
         eggs_per_female: Baseline offspring count per female.
-        sex_ratio: Female proportion.
+        sex_ratio: Female proportion (ignored when sex chromosomes
+            determine offspring sex).
         survival_rates: ``(2, n_ages)`` survival matrix.
         reproduction_rates: Resolved ``(n_ages,)`` participation vector.
         fertility: ``(n_ages,)`` relative female fertility.
@@ -54,6 +58,13 @@ def equilibrium_metrics_dispatch(
         n_ages: Total age classes.
         declared_distribution: ``None`` or empty means derive mode.
         external_expected_eggs: Champer egg override (``None`` = unused).
+        has_sex_chromosomes: Sex-chromosome constraints active; the
+            kernel then follows the genetic split instead of ``sex_ratio``.
+            Required: a caller that forgets it would silently get the
+            pre-fix reference.
+        discrete_generation: Non-overlapping discrete engine; its tick reads
+            no per-age fertility, so the kernel uses an implicit 1.0.
+            Required for the same reason.
 
     Returns:
         ``(expected_competition_strength, expected_survival_rate)`` from
@@ -80,6 +91,8 @@ def equilibrium_metrics_dispatch(
         np.ascontiguousarray(competition_weights, dtype=np.float64),
         int(new_adult_age),
         int(n_ages),
+        bool(has_sex_chromosomes),
+        bool(discrete_generation),
         declared,
         external_expected_eggs,
     )
@@ -124,4 +137,6 @@ def derive_equilibrium_metrics_from_draft(
         int(draft.n_ages),
         draft.equilibrium_individual_distribution,
         draft.external_expected_eggs,
+        has_sex_chromosomes=bool(draft.has_sex_chromosomes),
+        discrete_generation=bool(draft.discrete_generation),
     )

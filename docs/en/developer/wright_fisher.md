@@ -11,7 +11,7 @@ The fused path is selected by `extreme_speed_mode`:
 | 0 | off (the default); the staged path runs |
 | 1 | multinomial: one multinomial draw |
 | 2 | poisson: one Poisson draw per type |
-| 3 | multinomial + poisson combined |
+| 3 | deterministic: the expected counts pass through, with no sampling |
 
 A value outside 0–3 is refused **at declaration**, with the accepted values listed; there is no silent fallback for an unknown mode. Selecting a non-zero value also enables the fused execution path.
 
@@ -21,11 +21,14 @@ A value outside 0–3 is refused **at declaration**, with the accepted values li
 flowchart TD
     A["adult (age 1) counts and fecundity"] --> B["per female type: normalise effective males by the sexual-selection weights"]
     B --> C["accumulate expected offspring along the offspring tensor P"]
-    C --> D["fuse zygote viability, age viability, and base age-0 survival"]
+    C --> D["apply zygote viability: it reduces the pool that enters competition"]
     D --> E["apply the density curve to the offspring total"]
-    E --> F["sample: multinomial / poisson, or pass expectations through when deterministic"]
-    F --> G["the new cohort becomes age 1 directly; age 0 is cleared"]
+    E --> F["only now multiply in age viability and the base age-0 survival rate"]
+    F --> G["sample: multinomial / poisson, or pass expectations through when deterministic"]
+    G --> H["the new cohort becomes age 1 directly; age 0 is cleared"]
 ```
+
+The order around the density curve is deliberate and matches the staged lifecycle: zygote viability reduces the pool that enters competition, while age viability and the base age-0 survival rate act only after the curve. Moving them earlier would change the curve's input and therefore its equilibrium.
 
 Three differences from the staged path stand out:
 

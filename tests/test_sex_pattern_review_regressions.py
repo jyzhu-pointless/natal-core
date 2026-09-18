@@ -22,4 +22,4 @@ def test_exact_sex_group_pattern_matches_its_genotype(
         unordered=False,
     )
     genotype = species.get_genotype_from_str(genotype_text)
-    assert nt.GenotypePatternParser(species).parse(genotype_text).matches(genotype)
+    assert nt.parse_selector(genotype_text, species=species, kind="genotype").matches(genotype)

@@ -82,17 +82,17 @@ Species.get_gene("A") is locus.alleles[0]       → True：物种级名称索引
 
 ### 无序：`A|a` 与 `a|A` 是同一个对象
 
-二倍体基因型记录母方与父方两套单倍体，但很多模型并不关心基因来自哪一方。`Species(unordered=True)`（默认）下，构造时会逐位点比较等位基因的注册序号，把较小的排在母方：
+二倍体基因型记录母方与父方两套单倍体，但很多模型并不关心基因来自哪一方。`Species(unordered=True)`（默认）下，构造时会对每条染色体比较两条完整同源单倍型的等位基因索引元组，把字典序较小的排在母方：
 
 ```text
 get_genotype_from_str("a|A") is get_genotype_from_str("A|a")   # True
 ```
 
-于是无序物种只有六种基因型；把 `unordered=False` 打开会得到九种，其中 `A|a` 与 `a|A` 是两个对象。多位点差异更大：两个位点加一条染色体的物种，有序模式有 64 种、无序模式只有 27 种（每个位点各自合并）。
+于是无序物种只有六种基因型；把 `unordered=False` 打开会得到九种，其中 `A|a` 与 `a|A` 是两个对象。多位点差异更大：一条染色体上三个位点、每个位点两个等位基因的物种，有序模式有 64 种、无序模式有 36 种（八种单倍型构成 8 × 9 / 2 种无序配对）。
 
-合并是**逐位点**的，不是按字符串排序：性别染色体类型不同时（X|Y、Z|W）保留亲本顺序，因为“父方提供 Y”本身携带信息。
+规范化交换的是**整条同源染色体**，保留连锁相位：`A/B|a/b` 与 `A/b|a/B` 是不同基因型。不同染色体分别规范化，因此 `A|a;B|b` 与 `A|a;b|B` 是同一个基因型。同染色体上的两个双等位位点有 10 种无序基因型，分属两条染色体时则有 3 × 3 = 9 种。身份不随重组率变化，重组率为 0.5 时也不例外。同型性染色体遵循同样的规则；异型性染色体（X|Y、Z|W）保留亲本方向。
 
-这里有一个已经核验、但不直观的行为：身份是规范的，**渲染出的拼写却取决于谁先构造**。先在同一个物种上解析 `"a|A"`，之后再枚举，得到的仍是同一个对象，但它的名字是 `a|A`；运行目录里也会写成 `a|A@default`。索引位置和数值都不受影响，改变的只是符号。
+缓存键与实例保存的双亲使用同一对规范单倍型。因此，即使先构造反向配对，显示字符串和后续枚举也不会受首次构造顺序影响。
 
 因此：名称适合展示和解析，不适合作为跨实例的身份凭证。要比较两个模型是否描述同一种基因型，应比较对象或索引，而不是字符串。
 
@@ -147,7 +147,7 @@ GType 0：A@default        GType 1：A@drive            …
 | 保留一个“当前用不到”的等位基因 | 它仍然进入完整目录；是否留在运行模型里由可达性决定，详见[可达性、索引压缩与模型发布](publication.md) |
 | 删除一个当前数量为零的等位基因 | 删除会改变枚举、索引与历史名称；零数量与不可达是两件事 |
 | 用新等位基因表示感染状态 | 若感染不改变基因型，用 `somatic_labels` 更小；否则需要说明遗传规则如何随类型变化 |
-| 打开 `unordered=False` 精确追踪亲本来源 | 类型数量翻倍（本例 6 → 9），fitness、观测与历史的轴一起变宽 |
+| 打开 `unordered=False` 精确追踪亲本来源 | 类型数量增加（本例 6 → 9），fitness、观测与历史的轴一起变宽 |
 | 重命名一个等位基因 | 名称目录与所有依赖字符串的声明同时改变；对象身份不变，但历史与观测的名称会变 |
 
 前两项不是索引细节，而是“哪些生物学状态可以被表示”的决定；第三项是模型语义；第四、五项属于实现与接口层。提出改动时先说明属于哪一类，再讨论实现。
@@ -158,7 +158,7 @@ GType 0：A@default        GType 1：A@drive            …
 | --- | --- |
 | [structures/_base.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/structures/_base.py) | 结构的父子注册与查询 |
 | [structures/_enumeration.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/structures/_enumeration.py) | 单倍体、基因型枚举与有序/无序计数 |
-| [structures/_helpers.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/structures/_helpers.py)：`canonical_haploid_pair()` | 逐位点规范化的位置 |
+| [structures/_helpers.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/structures/_helpers.py)：`canonical_haploid_pair()` | 整条同源染色体规范化的位置 |
 | [entities/_base.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/entities/_base.py) | 实体缓存与自动注册 |
 | [entities/genotype.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/genetics/entities/genotype.py)：`to_string()` | 基因型字符串与缓存键 |
 | [builder/_registry_builder.py](https://github.com/jyzhu-pointless/natal-core/blob/main/src/natal/frontend/builder/_registry_builder.py)：`build_registry()` | 标签叉积展开成完整目录 |

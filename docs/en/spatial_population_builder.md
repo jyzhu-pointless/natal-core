@@ -50,7 +50,7 @@ SpatialPopulation.builder(...)
 
 1. **Delegates to `_template`** — the template `PopulationBuilder` always receives scalar values, maintaining correct internal state
 2. **Detects `BatchSetting`** — intercepts and stores them in `_batch_settings`; template only sees `first_value()`
-3. **Records in `_declaration_log`** — preserves original arguments (including BatchSetting objects) for heterogeneous scenario replay
+3. **Records in `_declaration_log`** — preserves original arguments (including BatchSetting objects) for the group declaration projector
 
 ### Frozen Declaration
 
@@ -60,30 +60,9 @@ Batch functions expand once when inputs are frozen, and finalization reuses cach
 
 ### Delegation Mechanism
 
-Every chained method ultimately passes through `_detect_and_delegate`:
+Domain calls validate their concrete template arguments first. Only a successful call commits its batch settings and declaration record. `presets()` and `hooks()` keep separate positional arguments: a batch preset cannot replace a hook.
 
-```python
-# Example: .competition(carrying_capacity=batch_setting([10000, 5000, 5000, 8000]))
-
-def _detect_and_delegate(self, method_name, kwargs):
-    concrete = {}
-    for key, value in kwargs.items():
-        if isinstance(value, BatchSetting):
-            self._batch_settings[key] = value        # Store the original object
-            first = value.first_value()               # Take the first scalar value
-            if first is not None:
-                concrete[key] = first                 # Template only sees scalar
-        else:
-            concrete[key] = value                     # Normal parameters pass through as-is
-
-    self._declaration_log.append((method_name, dict(kwargs)))  # Record original call
-
-    method = getattr(self._template, method_name)
-    method(**{k: v for k, v in concrete.items() if v is not None})
-    return self
-```
-
-`presets()` and `hooks()` have positional arguments and use `_delegate_positional`, with the same logic.
+Batch values belong to the declaration that supplied them. A later ordinary value overrides an earlier batch setting for that parameter; later batch settings likewise take effect in declaration order. For example, declaring `eggs_per_female=batch_setting([10, 20])` and then `eggs_per_female=30` gives both demes 30 eggs per female. Genetic operations retain their accumulation and priority rules.
 
 ### Parameter Aliasing
 
@@ -98,7 +77,7 @@ User passes age_1_carrying_capacity ─┘
 
 Priority: `age_1_carrying_capacity` > `old_juvenile_carrying_capacity` > `carrying_capacity`.
 
-This unifies key names in `_declaration_log`, ensuring parameter names match the template `PopulationBuilder` method signatures during heterogeneous replay.
+This unifies key names in `_declaration_log`, ensuring parameter names match the template `PopulationBuilder` method signatures the projector interprets.
 
 ## Two Build Paths
 
@@ -107,9 +86,9 @@ This unifies key names in `_declaration_log`, ensuring parameter names match the
 ### Homogeneous Path (no batch_setting)
 
 ```
-_build_homogeneous():
+_build_homogeneous_demes():
     1. template = self._template.build()     # Full pipeline once
-    2. config = template.export_config()      # Export ModelDraft
+    2. config = the template's own draft      # clones share it by reference
     3. demes = [template]
     4. for i in 1..n_demes:
            demes.append(_clone_deme(template, config))
@@ -119,46 +98,43 @@ _build_homogeneous():
 ### Heterogeneous Path (with batch_setting)
 
 ```
-_build_heterogeneous():
+_build_heterogeneous_demes():
     1. expanded = {name: batch.expand(n_demes, topology) for ...}
        # Expand all BatchSettings into per-deme value lists
 
-    2. Compute config signature for each deme by (param_name, param_value) tuples
-       # e.g., deme 0: (("age_1_carrying_capacity", 10000.0),)
+    2. _genetics_batch_names() picks the batch kwargs that alter the
+       genetics section; demes are grouped by that genetics-only signature
+       # e.g., a batched fitness row splits groups; ecology-only
+       # differences (carrying capacity, initial state, ...) do not
 
     3. Group by signature → {sig: [deme_index, ...]}
 
     4. For each group:
-       a. _build_template_for_group(sig_map)
-          # Create a new template PopulationBuilder, replay _declaration_log, replace batch params with group values
-       b. Remaining demes in group = _clone_deme(group_template)
+       a. _projected_group(values[first]) resolves the deme's journal
+          (per-deme batch values substituted) and projects it onto a
+          fresh baseline through the single declaration interpreter —
+          no builder method is re-executed
+       b. _carrier_from_projection restores an unpublished carrier from
+          the projection; group-0 with template-matching genetics
+          inherits the template's compile cache (recipes never re-run)
+       c. carrier._compile_products() → compile_definition produces the
+          group's products
+       d. Remaining demes: ecology-only variants project only their
+          *differing* declarations onto the group config; derived
+          scalars stay frozen at the group's computation
 
     5. Assemble all demes by index, construct SpatialPopulation
 ```
 
-`_build_template_for_group` is the core of replay:
-
-```python
-def _build_template_for_group(self, sig_map):
-    # New single-deme template for this group (same entry as SpatialPopulationBuilder.__init__)
-    template = PopulationBuilder.from_species(self._species, discrete=(self._pop_type != "age_structured"))
-
-    for method_name, kwargs in self._declaration_log:
-        resolved = {}
-        for key, value in kwargs.items():
-            if key in sig_map:
-                resolved[key] = sig_map[key]   # Replace with this group's scalar value
-            elif isinstance(value, BatchSetting):
-                resolved[key] = value.first_value()  # Uncovered batch takes first value
-            else:
-                resolved[key] = value           # Non-batch parameters pass through as-is
-
-        getattr(template, method_name)(**resolved)
-
-    return template.build()
-```
-
-After the first template of a group is fully built, later groups' variant configs share the large arrays of unreplaced fields through `ModelDraft._replace`; parameter discovery, equilibrium recomputation, and the fields that cannot be heterogeneous live in [Heterogeneous Config Sharing](spatial_config_replace.md).
+The projection replaces the old replay core: instead of re-running the
+journaled builder methods on a fresh builder, the journal is interpreted
+by `project_declaration_record` (`builder/_declarations.py`) — the same
+pure `apply_*` functions the chain methods delegate to.  A batched build
+therefore executes zero builder methods (pinned by a spy test), and each
+deme's compiled result equals the equivalent single-population
+declaration.  Parameter projectability, read-side equilibrium
+derivation, and the parameters that cannot be heterogeneous live in
+[Heterogeneous Config Sharing](spatial_config_replace.md).
 
 ## `_clone_deme`: Zero-Compilation-Overhead Cloning
 
@@ -171,7 +147,7 @@ def _clone_deme(template, config, name):
     return template._clone(name=name, config=config)
 ```
 
-In a homogeneous build the template deme (index 0) keeps its own draft, while clones from index 1 on share the single config object returned by `template.export_config()` (large arrays shared by reference).
+In a homogeneous build the template deme (index 0) keeps its own draft, while clones from index 1 on share the template's config object (large arrays shared by reference).
 
 How `_clone` shares and copies state:
 
@@ -201,7 +177,15 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 All three kinds are uniformly expanded into Python lists via `expand(n_demes, topology)` at `build()` time.
 
-Parameters that accept `BatchSetting`: `carrying_capacity`, `age_1_carrying_capacity`, `eggs_per_female`, `sex_ratio`, `low_density_growth_rate`, `juvenile_growth_mode`, `expected_num_new_adult_females`.
+Parameters that accept `BatchSetting` (by method):
+
+- `initial_state`: `individual_count`, `sperm_storage`
+- `survival` (discrete-generation scalars): `female_age0_survival`, `male_age0_survival`; `reproduction` (discrete-generation scalars): `female_adult_mating_rate`, `male_adult_mating_rate`
+- `reproduction`: `eggs_per_female`, `sex_ratio`
+- `competition`: `carrying_capacity` / `age_1_carrying_capacity`, `low_density_growth_rate`, `juvenile_growth_mode`, `expected_num_new_adult_females`, `equilibrium_distribution`
+- `presets`: positional preset arguments
+- `fitness`: `viability`, `fecundity`, `sexual_selection`, `zygote_viability`
+- `migration`: `kernel`, `migration_rate`
 
 ## Construction Cost
 
@@ -219,6 +203,6 @@ This page reports no historical measurements: the former table carried no versio
 
 ## Limitations
 
-1. **`batch_setting` does not support fitness / presets** — fitness and presets modify NumPy arrays inside config (in-place), which are not well-suited for scalar value expression. For heterogeneous fitness, manually modify the corresponding deme's config arrays after build
-2. **spatial kind requires topology** — `batch_setting(lambda topo, i: ...)` requires the topology parameter to have been passed to the builder, otherwise `expand()` will raise an error
+1. **Genetics-affecting batch values form their own compile groups** — `fitness` rows and `presets` accept `batch_setting`, but every distinct value forms its own genetics group compiled once through `compile_definition`; within a group, ecology-only variants share the group's compiled genetic product arrays (see [Heterogeneous Config Sharing](spatial_config_replace.md))
+2. **spatial kind requires topology** — a `batch_setting(lambda row, col: ...)` callable requires the topology parameter to have been passed to the builder, otherwise `expand()` will raise an error; the `(flat_idx)` form does not depend on topology (the form is auto-detected by parameter count)
 3. **Homogeneous demes share the same `_config` reference** — this is build-time deduplication, not writable runtime sharing. Writing array fields of `pop.demes[0]._config` directly bypasses session sync and affects every deme sharing that config; modify a single running deme with `deme(i).write_ecology(...)` / `write_genetics(...)`, or many demes with `pop.params.tensor_write(...)`

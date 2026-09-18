@@ -153,6 +153,7 @@ class ComplexDrive(GeneticPreset):
 
 ### 参数验证错误
 - 验证转换率是否在 [0, 1] 范围内
+- `fitness_patch` 中不支持的顶层键会抛 `ValueError`，消息给出该键并列出支持的键；模型保持不变，因此 `viability_allele`（正确写法是 `viability_per_allele`）这类拼写错误会直接报错而不是被忽略
 
 ### 物种绑定错误
 - 确保预设和种群使用相同的物种
@@ -191,9 +192,9 @@ class DebugPreset(GeneticPreset):
 
 ## 小结
 
-🎉 恭喜！你已经完成了"设计自己的 Preset"的完整主线：
+恭喜！你已经完成了"设计自己的 Preset"的完整主线：
 
-1. 规则定义（Gamete 与 Zygote 转换
+1. 规则定义（Gamete 与 Zygote 转换）
 2. 规则生效范围精细化（filters）
 3. Preset 工程化、验证与发布
 

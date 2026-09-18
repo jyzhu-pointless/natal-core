@@ -242,7 +242,7 @@ class GenotypePatternParser:
         """Split a target declaration without resolving species names.
 
         This is the declaration-time counterpart of
-        :meth:`parse_conversion_target`; it intentionally shares the same
+        :meth:`_parse_conversion_target`; it intentionally shares the same
         ``@`` handling and validation instead of maintaining a modifier-local
         string splitter.
         """
@@ -255,7 +255,7 @@ class GenotypePatternParser:
                 "'[genotype or *]@[label or *]'"
             )
         try:
-            base, label = GenotypePatternParser._strip_lab(original)
+            base, label = GenotypePatternParser.split_label_suffix(original)
         except PatternParseError as exc:
             raise PatternParseError(
                 f"{stage} target {target!r} must provide both parts explicit"
@@ -267,12 +267,62 @@ class GenotypePatternParser:
         return base.strip(), original.rsplit("@", 1)[1].strip()
 
     @staticmethod
-    def _strip_lab(pattern_str: str) -> tuple[str, Optional[LabPattern]]:
-        """Extract an ``@lab`` suffix from a pattern string.
+    def _require_unlabelled_pattern(pattern_str: str, *, haploid: bool) -> str:
+        """Return *pattern_str* without a label suffix, rejecting a labelled one.
 
-        Returns ``(base, lab_pattern)`` where *lab_pattern* is ``None``
-        (wildcard — matches any label) if no ``@`` suffix was present.
-        The suffix supports ``!`` negation and ``{...}`` set syntax.
+        Entries that match genetic content only — a genotype or a
+        haploid-genome pattern — have nothing to match an ``@label`` against,
+        so they must reject one instead of parsing it and then ignoring it
+        (FRONTEND_REFACTOR_PLAN.md §5.2).  The grammar's own ``@`` analysis
+        runs here, so callers never need a second scan of their own.
+
+        Args:
+            pattern_str: Pattern possibly carrying one ``@lab`` suffix.
+            haploid: Whether the entry matches a haploid genome.  Only picks
+                which label-aware alternative the error message names.
+
+        Returns:
+            The pattern with the (absent) suffix stripped.
+
+        Raises:
+            PatternParseError: If the pattern carries a label, or if the
+                suffix is malformed (more than one ``@``, or empty).
+        """
+        base, lab = GenotypePatternParser.split_label_suffix(pattern_str)
+        if lab is None:
+            return base
+        alternatives = (
+            "parse_selector(kind='gtype') for a gamete label"
+            if haploid
+            else "parse_selector(kind='ztype') or IndividualSelector(ztype=...) "
+            "for a somatic label"
+        )
+        kind = "haploid-genome" if haploid else "genotype"
+        raise PatternParseError(
+            f"A {kind} pattern does not take an '@label' suffix, got "
+            f"{pattern_str!r}. Use {alternatives}."
+        )
+
+    @staticmethod
+    def split_label_suffix(pattern_str: str) -> tuple[str, Optional[LabPattern]]:
+        """Split an optional ``@lab`` suffix off a pattern string.
+
+        The grammar's single ``@`` analysis.  Entries that match genetic
+        content reject a label instead of calling this; the label-aware
+        entries call it and compose the returned parts with their own type
+        (``ZygoteTypePattern``, ``GameteTypePattern``, conversion targets).
+
+        Args:
+            pattern_str: Pattern possibly carrying one ``@lab`` suffix.
+
+        Returns:
+            ``(base, lab_pattern)`` where *lab_pattern* is ``None`` when no
+            ``@`` suffix was present.  The suffix supports ``!`` negation and
+            ``{...}`` set syntax.
+
+        Raises:
+            PatternParseError: If there is more than one ``@``, the suffix is
+                empty, or the suffix is not a valid label pattern.
         """
         if pattern_str.count("@") > 1:
             raise PatternParseError("Only one @lab suffix is allowed")
@@ -285,8 +335,8 @@ class GenotypePatternParser:
             return base, LabPattern.parse(suffix)
         return pattern_str, None
 
-    def parse(self, pattern_str: str) -> GenotypePattern:
-        """Parse a pattern string into a GenotypePattern.
+    def _parse(self, pattern_str: str) -> GenotypePattern:
+        """Parse a pattern string into a content-only GenotypePattern.
 
         Supported syntax includes:
             - ``;`` separates chromosomes (outside parentheses)
@@ -297,31 +347,33 @@ class GenotypePatternParser:
             - ``!A`` matches any allele except A
             - ``::`` matches unordered pair (A::B matches A|B or B|A)
             - ``()`` groups loci within a chromosome
-            - ``@lab`` suffix selects a somatic label (ZType constraint),
-              e.g. ``A|a@cas9_high``
             - Omitted chromosomes default to wildcard matching (optional)
 
         Args:
             pattern_str: The pattern string to parse.
 
         Returns:
-            A GenotypePattern object.
+            A GenotypePattern object.  A ``Genotype`` has no label, so the
+            returned pattern carries none.
 
         Raises:
-            PatternParseError: If the pattern is invalid.
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  Use ``parse_selector(kind='ztype')`` or
+                ``IndividualSelector(ztype=...)`` to select by somatic label.
         """
-        original = pattern_str.strip()
-        pattern_str, lab = self._strip_lab(original)
+        original = GenotypePatternParser._require_unlabelled_pattern(
+            pattern_str.strip(), haploid=False
+        )
 
-        # Check cache — use the original string (before @lab stripping) as
-        # the cache key so that "A|a" and "A|a@cas9_high" are distinct.
+        # The label-free spelling is the only form this entry accepts, so it
+        # is also the cache key.
         cache_key = (id(self.species), original)
         if cache_key in self._pattern_cache:
             return self._pattern_cache[cache_key]
 
         try:
             # Split by semicolon, respecting parentheses
-            chr_pattern_strs = self._split_by_semicolon_respecting_parens(pattern_str)
+            chr_pattern_strs = self._split_by_semicolon_respecting_parens(original)
 
             chromosome_patterns: List[Union[ChromosomePairPattern, Literal["WILDCARD_CHROMOSOME"]]] = []
             for chr_str in chr_pattern_strs:
@@ -338,16 +390,16 @@ class GenotypePatternParser:
             ]
             final_patterns.extend([None] * (n_groups - len(final_patterns)))
 
-            result = GenotypePattern(final_patterns, lab=lab)
+            result = GenotypePattern(final_patterns)
             self._pattern_cache[cache_key] = result
             return result
 
         except PatternParseError:
             raise
         except Exception as e:
-            raise PatternParseError(f"Failed to parse pattern '{pattern_str}'") from e
+            raise PatternParseError(f"Failed to parse pattern '{original}'") from e
 
-    def parse_conversion_target(
+    def _parse_conversion_target(
         self, target: object, *, stage: str = "conversion", haploid: bool = False,
         require_label: bool = False,
     ) -> ConversionTarget:
@@ -375,42 +427,16 @@ class GenotypePatternParser:
         if not isinstance(target, str):
             raise TypeError(f"{stage} target must be a string, got {type(target).__name__}")
         original = target.strip()
-        genotype_text, label = self._strip_lab(original)
+        genotype_text, label = self.split_label_suffix(original)
         if not genotype_text.strip():
             raise PatternParseError(f"{stage} target {target!r} has an empty genotype part")
         if label is None and require_label:
             raise PatternParseError(
                 f"{stage} target {target!r} must be '[genotype or *]@[label or *]'"
             )
-        genotype = self.parse_haploid_genome_pattern(genotype_text) if haploid else self.parse(genotype_text)
+        genotype = self._parse_haploid(genotype_text) if haploid else self._parse(genotype_text)
         label_text = original.rsplit("@", 1)[1].strip() if label is not None else "*"
         return ConversionTarget(genotype_text.strip(), label_text, genotype, label or LabPattern())
-
-    def compile_conversion_target(
-        self, target: object, *, stage: str = "conversion", haploid: bool = False,
-        require_label: bool = False,
-    ) -> ConversionTarget:
-        """Parse and validate target forms before inspecting any source branches.
-
-        Args:
-            target: Unvalidated target pattern from the declaration boundary.
-            stage: Context included in errors.
-            haploid: Whether the target describes a gamete.
-            require_label: Require the legacy explicit label suffix.
-
-        Returns:
-            A target with only unambiguous keep-or-replace forms.
-
-        Raises:
-            TypeError: If target is not a string.
-            PatternParseError: If the expression is malformed.
-            ValueError: If the target uses a forbidden selection form.
-        """
-        parsed = self.parse_conversion_target(
-            target, stage=stage, haploid=haploid, require_label=require_label
-        )
-        parsed.validate(self.species)
-        return parsed
 
     def _split_by_semicolon_respecting_parens(self, s: str) -> List[str]:
         """Split by semicolon, but ignore semicolons inside parentheses.
@@ -584,17 +610,19 @@ class GenotypePatternParser:
         )
 
     def _parse_haplotype_path(self, haplotype_str: str) -> HaplotypePath:
-        """Parse a haplotype pattern string into HaplotypePath.
+        """Parse one chromosome's haplotype pattern string into HaplotypePath.
+
+        Only label-free content reaches this helper: every entry resolves the
+        ``@lab`` suffix before it splits chromosomes, so a label never arrives
+        here to be stripped or dropped.
 
         Args:
-            haplotype_str: Pattern string like ``"A1/B1"`` or ``"A1/*"`` or
-                ``"A1/B1@cas9_deposited"`` for gamete-label filtering.
+            haplotype_str: Label-free pattern string like ``"A1/B1"`` or
+                ``"A1/*"``.
 
         Returns:
             HaplotypePath object.
         """
-        haplotype_str, _ = self._strip_lab(haplotype_str)  # lab stripped; stored on parent pattern
-
         # A "/" separates individual loci; without one the whole string is
         # a single locus-level pattern.
         if "/" in haplotype_str:
@@ -633,40 +661,31 @@ class GenotypePatternParser:
 
         return HaplotypePath(locus_patterns)
 
-    def parse_haplotype_pattern(self, pattern_str: str) -> GameteTypePattern:
-        """Parse a complete haplotype pattern.
+    def _parse_gamete(self, pattern_str: str) -> GameteTypePattern:
+        """Parse a gamete type pattern: genetic content plus gamete label.
+
+        The ``@glab`` suffix is split off by the grammar's shared ``@``
+        analysis, and the content is parsed by the same helper as
+        :meth:`_parse_haploid`, so a gamete selector and a
+        content-only haploid pattern describe every chromosome the same way.
 
         Args:
-            pattern_str: Pattern string for a single haplotype
-                (e.g. ``"A1/B1; C1"`` or ``"A1/B1@cas9_deposited"``).
+            pattern_str: Pattern string for a single gamete
+                (e.g. ``"A1/B1; C1"`` or ``"A1/B1; C1@cas9_deposited"``).
 
         Returns:
-            GameteTypePattern with haplotype path and optional lab constraint.
+            GameteTypePattern combining the complete haploid genome pattern
+            with the optional gamete-label constraint.
 
         Raises:
             PatternParseError: If the pattern is invalid.
         """
-        pattern_str, lab = self._strip_lab(pattern_str.strip())
+        content, glab = GenotypePatternParser.split_label_suffix(pattern_str.strip())
+        return GameteTypePattern(
+            self._parse_haploid_content(content), glab, source_text=content.strip()
+        )
 
-        try:
-            # Split by semicolon to get loci from all chromosomes
-            chr_strs = [s.strip() for s in pattern_str.split(";") if s.strip()]
-
-            all_locus_patterns: List[PatternElement] = []
-            for chr_str in chr_strs:
-                subbandloci = chr_str.split("/")
-                for locus_str in subbandloci:
-                    pattern_elem = self._parse_allele_element(locus_str.strip())
-                    all_locus_patterns.append(pattern_elem)
-
-            return GameteTypePattern(HaplotypePath(all_locus_patterns), lab)
-
-        except PatternParseError:
-            raise
-        except Exception as e:
-            raise PatternParseError(f"Failed to parse haplotype pattern '{pattern_str}'") from e
-
-    def parse_haploid_genome_pattern(self, pattern_str: str) -> HaploidGenomePattern:
+    def _parse_haploid(self, pattern_str: str) -> HaploidGenomePattern:
         """Parse a haploid genome pattern (single DNA strand of individual).
 
         For haploid genomes:
@@ -679,13 +698,37 @@ class GenotypePatternParser:
             pattern_str: Pattern string (e.g., "A1/B1; C1" or "(A1; B1); C1")
 
         Returns:
-            HaploidGenomePattern object.
+            HaploidGenomePattern object.  A ``HaploidGenome`` has no label, so
+            the returned pattern carries none.
+
+        Raises:
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  The suffix has nothing to match against
+                here; use :meth:`_parse_gamete` (a
+                ``GameteTypePattern``) or a conversion rule's ``filters`` to
+                select by gamete label.
+        """
+        content = GenotypePatternParser._require_unlabelled_pattern(
+            pattern_str.strip(), haploid=True
+        )
+        return self._parse_haploid_content(content)
+
+    def _parse_haploid_content(self, pattern_str: str) -> HaploidGenomePattern:
+        """Parse the label-free content of a haploid genome pattern.
+
+        Shared by :meth:`_parse_haploid` and
+        :meth:`_parse_gamete`, which differ only in whether a gamete
+        label accompanies the content.
+
+        Args:
+            pattern_str: Label-free pattern string, e.g. ``"A1/B1; C1"``.
+
+        Returns:
+            HaploidGenomePattern with one entry per chromosome group.
 
         Raises:
             PatternParseError: If the pattern is invalid.
         """
-        pattern_str = pattern_str.strip()
-
         try:
             # Split by semicolon, respecting parentheses
             chr_strs = self._split_by_semicolon_respecting_parens(pattern_str)

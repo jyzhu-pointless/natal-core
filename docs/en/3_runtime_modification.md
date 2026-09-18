@@ -252,7 +252,7 @@ Draft-level `set_param(draft, name, value)` performs only the draft update: it d
 not sync the session and never writes to a running population.
 
 Ecology scalars (K, eggs, sex_ratio, sperm_displacement_rate, low_density_growth_rate,
-juvenile_growth_mode, generation_time) are plain scalars in the runtime contract;
+juvenile_growth_mode) are plain scalars in the runtime contract;
 equilibrium metrics (expected_competition_strength, expected_survival_rate) are
 read-only derived values read through `pop.params.<name>`; assigning to them raises
 `AttributeError`.

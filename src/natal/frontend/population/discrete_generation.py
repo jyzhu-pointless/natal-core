@@ -142,8 +142,7 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
                 ``ModelDraft`` in the discrete normalization.  A draft
                 violating the invariants is rejected with ``ValueError``;
                 build a discrete draft via ``PopulationBuilder.for_discrete()``
-                via ``PopulationBuilder.for_discrete()`` or
-                ``build_discrete_engine_config()``.
+                or ``build_discrete_engine_config()``.
             name: Human-readable population name.  Defaults to
                 ``"DiscreteGenerationPop"``.
             index_registry: Optional shared registry for index compression.
@@ -244,6 +243,30 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
         Returns the unified ``PopulationBuilder`` wrapping a
         discrete-normalized draft.  Chain domain methods and end with
         ``.build()`` to create a Population.
+
+        Args:
+            species: Genetic architecture for the population.
+            name: Population name (default: ``"DiscreteGenerationPop"``).
+            stochastic: If ``False``, use deterministic (median) outcomes.
+            continuous_sampling: If ``True``, sample from continuous
+                distributions instead of discrete counts.
+            fixed_egg_count: If ``True``, disable Poisson noise on egg counts.
+            compress: If ``True``, enable full index compression at build time.
+            declared_zygote_types: Optional sequence of genotype selectors
+                (``"WT|WT"`` strings or integer indices) protected from
+                compression pruning.
+            declared_genotypes: Deprecated alias for
+                *declared_zygote_types*; still works.
+            extreme_speed_mode: Optional speed/precision kernel selection
+                (0 off, 1 multinomial, 2 poisson, 3 both).
+
+        Returns:
+            A ``PopulationBuilder`` wrapping a discrete-normalized draft,
+            ready for chaining.
+
+        Raises:
+            ValueError: If both *declared_zygote_types* and the deprecated
+                *declared_genotypes* alias are given.
         """
         from natal.frontend.builder import PopulationBuilder
 
@@ -511,9 +534,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
             Self for chaining.
 
         Raises:
-            RuntimeError: If the population has already finished or the
-                native engine extension is unavailable (the session is
-                created by ``build()`` or lazily at the first run).
+            RuntimeError: If a run is already in progress (nested run is
+                forbidden), if the population has failed, if the
+                population has already finished, or if the native engine
+                extension is unavailable (the session is created by
+                ``build()`` or lazily at the first run).
         """
         self._require_standalone_owner("run")
         # Guards, in order: re-entrancy, then failed, then finished — each
@@ -555,6 +580,11 @@ class DiscreteGenerationPopulation(BasePopulation[DiscretePopulationState]):
 
         Returns:
             Self for chaining.
+
+        Raises:
+            RuntimeError: If a run is already in progress (nested run is
+                forbidden), if the population has failed, or if the
+                population has already finished.
         """
         return self.run(n_steps=1, record_every=self.record_every)
 

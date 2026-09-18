@@ -88,7 +88,7 @@ def test_carrier_requirements_are_per_locus_not_same_haplotype(required, genotyp
     species = nt.Species.from_dict(
         name="followup_carrier_phase", structure={"chr": {"l1": ["A", "a"], "l2": ["B", "b"]}}, unordered=False,
     )
-    pattern = ZygoteTypePattern.parse(carrier_pattern(species, *required), species)
+    pattern = nt.parse_selector(carrier_pattern(species, *required), species=species)
     assert pattern.matches(species.get_genotype_from_str(genotype), "default") is expected
 
 
@@ -101,7 +101,7 @@ def test_mixed_locus_ordering_does_not_swap_ordered_locus(genotype, expected):
     species = nt.Species.from_dict(
         name="followup_mixed_ordering", structure={"chr": {"l1": ["A", "a"], "l2": ["B", "b"]}}, unordered=False,
     )
-    pattern = ZygoteTypePattern.parse("(A::a; B|b)", species)
+    pattern = nt.parse_selector("(A::a; B|b)", species=species)
     assert pattern.matches(species.get_genotype_from_str(genotype), "default") is expected
 
 
@@ -173,7 +173,7 @@ def test_x_linked_carrier_with_different_y_locus_count():
         },
         unordered=False,
     )
-    pattern = ZygoteTypePattern.parse(carrier_pattern(species, "D"), species)
+    pattern = nt.parse_selector(carrier_pattern(species, "D"), species=species)
     assert pattern.matches(species.get_genotype_from_str("D/E|Y"), "default")
     assert not pattern.matches(species.get_genotype_from_str("W/E|Y"), "default")
 
@@ -206,7 +206,7 @@ def test_heteromorphic_carrier_uses_locus_identity(system, reverse, required, pr
     if reverse:
         genomes.reverse()
     genotype = species.get_genotype_from_str("|".join(genomes))
-    pattern = ZygoteTypePattern.parse(carrier_pattern(species, *required), species)
+    pattern = nt.parse_selector(carrier_pattern(species, *required), species=species)
     assert pattern.matches(genotype, "default") is expected
 
 
@@ -224,5 +224,5 @@ def test_carrier_can_require_genes_on_both_sex_chromosomes(system, heteromorphic
         unordered=False,
     )
     genotype = species.get_genotype_from_str("D|V" if heteromorphic else "D|D")
-    pattern = ZygoteTypePattern.parse(carrier_pattern(species, "D", "V"), species)
+    pattern = nt.parse_selector(carrier_pattern(species, "D", "V"), species=species)
     assert pattern.matches(genotype, "default") is heteromorphic

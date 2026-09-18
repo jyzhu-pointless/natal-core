@@ -50,12 +50,11 @@ pub(crate) fn validate_scalar_value(name: &str, value: f64) -> PyResult<()> {
     Ok(())
 }
 
-/// Validate the cross-field domain of a density-regulation curve.
-pub(crate) fn validate_growth_contract(mode: i64, r: f64) -> PyResult<()> {
-    if (2..=4).contains(&mode) && (!r.is_finite() || r < 1.0) {
+/// Validate the intrinsic growth rate independently of the regulation mode.
+pub(crate) fn validate_growth_contract(r: f64) -> PyResult<()> {
+    if !r.is_finite() || r < 1.0 {
         return Err(PyValueError::new_err(
-            "low_density_growth_rate must be finite and at least 1.0 for the ".to_owned()
-                + "linear/logistic, beverton_holt, and ricker growth modes",
+            "low_density_growth_rate must be finite and at least 1.0",
         ));
     }
     Ok(())

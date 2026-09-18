@@ -381,9 +381,10 @@ def plan_write(target: ModelDraft, entry: ParamDescriptor, value: object) -> Res
         A :class:`ResolvedWrite` ready for :func:`commit_write`.
 
     Raises:
-        KeyError: If the entry is a spatial-only parameter.
+        ValueError: If the entry is a spatial-only parameter (it has no
+            config field to write on a non-spatial draft), or the value
+            fails bounds/shape validation.
         TypeError: If the value's type does not fit the entry's kind.
-        ValueError: If the value fails bounds/shape validation.
     """
     if entry.config_field is None:
         raise ValueError(

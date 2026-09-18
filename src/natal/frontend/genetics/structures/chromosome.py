@@ -594,7 +594,7 @@ class Chromosome(GeneticStructure['Haplotype']):
         """
         return self.recombination_map.name_to_index(name)
 
-    def set_recombination(self, locus_a: Union[Locus, str], locus_b: Union[Locus, str], rate: float):
+    def set_recombination(self, locus_a: Union[Locus, str], locus_b: Union[Locus, str], rate: float) -> None:
         """
         Set the recombination rate between two adjacent loci.
 
@@ -611,7 +611,7 @@ class Chromosome(GeneticStructure['Haplotype']):
             raise ValueError("Cannot set recombination rate with fewer than 2 loci.")
         self.recombination_map[locus_a, locus_b] = rate
 
-    def set_recombination_bulk(self, settings: Dict[Tuple[Union[Locus, str], Union[Locus, str]], float]):
+    def set_recombination_bulk(self, settings: Dict[Tuple[Union[Locus, str], Union[Locus, str]], float]) -> None:
         """
         Bulk set recombination rates between adjacent loci.
 
@@ -621,7 +621,7 @@ class Chromosome(GeneticStructure['Haplotype']):
         for (a, b), rate in settings.items():
             self.set_recombination(a, b, rate)
 
-    def set_recombination_all(self, value: float):
+    def set_recombination_all(self, value: float) -> None:
         """
         Set all recombination rates to the same value.
 
@@ -632,15 +632,15 @@ class Chromosome(GeneticStructure['Haplotype']):
             self._recombination_map[:] = value
 
     # Backward compatibility alias
-    def set_recombination_default(self, value: float):
+    def set_recombination_default(self, value: float) -> None:
         """Deprecated: Use set_recombination_all instead."""
         self.set_recombination_all(value)
 
-    def set_recombination_rate(self, locus_a: Union[Locus, str], locus_b: Union[Locus, str], rate: float):
+    def set_recombination_rate(self, locus_a: Union[Locus, str], locus_b: Union[Locus, str], rate: float) -> None:
         """Set recombination rate between two adjacent loci.
 
-        Deprecated:
-            Use :meth:`set_recombination` instead.
+        Note:
+            Deprecated: use :meth:`set_recombination` instead.
 
         Args:
             locus_a: First locus (name or Locus object).
@@ -649,11 +649,11 @@ class Chromosome(GeneticStructure['Haplotype']):
         """
         self.set_recombination(locus_a, locus_b, rate)
 
-    def set_recombination_rates(self, settings: Dict[Tuple[Union[Locus, str], Union[Locus, str]], float]):
+    def set_recombination_rates(self, settings: Dict[Tuple[Union[Locus, str], Union[Locus, str]], float]) -> None:
         """Bulk-set recombination rates for multiple locus pairs.
 
-        Deprecated:
-            Use :meth:`set_recombination_bulk` instead.
+        Note:
+            Deprecated: use :meth:`set_recombination_bulk` instead.
 
         Args:
             settings: Dict mapping ``(locus_a, locus_b)`` to rate.

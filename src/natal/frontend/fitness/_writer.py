@@ -15,6 +15,8 @@ from natal.frontend.genetics import Species
 from natal.frontend.model import ModelDraft
 from natal.frontend.registry.index import IndexRegistry
 
+from ._selector_resolution import resolve_selector_ztypes
+
 if TYPE_CHECKING:
     from natal.frontend.genetics import Genotype
 
@@ -87,12 +89,21 @@ def write_fitness_field(
 
     Supported formats::
 
-        {genotype: val}                                        # scalar → both sexes, all ages
+        {genotype: val}                                        # scalar → both sexes, no age key
         {genotype: {"female": val, "male": val}}               # per-selector sex-keyed
         {genotype: {0: val, 1: val}}                           # per-selector age-keyed
         {genotype: {"female": {0: val}}}                       # per-selector sex+age keyed
         {"female": {genotype: val}, "male": {...}}             # top-level sex-keyed
         {female_g: {male_g: val}}                              # sexual_selection pair format
+
+    Note:
+        The scalar form applies to both sexes and carries no age key.  For
+        ``viability`` — the only field with an age axis — the missing age
+        key targets the last juvenile age, ``new_adult_age - 1``; an
+        explicit age keyed entry writes exactly that age.  The age-less
+        fields (``fecundity``, ``sexual_selection``, ``zygote_viability``)
+        have no age axis, so the absent age key carries no such meaning
+        there.
     """
     # ══════════════════════════════════════════════════════════════════════
     # BRANCH 1: top-level sex-keyed
@@ -140,27 +151,23 @@ def write_fitness_field(
                         "must be dicts mapping male selectors to values."
                     )
                 for male_selector, value in male_map.items():         # inner: male genotype key → float
-                    # ---- resolve both selectors to genotype indices ----
-                    matched_f = species.resolve_genotype_selectors(
-                        selector=female_selector,
-                        all_genotypes=all_genotypes,
-                        context="sexual_selection (female)",
+                    # ---- resolve both selectors to ZType indices ----
+                    f_z_indices = resolve_selector_ztypes(
+                        species, registry, female_selector, all_genotypes,
+                        "sexual_selection (female)",
                     )
-                    matched_m = species.resolve_genotype_selectors(
-                        selector=male_selector,
-                        all_genotypes=all_genotypes,
-                        context="sexual_selection (male)",
+                    m_z_indices = resolve_selector_ztypes(
+                        species, registry, male_selector, all_genotypes,
+                        "sexual_selection (male)",
                     )
                     # ---- write every female×male combination ----
-                    for f_geno in matched_f:
-                        for f_z in registry.ztype_indices_for(f_geno):
-                            for m_geno in matched_m:
-                                for m_z in registry.ztype_indices_for(m_geno):
-                                    val = float(value)
-                                    if mode == "replace":
-                                        arr[f_z, m_z] = val
-                                    else:
-                                        arr[f_z, m_z] *= val
+                    for f_z in f_z_indices:
+                        for m_z in m_z_indices:
+                            val = float(value)
+                            if mode == "replace":
+                                arr[f_z, m_z] = val
+                            else:
+                                arr[f_z, m_z] *= val
             return
 
         # ═══════════════════════════════════════════════════════════════
@@ -178,19 +185,17 @@ def write_fitness_field(
                     "When using nested female→male pairs, all values "
                     "must be dicts."
                 )
-            # ---- resolve the male genotype to an index ----
-            matched_m = species.resolve_genotype_selectors(
-                selector=male_selector,
-                all_genotypes=all_genotypes,
-                context="sexual_selection (male)",
+            # ---- resolve the male selector to ZType indices ----
+            m_z_indices = resolve_selector_ztypes(
+                species, registry, male_selector, all_genotypes,
+                "sexual_selection (male)",
             )
-            for m_geno in matched_m:
-                for m_z in registry.ztype_indices_for(m_geno):
-                    val = float(value)
-                    if mode == "replace":
-                        arr[:, m_z] = val        # broadcast: all females × this male
-                    else:
-                        arr[:, m_z] *= val
+            for m_z in m_z_indices:
+                val = float(value)
+                if mode == "replace":
+                    arr[:, m_z] = val        # broadcast: all females × this male
+                else:
+                    arr[:, m_z] *= val
         return
 
     # ══════════════════════════════════════════════════════════════════════
@@ -202,7 +207,8 @@ def write_fitness_field(
     #
     # Detection: everything not caught by branches 1-3.
     # Each selector value may be:
-    #   - scalar → apply to both sexes, all ages
+    #   - scalar → apply to both sexes; viability writes the default age
+    #     (``new_adult_age - 1``), age-less fields ignore the age axis
     #   - Mapping → inspect the first key to decide the format
     # ══════════════════════════════════════════════════════════════════════
     for selector, value in patch.items():
@@ -254,7 +260,8 @@ def write_fitness_field(
                     f"Expected 'female'/'male' (sex-keyed) or int (age-keyed)."
                 )
         else:
-            # ---- scalar format: {genotype: val} → apply to both sexes, all ages ----
+            # ---- scalar format: {genotype: val} → both sexes; viability writes
+            # ---- the default age (``new_adult_age - 1``), age-less fields ignore it
             for sex_idx in (0, 1):
                 _write_fitness_field_flat(
                     config, field_name,
@@ -371,32 +378,27 @@ def _write_fitness_field_flat(
             continue
         # ── end tuple branch ──
 
-        from natal.frontend.patterns import LabPattern, ZygoteTypePattern
+        from natal.frontend.patterns.entries import parse_selector
 
         selector_str = str(selector)
-        pattern = ZygoteTypePattern.parse(selector_str, species)
+        # parse_selector owns the unordered | → :: promotion, so the same
+        # spelling matches exactly what IndividualSelector, the conversion
+        # filters and the rules match (FRONTEND_REFACTOR_PLAN.md §5.6).
+        pattern = parse_selector(
+            selector_str, species=species, kind="ztype",
+            context=f"fitness.{field_name}",
+        )
         z_indices = registry.resolve_ztype_indices(pattern)
 
-        # For | patterns (not ::), also try :: for unordered matching.
-        # Ordered | may only partially match (e.g. *|A → AA but not Aa).
-        # Only promote for unordered species (consistent with
-        # genetic_structures.Species._resolve_single_genotype_selector).
-        if species.unordered and "|" in selector_str and "::" not in selector_str:
-            try:
-                unordered_str = selector_str.replace("|", "::", 1)
-                unordered_pattern = ZygoteTypePattern.parse(unordered_str, species)
-                unordered_indices = registry.resolve_ztype_indices(unordered_pattern)
-                if len(unordered_indices) >= len(z_indices):
-                    z_indices = unordered_indices
-            except Exception:
-                pass
-
         if not z_indices:
-            # Check for invalid slab first — give a specific error
-            if "@" in selector_str:
+            # Check for invalid slab first — give a specific error.  A slab
+            # constraint means a suffix was written, and the selector entry
+            # already ran the grammar's @ analysis over selector_str, so the
+            # read below only spells that suffix for the message.
+            slab_pattern = pattern.slab
+            if slab_pattern is not None:
                 _, s_str = selector_str.rsplit("@", 1)
-                lab = LabPattern.parse(s_str)
-                matching_slabs = [s for s in raw_slabs if lab.matches(s)]
+                matching_slabs = [s for s in raw_slabs if slab_pattern.matches(s)]
                 if not matching_slabs:
                     raise ValueError(
                         f"No slab matches '{s_str}' in fitness.{field_name} "

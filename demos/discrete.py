@@ -1,3 +1,12 @@
+"""Run a deterministic discrete-generation homing-drive release headlessly.
+
+Builds a one-locus species with a homing drive preset, starts from an
+all-wildtype panmictic population, and injects drive-heterozygous males
+every 10 ticks via a declarative hook.  After 10000 ticks it prints the
+final ``pop.observe()`` output: labels, axes, observed shape, and the
+adult counts for the wildtype / drive-het / drive-hom groups.
+"""
+
 import natal as nt
 from natal.frontend.patterns import IndividualSelector
 

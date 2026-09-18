@@ -1,6 +1,6 @@
 [project]
 name = "natal-core"
-version = "0.3.0"
+version = "0.3.1"
 description = "Numerical Aggregation Toolkit for Analysis of Lifecycles, a high-performance forward-time population genetics simulation engine especially designed for gene drive modeling."
 readme = "README.md"
 authors = [
@@ -124,4 +124,7 @@ manifest-path = "rust/Cargo.toml"
 module-name = "natal._engine_rs"
 python-source = "src"
 features = ["extension-module"]
-include = [{ path = "src/natal/frontend/webui/dist/**/*", format = "wheel" }]
+include = [
+  { path = "src/natal/frontend/webui/dist/**/*", format = "wheel" },
+  { path = "src/natal/frontend/model/dependencies.jsonc", format = "wheel" },
+]

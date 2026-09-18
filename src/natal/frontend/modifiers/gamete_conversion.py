@@ -8,9 +8,12 @@ declarations in append order and compiles them into one gamete modifier.
 Compile semantics (single owner):
 
 - Every construction starts from the species' unmodified Mendelian
-  baseline projected onto the active registry. Within that construction,
-  each rule set receives the preceding modifier's result. Rebuilding
-  therefore never reapplies rules to an already-converted run matrix.
+  baseline, compiled against the complete species registry: a published
+  host registry is replaced by a rebuilt complete one, so the compiled
+  indices are complete species coordinates and never depend on a later
+  compressed runtime axis. Within that construction, each rule set
+  receives the preceding modifier's result. Rebuilding therefore never
+  reapplies rules to an already-converted run matrix.
 - Rules cascade strictly in declaration order: each rule sees the
   previous rule's branches; there is no priority, no type ordering, and
   no first-match stop.
@@ -35,13 +38,12 @@ from .conversion_rules import (
     GameteAlleleConversionRule,
     GameteGtypeConversionRule,
     replace_allele_in_haploid,
-    validate_filter_pattern,
 )
 
 if TYPE_CHECKING:
     from natal.frontend.genetics.compile import RecipeHost
     from natal.frontend.patterns import ZygoteTypePattern
-    from natal.frontend.patterns.parser import ConversionTarget, GenotypePatternParser
+    from natal.frontend.patterns.parser import ConversionTarget
 
 # A compiled matcher: (sex_idx, ztype_idx, gtype_idx) -> bool.
 _GtypeMatcher = Callable[[int, int, int], bool]
@@ -78,7 +80,7 @@ class _CompiledGtypeRule:
 class GameteConversionRuleSet:
     """Ordered cascade of gamete conversion rules.
 
-    Example:
+    Examples:
         rs = GameteConversionRuleSet("drive")
         rs.add_allele_convert(
             from_allele="WT", to_allele="Dr", rate=0.9,
@@ -189,7 +191,10 @@ class GameteConversionRuleSet:
         and returns ``{(sex_idx, ztype_idx): {gtype_idx: probability}}`` —
         the complete post-cascade branch distribution of every non-empty
         baseline row, computed from the species' unmodified Mendelian
-        baseline projected onto *host*'s registry.
+        baseline. Compilation always uses complete species coordinates
+        (a published host registry is replaced by a rebuilt complete
+        one), so the returned indices never depend on a later compressed
+        runtime axis.
 
         Args:
             host: A :class:`~natal.frontend.genetics.compile.RecipeHost`
@@ -239,11 +244,9 @@ class GameteConversionRuleSet:
         Raises:
             ValueError: When a declaration cannot be resolved.
         """
-        from natal.frontend.patterns import ZygoteTypePattern
-        from natal.frontend.patterns.parser import GenotypePatternParser
+        from natal.frontend.patterns.entries import parse_selector, parse_target
         from natal.frontend.utils.helpers import resolve_sex_label  # noqa: F401
 
-        parser = GenotypePatternParser(species)
         compiled: List[_CompiledGtypeRule] = []
 
         # Resolve each declaration once into match/convert closures, so per-row
@@ -268,22 +271,30 @@ class GameteConversionRuleSet:
                 elif key == "parent":
                     # Validate only the genotype part; the token after the
                     # last '@' is a somatic-label qualifier, not an allele.
-                    validate_filter_pattern(species, pattern, species.somatic_labels, self.name)
                     try:
-                        parent_pattern = ZygoteTypePattern.parse(pattern, species)
+                        parent_pattern = parse_selector(
+                            pattern, species=species, kind="ztype", validate_alleles=True,
+                            context=f"{self.name} parent filter",
+                            label_catalog=tuple(
+                                dict.fromkeys(
+                                    (*species.somatic_labels, *registry.slab_labels)
+                                )
+                            ),
+                        )
                     except Exception as exc:
                         raise ValueError(
                             f"{self.name}: invalid parent filter {pattern!r}"
                         ) from exc
                 elif key == "current":
                     current_pattern, current_lab = _compile_gamete_pattern(
-                        parser, pattern, self.name, species
+                        pattern, self.name, species
                     )
 
             if isinstance(rule, GameteGtypeConversionRule):
                 try:
-                    target_spec = parser.compile_conversion_target(
-                        rule.to, stage="gamete conversion", haploid=True, require_label=True
+                    target_spec = parse_target(
+                        rule.to, species=species, stage="gamete conversion",
+                        haploid=True, require_label=True, validate=True,
                     )
                 except Exception as exc:
                     raise ValueError(
@@ -400,7 +411,6 @@ def _require_same_locus(
 
 
 def _compile_gamete_pattern(
-    parser: GenotypePatternParser,
     pattern: str,
     rs_name: str,
     species: Species,
@@ -413,31 +423,26 @@ def _compile_gamete_pattern(
     Raises:
         ValueError: If the pattern cannot be parsed.
     """
-    lab: Optional[LabPattern]
-    base = pattern
-    # Split the optional label qualifier off the genotype pattern; each part is
-    # validated separately against the species catalog and label set.
-    if "@" in pattern:
-        base, suffix = pattern.rsplit("@", 1)
-        if suffix and suffix != "*":
-            try:
-                lab = LabPattern.parse(suffix)
-            except Exception as exc:
-                raise ValueError(
-                    f"{rs_name}: invalid label pattern {pattern!r}"
-                ) from exc
-        else:
-            lab = None
-    else:
-        lab = None
-    validate_filter_pattern(species, pattern, species.gamete_labels, rs_name)
     try:
-        genome_pattern = parser.parse_haploid_genome_pattern(base)
+        from natal.frontend.patterns.entries import parse_selector
+
+        parsed = parse_selector(
+            pattern, species=species, kind="gtype", validate_alleles=True,
+            context=f"{rs_name} current filter",
+        )
     except Exception as exc:
+        detail = str(exc)
+        if "Only one @lab suffix" in detail:
+            detail = "at most one @ separator"
+        elif "Invalid lab name" in detail:
+            detail = "invalid filter label"
+        elif "unknown gtype labels" in detail:
+            detail = "unknown filter labels"
         raise ValueError(
-            f"{rs_name}: invalid gamete pattern {pattern!r}"
+            f"{rs_name}: invalid gamete pattern {pattern!r}: {detail}"
         ) from exc
-    return genome_pattern, lab
+    lab = parsed.glab if parsed.glab and not parsed.glab.is_wildcard() else None
+    return parsed.genome, lab
 
 
 def _cascade_row(
@@ -499,6 +504,8 @@ def _cascade_row(
                 )
         branches = next_branches
 
-    # Drop numerical dust below 1e-15; the retained mass may fall short of 1 by
-    # at most that tolerance.
+    # Drop numerical dust below 1e-15. Each discarded branch sheds at most
+    # that tolerance, and dust can be discarded once per path across the
+    # cascade, so the retained mass may fall short of 1 by up to
+    # k * tolerance, not by the tolerance alone.
     return {g: p for g, p in branches.items() if p > 1e-15}

@@ -1,8 +1,9 @@
 """Launch a hex-topology spatial dashboard demo.
 
-Builds a 51x51 spatial population using the spatial builder with
-batch_setting for heterogeneous initial states. Construction time is
-~16ms vs ~2.6s with the old per-deme pattern.
+Builds a 9x9 (81-deme) spatial population using the spatial builder with
+batch_setting for heterogeneous initial states.  Compared with the old
+per-deme construction pattern this is expected to be far faster (on the
+order of milliseconds vs seconds); the exact timings are machine-dependent.
 """
 
 from __future__ import annotations

@@ -39,7 +39,6 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Mapping, Optional, cast
 
-from natal.frontend.genetics import Species
 from natal.frontend.patterns.elements._base import PatternParseError
 from natal.frontend.patterns.parser import GenotypePatternParser
 
@@ -125,7 +124,7 @@ def _validate_filters(
 
 
 def _parse_target_str(target: object, stage: str) -> str:
-    """Require a string target and return it (see :func:`_parse_target`).
+    """Require a string target and return it for the declaration.
 
     Raises:
         TypeError: If *target* is not a string.
@@ -137,16 +136,19 @@ def _parse_target_str(target: object, stage: str) -> str:
     return target
 
 
-def _parse_target(target: object, stage: str) -> tuple[str, str]:
-    """Split a whole-state target into its ``(genotype_part, label_part)``.
 
-    Both parts must be given explicitly; ``*`` keeps the input part.
+def _validate_target_declaration(target: str, stage: str) -> None:
+    """Validate the ``[genotype or *]@[label or *]`` spelling at declaration time.
+
+    Both parts must be given explicitly; ``*`` keeps the input part.  The
+    compile-time parse goes through the unified target entry; this is only
+    the early, species-unbound check, sharing the same ``@`` analysis.
 
     Raises:
         ValueError: If the target is malformed.
     """
     try:
-        return GenotypePatternParser.split_conversion_target(target, stage=stage)
+        GenotypePatternParser.split_conversion_target(target, stage=stage)
     except PatternParseError as exc:
         raise ValueError(str(exc)) from exc
 
@@ -217,9 +219,11 @@ class GameteGtypeConversionRule(GameteStageRule):
                 malformed.
         """
         self.to: str = _parse_target_str(to, "gamete gtype conversion")
-        # Shape checked here; the genotype/label names are resolved against the
-        # species and registry only when the owning rule set compiles.
-        self.target_parts = _parse_target(self.to, "gamete gtype conversion")
+        # Declaration-time validation of the "[genotype or *]@[label or *]"
+        # spelling through the shared target analysis; the genotype/label
+        # names are resolved against the species and registry only when the
+        # owning rule set compiles through the unified target entry.
+        _validate_target_declaration(self.to, "gamete gtype conversion")
         self._init_common(rate, filters, name, GAMETE_FILTER_KEYS, "gamete")
 
     def __repr__(self) -> str:
@@ -258,7 +262,7 @@ class ZygoteZtypeConversionRule(ZygoteStageRule):
                 malformed.
         """
         self.to: str = _parse_target_str(to, "zygote ztype conversion")
-        self.target_parts = _parse_target(self.to, "zygote ztype conversion")
+        _validate_target_declaration(self.to, "zygote ztype conversion")
         self._init_common(rate, filters, name, ZYGOTE_FILTER_KEYS, "zygote")
 
     def __repr__(self) -> str:
@@ -387,6 +391,11 @@ def replace_allele_in_haploid(
     and a new (cached) ``HaploidGenotype`` is constructed.  Entity caching
     makes the result an identity-resolvable object.
 
+    Args:
+        hg: The haploid genotype to scan.
+        from_allele: Name of the source allele to replace.
+        to_allele: Name of the same-locus target allele.
+
     Returns:
         The converted haploid genotype, or ``None`` when *from_allele* is
         absent or the target allele is not registered at that locus.
@@ -434,72 +443,3 @@ def replace_allele_in_haploid(
             return HaploidGenotype(species=species, haplotypes=new_haplotypes)
 
     return None
-
-
-def validate_pattern_alleles(
-    species: Species,
-    base_pattern: str,
-    context: str,
-) -> None:
-    """Reject filter patterns naming alleles unknown to the species.
-
-    Pattern parsing itself accepts arbitrary tokens; a typo'd allele name
-    would otherwise compile into a matcher that never fires — the
-    "interpreted as match failure" outcome the CR-1 contract forbids.
-    Only the genotype part of a pattern is validated here; the ``@label``
-    suffix must be stripped by the caller.
-
-    Args:
-        species: Species providing the gene catalog.
-        base_pattern: The genotype part of the pattern (no ``@`` suffix).
-        context: Error-message prefix (ruleset name).
-
-    Raises:
-        ValueError: If any identifier token is not a registered allele.
-    """
-    import re
-
-    tokens = sorted(set(re.findall(r"[A-Za-z0-9_]+", base_pattern)))
-    # Every identifier token must be a registered allele: a typo would otherwise
-    # compile into a matcher that silently never fires (forbidden by CR-1).
-    for token in tokens:
-        if species.get_gene(token) is None:
-            raise ValueError(
-                f"{context}: filter pattern names unknown allele {token!r}; "
-                "every allele in a filter pattern must be registered in the "
-                "species"
-            )
-
-
-def validate_filter_pattern(
-    species: Species, pattern: str, labels: list[str], context: str,
-) -> str:
-    """Validate filter allele names and label names, returning the genotype part.
-
-    Labels use the existing exact/set/negated pattern syntax. Every named
-    label must exist even when negated, so a typo cannot silently broaden
-    or disable a rule.
-    """
-    from natal.frontend.patterns.elements.atom import LabPattern
-
-    base = pattern
-    # At most one '@'; both sides must be non-empty, and every named label must
-    # exist even when negated, so a typo cannot broaden or disable the rule.
-    if "@" in pattern:
-        if pattern.count("@") != 1:
-            raise ValueError(f"{context}: filter must contain at most one @ separator")
-        base, suffix = (part.strip() for part in pattern.split("@"))
-        if not base or not suffix:
-            raise ValueError(f"{context}: empty genotype or label in filter {pattern!r}")
-        try:
-            lab = LabPattern.parse(suffix)
-        except Exception as exc:
-            raise ValueError(f"{context}: invalid filter label {suffix!r}") from exc
-        names = lab.lab_set or ({lab.lab} if lab.lab is not None else set())
-        # LabPattern exposes either an explicit label or a set (which may encode
-        # negations); collect the named labels for the existence check.
-        unknown = names - set(labels or ["default"])
-        if unknown:
-            raise ValueError(f"{context}: unknown filter labels {sorted(unknown)!r}")
-    validate_pattern_alleles(species, base, context)
-    return base

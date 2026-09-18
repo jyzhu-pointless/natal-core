@@ -46,7 +46,8 @@ def _natal_replicates(
         migration_rate=0.0,
     )
     seed_rng(seed)
-    # Exclude JIT warm-up from the sampled replicates.
+    # One untimed warm-up step: one-time imports and lazy setup stay out of
+    # the sampled replicates.
     from benchmarks.mgdrive1.spatial_benchmark import step_spatial
 
     step_spatial(

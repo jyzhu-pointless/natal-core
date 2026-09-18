@@ -19,7 +19,7 @@ N_TICKS = 100
 REPEATS = 3
 
 
-def build(stochastic: bool, name: str):
+def build(stochastic: bool, name: str) -> nt.AgeStructuredPopulation:
     """Build a one-locus, three-allele population."""
     species = nt.Species.from_dict(
         name=f"small_bench_{stochastic}_{name}",

@@ -235,12 +235,14 @@ def normalize_migration_rate_column(
     Every declaration that function accepts (scalar, ``(n_ages,)`` vector,
     ``(S, A)`` table, per-sex mapping) is normalized to one ``(S, A)``
     table and tiled over demes.  Two per-deme forms are additionally
-    accepted, matching :meth:`SpatialPopulation.params.tensor_write`:
+    accepted:
 
     - ``(n_demes, n_ages)``: each deme's age vector, broadcast across
       both sexes.
     - ``(n_demes, n_sexes, n_ages)``: the canonical contract column, used
-      as-is.
+      as-is.  This is the only per-deme form
+      :meth:`SpatialPopulation.params.tensor_write` also accepts at
+      runtime; it rejects the 2-D per-deme table above.
 
     Shape precedence: a 2-D declaration whose shape is exactly
     ``(n_sexes, n_ages)`` keeps the shared per-sex meaning (tiled over
@@ -379,7 +381,9 @@ def fold_migration_csr(
 
     Args:
         n_demes: Number of demes.
-        topology: Grid topology (required in kernel mode).
+        topology: Grid topology used in kernel mode. ``None`` is not an
+            error in kernel mode: the fold then emits an empty CSR (no
+            outbound entries), so every deme stays put.
         adjacency_dense: Dense ``(n_demes, n_demes)`` adjacency matrix, read in
             adjacency mode only. Kernel mode ignores it and accepts ``None``,
             so a kernel-mode caller need not materialize the default matrix.

@@ -380,7 +380,7 @@ class TestChannelAgreementMultiLabel:
         # Multi-label layout with live drive mass (3 ztypes × 4 gtypes).
         assert meiosis.shape == (2, 3, 4)
         np.testing.assert_array_equal(refreshed, _einsum_reference(meiosis, fusion))
-        # The drive really biases the cas9-labelled columns (non-trivial
+        # The drive really biases the cas9-labeled columns (non-trivial
         # input to the derivation, not the Mendelian baseline).
         assert meiosis[:, 1, 2:].sum() > 0.0
 
@@ -704,6 +704,8 @@ class TestRustKernelSingleDispatch:
                     3,
                     None,
                     None,
+                    has_sex_chromosomes=False,
+                    discrete_generation=False,
                 )
         finally:
             if saved is None:
@@ -1132,6 +1134,8 @@ class TestEquilibriumKernelParity:
                 np.ascontiguousarray(comp),
                 1,
                 n,
+                False,
+                False,
                 None,
                 None,
             )
@@ -1162,6 +1166,8 @@ class TestEquilibriumKernelParity:
             np.ascontiguousarray(comp),
             1,
             n,
+            False,
+            False,
             None,
             None,
         )
@@ -1209,6 +1215,8 @@ class TestEquilibriumKernelParity:
                 np.ascontiguousarray(c),
                 na,
                 ages,
+                False,
+                False,
                 declared,
                 external,
             )
@@ -1246,6 +1254,8 @@ class TestEquilibriumKernelParity:
                 np.ascontiguousarray(comp),
                 1,
                 n,
+                False,
+                False,
                 None,
                 None,
             )
@@ -1263,6 +1273,8 @@ class TestEquilibriumKernelParity:
                 np.ascontiguousarray(comp),
                 1,
                 n,
+                False,
+                False,
                 np.asfortranarray(wide[:, :n]),
                 None,
             )
@@ -1357,6 +1369,8 @@ class TestEquilibriumKernelParity:
                     ),
                     int(d.new_adult_age),
                     int(d.n_ages),
+                    bool(d.has_sex_chromosomes),
+                    bool(d.discrete_generation),
                     (
                         np.ascontiguousarray(declared, dtype=np.float64)
                         if declared is not None
@@ -1691,6 +1705,8 @@ class TestBuildPathEquilibriumDispatch:
                 3,
                 declared,
                 external,
+                has_sex_chromosomes=False,
+                discrete_generation=False,
             )
             assert result is not None  # extension guarded above
             return result
@@ -1763,6 +1779,8 @@ class TestBuildPathEquilibriumDispatch:
                 3,
                 declared,
                 None,
+                has_sex_chromosomes=False,
+                discrete_generation=False,
             )
             assert result is not None  # extension guarded above
             return result

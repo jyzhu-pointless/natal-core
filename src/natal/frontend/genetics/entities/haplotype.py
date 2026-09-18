@@ -151,8 +151,8 @@ class Haplotype(GeneticEntity['Chromosome']):
 
     def get_gene_at_locus(self, locus: Locus) -> Optional[Gene]:
         """Get the gene at a specific locus."""
-        # A locus lives on exactly one chromosome, so the first haplotype that
-        # owns it holds the answer.
+        # __init__ validation rejects duplicate loci, so at most one gene in
+        # self.genes can match the requested locus; the loop finds that one.
         for gene in self.genes:
             if gene.locus is locus:
                 return gene
@@ -173,7 +173,9 @@ class HaploidGenotype(GeneticEntity['Species']):
     Represents a complete haploid genome - all haplotypes from one parent.
 
     A HaploidGenotype is bound to a Species and contains one Haplotype
-    for each Chromosome in the Species. Same haplotype combination under
+    for each required Chromosome of the Species: every autosome, plus
+    exactly one member of each sex-chromosome group (so an XY male
+    carries no W). Same haplotype combination under
     same Species returns the same instance.
 
     Attributes:
@@ -350,8 +352,12 @@ class HaploidGenotype(GeneticEntity['Species']):
         return species.get_haploid_genotype_from_str(haploid_str)
 
     # Alias for backward compatibility
-    def get_chromosome_for_linkage(self, linkage: Chromosome) -> Optional[Haplotype]:
-        """Alias for get_haplotype_for_chromosome (backward compatibility)."""
+    def get_chromosome_for_linkage(self, linkage: Chromosome) -> Haplotype:
+        """Alias for get_haplotype_for_chromosome (backward compatibility).
+
+        Never returns ``None``: the delegate raises ``ValueError`` when
+        no haplotype matches the given chromosome.
+        """
         return self.get_haplotype_for_chromosome(linkage)
 
     def get_gene_at_locus(self, locus: Locus) -> Optional[Gene]:

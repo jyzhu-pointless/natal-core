@@ -146,7 +146,8 @@ def initialize_zygote_map(
         diploid_genotypes: List of all diploid genotype objects (unique
             set, without slab variants).
         n_glabs: Number of gamete labels (default: 1).
-        n_slabs: Number of somatic slab variants per genotype (≥ 1).
+        n_slabs: Number of somatic slab variants per genotype (≥ 1
+            expected; not validated).
         unordered: If True, use unordered genotype canonicalization.
         zygote_modifiers: Optional sequence of callables that accept and
             return a modified ``gametes_to_zygotes_map`` tensor.
@@ -244,7 +245,8 @@ def initialize_gamete_map(
         diploid_genotypes: List of all diploid genotype objects (unique
             set, without slab variants).
         n_glabs: Number of gamete labels (default: 1).
-        n_slabs: Number of somatic slab variants per genotype (≥ 1).
+        n_slabs: Number of somatic slab variants per genotype (≥ 1
+            expected; not validated).
         gamete_modifiers: Optional sequence of callables that accept and
             return a modified ``zygotes_to_gametes_map`` tensor.
 

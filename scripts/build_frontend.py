@@ -22,7 +22,7 @@ def main() -> int:
         ["build", "--outDir", "../src/natal/frontend/webui/dist", "--emptyOutDir"],
     ):
         result = subprocess.run(
-            [corepack, "pnpm", *arguments], cwd=ROOT_DIR / "frontend", check=False,
+            [corepack, "pnpm", *arguments], cwd=ROOT_DIR / "ui", check=False,
         )
         if result.returncode:
             return result.returncode

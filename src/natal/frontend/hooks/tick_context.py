@@ -242,6 +242,8 @@ class TickMetrics:
             n_ages=n_ages,
             declared_distribution=distribution,
             external_expected_eggs=None,
+            has_sex_chromosomes=bool(config.has_sex_chromosomes),
+            discrete_generation=bool(config.discrete_generation),
         )
 
 
@@ -279,8 +281,11 @@ class TickContext:
             deme_id: Deme index (``0`` for panmictic populations, the live
                 deme index under a SpatialPopulation).
             state: The writable state view for this callback.
-            hook_index: Position of this hook within its event; folds into
-                the RNG stream so same-tick hooks get independent draws.
+            hook_index: Informational position of this hook within its
+                event; metadata only — nothing reads it at run time.
+                Same-tick hooks get independent draws because the native
+                interpreter clones the RNG stream per callback and
+                commits the consumed draws only on success.
             transaction: The callback's owned native transaction, when the
                 event runs inside a native session.
             event: The executing event's name, when the invocation is

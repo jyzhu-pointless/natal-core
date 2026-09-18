@@ -182,6 +182,28 @@ class TestEvaluateGenotypeFilter:
         assert passed is False
         assert compiled is None
 
+    def test_string_filter_compiles_through_the_selector_entry(self, simple_species):
+        """A string filter lazily compiles once and is reused (§5.3 migration).
+
+        The unordered ``|`` promotion belongs to the selector entry, so
+        ``"Dr|WT"`` matches the canonical ``WT|Dr`` genotype; the compiled
+        filter is handed back and the reused call does not reparse; an
+        invalid pattern surfaces as ``ValueError``.
+        """
+        by_name = {gt.to_string(): gt for gt in simple_species.get_all_genotypes()}
+        passed, compiled = evaluate_genotype_filter("Dr|WT", by_name["WT|Dr"], None)
+        assert passed is True
+        assert callable(compiled)
+        # The compiled filter answers directly for other genotypes.
+        assert compiled(by_name["WT|WT"]) is False
+        passed_again, compiled_again = evaluate_genotype_filter(
+            "Dr|WT", by_name["WT|Dr"], compiled
+        )
+        assert passed_again is True
+        assert compiled_again is compiled
+        with pytest.raises(ValueError, match="Invalid genotype_filter pattern"):
+            evaluate_genotype_filter("Dr@", by_name["WT|Dr"], None)
+
 
 # ============================================================================
 # Gamete conversion rules — construction, validation, repr

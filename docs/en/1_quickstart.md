@@ -324,7 +324,7 @@ launch_vue(pop, port=8000, title="My Simulation")
 
 Once launched, open <http://localhost:8000>. The dashboard provides live charts, per-genotype inspection, hooks/genetics panels, and a Debug tab (event log, parameter audit, tick-to-tick state diff, raw state arrays). The simulation loop runs server-side — closing the browser does not stop the simulation; reopen the page to catch up.
 
-When developing the dashboard frontend itself, run `corepack pnpm dev` inside `frontend/` to start the Vite dev server (which proxies the API); release wheels bundle the dashboard inside the Python package, which `launch_vue` serves directly. In a source checkout, run `python scripts/build_frontend.py` from the repository root to build the same assets; a local `frontend/dist` is also supported when package assets are absent.
+When developing the dashboard frontend itself, run `corepack pnpm dev` inside `ui/` to start the Vite dev server (which proxies the API); release wheels bundle the dashboard inside the Python package, which `launch_vue` serves directly. In a source checkout, run `python scripts/build_frontend.py` from the repository root to build the same assets; a local `ui/dist` is also supported when package assets are absent.
 
 ---
 

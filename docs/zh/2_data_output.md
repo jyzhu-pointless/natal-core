@@ -120,6 +120,11 @@ pop = (
 ```
 无需 `with_observation()`——每个 ZType 自动对应一个分组，提供无损投影。
 
+观测规则在 Population 构建时通过 `with_observation()` 冻结，
+运行时无法修改。这保证了同一 History 中所有记录的语义一致。
+
+使用 `pop.history` 直接访问类型化历史数据。
+
 ### Panmictic 示例
 
 ```python
@@ -283,7 +288,7 @@ pop = (
 | `mode` | `"raw"` | `"raw"` 记录完整状态；`"observation"` 记录压缩后的观测聚合 |
 | `max_rows` | `None` | 最多保存的快照数（FIFO 淘汰）。`None` 应用种群的有界默认值（`max_history`，5000 行）——被淘汰的行会连带丢弃配对的恢复检查点 |
 
-### 运行时空录配置
+### 运行时记录配置
 
 种群对象也提供运行时记录控制（向后兼容）：
 
@@ -355,11 +360,18 @@ print(f"分组标签: {result.labels['group']}")
 
 ### pop.record_snapshot() — 手动记录
 
-在 `run()` 之外手动将当前稳定状态记录到历史中：
+在 `run()` 之外手动将当前稳定状态记录到历史中。
+
+`run()` 默认每个 tick 都记录（`record_every=1`），因此 `run_tick()` 或
+`run()` 推进过的 tick 通常已被记录，此时再调用 `record_snapshot()` 会抛出
+`ValueError`（如 `History already contains tick 1`）。`record_snapshot()`
+适用于当前 tick **尚未**被记录的情况——例如 `record_every > 1` 导致
+`run()` 跳过了它：
 
 ```python
-pop.run_tick()
-pop.record_snapshot()  # 在单个 tick 后手动记录
+pop.record_every = 5  # run() 每 5 个 tick 才记录一次
+pop.run(n_steps=3)    # tick 1-3 被 run() 跳过
+pop.record_snapshot() # 手动记录当前 tick（tick 3）
 ```
 
 应在两次 `run()` 调用之间调用，包括中途停止后的边界。当前 tick 已有记录时抛出
@@ -480,18 +492,25 @@ individuals belonging to that group.
 | Argument | Type | Description |
 |----------|------|-------------|
 | `ztype` | `str` | Diploid genotype string (e.g. `"WT|Dr"`) |
-| `gtype` | `str` | Haploid genotype string |
 | `sex` | `str` or `int` | `"female"`, `"male"`, or `0` / `1` |
 | `age` | `range`, `int`, or sequence of `int` | Age or age interval |
 
-Selectors can be combined with `|` (union) and `+` (intersection) operators:
+选择器之间可以用 `|` 或 `+` 组合——两个运算符都表示并集（OR）：
 
 ```python
 # Union — individuals matching either selector
 combined = nt.IndividualSelector(ztype="WT|Dr") | nt.IndividualSelector(ztype="Dr|Dr")
 
-# Intersection — individuals matching both selectors
-both = nt.IndividualSelector(sex="female") + nt.IndividualSelector(age=range(2, 5))
+# + 是 | 的别名——这是同一个并集，不是交集
+same_union = nt.IndividualSelector(sex="female") + nt.IndividualSelector(age=range(2, 5))
+```
+
+不存在跨选择器的交集运算符。要同时约束多个字段，请把它们放在同一个
+`IndividualSelector` 中——单个选择器内部各字段之间是 AND 关系：
+
+```python
+# Female adults aged 2-4: both constraints in one selector
+both = nt.IndividualSelector(sex="female", age=range(2, 5))
 ```
 
 ### 分组示例

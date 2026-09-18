@@ -124,10 +124,10 @@ pop.run_tick()
 连续抽样保留小数值。WF 模式按 `extreme_speed_mode` 对最终下一代抽样，
 该开关不会关闭这种抽样。
 
-`linear`/`logistic`、`beverton_holt` 和 `ricker` 要求
-`low_density_growth_rate` 为有限值且至少为 1，以保持随密度增加而不增的响应，
-并避免 Beverton–Holt 分母无定义。`no_competition` 和 `fixed` 不使用此参数，
-保留其通常的参数范围。运行时更新和切换曲线时也执行同样的约束。
+所有增长模式都要求 `low_density_growth_rate` 为有限值且在 [1, 1000000] 内，
+包括不使用此参数的 `no_competition` 和 `fixed`。
+对于 `linear`/`logistic`、`beverton_holt` 和 `ricker`，下界 1 保持随密度增加而不增的响应，
+并避免 Beverton–Holt 分母无定义。构建、运行时更新和 hook 都执行同样的约束。
 
 ## 4. 引擎实现布局
 
@@ -202,7 +202,7 @@ pop.import_state(state_flat)
 
 ### 7.2 检查点与历史查询
 
-Rust 会话拥有历史数值、检查点和参数日志。`mode="raw"` 的每个保留记录都包含对应的完整检查点：个体与精子状态、tick、执行阶段与状态、RNG、生态参数（含迁移和 custom）及日志位置。遗传表不参与回滚。`mode="observation"` 只保留投影值，不隐藏完整原始历史，也不支持恢复。
+Rust 会话拥有历史数值、检查点和参数日志。`mode="raw"` 的每个保留记录都包含对应的完整检查点：个体与精子状态、tick、执行阶段与状态、RNG、生态参数（含迁移和 custom）及日志位置。遗传表不参与回滚。`mode="observation"` 只保留投影值，不保留隐藏的完整原始历史，也不支持恢复检查点。
 
 `pop.restore_checkpoint(tick)` 只接受仍保留的精确 tick；未记录或已淘汰的 tick 会在修改状态前报错。恢复保留该 tick 及以前的历史，并按检查点中的位置截断未来参数日志，包括同一 tick 上后来发生的更新。普通稳定边界恢复为 `Ready`；手动记录的停止或失败边界保留对应执行状态。
 
@@ -212,7 +212,9 @@ Rust 会话拥有历史数值、检查点和参数日志。`mode="raw"` 的每�
 
 `max_rows` 同时限制保留的记录与检查点；无 Python 回调的批量运行在 Rust 内逐步记录并淘汰。`clear_history()` 清除记录和对应检查点，保留当前状态、RNG、参数和参数日志。
 
-下面的完整示例演示有界历史及日志回滚：
+下面的完整示例演示有界历史及日志回滚。初始状态会作为 tick 0 记录，因此容量
+不受限时 `run(3)` 之后的 ticks 是 `(0, 1, 2, 3)`；这里的 `max_rows=3` 会先淘汰
+tick-0 行，所以下方断言看到的是 `(1, 2, 3)`：
 
 ```python
 import natal as nt

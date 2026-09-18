@@ -1,7 +1,7 @@
 """Independent-review probes for the high-risk remediation batch.
 
 Added by the evaluator (not the implementer) as extra evidence around gaps the
-shipped tests leave open.  Nothing here asserts product behaviour that the
+shipped tests leave open.  Nothing here asserts product behavior that the
 implementer weakened; each test documents a contract the batch claims and
 strengthens the coverage where the shipped suite is thin:
 

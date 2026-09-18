@@ -19,9 +19,9 @@ def launch_vue(
 ) -> None:
     """Serve the Vue dashboard for *population* and block.
 
-    Production mode serves the built ``frontend/dist`` at the root URL.  In
+    Production mode serves the built ``ui/dist`` at the root URL.  In
     frontend development, run the Vite dev server (``npm run dev`` inside
-    ``frontend/``) instead; it proxies ``/api`` and ``/ws`` to this server.
+    ``ui/``) instead; it proxies ``/api`` and ``/ws`` to this server.
 
     Args:
         population: A built panmictic or spatial population.

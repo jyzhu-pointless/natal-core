@@ -435,3 +435,162 @@ class TestFailedCallsLeaveNoJournalEntry:
         assert builder._declaration_log == before, (
             "the failed spatial delegation polluted the journal"
         )
+
+    def _spatial_chain(self, name: str):
+        """A spatial builder with the full chain up to the declaration under test."""
+        from natal.frontend.spatial.topology import SquareGrid
+
+        return (
+            nt.SpatialPopulation.builder(
+                _species(),
+                n_demes=4,
+                topology=SquareGrid(2, 2),
+                pop_type="age_structured",
+            )
+            .setup(name=name, stochastic=False)
+            .age_structure(n_ages=2, new_adult_age=1)
+            .initial_state(
+                individual_count={"female": {"A|A": 50}, "male": {"A|A": 50}}
+            )
+            .reproduction(eggs_per_female=5.0)
+            .competition(carrying_capacity=1000.0)
+        )
+
+    @staticmethod
+    def _drive(name: str, *, mismatched: bool) -> nt.HomingDrive:
+        """A drive bound to the journal species, or to an unrelated one."""
+        drive = nt.HomingDrive(
+            name=name,
+            drive_allele="B",
+            target_allele="A",
+            drive_conversion_rate=0.9,
+        )
+        if mismatched:
+            drive.bind_species(
+                nt.Species.from_dict(
+                    name=f"__journal_other_{name}__",
+                    structure={"chrZ": {"loc9": ["X", "Y"]}},
+                    gamete_labels=["default"],
+                )
+            )
+        return drive
+
+    @staticmethod
+    def _expect_value_error(call, match: str) -> None:
+        """Run *call* expecting a ValueError whose message contains *match*.
+
+        This file deliberately avoids importing pytest; the surrounding
+        failure tests use the same try/except spelling.
+        """
+        try:
+            call()
+        except ValueError as exc:
+            assert match in str(exc), f"unexpected message: {exc}"
+        else:
+            raise AssertionError(f"expected ValueError containing {match!r}")
+
+    def test_spatial_failed_presets_leaves_no_batch_entry_and_recovers(self) -> None:
+        """A rejected batch preset leaves neither journal nor batch residue.
+
+        The rejection is natural: the preset is bound to a different species,
+        so the delegated template call raises ``ValueError``.  Correcting the
+        input must leave the builder able to continue and build.
+        """
+        builder = self._spatial_chain("__journal_spatial_presets__")
+        before_journal = list(builder._declaration_log)
+        before_batch = dict(builder._batch_settings)
+
+        self._expect_value_error(
+            lambda: builder.presets(
+                nt.batch_setting([self._drive("bad", mismatched=True)] * 4)
+            ),
+            "already bound to species",
+        )
+
+        assert builder._declaration_log == before_journal
+        assert builder._batch_settings == before_batch, (
+            "the failed presets() call left a batch entry behind"
+        )
+
+        builder.presets(nt.batch_setting([self._drive("good", mismatched=False)] * 4))
+        assert [name for name, _ in builder._declaration_log][-1] == "presets"
+        assert sorted(builder._batch_settings) == ["_preset_0"]
+        builder.build()
+
+    def test_spatial_failed_presets_keeps_the_earlier_batch_entry(self) -> None:
+        """A failed call must not overwrite an entry an earlier call committed."""
+        builder = self._spatial_chain("__journal_spatial_presets_overwrite__")
+        builder.presets(nt.batch_setting([self._drive("keep", mismatched=False)] * 4))
+        kept = builder._batch_settings["_preset_0"]
+        before_journal = list(builder._declaration_log)
+
+        self._expect_value_error(
+            lambda: builder.presets(
+                nt.batch_setting([self._drive("drop", mismatched=True)] * 4)
+            ),
+            "already bound to species",
+        )
+
+        assert builder._batch_settings["_preset_0"] is kept, (
+            "the failed call replaced the batch entry committed earlier"
+        )
+        assert builder._declaration_log == before_journal
+
+    def test_spatial_failed_batch_delegation_leaves_no_batch_entry(self) -> None:
+        """A template failure in a kwargs batch call stages nothing.
+
+        The failure is injected into ``_call_template``: this is a sequencing
+        contract for the staging order, not a reproduction of a natural
+        failure of ``competition()``.
+        """
+        builder = self._spatial_chain("__journal_spatial_batch__")
+        before_journal = list(builder._declaration_log)
+        before_batch = dict(builder._batch_settings)
+
+        def boom(*args: object, **kwargs: object) -> None:
+            """Simulate the template rejecting the delegated batch call."""
+            raise ValueError("__template_rejected__")
+
+        original = builder._call_template
+        builder._call_template = boom  # type: ignore[method-assign]  # test double: inject a failing template call
+        try:
+            self._expect_value_error(
+                lambda: builder.competition(
+                    carrying_capacity=nt.batch_setting([1.0, 2.0, 3.0, 4.0])
+                ),
+                "__template_rejected__",
+            )
+        finally:
+            builder._call_template = original  # type: ignore[method-assign]  # restore the real delegation
+
+        assert builder._declaration_log == before_journal
+        assert builder._batch_settings == before_batch, (
+            "the failed batch delegation left a batch entry behind"
+        )
+
+    def test_spatial_failed_hooks_delegation_is_not_journaled(self) -> None:
+        """The hooks journal entry is written after the template call returns.
+
+        Hook items are validated at build time, so there is no natural
+        immediate failure to reproduce here; the template exception is
+        injected.  This pins the recording order only.
+        """
+        builder = self._spatial_chain("__journal_spatial_hooks__")
+        before_journal = list(builder._declaration_log)
+
+        def boom(*args: object, **kwargs: object) -> None:
+            """Simulate the template rejecting the delegated hooks call."""
+            raise ValueError("__template_rejected__")
+
+        original = builder._call_template
+        builder._call_template = boom  # type: ignore[method-assign]  # test double: inject a failing template call
+        try:
+            self._expect_value_error(
+                lambda: builder.hooks(event="first"), "__template_rejected__"
+            )
+        finally:
+            builder._call_template = original  # type: ignore[method-assign]  # restore the real delegation
+
+        assert builder._declaration_log == before_journal, (
+            "the failed hooks() call polluted the journal"
+        )

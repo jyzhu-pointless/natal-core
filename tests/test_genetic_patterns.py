@@ -27,8 +27,7 @@ class TestExactMatch:
             name="Pat_homo_match",
             structure={"chr1": {"loc": ["WT", "Dr", "R2"]}},
         )
-        parser = nt.GenotypePatternParser(sp)
-        pattern = parser.parse("WT|WT")
+        pattern = nt.parse_selector("WT|WT", species=sp, kind="genotype")
         gt = _build_genotype(sp, "WT", "WT")
         assert pattern.matches(gt) is True
 
@@ -37,8 +36,7 @@ class TestExactMatch:
             name="Pat_homo_no_match",
             structure={"chr1": {"loc": ["WT", "Dr", "R2"]}},
         )
-        parser = nt.GenotypePatternParser(sp)
-        pattern = parser.parse("WT|WT")
+        pattern = nt.parse_selector("WT|WT", species=sp, kind="genotype")
         gt = _build_genotype(sp, "WT", "Dr")
         assert pattern.matches(gt) is False
 
@@ -47,29 +45,33 @@ class TestExactMatch:
             name="Pat_het_match",
             structure={"chr1": {"loc": ["WT", "Dr", "R2"]}},
         )
-        parser = nt.GenotypePatternParser(sp)
-        pattern = parser.parse("WT|Dr")
+        pattern = nt.parse_selector("WT|Dr", species=sp, kind="genotype")
         gt = _build_genotype(sp, "WT", "Dr")
         assert pattern.matches(gt) is True
 
     def test_maternal_paternal_order_matters(self):
-        """WT|Dr must NOT match Dr|WT."""
+        """The grammar keeps | ordered; the selector entry promotes it."""
         sp = nt.Species.from_dict(
             name="Pat_order",
             structure={"chr1": {"loc": ["WT", "Dr", "R2"]}},
         )
-        parser = nt.GenotypePatternParser(sp)
-        pattern = parser.parse("WT|Dr")
         gt_dr_wt = _build_genotype(sp, "Dr", "WT")
-        assert pattern.matches(gt_dr_wt) is False
+        # Direct construction canonicalizes the stored pair to WT|Dr.
+        assert gt_dr_wt.to_string() == "WT|Dr"
+        # Grammar | is strict, whereas selector | permits homolog reversal.
+        strict = sp.parse_genotype_pattern("Dr|WT")
+        assert strict(gt_dr_wt) is False
+        # Selector: an unordered species promotes | to ::, so one spelling
+        # matches both parental orders everywhere.
+        promoted = nt.parse_selector("Dr|WT", species=sp, kind="genotype")
+        assert promoted.matches(gt_dr_wt) is True
 
     def test_dr_wt_matches_dr_wt(self):
         sp = nt.Species.from_dict(
             name="Pat_dr_wt",
             structure={"chr1": {"loc": ["WT", "Dr", "R2"]}},
         )
-        parser = nt.GenotypePatternParser(sp)
-        pattern = parser.parse("Dr|WT")
+        pattern = nt.parse_selector("Dr|WT", species=sp, kind="genotype")
         gt = _build_genotype(sp, "Dr", "WT")
         assert pattern.matches(gt) is True
 
@@ -80,8 +82,7 @@ class TestWildcard:
             name="Pat_wild_all",
             structure={"chr1": {"loc": ["WT", "Dr", "R2"]}},
         )
-        parser = nt.GenotypePatternParser(sp)
-        pattern = parser.parse("*|*")
+        pattern = nt.parse_selector("*|*", species=sp, kind="genotype")
         for mat in ("WT", "Dr", "R2"):
             for pat in ("WT", "Dr", "R2"):
                 gt = _build_genotype(sp, mat, pat)
@@ -92,8 +93,7 @@ class TestWildcard:
             name="Pat_wild_pat",
             structure={"chr1": {"loc": ["WT", "Dr"]}},
         )
-        parser = nt.GenotypePatternParser(sp)
-        pattern = parser.parse("WT|*")
+        pattern = nt.parse_selector("WT|*", species=sp, kind="genotype")
         assert pattern.matches(_build_genotype(sp, "WT", "WT")) is True
         assert pattern.matches(_build_genotype(sp, "WT", "Dr")) is True
         # For unordered species, (Dr, WT) normalizes to (WT, Dr), so WT|* matches.
@@ -105,9 +105,8 @@ class TestMultipleGenotypes:
             name="Pat_three_homo",
             structure={"chr1": {"loc": ["WT", "Dr", "R2"]}},
         )
-        parser = nt.GenotypePatternParser(sp)
         for allele in ("WT", "Dr", "R2"):
-            pattern = parser.parse(f"{allele}|{allele}")
+            pattern = nt.parse_selector(f"{allele}|{allele}", species=sp, kind="genotype")
             gt_match = _build_genotype(sp, allele, allele)
             assert pattern.matches(gt_match) is True
             # must not match the other homozygous genotype
@@ -365,18 +364,23 @@ class TestPatternOmissionSyntax:
         enum = list(sp.enumerate_genotypes_matching_pattern(pattern))
         result = self.normalize_enum_output(sp, enum)
 
-        # After normalization, symmetric pairs collapse (16 → 12 entries)
+        # Two maternal A choices * two maternal B * two paternal B * two C pairs = 16.
+        # Reversing B alone changes linked phase and cannot collapse entries.
         expected = [
             "A1/B1|A3/B1;C1|C1",
             "A1/B1|A3/B1;C1|C2",
             "A1/B1|A3/B2;C1|C1",
             "A1/B1|A3/B2;C1|C2",
+            "A1/B2|A3/B1;C1|C1",
+            "A1/B2|A3/B1;C1|C2",
             "A1/B2|A3/B2;C1|C1",
             "A1/B2|A3/B2;C1|C2",
             "A2/B1|A3/B1;C1|C1",
             "A2/B1|A3/B1;C1|C2",
             "A2/B1|A3/B2;C1|C1",
             "A2/B1|A3/B2;C1|C2",
+            "A2/B2|A3/B1;C1|C1",
+            "A2/B2|A3/B1;C1|C2",
             "A2/B2|A3/B2;C1|C1",
             "A2/B2|A3/B2;C1|C2",
         ]
@@ -563,54 +567,58 @@ class TestLabPatternParsing:
             LabPattern.parse("{}")
 
 
-class TestLabPatternOnGenotype:
+class TestLabPatternOnZygoteType:
+    """The somatic-label suffix belongs to ZygoteTypePattern, not the content."""
+
     @staticmethod
     def _species():
         return nt.Species.from_dict(
             "lab_test", {"c1": {"l1": ["A", "a"]}},
             gamete_labels=["default"],
+            somatic_labels=["default", "cas9_high", "cas9_low", "high", "low"],
         )
 
     def test_genotype_with_lab(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        p = parser.parse("A|a@cas9_high")
-        assert p.lab is not None
-        assert p.lab.matches("cas9_high")
-        assert not p.lab.matches("wildtype")
+        zt = nt.parse_selector("A|a@cas9_high", species=sp)
+        assert zt.slab is not None
+        assert zt.slab.matches("cas9_high")
+        assert not zt.slab.matches("wildtype")
 
     def test_genotype_without_lab_is_wildcard(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        p = parser.parse("A|a")
-        assert p.lab is None  # None means "any lab"
+        zt = nt.parse_selector("A|a", species=sp)
+        assert zt.slab is None  # None means "any lab"
 
     def test_genotype_with_negated_lab(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        p = parser.parse("A|a@!cas9_high")
-        assert p.lab is not None
-        assert not p.lab.matches("cas9_high")
-        assert p.lab.matches("cas9_low")
+        zt = nt.parse_selector("A|a@!cas9_high", species=sp)
+        assert zt.slab is not None
+        assert not zt.slab.matches("cas9_high")
+        assert zt.slab.matches("cas9_low")
 
     def test_genotype_with_lab_set(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        p = parser.parse("A|a@{high,low}")
-        assert p.lab.matches("high")
-        assert p.lab.matches("low")
-        assert not p.lab.matches("mid")
+        zt = nt.parse_selector("A|a@{high,low}", species=sp)
+        assert zt.slab.matches("high")
+        assert zt.slab.matches("low")
+        assert not zt.slab.matches("mid")
 
-    def test_cache_distinguishes_lab(self):
+    def test_content_entry_rejects_the_lab(self):
+        """The content pattern carries no label, so the entry refuses one."""
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        p1 = parser.parse("A|a@cas9_high")
-        p2 = parser.parse("A|a")
-        assert p1.lab is not None
-        assert p2.lab is None  # not cached from p1
+        with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
+            nt.parse_selector("A|a@cas9_high", species=sp, kind="genotype")
+
+    def test_labelled_and_plain_share_one_content_pattern(self):
+        """The cache keys on the label-free spelling, the only form accepted."""
+        sp = self._species()
+        assert nt.parse_selector("A|a", species=sp, kind="genotype") is nt.parse_selector("A|a", species=sp, kind="genotype")
 
 
-class TestLabPatternOnHaplotype:
+class TestLabPatternOnGameteType:
+    """The gamete-label suffix belongs to GameteTypePattern, not the content."""
+
     @staticmethod
     def _species():
         return nt.Species.from_dict(
@@ -620,24 +628,34 @@ class TestLabPatternOnHaplotype:
 
     def test_haplotype_with_glab(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        hp = parser.parse_haplotype_pattern("A@cas9_deposited")
-        assert hp.lab is not None
-        assert hp.lab.matches("cas9_deposited")
-        assert not hp.lab.matches("default")
+        hp = nt.parse_selector("A@cas9_deposited", species=sp, kind="gtype")
+        assert hp.glab is not None
+        assert hp.glab.matches("cas9_deposited")
+        assert not hp.glab.matches("default")
 
     def test_haplotype_without_glab(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        hp = parser.parse_haplotype_pattern("A")
-        assert hp.lab is None
+        hp = nt.parse_selector("A", species=sp, kind="gtype")
+        assert hp.glab is None
 
     def test_haplotype_negated_glab(self):
         sp = self._species()
-        parser = nt.GenotypePatternParser(sp)
-        hp = parser.parse_haplotype_pattern("A@!default")
-        assert not hp.lab.matches("default")
-        assert hp.lab.matches("cas9_deposited")
+        hp = nt.parse_selector("A@!default", species=sp, kind="gtype")
+        assert not hp.glab.matches("default")
+        assert hp.glab.matches("cas9_deposited")
+
+    def test_gamete_content_keeps_each_chromosome_separate(self):
+        """A gamete selector is not flattened across chromosome groups."""
+        sp = nt.Species.from_dict(
+            "hlab_multi",
+            {"first": {"one": ["A", "B"]}, "second": {"two": ["X", "Y"]}},
+            gamete_labels=["default", "cas9_deposited"],
+        )
+        gt = nt.parse_selector("A; X@cas9_deposited", species=sp, kind="gtype")
+        assert gt.glab is not None and gt.glab.matches("cas9_deposited")
+        patterns = gt.genome.haplotype_patterns
+        assert len(patterns) == 2
+        assert patterns[0] is not None and patterns[1] is not None
 
 
 class TestLabNameValidation:
@@ -648,12 +666,10 @@ class TestLabNameValidation:
 
     def test_invalid_names_rejected_in_genotype(self):
         sp = nt.Species.from_dict("vtest", {"c1": {"l1": ["A"]}})
-        parser = nt.GenotypePatternParser(sp)
         with pytest.raises(PatternParseError, match="Invalid lab name"):
-            parser.parse("A|A@bad name")
+            nt.parse_selector("A|A@bad name", species=sp)
 
     def test_invalid_names_rejected_in_haplotype(self):
         sp = nt.Species.from_dict("vtest2", {"c1": {"l1": ["A"]}})
-        parser = nt.GenotypePatternParser(sp)
         with pytest.raises(PatternParseError, match="Invalid lab name"):
-            parser.parse_haplotype_pattern("A@bad-name")
+            nt.parse_selector("A@bad-name", species=sp, kind="gtype")

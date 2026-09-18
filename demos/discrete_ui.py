@@ -1,3 +1,11 @@
+"""Build a discrete-generation homing-drive demo and launch the Web UI.
+
+Defines a one-locus species and a homing drive preset, assembles a
+panmictic discrete-generation population with a scheduled release of
+drive-heterozygous males at tick 10, then hands the population to
+``launch_vue`` for interactive simulation in the browser dashboard.
+"""
+
 import natal as nt
 from natal import launch_vue
 
@@ -48,7 +56,7 @@ pop = (nt.DiscreteGenerationPopulation
         carrying_capacity=100000,
         juvenile_growth_mode="beverton_holt"
     )
-    # 3b. Declare the release event with its event boundary on the Op itself.
+    # 4. Declare the release event with its event boundary on the Op itself.
     .hooks(
         nt.Op.add(
             genotypes="WT|Dr", ages=1, sex="male", delta=500,

@@ -125,11 +125,15 @@ class HelloFrame(TypedDict):
 
 
 class PongFrame(TypedDict):
+    """Replies to a client ping, echoing its nonce."""
+
     type: Literal["pong"]
     nonce: str
 
 
 class StatusFrame(TypedDict):
+    """Pushed on every lifecycle status change."""
+
     type: Literal["status"]
     status: SimulationStatus
     error: str | None
@@ -148,6 +152,8 @@ class TickUpdateFrame(TypedDict):
 
 
 class LogFrame(TypedDict):
+    """One engine log record (replayed to new connections)."""
+
     type: Literal["log"]
     ts: float
     level: LogLevel
@@ -157,11 +163,15 @@ class LogFrame(TypedDict):
 
 
 class ErrorFrame(TypedDict):
+    """Reports a failed command (validation or execution error)."""
+
     type: Literal["error"]
     message: str
 
 
 class ResetDoneFrame(TypedDict):
+    """Acknowledges a completed reset."""
+
     type: Literal["reset_done"]
 
 

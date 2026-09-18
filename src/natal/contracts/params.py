@@ -127,10 +127,11 @@ class Params:
         section is deliberately excluded — it is a "mod", not a save).
 
         Returns:
-            A fresh mapping of every ecology field name to its value;
-            arrays and the custom-slot dict are shallow-copied at the
-            top level (array contents are not duplicated — callers that
-            need isolation copy further).
+            A fresh mapping of every ecology field name to its value.
+            The mapping and the ``custom_slots`` dict are new objects,
+            but the values themselves are not copied: array fields alias
+            the live session arrays, so callers that need isolation must
+            copy further.
         """
         snapshot: EcologySnapshot = {
             "carrying_capacity": self.carrying_capacity,

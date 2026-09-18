@@ -208,7 +208,7 @@ Stub checking never rewrites the file; use `python scripts/generate_init_pyi.py`
 to regenerate it after an intentional export change.
 
 Wheel builds require Node.js 24 and Corepack. `python scripts/build_frontend.py`
-installs locked frontend dependencies, runs lint and tests, and builds the dashboard
+installs locked UI dependencies, runs lint and tests, and builds the dashboard
 into `src/natal/frontend/webui/dist`. The wheel builder calls this automatically;
 CI builds it once and shares the assets across the wheel matrix. Installed wheels
 include these assets, so end users do not need Node.js.

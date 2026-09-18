@@ -65,7 +65,7 @@ The `Op` objects themselves are the declaration: they are compiled into a CSR pl
 - **Callback**: single parameter `def hook(pop: TickContext) -> int`, decorated with `@nt.hook` (a plain function also works, with the event given by `.hooks(..., event=...)`).
 - **Selector callback**: `@nt.hook(..., selectors={...})`; selector values are resolved at build time and injected on each call.
 
-The `@nt.hook` decorator detects the latter two shapes from the function signature during the build. A zero-parameter function returning `List[HookOp]` remains a compatibility entry point for declarative hooks: the build-time flow may invoke it for reference collection and then for compilation, with the returned Ops entering the normal pipeline. Direct Op declarations with Op-local `event` and `priority` are recommended. The factory form is useful only when the list must be assembled dynamically; its decorator and call-level metadata still follow the precedence rules below.
+The `@nt.hook` decorator detects the latter two shapes from the function signature during the build. A zero-parameter function returning `List[HookOp]` remains a compatibility entry point for declarative hooks: the build-time flow may invoke it for reference collection and then for compilation, with the returned Ops entering the normal pipeline. An empty list is a legal declaration that does nothing; any other return value, or a list carrying an element that is not a `HookOp`, raises `TypeError` at build time (the message names the received type) instead of silently compiling to zero operations. Direct Op declarations with Op-local `event` and `priority` are recommended. The factory form is useful only when the list must be assembled dynamically; its decorator and call-level metadata still follow the precedence rules below.
 
 The legacy `(state, config, deme_id)` three-parameter signature is explicitly rejected (`TypeError` -- it is a leftover of the njit era with no migration channel). Callbacks return `0` (or `RESULT_CONTINUE`) to continue; a non-zero value (or `RESULT_STOP`) stops the simulation.
 
@@ -101,7 +101,7 @@ Think of them as "declarative transformations over the state tensor". Every `Op`
 nt.Op.set_param("carrying_capacity", "K * 0.95", every=10, event="early", priority=0)
 ```
 
-- `value` is an arithmetic expression (compiled to RPN): operands are jsonc parameter names (`K` is the registered alias of `carrying_capacity`) or numeric literals; operators are `+ - * /` with parentheses. A plain number is sugar for a constant. The expression is evaluated **against the current values every firing tick**, so `"K * 0.95"` compounds.
+- `value` is an arithmetic expression (compiled to RPN): operands are the five settable ecology scalars listed below (or their registered aliases, e.g. `K` for `carrying_capacity`) or numeric literals; operators are `+ - * /` with parentheses. Any other parameter name in the expression raises `ValueError` at compile time. A plain number is sugar for a constant. The expression is evaluated **against the current values every firing tick**, so `"K * 0.95"` compounds.
 - `every` / `start` control the firing plan: `tick >= start and (tick - start) % every == 0`; `when` adds an extra condition.
 - The `event` argument defaults to `early`.
 
@@ -303,11 +303,11 @@ Use the single-parameter callback shape when you need to read and write state ar
 |---|---|
 | `pop.tick` | Current simulation tick (read-only). |
 | `pop.deme_id` | Deme index of this invocation (`0` panmictic, the live deme index under a SpatialPopulation, read-only). |
-| `pop.state` | Writable state view (short-term loan; writes take effect immediately). |
-| `pop.params` | Writable parameter surface (same writer stack as `pop.params`; attribute writes are bounds-validated and reach the draft, the live Rust session, and the parameter snapshot log). |
+| `pop.state` | Writable transaction candidate, materialized on first state or metrics access; commits when the callback succeeds, discarded if it fails. |
+| `pop.params` | Writable parameter surface (same writer stack as `pop.params`; attribute writes are validated in the candidate and reach the draft, the live Rust session, and the parameter snapshot log when the callback succeeds). |
 | `pop.blueprint` | Read-only dimensions, name catalogs, and engine switches (`n_sexes`, `n_ages`, `n_ztypes`, `ztype_names`, ...). |
 | `pop.metrics` | On-demand metrics view (recomputed on every access). |
-| `pop.rng` | Deterministic per-invocation random stream (derived from population slot, tick, deme, hook index; never touches global `numpy.random`). |
+| `pop.rng` | Controlled sampler of the persistent Rust RNG stream for this deme; each invocation clones the stream and commits its advances only on success (never touches global `numpy.random`). |
 | `pop.update()` | Returns a `RuntimeUpdater` bound to the owning population (same syntax as the build chain). |
 | `pop.stop()` / `pop.stop_requested` | Request/query run termination at the event boundary. |
 

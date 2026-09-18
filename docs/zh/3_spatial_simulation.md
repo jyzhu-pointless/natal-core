@@ -805,9 +805,9 @@ launch_vue(spatial, port=8000, title="Spatial Debug Dashboard")
 
 `adjacency.shape` 必须等于 `(n_demes, n_demes)`。
 
-### 错误 5：kernel_bank 与 topology 不匹配
+### 错误 5：kernel_bank 缺少 topology 时静默失效
 
-异构 kernel（`kernel_bank` + `deme_kernel_ids`）走 kernel 路径，要求 `topology` 必须存在。如果只传了 `kernel_bank` 但没有 `topology`，构造时会报错。
+异构 kernel（`kernel_bank` + `deme_kernel_ids`）走 kernel 路径，需要 `topology` 才能生效。但缺少 `topology` **不会**被当作错误捕获：构造照常成功，缺失的 topology 会解析为单位邻接——没有个体在 deme 间迁移，kernel bank 实际上被忽略。默认 `migration_rate=0` 时完全没有提示；只有当 `migration_rate > 0` 时，builder 才会发出"没有个体能在 deme 间移动"的警告。要让异构迁移真正生效，请在 `.migration(...)` 中同时传入 `topology=`（或显式的 `kernel=` / `adjacency=`）。
 
 ## 小结
 

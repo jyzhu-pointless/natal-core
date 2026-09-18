@@ -196,7 +196,7 @@ O_k=\sum_i\sum_j E_{ij}P_{ijk}.
 
 因此，在本例的整数随机路径中，最终不是强制恰好有 50 个 AA、100 个 Aa、50 个 aa 后代；连总产卵数本身也会波动。确定性算例可以核对公式，但不能证明随机分布、方差或多步平均轨迹正确，尤其存在密度反馈时不能把“随机轨迹的均值”等同于“确定性轨迹”。
 
-本章所读的离散 `fertilize_discrete()` 在随机产卵路径中直接使用 Poisson 或连续对应版本；它没有年龄结构 `fertilize()` 的 `fixed_egg_count` 分支。参数在共享 Blueprint 中存在，不意味着两条实现都会以相同方式使用它。
+本章所读的离散 `fertilize_discrete()` 在随机产卵路径中直接使用 Poisson 或连续对应版本。它**确实包含** `fixed_egg_count` 分支，语义与年龄结构 `fertilize()` 一致：置位时用取整后的期望产卵量替代 Poisson 抽样，两种抽样模式均如此。共享 Blueprint 字段只在实现刻意对齐之处才有相同用法。
 
 `continuous_sampling` 也不是把整数随机结果转成 float。其连续二项函数用 Beta 比例构造，但在 n≤1+EPS 时直接返回 n·p；连续 Poisson 使用 Gamma 抽样；连续多项使用归一化 Gamma 值。它们是另一组数值规则，不能仅凭“结果是小数”认定等同于确定性计算或自动可微。
 

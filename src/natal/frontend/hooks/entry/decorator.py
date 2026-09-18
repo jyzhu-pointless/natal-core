@@ -94,7 +94,10 @@ def hook(
     * ``selectors=`` is set → **Selector callback** (selector values
       injected as keyword arguments after the context).
     * function takes no required parameters → **Declarative hook**
-      (called once; must return ``List[HookOp]``).
+      (invoked at build time — it may be called twice, once for reference
+      collection and once for compilation; must return ``List[HookOp]`` —
+      an empty list is a legal no-op, but any other return value, or a
+      list containing a non-``HookOp`` element, raises :class:`TypeError`).
     * function takes exactly one required parameter → **Callback**
       (``def hook(pop) -> int``; ``0``/``None`` continues, nonzero stops).
     * anything else → :class:`TypeError` (the legacy
@@ -194,17 +197,27 @@ def hook(
                     deme_selector=actual_deme_selector,
                 )
             elif required == 0:
-                # Declarative: called ONCE at compile time; its return value
-                # (list of HookOp) is compiled into a CSR plan.
+                # Declarative: invoked at build time (once for reference
+                # collection, once for compilation); its return value
+                # (list of HookOp) is compiled into a CSR plan.  An empty list
+                # is a legal no-op; a non-list return, or a list carrying an
+                # element that is not a HookOp, is a declaration error.
                 result: object = func()
-                items = list(cast("List[object]", result)) if isinstance(result, list) else []
-                if not all(isinstance(op, HookOp) for op in items):
+                if not isinstance(result, list):
                     raise TypeError(
                         f"Declarative hook '{func.__name__}' must return "
                         "List[HookOp], or take one 'pop' parameter for the "
-                        "callback style."
+                        f"callback style; got {type(result).__name__}."
                     )
-                ops = [op for op in items if isinstance(op, HookOp)]
+                items = cast("List[object]", result)
+                invalid = [op for op in items if not isinstance(op, HookOp)]
+                if invalid:
+                    raise TypeError(
+                        f"Declarative hook '{func.__name__}' must return "
+                        "List[HookOp], or take one 'pop' parameter for the "
+                        f"callback style; list contains {type(invalid[0]).__name__}."
+                    )
+                ops = cast("List[HookOp]", items)
                 desc = compile_declarative_hook(
                     ops,
                     layout,

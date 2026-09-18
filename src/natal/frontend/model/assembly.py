@@ -397,8 +397,9 @@ def build_population_config(
     """Build a :class:`ModelDraft` directly (legacy‑free path).
 
     This function constructs a complete configuration, filling missing arrays
-    with sensible defaults and computing derived values such as equilibrium
-    metrics and generation time.
+    with sensible defaults and deriving generation time when it is not
+    supplied. Equilibrium metrics are not computed or stored here; they are
+    derived on demand via the ``pop.params.expected_*`` read surface.
 
     Args:
         n_genotypes: Number of diploid genotype types BEFORE slab expansion
@@ -410,6 +411,9 @@ def build_population_config(
         n_ages: Number of age classes (default 2).
         n_glabs: Number of gamete‑label variants per haplotype (default 1).
         n_slabs: Number of somatic-label variants per genotype (default 1).
+        gamete_labels: Registered gamete label strings (unused here; kept
+            for signature parity with the discrete-generation factory).
+        somatic_labels: Registered somatic label strings (as above).
         stochastic: Whether to use stochastic demography.
         continuous_sampling: Use Dirichlet sampling for gamete proportions.
         age_based_mating_rates: Array (n_sexes, n_ages) – mating rates.
@@ -422,6 +426,8 @@ def build_population_config(
         fecundity_fitness: Array (n_sexes, n_ztypes) – fecundity fitness.
         sexual_selection_fitness: Array (n_ztypes, n_ztypes) – sexual
             selection coefficients.
+        zygote_viability_fitness: Array (n_sexes, n_ztypes) – zygote
+            viability fitness.
         age_based_relative_competition_strength: Array (n_ages,) – competition
             weight per age.
         new_adult_age: Age at which individuals become adults (default 2).
@@ -435,8 +441,17 @@ def build_population_config(
             ``BEVERTON_HOLT``.
         generation_time: Optional pre‑computed generation time; if None, computed.
         has_sex_chromosomes: Whether the species has sex‑chromosome constraints.
-            If True, offspring sex is determined by genotype compatibility;
-            if False, only sex_ratio is used (default False).
+            When True, offspring sex follows per‑genotype sex‑fix masks;
+            pass the structure‑derived ``female_only_by_sex_chrom`` /
+            ``male_only_by_sex_chrom`` masks from the species blueprint.
+            If those are omitted, a genotype‑compatibility heuristic runs
+            instead and raises ``ValueError`` when it yields no sex‑fixed
+            genotype — sex is never silently assigned from compatibility
+            weights. When False, only sex_ratio is used (default False).
+        female_only_by_sex_chrom: Structure‑derived ``(n_genotypes,)`` bool
+            mask marking genotypes that develop as female only.
+        male_only_by_sex_chrom: Structure‑derived ``(n_genotypes,)`` bool
+            mask marking genotypes that develop as male only.
         zygotes_to_gametes_map: Pre‑built mapping from genotype to gametes.
         gametes_to_zygotes_map: Pre‑built mapping from gamete pair to zygote.
         initial_individual_count: Initial population counts (n_sexes, n_ages,
@@ -465,6 +480,9 @@ def build_population_config(
 
     Raises:
         AssertionError: If required dimensions are invalid or shape mismatches occur.
+        ValueError: If has_sex_chromosomes is True, no structure-derived
+            sex masks are passed, and the compatibility heuristic finds
+            no sex-fixed genotype.
     """
     draft = build_config_maps(
         n_genotypes=n_genotypes,
@@ -576,11 +594,10 @@ def build_discrete_engine_config(
     fertility = np.ones(n_ages, dtype=np.float64)
     fertility[0] = 0.0
 
-    # Pop stochastic / continuous_sampling once into locals; both
-    # build_config_maps and the ModelDraft constructor need them, and a
-    # double kwargs.pop would silently fall back to the default on the
-    # second read (a pre-existing bug that gave stochastic=True even
-    # when the caller passed False).
+    # Pop stochastic / continuous_sampling once into locals; the values
+    # feed build_config_maps alone, and re-popping the same key would
+    # silently fall back to the default on the second read (a pre-existing
+    # bug that gave stochastic=True even when the caller passed False).
     stochastic_val = bool(kwargs.pop("stochastic", True))
     continuous_sampling_val = bool(kwargs.pop("continuous_sampling", False))
     equilibrium_val = kwargs.pop("equilibrium_individual_distribution", None)

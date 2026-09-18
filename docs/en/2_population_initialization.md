@@ -87,11 +87,11 @@ Configure the population's age structure, including the total number of age stag
 
 ### `initial_state(...)` – Initial State
 
-Initial state parameters take effect at the start of the simulation, providing base data for various sampling functions in `algorithms.py`. The initial individual count distribution directly affects subsequent reproduction and survival calculations; sperm storage data is used by the `sample_mating` function during the reproduction phase.
+Initial state parameters take effect at the start of the simulation, providing base data for the reproduction and survival sampling stages of the simulation kernels. The initial individual count distribution directly affects subsequent reproduction and survival calculations; sperm storage data is used during the mating step of the reproduction phase.
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `individual_count` | `Mapping` | Initial individual count distribution, format `{sex: {genotype: age_data}}` | Required | Initial state | If not set, `build()` will raise an error; supports scalar, sequence, mapping, and other formats |
+| `individual_count` | `Mapping` | Initial individual count distribution, format `{sex: {genotype: age_data}}` | Required | Initial state | If not set, `build()` still succeeds and produces an empty (zero-count) population; supports scalar, sequence, mapping, and other formats |
 | `sperm_storage` | `Optional[Mapping]` | Initial sperm storage for age-structured models | `None` | reproduction | Three-level mapping format; sperm storage is always enabled in age-structured models |
 
 **Age data (`age_data`) format** (all counts must be non-negative):
@@ -136,7 +136,7 @@ Validation rules:
 | `female_age_based_survival` | `Optional` | Female per-age survival rates | `None` | survival | Supports scalar, sequence, mapping, function, etc.; `None` uses default curve; range `[0, 1]` |
 | `male_age_based_survival` | `Optional` | Male per-age survival rates | `None` | survival | Same as above |
 
-**Code examples** (from `_resolve_survival_param`):
+**Code examples** (acceptance forms resolved by `resolve_age_param`):
 
 ```python
 # A) None → use default curve
@@ -166,7 +166,7 @@ Validation rules:
 | `male_age_based_mating_rate` | `Optional` | Male per-age mating rates | `None` | reproduction | Length must equal `n_ages`; default values used when not set |
 | `female_age_based_fertility` | `Optional` | Female per-age relative fertility weights | `None` | reproduction | Length must equal `n_ages`; used to modulate egg production contribution across ages |
 | `age_based_reproduction_rate` | `Optional` | Female per-age reproduction participation rates. | `None` | reproduction | Length must equal `n_ages`; defaults to all 1.0 when not set. Supports scalar, sequence, mapping, function. |
-| `eggs_per_female` | `float` | Base number of eggs per female | `50.0` | reproduction | Baseline for population egg production; start with neutral value during tuning |
+| `eggs_per_female` | `float` | Base number of eggs per female | `100.0` | reproduction | Baseline for population egg production; start with neutral value during tuning |
 | `fixed_egg_count` | `bool` | Whether egg count is fixed | `False` | reproduction | `True` for fixed egg count, `False` for random egg production |
 | `sex_ratio` | `float` | Proportion of female offspring | `0.5` | reproduction | Range `[0, 1]`; `0.5` means equal sex ratio. Ignored when sex chromosomes can determine offspring sex (e.g., XX/ZW for female, XY/ZZ for male) |
 | `sperm_displacement_rate` | `float` | Rate at which new sperm replaces old sperm | `0.05` | reproduction | Typical range `(0, 1]`; larger values mean faster replacement |
@@ -195,7 +195,10 @@ The `competition_strength` scalar sets only the second juvenile age weight. The 
 Three acceptance bottom lines: (1) at the equilibrium point x=1 all curves converge to `s` (g(1)=s); (2) at low density x->0, g(0)=r·s (the curves share values at the joint equilibrium point); (3) deterministic simulations produce bitwise-reproducible curve scaling.
 
 A fourth rule covers an unusable reference: when the expected competition strength `C*` is zero — a carrying capacity of zero, or a declared equilibrium distribution whose juvenile entries are all zero — the compensatory modes 2–4 recruit nothing (scaling `0`) instead of falling back to an unregulated scaling of `1.0`. A zero `eggs_per_female` is another trigger while `new_adult_age == 1`, because age 0 is then the only competing age. `fixed` (mode 1) is evaluated against the carrying capacity rather than `C*`, so a positive `K` still clamps at `K`. `no_competition` (mode 0) remains the way to say "do not regulate", including for models whose only recruitment comes from hooks.
-| `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
+
+| Parameter | Type | Description | Default | Affected Stage | Notes |
+|---|---|---|---|---|---|
+| `low_density_growth_rate` | `float` | Intrinsic growth rate at low density | `6.0` | Juvenile density regulation | Must be finite and in [1, 1000000] in every mode; growth multiplier under no competition; overly large values can cause oscillations |
 | `age_1_carrying_capacity` | `Optional[int]` | Carrying capacity at the age=1 stage | `None` | Juvenile density regulation | If explicitly specified, takes highest priority |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | Legacy parameter name (deprecated) with same function as `age_1_carrying_capacity` | `None` | Juvenile density regulation | `age_1_carrying_capacity` recommended; when both are set, `age_1_carrying_capacity` takes precedence |
 | `expected_num_new_adult_females` | `Optional[int]` | Expected number of adult females, used to independently calculate expected egg production | `None` | Expected egg production derivation | Decoupled from `age_1_carrying_capacity`: one sets capacity, the other sets egg production (see below) |
@@ -226,6 +229,13 @@ The initialization path has three scenarios:
    - If expected egg production is missing: calculates expected egg production from the female distribution in the initial state
 
 Regardless of the path taken, the system will genuinely construct the equilibrium distribution, then compute all competition metrics from it. This ensures consistency among $K$, expected egg production, and the equilibrium survival rate. The derived distribution splits the age-1 total by the *surviving* sex ratio — the offspring sex ratio filtered by each sex's own age-0 survival — so the calibrated equilibrium stays at $K$ even when the two sexes survive differently; with equal age-0 survival this reduces to the offspring sex ratio itself.
+
+Two inputs are read exactly as the owning engine reads them, so the reference state is one the model can actually reach:
+
+- **Offspring sex ratio.** A species whose sex is determined by sex chromosomes ignores `sex_ratio` (see the parameter table above); the calibration follows the same rule and splits the reference composition by the balanced genetic 1:1 split, so a non-0.5 value stays inert instead of moving the calibrated equilibrium.
+- **Per-age fertility.** Discrete generations have no age-dependent fertility, so the calibration uses an implicit 1.0 there, while the age-structured path clamps the stored weight to `[0, 1]` — in both cases matching its tick.
+
+The derived reference is the **wild-type** background: it is built from the species structure and the ecology parameters only. Fitness coefficients and the modifier/preset rule sets — which rewrite the transmission tables — are overlays: they change the realized composition, and, when they carry a cost, the realized total, without changing what $K$ anchors. Applying `viability`, `fecundity`, or `zygote_viability` fitness therefore moves the realized equilibrium away from $K$; that is the cost taking effect, not a calibration error. `sexual_selection` is the exception: mating preferences redistribute paternities but preserve each female's total pair weight, so the total stays at $K$. A model whose anchor should be something other than the wild-type equilibrium declares it explicitly with `equilibrium_distribution`.
 
 **Expected egg production formula**:
 
@@ -268,7 +278,7 @@ Similarly, when the system automatically constructs an equilibrium distribution 
 
 ### `fitness(...)` – Fitness Coefficients
 
-Fitness parameters take effect at different stages of the simulation. `sexual_selection` affects mating probabilities in `compute_mating_probability_matrix` during reproduction, `fecundity` affects egg production in `fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction`, `viability` combines with age-specific survival rates in `compute_viability_survival_rates` during the survival phase, and `zygote_viability` is applied to newborn individuals immediately after the reproduction phase.
+Fitness parameters take effect at different stages of the simulation. `sexual_selection` affects mating probabilities during the mating step of reproduction, `fecundity` affects egg production during fertilization, `viability` combines with age-specific survival rates during the survival phase, and `zygote_viability` is applied to newborn individuals immediately after the reproduction phase.
 
 NATAL supports flexible fitness configuration schemes. In simulation, the following fitness types take effect at different stages:
 
@@ -379,9 +389,9 @@ Common errors:
 
 ### `build()` – Compilation Build
 
-The `build()` method accepts optional `name` (population name) and `hooks` (hook registrations), with constraints:
+The `build()` method accepts optional `name` (population name) and `hook_items` (hook registrations), with constraints:
 
-- `initial_state(...)` must be called before it to set the initial state.
+- `initial_state(...)` is optional; without it `build()` succeeds and produces an empty (zero-count) population.
 - Execution order:
   1. Sync equilibrium metrics
   2. Merge stored + passed hooks
@@ -432,7 +442,7 @@ Validation rules:
 
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
-| `eggs_per_female` | `float` | Number of eggs per female per generation | `50.0` | reproduction | Baseline for egg production; start with neutral value during tuning |
+| `eggs_per_female` | `float` | Number of eggs per female per generation | `100.0` | reproduction | Baseline for egg production; start with neutral value during tuning |
 | `sex_ratio` | `float` | Proportion of female offspring | `0.5` | reproduction | Range `[0, 1]`; `0.5` means equal sex ratio. Ignored when sex chromosomes can determine offspring sex (e.g., XX/ZW for female, XY/ZZ for male) |
 | `female_adult_mating_rate` | `float` | Adult female mating rate | `1.0` | reproduction | Proportion of females participating in mating; range `[0, 1]` |
 | `male_adult_mating_rate` | `float` | Adult male mating rate | `1.0` | reproduction | Proportion of males participating in mating; range `[0, 1]` |
@@ -454,7 +464,7 @@ Modeling advice:
 | Parameter | Type | Description | Default | Affected Stage | Notes |
 |---|---|---|---|---|---|
 | `juvenile_growth_mode` | `Union[int, str]` | Density regulation mode for juvenile growth | `"beverton_holt"` | Juvenile density regulation | Defaults to `"beverton_holt"`; `"logistic"`, `"ricker"` and the other modes stay available |
-| `low_density_growth_rate` | `float` | Intrinsic growth multiplier at low density | `6.0` | Juvenile density regulation | Growth multiplier under no competition; overly large values can cause oscillations |
+| `low_density_growth_rate` | `float` | Intrinsic growth multiplier at low density | `6.0` | Juvenile density regulation | Must be finite and in [1, 1000000] in every mode; growth multiplier under no competition; overly large values can cause oscillations |
 | `carrying_capacity` | `Optional[int]` | Carrying capacity for juveniles | `None` | Density upper limit | If not set, the system will attempt automatic derivation; explicitly specified values take highest priority |
 
 ### `presets(...)` / `fitness(...)` / `modifiers(...)` / `hooks(...)` / `build()`
@@ -487,7 +497,7 @@ The semantics of these methods are fully consistent with the age-structured mode
 
 | Error Symptom | Possible Cause | Solution |
 |---|---|---|
-| `build()` raises an error | Forgot to set `initial_state(...)` | Call `initial_state(...)` before `build()` |
+| Population is empty (all counts zero) | `initial_state(...)` was not called — `build()` succeeds with a zero-count population | Add `.initial_state(...)` to the chain before `build()` |
 | Error during initialization or compilation | Age vector length does not match `n_ages` | Ensure all age-related parameter lengths equal `n_ages` |
 | Abnormal results or runtime errors | `sex_ratio` or other probability parameters out of bounds | Check that parameters are within valid ranges (e.g., `[0, 1]`) |
 | Behavior does not match expectations | Same-named parameter set multiple times leading to overwrite | Note that `generation_time`, `equilibrium_distribution` etc. can be set in multiple methods; later calls override earlier ones |
@@ -498,7 +508,7 @@ The chainable API is powered by a `PopulationBuilder` object. Each chain method 
 `ModelDraft` NumPy arrays — no deferred execution, no intermediate accumulation.
 
 1. **Basic config**: `setup()` and `age_structure()` set flags and dimensions
-2. **State config**: `initial_state()` resolves dicts to 3-D arrays and writes to config
+2. **State config**: `initial_state()` stores the distribution as the authoritative declaration; the 3-D arrays are derived from it once the final dimensions are known (`age_structure()` rebuilds and `build()`), so declaring before locking the age structure neither loses the counts nor gets rejected against provisional dimensions
 3. **Dynamics config**: `survival()`, `reproduction()`, `competition()` write per-age arrays and 0-d scalars
 4. **Advanced config**: `presets()`, `fitness()`, `modifiers()` write immediately (not deferred)
 5. **Final build**: `build()` syncs equilibrium metrics and creates the Population object

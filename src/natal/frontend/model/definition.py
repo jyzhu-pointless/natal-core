@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, cast
 import numpy as np
 from numpy.typing import NDArray
 
+from natal.frontend.model.initial_state import InitialDistributionDeclaration
+
 if TYPE_CHECKING:
     from natal.frontend.builder import PopulationBuilder
     from natal.frontend.genetics import Species
@@ -30,15 +32,25 @@ if TYPE_CHECKING:
 
 
 def copy_declaration_value(value: Any) -> Any:
-    """Copy owned arrays/containers while preserving opaque recipes and resources."""
+    """Copy owned arrays/containers while preserving opaque recipes and resources.
+
+    Args:
+        value: The declaration value to detach. NumPy arrays, mappings,
+            lists, and tuples are copied recursively; any other object
+            (recipes, hooks, and other opaque user resources) is returned
+            unchanged with its identity preserved.
+
+    Returns:
+        The detached copy, or *value* itself for unowned types.
+    """
     # Any: declaration values include heterogeneous recipes and user resources;
     # copying is deliberately restricted to NATAL-owned container types.
     import numpy as np
 
     if isinstance(value, np.ndarray):
         return cast("np.ndarray[Any, Any]", value).copy()
-    if isinstance(value, dict):
-        return {key: copy_declaration_value(item) for key, item in cast("dict[object, Any]", value).items()}
+    if isinstance(value, Mapping):
+        return {key: copy_declaration_value(item) for key, item in cast("Mapping[object, Any]", value).items()}
     if isinstance(value, list):
         return [copy_declaration_value(item) for item in cast("list[Any]", value)]
     if type(value) is tuple:
@@ -81,7 +93,16 @@ class SpatialInputs:
 
 
 def snapshot_spatial_inputs(inputs: SpatialInputs) -> SpatialInputs:
-    """Detach owned spatial values without re-running batches or recipes."""
+    """Detach owned spatial values without re-running batches or recipes.
+
+    Args:
+        inputs: The normalized spatial controls to snapshot.
+
+    Returns:
+        A new :class:`SpatialInputs` whose batch values, group calls,
+        migration mapping, and observation groups are detached copies;
+        every other field is shared unchanged.
+    """
     from dataclasses import replace
 
     return replace(
@@ -136,6 +157,7 @@ class ModelDefinition:
     history_max_rows: int | None = None
     compress: bool = False
     declared_zygote_types: frozenset[str] | frozenset[int] | None = None
+    initial_distribution: InitialDistributionDeclaration | None = None
     _draft: ModelDraft | None = field(default=None, repr=False)
     _registry: IndexRegistry | None = field(default=None, repr=False)
     _fitness_base: tuple[NDArray[np.float64], ...] = field(default=(), repr=False)
@@ -158,6 +180,7 @@ class ModelDefinition:
         history_max_rows: int | None = None,
         compress: bool = False,
         declared_zygote_types: frozenset[str] | frozenset[int] | None = None,
+        initial_distribution: InitialDistributionDeclaration | None = None,
         draft: ModelDraft | None = None,
         registry: IndexRegistry | None = None,
         fitness_base: tuple[NDArray[np.float64], ...] = (),
@@ -190,6 +213,10 @@ class ModelDefinition:
         object.__setattr__(self, "history_max_rows", history_max_rows)
         object.__setattr__(self, "compress", compress)
         object.__setattr__(self, "declared_zygote_types", declared_zygote_types)
+        # The raw initial-distribution declaration: an immutable
+        # InitialDistributionDeclaration whose containers were copied at
+        # capture time, so it is stored as-is (opaque references kept).
+        object.__setattr__(self, "initial_distribution", initial_distribution)
         object.__setattr__(self, "_draft", None if draft is None else detach_draft(draft))
         object.__setattr__(self, "_registry", None if registry is None else copy_registry(registry))
         # Any: declaration values include heterogeneous recipes and user resources.
@@ -268,6 +295,7 @@ class ModelDefinition:
             observation_collapse_age=self.observation_collapse_age,
             history_mode=self.history_mode, history_max_rows=self.history_max_rows,
             compress=self.compress, declared_zygote_types=self.declared_zygote_types,
+            initial_distribution=self.initial_distribution,
             draft=self._draft, registry=self._registry,
             fitness_base=self._fitness_base, fitness_steps=self._fitness_steps,
             hook_calls=self._hook_calls, observation_groups=self._observation_groups,

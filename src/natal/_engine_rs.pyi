@@ -286,6 +286,8 @@ def equilibrium_metrics_flat(
     competition_weights: NDArray[np.float64],
     new_adult_age: int,
     n_ages: int,
+    has_sex_chromosomes: bool,
+    discrete_generation: bool,
     declared_distribution: NDArray[np.float64] | None = ...,
     external_expected_eggs: float | None = ...,
 ) -> tuple[float, float]:

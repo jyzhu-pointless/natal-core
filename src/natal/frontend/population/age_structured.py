@@ -85,6 +85,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             species: Species object describing genetic architecture.
             population_config: Fully initialized ModelDraft instance.
             name: Human-readable population name. If None, uses "AgeStructuredPop".
+            index_registry: Optional pre-built IndexRegistry (possibly
+                index-compressed) injected by the builder; ``None`` creates
+                a fresh registry from the Species.
             initial_individual_count: Initial population distribution.
                 Format: {sex: {genotype: counts_by_age}}
             initial_sperm_storage: Initial sperm storage state (if supported).
@@ -365,6 +368,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             Supported formats for age_data (innermost value):
             - Dict[int, float]: Sparse mapping {age: count, ...}
             - List[float]: Dense list [count_age0, count_age1, ...]
+            - Tuple[float, ...]: Dense sequence in tuple form
             - float/int: Scalar value applied to all adult ages (>= new_adult_age)
 
         Args:
@@ -380,24 +384,31 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         self._live_state().sperm_storage.fill(0.0)
 
         # Type-check keys before resolution so a malformed mapping fails with a
-        # clear message rather than a registry lookup error.
+        # clear message rather than a registry lookup error.  Explicit raises,
+        # not asserts: these guard user input and must survive ``python -O``.
+        # The parameter annotation states the supported contract; these checks
+        # are its runtime enforcement point for callers that static analysis
+        # never saw (hence the unnecessary-isinstance suppressions).
         for female_key, male_dict in sperm_storage_dist.items():
-            assert isinstance(female_key, (str, Genotype)), (
-                f"Female genotype key must be Genotype or str, got {type(female_key)}"
-            )
+            if not isinstance(female_key, (str, Genotype)):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime enforcement of the declared contract
+                raise TypeError(
+                    f"Female genotype key must be Genotype or str, got {type(female_key)}"
+                )
 
             f_z = resolve_genotype_key_ztype_index(female_key, species, self.registry)
 
             for male_key, age_data in male_dict.items():
-                assert isinstance(male_key, (str, Genotype)), (
-                    f"Male genotype key must be Genotype or str, got {type(male_key)}"
-                )
+                if not isinstance(male_key, (str, Genotype)):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime enforcement of the declared contract
+                    raise TypeError(
+                        f"Male genotype key must be Genotype or str, got {type(male_key)}"
+                    )
 
                 m_z = resolve_genotype_key_ztype_index(male_key, species, self.registry)
 
-                assert isinstance(age_data, (dict, list, tuple, int, float)), (
-                    f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}"
-                )
+                if not isinstance(age_data, (dict, list, tuple, int, float)):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime enforcement of the declared contract
+                    raise TypeError(
+                        f"Age data must be Dict, List, or numeric scalar, got {type(age_data)}"
+                    )
 
                 # Parse age_data: supports multiple formats
                 if isinstance(age_data, dict):
@@ -629,7 +640,7 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             sex: One of ``'female'``, ``'male'``, or ``'both'`` (aliases accepted).
 
         Returns:
-            float: Total number of adults for the requested sex(es).
+            int: Total number of adults for the requested sex(es).
 
         Raises:
             ValueError: If the sex identifier is not recognized.
@@ -723,7 +734,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         population unchanged.
 
         Args:
-            state: Flattened array, PopulationState object, or data dictionary.
+            state: One of: a flattened state array, a PopulationState
+                object, a data dictionary with ``individual_count`` and
+                ``sperm_storage`` entries, or a 2-tuple
+                ``(individual_count, sperm_storage)`` of arrays (the tick
+                stays at the current value).
         """
         self._require_standalone_owner("import_state")
         from natal.frontend.data import PopulationState, parse_flattened_state
@@ -792,7 +807,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             tick: The target tick number.
 
         Raises:
-            ValueError: If no record is found for the specified tick.
+            ValueError: If history is empty, if history is not in ``"raw"``
+                mode, or if no record is found for the specified tick.
         """
         self._require_standalone_owner("restore_checkpoint")
         super().restore_checkpoint(tick)
@@ -984,10 +1000,11 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             AgeStructuredPopulation: Self for chaining.
 
         Raises:
-            RuntimeError: If the population is already finished and cannot
-                continue, or if the native engine extension is unavailable
-                (the session is created by ``build()`` or lazily at the
-                first run).
+            RuntimeError: If a run is already in progress (nested run is
+                forbidden), if the population has failed, if the
+                population is already finished and cannot continue, or if
+                the native engine extension is unavailable (the session is
+                created by ``build()`` or lazily at the first run).
         """
         self._require_standalone_owner("run")
         # Guards, in order: re-entrancy, then failed, then finished — each
@@ -1032,7 +1049,9 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
             AgeStructuredPopulation: Self for chaining.
 
         Raises:
-            RuntimeError: If the population is already finished and cannot continue.
+            RuntimeError: If a run is already in progress (nested run is
+                forbidden), if the population has failed, or if the
+                population is already finished and cannot continue.
         """
         return self.run(
             n_steps=1, record_every=self.record_every, clear_history_on_start=False
@@ -1042,7 +1061,8 @@ class AgeStructuredPopulation(BasePopulation[PopulationState]):
         """Return the age distribution for the requested sex.
 
         Args:
-            sex: One of ``'female'``, ``'male'``, or ``'both'``.
+            sex: One of ``'female'``, ``'male'``, or ``'both'`` (aliases
+                ``'F'`` and ``'M'`` accepted).
 
         Returns:
             NDArray[np.float64]: Age distribution array with shape (n_ages,).

@@ -66,10 +66,13 @@ def _session(request: Request) -> SimulationSession:
 
 
 def _panmictic(request: Request) -> PanmicticPopulation:
-    """Return the population, rejecting spatial populations for now.
+    """Return the population for the panmictic-only endpoints.
+
+    These routes permanently serve panmictic populations; spatial
+    dashboards use their own ``/api/spatial/*`` routes instead.
 
     Raises:
-        HTTPException: 501 while spatial support is still Phase 3 work.
+        HTTPException: 501 when the session population is spatial.
     """
     population = _session(request).population
     if isinstance(population, SpatialPopulation):

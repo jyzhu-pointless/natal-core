@@ -37,7 +37,7 @@ flowchart TD
 | `late` | 生存之后、aging 之前 |
 | `finish` | `run(..., finish=True)` 结束时 |
 
-同一事件内，声明式槽与回调槽按 priority 混合执行，**不是"先跑完所有声明式再跑回调"**。核验：priority 1 的声明式缩放与 priority 5 的回调，执行顺序是 `callback-first`、`callback-early`（各自事件内回调在后），最终数量是缩放两次中的一次作用于幼体后的结果（每性别 `[6.25, 12.5, 6.25]`）。
+同一事件内，声明式槽与回调槽按 priority 混合执行，**不是"先跑完所有声明式再跑回调"**。核验：priority 1 的声明式缩放与 priority 5 的回调，执行顺序是 `callback-first`、`callback-early`（各自事件内回调在后），最终数量是对幼体应用一次缩放后的结果（每性别 `[6.25, 12.5, 6.25]`）。
 
 Rust 侧 [HookProgram](https://github.com/jyzhu-pointless/natal-core/blob/main/rust/src/hooks/interpreter.rs) 在执行前先校验操作码，遇到未知操作码直接报错，而不是部分应用前面的操作；任一槽请求停止都会立即短路整个事件。
 

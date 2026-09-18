@@ -13,7 +13,7 @@ import natal as nt
 from natal.backends.rust.rust_backend import rust_backend_available
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 0. 检查原生扩展
+# 0. Check the native extension
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if not rust_backend_available():
@@ -22,7 +22,7 @@ if not rust_backend_available():
     raise SystemExit(0)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 1. 准备 Species 与 Population
+# 1. Prepare the species and population
 # ═══════════════════════════════════════════════════════════════════════════════
 
 sp = nt.Species.from_dict(
@@ -32,7 +32,7 @@ sp = nt.Species.from_dict(
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 2. 在构建链中声明一个 CSR declarative hook
+# 2. Declare a CSR declarative hook in the build chain
 # ═══════════════════════════════════════════════════════════════════════════════
 
 control_ops = [
@@ -67,7 +67,7 @@ pop = (
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3. 启用引擎会话并运行
+# 3. Enable the engine session and run
 # ═══════════════════════════════════════════════════════════════════════════════
 
 pop._initialize_session(seed=2026)
@@ -76,7 +76,7 @@ n_steps = 10
 pop.run(n_steps, record_every=1, clear_history_on_start=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 4. 输出结果
+# 4. Print the results
 # ═══════════════════════════════════════════════════════════════════════════════
 
 sperm = getattr(pop.state, "sperm_storage", None)

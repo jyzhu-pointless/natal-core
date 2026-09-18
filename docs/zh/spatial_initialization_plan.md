@@ -79,16 +79,20 @@ batch_setting({
 
 ### SpatialPopulationBuilder 链式 API
 
+> **注意**：本页记录的是早期设计，其中的 API 与最终实现不一致。实际实现的 builder 签名是 `initial_state(individual_count=..., sperm_storage=...)`，`batch_setting` 的回调接收 `(flat_idx)` 或 `(row, col)`。
+
 ```python
 pop = SpatialPopulation.builder(species, n_demes=N, topology=HexGrid(rows=N, cols=N)) \
     .setup(name="spatial_demo") \
     .initial_state(
-        female={"WT|WT": 5000, "Dr|WT": 50},      # 非 batch → 所有 deme 相同
-        male={"WT|WT": 5000, "Dr|WT": 50},
+        individual_count={                         # 非 batch → 所有 deme 相同
+            "female": {"WT|WT": 5000, "Dr|WT": 50},
+            "male": {"WT|WT": 5000, "Dr|WT": 50},
+        },
     ) \
     .reproduction(eggs_per_female=50) \
     .competition(
-        carrying_capacity=batch_setting(spatial=lambda i, x, y: 10000 if x < N//2 else 5000),
+        carrying_capacity=batch_setting(lambda row, col: 10000 if row < N//2 else 5000),
         juvenile_growth_mode="beverton_holt",
         low_density_growth_rate=6.0,
     ) \
@@ -284,7 +288,7 @@ for i in range(n_demes):
 
 ## 接口设计原则
 
-1. **不破坏现有 API** — 现有`SpatialPopulation.__init__` 不动
+1. **不破坏现有 API** — 现有 `DiscreteGenerationPopulation.builder()` 与 `SpatialPopulation.__init__` 不动
 2. **`batch_setting` 是可选增强** — 不加 demo 照样跑，加了语法更简洁
 3. **零拷贝优先** — 同构 config/hooks 共享引用，只复制差异行为
 4. **验证前置** — `build()` 时校验 batch_setting 长度/坐标与 n_demes 一致

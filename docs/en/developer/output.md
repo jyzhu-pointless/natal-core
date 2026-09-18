@@ -25,7 +25,7 @@ In one sentence each: **observation is a projection, history is a record, a chec
 
 - Need to regroup old data later, or to run branching experiments → use `raw`.
 - Only care about a few fixed groups and want a smaller store → use `observation`, accepting that checkpoints cannot be restored.
-- Need a storage ceiling → use `max_rows`, remembering that the checkpoints of evicted rows go with them.
+- Need a storage ceiling → the history is already bounded by default: a rolling window of 5000 rows per population. `record_history(max_rows=...)` overrides it; evicted rows lose their checkpoints with them.
 - Need to know when a parameter changed → read `pop.params_log`, which is tick-aligned with the history.
 
 ## Code and test entry points

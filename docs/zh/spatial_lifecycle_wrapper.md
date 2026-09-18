@@ -68,9 +68,12 @@ pop.run(n_steps=10, record_every=1)
 pop.params.tensor_write("migration_rate", {"F": 0.2, "M": 0.05})  # 运行时改迁移率
 ```
 
-构建后运行时参数写入只有两个入口：`pop.params.tensor_write(...)`（批量、
-推荐）与 `deme(i).write_ecology(...)` / `write_genetics(...)`（单 deme）。
-**`SpatialPopulation.update()` 链已删除**。
+构建后运行时参数写入有三个入口：`pop.params.tensor_write(...)`（批量、
+推荐）、`deme(i).write_ecology(...)` / `write_genetics(...)`（单 deme）与
+`deme(i).update()`（单 deme 的 `RuntimeUpdater`）。
+**容器级的 `SpatialPopulation.update()` 链已删除**；`update()` 只保留在
+deme 级 —— `pop.deme(i).update()` 返回同样的 `RuntimeUpdater`，通过父空间
+会话中该 deme 的通道提交。
 
 > **注意**：空间容器的 `pop.params` 每次访问都返回**新的** `SpatialParamsView`。
 > `pop.params.carrying_capacity = 5` 等属性赋值会抛出 `AttributeError`，不会

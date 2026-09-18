@@ -51,7 +51,16 @@ class CompiledProducts(NamedTuple):
 
 
 def copy_registry(registry: IndexRegistry) -> IndexRegistry:
-    """Copy active index containers while preserving interned genetic identities."""
+    """Copy active index containers while preserving interned genetic identities.
+
+    Args:
+        registry: The registry to copy.
+
+    Returns:
+        A fresh registry holding copied label lists and re-registered
+        ztype/gtype entries; interned genetic identities are shared, and
+        the published lifecycle marker is carried over.
+    """
     from natal.frontend.registry.index import IndexRegistry
 
     result = IndexRegistry()
@@ -74,6 +83,14 @@ def detach_draft(draft: ModelDraft) -> ModelDraft:
     The copy detaches a draft from every previous holder so later in-place
     writes cannot alias; recipes, callables, and other user resources are
     never copied.
+
+    Args:
+        draft: The draft to detach.
+
+    Returns:
+        A new draft whose NumPy fields are fresh copies and whose
+        ``custom`` slot mapping is deep-copied; every other field is
+        shared by reference.
     """
     return draft._replace(
         **{name: value.copy() for name, value in draft._asdict().items() if isinstance(value, np.ndarray)},
@@ -157,7 +174,12 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
         native commit.
 
     Raises:
-        ValueError: If the declaration carries no normalized draft.
+        ValueError: If the declaration carries no normalized draft; if a
+            declared fitness baseline does not cover every field in
+            ``FITNESS_FIELDS`` (an empty baseline means "derive it" and is
+            accepted), naming the expected field order; or if a baseline does
+            not match the working draft's shape for that field, naming each
+            mismatched field with both shapes.
     """
     from natal.frontend.fitness import apply_preset_fitness_patch
 
@@ -174,9 +196,40 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
         raise ValueError("Compilation requires the complete species registry.")
     species = definition.species
     host = CompileHost(species, registry, draft)
-    for name, base in zip(FITNESS_FIELDS, definition.fitness_base):
-        target: NDArray[np.float64] = getattr(host.draft, name)
-        target[...] = base if base.shape == target.shape else np.ones_like(target)
+    # Validate every baseline shape before the first assignment.  A mismatch
+    # used to fall back to ``np.ones_like(target)``, which silently turned a
+    # declared baseline into a neutral one; and checking up front guarantees a
+    # failure cannot leave the working draft partially re-seeded.
+    # The baseline tuple is either empty — the documented default, where the
+    # compiler derives the baseline — or it covers every fitness field in
+    # ``FITNESS_FIELDS`` order.  A shorter tuple used to leave the surplus
+    # fields at the draft's own values, so part of the declaration was
+    # ignored without a signal; the runtime path (``build_runtime_definition``)
+    # already rejects that.  The check below is what enforces the length
+    # contract, so the pairing itself is a plain ``zip``.
+    working = host.draft
+    if definition.fitness_base and len(definition.fitness_base) != len(FITNESS_FIELDS):
+        raise ValueError(
+            f"Fitness baseline has {len(definition.fitness_base)} entries; expected "
+            f"{len(FITNESS_FIELDS)} in the order {', '.join(FITNESS_FIELDS)}, or none."
+        )
+    baseline_fields = list(zip(FITNESS_FIELDS, definition.fitness_base))
+    mismatches: list[tuple[str, tuple[int, ...], tuple[int, ...]]] = [
+        (name, base.shape, getattr(working, name).shape)
+        for name, base in baseline_fields
+        if base.shape != getattr(working, name).shape
+    ]
+    if mismatches:
+        details = "; ".join(
+            f"{name}: baseline {base_shape} vs draft {draft_shape}"
+            for name, base_shape, draft_shape in mismatches
+        )
+        raise ValueError(
+            "Fitness baseline shape does not match the declaration's draft: " + details
+        )
+    for name, base in baseline_fields:
+        target: NDArray[np.float64] = getattr(working, name)
+        target[...] = base
     gametes: GameteList = []
     zygotes: ZygoteList = []
     presets = definition.presets
@@ -185,6 +238,10 @@ def compile_definition(definition: ModelDefinition) -> CompiledProducts:
     try:
         ordered = sorted(presets, key=lambda item: item.priority)
         for position in range(len(ordered) + 1):
+            # `before` means "insert this explicit fitness step ahead of the
+            # N-th preset in priority order".  min(before, len(ordered))
+            # clamps out-of-range positions to the end, pinning such steps
+            # after every preset's patch.
             for before, step in fitness_steps:
                 if min(before, len(ordered)) == position:
                     _apply_fitness_step(host, step)  # normalized validated fitness keyword arguments.

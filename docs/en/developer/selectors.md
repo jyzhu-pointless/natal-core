@@ -4,6 +4,10 @@ A declaration names what it wants to affect — "every X heterozygote", "adult f
 
 The chapter reuses the sample species (A, a, X on `chr1`) and adds two cases: a labelled species and an ordered species.
 
+
+Structured patterns returned by `parse_selector()` can be passed directly to `IndividualSelector(ztype=...)`; they retain their structure instead of being converted to display text and parsed again. Label names are checked against the species catalog together with any labels registered in the current index registry, including names inside sets and negations. Compression does not make a known species label invalid. A misspelled excluded label is an error, not a request to select every label.
+
+
 ## What a pattern string goes through
 
 ```mermaid
@@ -25,7 +29,7 @@ The three outcomes must be read separately, because they mean different things:
 | Valid but empty match | An unknown name (`A|Q`) or a condition with no intersection | A valid query whose answer is "nothing" |
 | `ValueError` (empty mask) | An empty result used where a concrete selection is required (`IndividualSelector.compile()`) | The caller demanded at least one coordinate |
 
-A verified example: `ZygoteTypePattern.parse("A|Q")` parses and matches `[]`, while handing the same string to the exact parser `Species.get_genotype_from_str("A|Q")` raises `ValueError: Cannot parse haplotype segment string 'Q'`. The pattern language tolerates unknown names (wildcards and sets can legitimately mention entries that do not exist); exact strings do not.
+A verified example: `parse_selector("A|Q", species=sp)` parses and matches `[]`, while handing the same string to the exact parser `Species.get_genotype_from_str("A|Q")` raises `ValueError: Cannot parse haplotype segment string 'Q'`. The pattern language tolerates unknown names (wildcards and sets can legitimately mention entries that do not exist); exact strings do not.
 
 ## Grammar
 
@@ -45,11 +49,11 @@ Multi-locus and multi-chromosome patterns reuse the same separators: `/` between
 `a|A` is the trap worth remembering from this chapter:
 
 ```text
-ZygoteTypePattern.parse("a|A")            → parses, matches nothing
+sp.parse_genotype_pattern("a|A")          → parses, matches nothing
 resolve_zygote_type("a|A", species, reg)  → index 1
 ```
 
-The reason is that an unordered species canonicalises genotype objects (see [genetic objects](genetic_objects.md)), so the catalog only contains the spelling whose maternal side sorts first. The public selection entry points (`resolve_zygote_type`, observation groups, fitness writes, hook declarations) promote `|` to `::` for unordered species, so `a|A` still matches; using `ZygoteTypePattern.parse` directly stays strict. Under an ordered species (`unordered=False`), `A|a` and `a|A` are two different genotypes: `.parse("A|a")` → index 1 and `.parse("a|A")` → index 3.
+The reason is that an unordered species canonicalises genotype objects (see [genetic objects](genetic_objects.md)), so the catalog only contains the spelling whose maternal side sorts first. Every selection entry point — the unified `parse_selector` (which `resolve_zygote_type`, observation groups, fitness writes and hook declarations all funnel through), `IndividualSelector`, the conversion filters — promotes `|` to `::` for unordered species, so `a|A` still matches; the content-only helpers (`Species.parse_genotype_pattern` and friends) keep `|` strictly ordered. Under an ordered species (`unordered=False`), `A|a` and `a|A` are two different genotypes: `parse_selector("A|a", ...)` → index 1 and `parse_selector("a|A", ...)` → index 3.
 
 So deciding whether a selector matches requires knowing **which entry point it travels through and whether the species is unordered**. The string alone does not tell you.
 
@@ -81,7 +85,7 @@ The decisive difference is *when the index binding happens*. Build-time writes u
 
 ## Conversion targets: keep or replace
 
-Conversion targets share the pattern grammar, but they describe changes to a source rather than a set of matching destinations. `GenotypePatternParser.parse_conversion_target()` retains the original spelling and parsed structure; `compile_conversion_target()` rejects forbidden target forms before testing source reachability. `ConversionTarget.apply_zygote()` or `.apply_gamete()` then fills in the parts retained from each source.
+Conversion targets share the pattern grammar, but they describe changes to a source rather than a set of matching destinations. The unified target entry `parse_target()` (`natal.parse_target`) retains the original spelling and parsed structure; passing `validate=True` rejects forbidden target forms before testing source reachability. `ConversionTarget.apply_zygote()` or `.apply_gamete()` then fills in the parts retained from each source.
 
 | Target part | Meaning |
 | --- | --- |

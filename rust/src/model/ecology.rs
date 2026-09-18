@@ -860,7 +860,7 @@ impl EcologyParams {
             }
         }
         for deme in 0..self.n_demes {
-            validate_growth_contract(self.growth_mode[deme], self.low_density_growth_rate[deme])?;
+            validate_growth_contract(self.low_density_growth_rate[deme])?;
         }
         // Vector columns carry n_demes per-deme extents.
         for name in ECOLOGY_TENSOR_COLUMNS {
@@ -894,14 +894,11 @@ impl EcologyParams {
             self.scalar_ref(name, 0)?;
             validate_scalar_value(name, *value)?;
         }
-        let mode = writes
-            .get("growth_mode")
-            .map_or(self.growth_mode[0], |value| *value as i64);
         let growth_rate = writes
             .get("low_density_growth_rate")
             .copied()
             .unwrap_or(self.low_density_growth_rate[0]);
-        validate_growth_contract(mode, growth_rate)?;
+        validate_growth_contract(growth_rate)?;
         for (name, value) in writes {
             // Commit pass: growth_mode arrives as f64 and is written through the
             // i64 channel (truncating cast); other fields keep their float value.

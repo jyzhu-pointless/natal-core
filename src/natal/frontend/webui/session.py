@@ -131,7 +131,7 @@ class SimulationSession:
     #
     # SpatialPopulation does not share the panmictic base class, so every
     # engine-loop access goes through these guards.  Spatial-specific
-    # behaviour (finish conditions, record_every) lands in Phase 3.
+    # behavior (finish conditions) lands in Phase 3.
 
     def _finished(self) -> bool:
         """Whether the population reached a stop condition."""

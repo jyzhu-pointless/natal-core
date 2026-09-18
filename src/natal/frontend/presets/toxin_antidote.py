@@ -95,6 +95,8 @@ class ToxinAntidoteDrive(GeneticPreset):
             zygote_viability_mode: Scaling mode for zygote viability (default "multiplicative").
             cas9_deposition_glab: Gamete label for Cas9 deposition tracking.
             species: Optional species to bind at construction.
+            priority: Execution order — lower values apply first.
+                Same priority uses registration order (stable sort).
             use_paternal_deposition: Whether to enable paternal Cas9 deposition.
         """
         # Store canonical allele names (Gene or str) so the preset can be built
@@ -168,7 +170,11 @@ class ToxinAntidoteDrive(GeneticPreset):
         return rate[sex]
 
     def gamete_modifier(self, host: "RecipeHost") -> Optional[GameteModifier]:
-        """Implement target disruption in the germline of drive carriers."""
+        """Implement target disruption in the germline of drive carriers.
+
+        Args:
+            host: Species and registry used to compile the conversion rules.
+        """
         from natal.frontend.presets._types import carrier_pattern
 
         species = host.species
@@ -204,7 +210,11 @@ class ToxinAntidoteDrive(GeneticPreset):
         return rule_set.to_gamete_modifier(host) if rule_set.rules else None  # type: ignore[return-type]  # structurally satisfies the GameteModifier protocol
 
     def zygote_modifier(self, host: "RecipeHost") -> Optional[ZygoteModifier]:
-        """Implement target disruption in embryos."""
+        """Implement target disruption in embryos.
+
+        Args:
+            host: Species and registry used to compile the conversion rules.
+        """
         rule_set = ZygoteConversionRuleSet(f"{self.name}_EmbryoDisruption")
 
         from natal.frontend.presets._types import carrier_pattern

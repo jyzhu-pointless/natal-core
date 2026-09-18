@@ -202,15 +202,6 @@ cfg.presets(homing_drive)
 Register genetic presets in the model definition. Construction compiles their
 rules; runtime reconfiguration replaces validated tables without resetting the session.
 
-### `reconfigure_preset(preset, **changes)`
-```python
-pop.update().reconfigure_preset(homing_drive, drive_conversion_rate=0.95)
-```
-Modify a registered preset parameter and re-apply from baselines. Restores
-baseline fitness/gamete arrays and recompiles the genetic tables in place.
-Equilibrium metrics follow on read. Requires that the preset was first
-registered via `presets()`.
-
 ### `modifiers(gamete_modifiers=None, zygote_modifiers=None)`
 ```python
 cfg.modifiers(gamete_modifiers=[my_mod])
@@ -271,6 +262,20 @@ pop.update().custom(temperature=35.0)
 ```
 Each runtime call validates and commits its own update. Separate chained calls
 are separate transactions; the existing Rust session and random stream continue.
+
+### `reconfigure_preset(preset, **changes)` — updater only
+
+```python
+pop.update().reconfigure_preset(homing_drive, drive_conversion_rate=0.95)
+```
+Modify a registered preset parameter and re-apply from baselines. Restores
+baseline fitness/gamete arrays and recompiles the genetic tables in place.
+Equilibrium metrics follow on read. Requires that the preset was first
+registered via `presets()`.
+
+> This method exists **only** on the `RuntimeUpdater` returned by
+> `pop.update()` / `ctx.update()` — the build-time `PopulationBuilder` chain
+> has no `reconfigure_preset()`; presets are declared there with `presets()`.
 
 ### Inside Hooks
 

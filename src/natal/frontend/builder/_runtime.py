@@ -107,6 +107,12 @@ def competition_writes(
 
     Returns:
         The resolved writes dict (possibly empty).
+
+    Raises:
+        ValueError: If *competition_strength* is given and *draft* has
+            ``new_adult_age < 2`` — the second juvenile age class whose
+            weight it sets does not exist there, so the write could
+            never reach the kernels.
     """
     mode_value = (
         juvenile_growth_mode if juvenile_growth_mode is not None else growth_mode
@@ -294,6 +300,11 @@ def fitness_writes(
 def expected_females_eggs(draft: ModelDraft, target_females: float) -> float:
     """Derive the total-egg override equivalent to *target_females*.
 
+    The override feeds the calibration's survival-rate numerator, so it must
+    count eggs the way the owning tick counts them: the discrete engine reads
+    no per-age fertility and the age-structured engine clamps it.  Passing the
+    draft's engine through keeps this anchor consistent with ``C*``.
+
     Args:
         draft: The working draft supplying the current demographics.
         target_females: Target number of new adult females.
@@ -311,6 +322,7 @@ def expected_females_eggs(draft: ModelDraft, target_females: float) -> float:
         sex_ratio=float(draft.sex_ratio),
         new_adult_age=int(draft.new_adult_age),
         n_ages=int(draft.n_ages),
+        discrete_generation=bool(draft.discrete_generation),
     )
 
 
@@ -1555,6 +1567,11 @@ class RuntimeUpdater:
             if value is not None
         }
         step["mode"] = mode
+        # The leading int is a sort key: the number of presets registered
+        # when this step was declared.  Compilation interleaves explicit
+        # steps with preset fitness patches by that key — each step
+        # applies after the first ``min(key, len(presets))`` presets, in
+        # priority order.
         declaration.fitness_steps.append((len(declaration.presets), deepcopy(step)))
         target.publish_definition(
             build_runtime_definition(target.species, new_draft, target.registry, declaration)
@@ -1566,7 +1583,9 @@ class RuntimeUpdater:
 
         Because ``presets()`` appends modifiers cumulatively, calling it
         again after changing a preset attribute would double-apply.
-        This method resets the fitness declaration to neutral, then
+        This method resets the fitness declaration to neutral — both the
+        baseline tensors (reset to all ones) and any explicit
+        ``fitness()`` steps the user declared are cleared — then
         re-applies the preset so it writes onto a clean slate.
 
         Validation happens entirely before any mutation: if the preset

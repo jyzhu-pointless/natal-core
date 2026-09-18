@@ -46,7 +46,6 @@ from natal.frontend.hooks.types import (
 )
 from natal.frontend.model import ModelDraft
 from natal.frontend.patterns import (
-    GenotypePatternParser,
     IndividualSelector,
     PatternParseError,
 )
@@ -91,7 +90,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.SCALE, genotypes, ages, sex, factor, when, event, priority)
 
@@ -120,7 +119,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.SET, genotypes, ages, sex, value, when, event, priority)
 
@@ -149,7 +148,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.ADD, genotypes, ages, sex, delta, when, event, priority)
 
@@ -178,7 +177,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.SUBTRACT, genotypes, ages, sex, delta, when, event, priority)
 
@@ -207,7 +206,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
 
         Raises:
             ValueError: If probability is not in [0, 1]
@@ -241,7 +240,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.SAMPLE, genotypes, ages, sex, float(size), when, event, priority)
 
@@ -268,7 +267,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.STOP_IF_ZERO, genotypes, ages, sex, 0.0, when, event, priority)
 
@@ -297,7 +296,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.STOP_IF_BELOW, genotypes, ages, sex, float(threshold), when, event, priority)
 
@@ -326,7 +325,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.STOP_IF_ABOVE, genotypes, ages, sex, float(threshold), when, event, priority)
 
@@ -347,7 +346,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation
+            Operation descriptor for compilation
         """
         return HookOp(OpType.STOP_IF_EXTINCTION, "*", "*", "both", 0.0, when, event, priority)
 
@@ -410,7 +409,7 @@ class Op:
                 whole declared group).
 
         Returns:
-            HookOp: Operation descriptor for compilation.
+            Operation descriptor for compilation.
 
         Raises:
             ValueError: If *every* < 1 or *start* < 0 (the target name
@@ -553,7 +552,7 @@ def _resolve_ztypes(
     - ``"*"`` — all ZTypes
     - genotype label (``"AA"``) or label list — resolved via ZygoteTypePattern
     - ``@slab`` syntax (``"AA@infected"``) — genotype with slab constraint
-    - raw integer index or index list
+    - index list (raw integer ZType indices)
 
     Args:
         selector: ZType selector expression
@@ -1103,6 +1102,79 @@ def _compile_convert_endpoint(
     )
 
 
+def _compile_convert_target_legacy(
+    target: str,
+    species: Species,
+    index_registry: IndexRegistry,
+) -> int:
+    """Compile the legacy ``Op.convert(source, target)`` target name.
+
+    The legacy form names one complete zygote type.  Its compatibility
+    check lives in the unified target flow (FRONTEND_REFACTOR_PLAN.md
+    §5.4): the string parses as a conversion target, keep-or-replace forms
+    are rejected instead of being quietly reinterpreted, and the complete
+    destination must bind to exactly one registered ztype — the contract
+    the legacy form always had.
+
+    Args:
+        target: Complete zygote-type name, e.g. ``"A|A@marked"``.
+        species: Species resolving the genotype part.
+        index_registry: Registry binding the destination to a ztype index.
+
+    Returns:
+        The unique destination ZType index.
+
+    Raises:
+        ValueError: If the target is not a complete diploid name, or its
+            destination binds to zero or several registered ztypes.
+    """
+    from natal.frontend.patterns import parse_target
+    from natal.frontend.patterns.elements.diploid import GenotypePattern
+
+    parsed = parse_target(
+        target, species=species, stage="Op.convert target", validate=True
+    )
+    # ``parse_target`` without ``haploid=True`` always yields the diploid
+    # branch, so the parsed genotype is a GenotypePattern by construction.
+    assert isinstance(parsed.genotype, GenotypePattern)
+    complete = (
+        "*" not in parsed.genotype_text
+        and all(pair is not None for pair in parsed.genotype.chromosome_patterns)
+    )
+    if not complete:
+        raise ValueError(
+            f"Op.convert target pattern {target!r} must name one complete "
+            "zygote type; keep-or-replace targets belong to the from_/to= "
+            "selector form"
+        )
+    # A pattern may name alleles the species never registered, so a name
+    # the exact resolver rejects is a zero-match target, not a crash.
+    try:
+        genotype = species.get_genotype_from_str(parsed.genotype_text)
+    except Exception as exc:
+        raise ValueError(
+            f"Op.convert target pattern {target!r} matches no zygote "
+            f"type: {exc}"
+        ) from exc
+    label = parsed.label
+    destinations = [
+        z for z, (gt, slab) in enumerate(index_registry.index_to_ztype)
+        if gt == genotype and (label.is_wildcard() or label.matches(slab))
+    ]
+    if len(destinations) != 1:
+        from natal.contracts.blueprint import format_type_name
+
+        names = [
+            format_type_name(gt, slab)
+            for gt, slab in (index_registry.index_to_ztype[z] for z in destinations)
+        ]
+        raise ValueError(
+            f"Op.convert target pattern {target!r} must match exactly one "
+            f"zygote type, but matched {len(destinations)}: {names}"
+        )
+    return destinations[0]
+
+
 def _compile_selector_conversion(
     source: IndividualSelector,
     target: IndividualSelector,
@@ -1116,22 +1188,27 @@ def _compile_selector_conversion(
     target. Target restrictions are checked rather than silently dropping
     transfers. The full coordinate relation preserves selector unions.
     """
-    if target.n_atoms != 1:
-        raise ValueError("Op.convert to selector must contain exactly one atom")
+    from natal.frontend.patterns import parse_target
+
     n_ages = config.n_ages
     src_coords = sorted(source.compile_coordinates(index_registry, n_sexes=2, n_ages=n_ages))
-    atom = target.to_dict()["atoms"][0]
-    sexes, ages, ztypes = atom.get("sex", []), atom.get("age", []), atom.get("ztype", [])
-    if len(sexes) > 1 or len(ages) > 1 or len(ztypes) > 1:
-        raise ValueError("Op.convert to selector fields must specify at most one value")
-    target_sex = sexes[0] if sexes else None
-    target_age = ages[0] if ages else None
+    # The target's single-destination contract is read through the
+    # selector's own structured accessor, and its ztype expression compiles
+    # through the unified target entry — the serialized to_dict form is not
+    # reinterpreted here (FRONTEND_REFACTOR_PLAN.md §5.2).
+    target_sex, target_age, target_ztype = target.as_target_spec()
     if target_sex is not None and target_sex not in (0, 1):
         raise ValueError(f"Op.convert target sex index {target_sex} is invalid")
     if target_age is not None and not 0 <= target_age < n_ages:
         raise ValueError(f"Op.convert target age {target_age} is outside [0, {n_ages})")
     try:
-        parsed = GenotypePatternParser(species).compile_conversion_target(ztypes[0]) if ztypes else None
+        parsed = (
+            parse_target(
+                target_ztype, species=species, stage="Op.convert target", validate=True
+            )
+            if target_ztype is not None
+            else None
+        )
     except PatternParseError as exc:
         raise ValueError(f"Op.convert target pattern is invalid: {exc}") from exc
     sources: list[tuple[int, int, int]] = []
@@ -1180,11 +1257,18 @@ def compile_declarative_hook(
         ops: Declarative operations to compile.
         pop: Layout provider (a built population or the builder's
             build-time context); only its ``index_registry``, ``species``,
-            and ``config.n_ages`` are read.
+            and ``config`` are read — ``config.n_ages`` everywhere, plus
+            ``config.male_only_by_sex_chrom`` /
+            ``config.female_only_by_sex_chrom`` on the ``Op.convert``
+            selector path.
         event: Event this hook fires at.
         priority: Execution priority — lower values run first.
         deme_selector: Deme selector carried on the descriptor.
         name: Human-readable descriptor name.
+
+    Returns:
+        The compiled descriptor holding the packed CSR arrays and hook
+        metadata, ready for native registration.
     """
     # Get population configuration and registry for resolving genotype/age indices
     index_registry = pop.index_registry
@@ -1336,7 +1420,10 @@ def compile_declarative_hook(
                 raise ValueError("Op.convert requires a target genotype pattern")
             source_pattern = op.genotypes if isinstance(op.genotypes, str) else str(op.genotypes)
             source_z = _compile_convert_endpoint(source_pattern, species, index_registry, "source")
-            target_z = _compile_convert_endpoint(op.target_z, species, index_registry, "target")
+            # The legacy target is a compatibility form (§5.4): it names one
+            # complete zygote type, and the check lives in the unified
+            # target flow — never a second selector interpretation.
+            target_z = _compile_convert_target_legacy(op.target_z, species, index_registry)
             if source_z == target_z:
                 raise ValueError(f"Op.convert source and target must differ, both resolve to ztype {source_z}")
             convert_source_z.append(source_z)

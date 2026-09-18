@@ -12,7 +12,7 @@ discrete — now default to BEVERTON_HOLT, the monotone compensatory curve
 never clamps the cohort to zero) and ``|g'(1)| < 1`` for ``r > 1``, so a
 population above the carrying capacity converges instead of swinging.
 
-These tests pin that default at each entry point and the behaviour it buys.
+These tests pin that default at each entry point and the behavior it buys.
 The curve identities themselves are covered by the density-regulation unit
 tests; here the point is that the *default* is regulated and stable.
 """

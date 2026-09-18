@@ -1,8 +1,4 @@
-"""Cross-field validation for density-dependent growth rates.
-
-The scalar bounds remain broad because ``none`` and ``fixed`` do not consume
-``r``.  Compensatory curves require a finite intrinsic rate ``r >= 1``.
-"""
+"""Every growth mode requires a finite intrinsic rate ``r >= 1``."""
 
 from __future__ import annotations
 
@@ -38,8 +34,8 @@ def _builder(name: str) -> nt.PopulationBuilder:
     )
 
 
-@pytest.mark.parametrize("mode", ["linear", "logistic", "beverton_holt", "ricker"])
-def test_compensatory_modes_accept_boundary_r_one(mode: str) -> None:
+@pytest.mark.parametrize("mode", ["no_competition", "fixed", "linear", "logistic", "beverton_holt", "ricker"])
+def test_all_modes_accept_boundary_r_one(mode: str) -> None:
     config = _builder(f"r_one_{mode}").competition(
         growth_mode=mode,
         carrying_capacity=100.0,
@@ -48,9 +44,9 @@ def test_compensatory_modes_accept_boundary_r_one(mode: str) -> None:
     assert config.low_density_growth_rate == 1.0
 
 
-@pytest.mark.parametrize("mode", ["linear", "logistic", "beverton_holt", "ricker"])
-@pytest.mark.parametrize("bad_r", [0.5, math.nan, math.inf])
-def test_compensatory_modes_reject_invalid_r(mode: str, bad_r: float) -> None:
+@pytest.mark.parametrize("mode", ["no_competition", "fixed", "linear", "logistic", "beverton_holt", "ricker"])
+@pytest.mark.parametrize("bad_r", [-1.0, 0.0, 0.5, math.nan, math.inf, -math.inf])
+def test_all_modes_reject_invalid_r(mode: str, bad_r: float) -> None:
     with pytest.raises(ValueError, match="low_density_growth_rate"):
         _builder(f"bad_{mode}_{bad_r}").competition(
             growth_mode=mode,
@@ -59,42 +55,33 @@ def test_compensatory_modes_reject_invalid_r(mode: str, bad_r: float) -> None:
         )
 
 
-@pytest.mark.parametrize("mode", ["no_competition", "fixed"])
-def test_none_and_fixed_retain_low_r_domain(mode: str) -> None:
-    config = _builder(f"low_r_{mode}").competition(
-        growth_mode=mode,
-        carrying_capacity=100.0,
-        low_density_growth_rate=0.5,
-    ).config
-    assert config.low_density_growth_rate == 0.5
-
-
 def test_mode_switch_and_atomic_runtime_update() -> None:
     pop = _builder("runtime_growth_contract").competition(
-        growth_mode="fixed", carrying_capacity=100.0, low_density_growth_rate=0.5
+        growth_mode="fixed", carrying_capacity=100.0, low_density_growth_rate=1.0
     ).build()
     pop.update().competition(growth_mode="beverton_holt", low_density_growth_rate=1.0)
     assert pop.params.growth_mode == 3
     assert pop.params.low_density_growth_rate == 1.0
 
     before = (pop.params.growth_mode, pop.params.low_density_growth_rate)
-    with pytest.raises(ValueError, match="finite and at least 1.0"):
+    with pytest.raises(ValueError, match="low_density_growth_rate"):
         pop.update().competition(growth_mode="ricker", low_density_growth_rate=0.5)
     assert (pop.params.growth_mode, pop.params.low_density_growth_rate) == before
 
 
-def test_params_mode_switch_requires_valid_existing_r() -> None:
-    pop = _builder("params_growth_contract").competition(
-        growth_mode="fixed", carrying_capacity=100.0, low_density_growth_rate=0.5
+@pytest.mark.parametrize("mode", ["no_competition", "fixed", "beverton_holt"])
+@pytest.mark.parametrize("bad_r", [0.5, math.nan, math.inf])
+def test_params_reject_invalid_r_in_every_mode(mode: str, bad_r: float) -> None:
+    pop = _builder(f"params_growth_contract_{mode}_{bad_r}").competition(
+        growth_mode=mode, carrying_capacity=100.0, low_density_growth_rate=1.0
     ).build()
-    with pytest.raises(ValueError, match="finite and at least 1.0"):
-        pop.params.growth_mode = 4
-    assert pop.params.growth_mode == 1
-    assert pop.params.low_density_growth_rate == 0.5
+    with pytest.raises(ValueError, match="low_density_growth_rate"):
+        pop.params.low_density_growth_rate = bad_r
+    assert pop.params.low_density_growth_rate == 1.0
 
 
 @pytest.mark.parametrize("model", ["age", "discrete"])
-@pytest.mark.parametrize("bad_r", [0.5, math.nan, math.inf])
+@pytest.mark.parametrize("bad_r", [-1.0, 0.0, 0.5, math.nan, math.inf, -math.inf])
 def test_native_growth_batch_rejects_before_any_commit(model: str, bad_r: float) -> None:
     """Bypassing Python guards cannot commit invalid r or a valid sibling write."""
     from tests.test_review_runtime_regressions import _population
@@ -107,24 +94,26 @@ def test_native_growth_batch_rejects_before_any_commit(model: str, bad_r: float)
     assert session.get_scalar("carrying_capacity") == before
     assert session.get_scalar("low_density_growth_rate") == 2.0
     # Validate the final pair, independent of mapping iteration order.
-    session.apply({"low_density_growth_rate": 0.5, "growth_mode": 1})
+    before_mode = session.get_scalar("growth_mode")
     with pytest.raises(ValueError, match="low_density_growth_rate"):
-        session.apply({"growth_mode": 4})
-    assert session.get_scalar("growth_mode") == 1
+        session.apply({"low_density_growth_rate": 0.5, "growth_mode": 1})
+    assert session.get_scalar("growth_mode") == before_mode
     session.apply({"low_density_growth_rate": 1, "growth_mode": 4})
     assert session.get_scalar("growth_mode") == 4
 
 
 @pytest.mark.parametrize("model", ["age", "discrete"])
-def test_invalid_growth_hook_preserves_event_state_and_parameters(model: str) -> None:
+@pytest.mark.parametrize("mode", ["no_competition", "fixed", "beverton_holt"])
+def test_invalid_growth_hook_preserves_event_state_and_parameters(model: str, mode: str) -> None:
     """An invalid first-event r rolls back the whole ecology scratch commit."""
     from tests.test_review_runtime_regressions import _population
 
     pop = _population(
-        f"hook_r_{model}", model, stochastic=False,
+        f"hook_r_{model}_{mode}", model, stochastic=False,
         hook_calls=[((nt.Op.set_param("carrying_capacity", 123, event="first"),
                       nt.Op.set_param("low_density_growth_rate", 0.5, event="first")), {})],
     )
+    pop.update().competition(growth_mode=mode)
     before = pop.state.individual_count.copy()
     log_before = pop.params_log
     with pytest.raises((ValueError, RuntimeError), match="low_density_growth_rate"):
@@ -150,13 +139,15 @@ def test_spatial_growth_update_rejects_without_mutating_other_demes(model: str) 
     for deme in pop.demes:
         assert deme.params.carrying_capacity == 100
         assert deme.params.low_density_growth_rate == 2
-    pop.deme(1).update().competition(growth_mode="fixed", low_density_growth_rate=0.5)
-    assert pop.demes[1].params.low_density_growth_rate == 0.5
+    with pytest.raises(ValueError, match="low_density_growth_rate"):
+        pop.deme(1).update().competition(growth_mode="fixed", low_density_growth_rate=0.5)
+    pop.deme(1).update().competition(growth_mode="fixed", low_density_growth_rate=1.0)
+    assert pop.demes[1].params.low_density_growth_rate == 1.0
     assert pop.demes[0].params.low_density_growth_rate == 2
 
 
 @pytest.mark.parametrize("model", ["age", "discrete"])
-@pytest.mark.parametrize("mode", [2, 3, 4])
+@pytest.mark.parametrize("mode", [0, 1, 2, 3, 4])
 def test_native_spatial_constructor_validates_every_deme_growth_pair(model: str, mode: int) -> None:
     """Raw ecology columns cannot hide an invalid rate in a later deme."""
     from natal import _engine_rs

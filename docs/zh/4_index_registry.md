@@ -50,11 +50,11 @@ GType = (HaploidGenotype, glab_label)
 - 如果未指定，会自动创建一个单一的 `"default"` 标签。
 - 引擎会将每个基因型/单倍型与每个标签做叉积，生成完整的 ZType/GType 空间。
 
-Slab 被具体的 Preset 使用，例如 **Wolbachia**（母系细胞质标记：`wolbachia` 配子标签把感染母本的全部子代转到 `infected` slab，另有可选的按 slab 的 `viability_scaling` / `fecundity_scaling`）和 **TransgenicBackground**（按个体追踪标记表达）。该 preset 只建模母系遗传与标记适合度，不实现细胞质不兼容；这一交叉效应需用 zygote modifier 搭建（见[Modifier 机制](3_modifiers.md) 5.2 节）。如果没有这些 Preset，大多数模拟只有一个 `"default"` slab，slab 系统对用户不可见。
+Slab 被具体的 Preset 使用，例如 **Wolbachia**（母系细胞质标记：`wolbachia` 配子标签把感染母本仍带正常来源标签的子代转到 `infected` slab，另有可选的按 slab 的 `viability_scaling` / `fecundity_scaling`）和 **TransgenicBackground**（按个体追踪标记表达）。可选的不相容机制将未感染母本与感染父本的子代标记为独立 slab，再作用于这些个体自身的胚胎存活、普通存活或生育力（见[Modifier 机制](3_modifiers.md) 5.2 节）。如果没有这些 Preset，大多数模拟只有一个 `"default"` slab，slab 系统对用户不可见。
 
 ### 索引注册表结构
 
-注册表使用扁平的（实体, 标签）配对列表：
+旧注册表存储的是基因型和单倍型的扁平列表；现代注册表使用扁平的（实体, 标签）配对列表：
 
 ```python
 class IndexRegistry:
@@ -187,11 +187,11 @@ Op.add(genotypes="Drive|WT@infected", delta=500, event="early", priority=0)
 
 ### 动机
 
-完整的组合空间 `(基因型 × slabs) × (单倍型 × glabs)` 可能很大。大多数基因型和单倍型从未从初始条件可达——它们有零个体，也没有遗传修饰因子产生它们。索引压缩会修剪这些不可达的条目，减小数组大小和计算量。
+完整的组合空间 `(基因型 × slabs) × (单倍型 × glabs)` 可能很大。编译阶段会先为每个基因型和标签使用这套完整、稳定的布局。索引压缩是发布阶段的后置步骤，它裁剪不可达条目，从而减小运行时数组规模和计算量。
 
 ### BFS 算法
 
-完整布局会先为所有基因型和标签建立稳定索引，再在发布阶段使用不动点 BFS（在 `natal.frontend.genetics.structures._helpers` 的 `build_compression_mask` 中实现）裁剪不可达条目。该算法对 GType 和 ZType 层次是对称的：
+压缩使用不动点 BFS（在 `natal.frontend.genetics.structures._helpers` 的 `build_compression_mask` 中实现）。该算法对 GType 和 ZType 层次是对称的：
 
 ```
 1. 种子：收集可达基因型
@@ -268,8 +268,7 @@ pop.state.individual_count[0, 3, idx]
 
 ```python
 # 用 ZygoteTypePattern 解析模式，再交给注册表解析索引
-from natal.frontend.patterns import ZygoteTypePattern
-pattern = ZygoteTypePattern.parse("A1|*", pop.species)
+pattern = nt.parse_selector("A1|*", species=pop.species)
 indices = list(pop.index_registry.resolve_ztype_indices(pattern))  # 匹配的整数索引
 ```
 

@@ -3,11 +3,18 @@
 Extracted from the builder parameter helpers so the model assembly side
 owns the initial-input resolution; the builder chain and the spatial
 builder consume these as plain functions.
+
+The builder stores the user's initial distribution as an
+:class:`InitialDistributionDeclaration` — the authoritative input — and
+resolves it into engine arrays through these functions whenever the final
+dimensions are known (at declaration time, on ``age_structure()`` rebuilds,
+and at ``build()``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Dict, Optional, Tuple, TypeAlias, Union, cast
 
 import numpy as np
@@ -19,6 +26,7 @@ from natal.frontend.utils.helpers import resolve_sex_label
 from natal.frontend.utils.types import Sex
 
 __all__ = [
+    "InitialDistributionDeclaration",
     "resolve_age_structured_initial_individual_count",
     "resolve_age_structured_initial_sperm_storage",
     "resolve_discrete_initial_individual_count",
@@ -34,6 +42,182 @@ InitialIndividualCountInput: TypeAlias = Mapping[str, Mapping[Any, InitialAgeCou
 InitialSpermStorageInput: TypeAlias = Mapping[Any, Mapping[Any, InitialAgeCountValue]]
 
 
+class _FrozenList(tuple[Any, ...]):
+    """Tuple-backed marker retaining that the source value was a list."""
+
+
+def _immutable_array(value: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
+    """Return an array whose backing storage cannot be made writable."""
+    contiguous: np.ndarray[Any, Any] = np.ascontiguousarray(value)
+    return cast(
+        "np.ndarray[Any, Any]",
+        np.frombuffer(contiguous.tobytes(), dtype=contiguous.dtype).reshape(
+            contiguous.shape
+        ),
+    )
+
+
+def _freeze_declaration_value(value: Any) -> Any:
+    """Recursively own declaration containers while preserving opaque objects."""
+    if isinstance(value, np.ndarray):
+        return _immutable_array(cast("np.ndarray[Any, Any]", value))
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[Any, Any], value)
+        frozen: dict[Any, Any] = {
+            key: _freeze_declaration_value(item) for key, item in mapping.items()
+        }
+        return MappingProxyType(frozen)
+    if isinstance(value, list):
+        items = cast(list[Any], value)
+        return _FrozenList(_freeze_declaration_value(item) for item in items)
+    if isinstance(value, tuple):
+        items = cast(tuple[Any, ...], value)
+        return tuple(_freeze_declaration_value(item) for item in items)
+    return value
+
+
+def _copy_declaration_value(value: Any) -> Any:
+    """Return an isolated mutable copy for the public declaration surface."""
+    if isinstance(value, np.ndarray):
+        return cast("np.ndarray[Any, Any]", value.copy())
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[Any, Any], value)
+        return {
+            key: _copy_declaration_value(item) for key, item in mapping.items()
+        }
+    if isinstance(value, _FrozenList):
+        return [_copy_declaration_value(item) for item in value]
+    if isinstance(value, tuple):
+        items = cast(tuple[Any, ...], value)
+        return tuple(_copy_declaration_value(item) for item in items)
+    return value
+
+
+class InitialDistributionDeclaration:
+    """A user's raw initial-distribution declaration.
+
+    The authoritative input the builder keeps: nested containers and numeric
+    arrays are recursively owned and frozen on construction, while opaque
+    references such as ``Genotype`` objects keep their identity.  Resolution
+    into engine arrays happens against whatever dimensions are current; a
+    resolution is a pure function of (species identity, declaration,
+    dimensions), so resolved arrays are memoized and safely shared as
+    immutable views.  Drafts that may be written get fresh copies.
+    """
+
+    __slots__ = ("_individual_count", "_sperm_storage", "_resolved")
+
+    def __init__(
+        self,
+        individual_count: InitialIndividualCountInput,
+        sperm_storage: InitialSpermStorageInput | None,
+    ) -> None:
+        """Store recursively owned, immutable declaration containers."""
+        self._individual_count = _freeze_declaration_value(individual_count)
+        self._sperm_storage = (
+            None if sperm_storage is None else _freeze_declaration_value(sperm_storage)
+        )
+        self._resolved: Dict[
+            Tuple[Species, int, bool, int, int], Tuple[ArrayF64, Optional[ArrayF64]]
+        ] = {}
+
+    @classmethod
+    def capture(
+        cls,
+        individual_count: InitialIndividualCountInput,
+        sperm_storage: InitialSpermStorageInput | None,
+    ) -> InitialDistributionDeclaration:
+        """Capture the declaration, keeping opaque references.
+
+        Args:
+            individual_count: The ``{sex: {genotype: count}}`` mapping as
+                the user passed it.
+            sperm_storage: The optional sperm-storage mapping, ``None``
+                when the user declared none.
+
+        Returns:
+            The frozen declaration.
+        """
+        return cls(individual_count, sperm_storage)
+
+    @property
+    def individual_count(self) -> InitialIndividualCountInput:
+        """Return an isolated copy of the raw individual-count declaration."""
+        return cast(InitialIndividualCountInput, _copy_declaration_value(self._individual_count))
+
+    @property
+    def sperm_storage(self) -> InitialSpermStorageInput | None:
+        """Return an isolated copy of the raw sperm-storage declaration."""
+        if self._sperm_storage is None:
+            return None
+        return cast(InitialSpermStorageInput, _copy_declaration_value(self._sperm_storage))
+
+    def resolve(
+        self,
+        species: Species,
+        *,
+        discrete_generation: bool,
+        n_ages: int,
+        new_adult_age: int,
+    ) -> Tuple[ArrayF64, Optional[ArrayF64]]:
+        """Resolve the declared arrays against the given dimensions.
+
+        Memoized per Species and dimension key: the same declaration resolved
+        for the same inputs always yields the same arrays, so builders,
+        definition captures, and group projections share one resolution
+        instead of re-enumerating the species catalog each time.
+
+        Args:
+            species: Species whose catalog resolves genotype selectors.
+            discrete_generation: Whether the draft uses the flat discrete
+                layout.
+            n_ages: Age-class count of the current draft.
+            new_adult_age: First adult age of the current draft.
+
+        Returns:
+            ``(counts, sperm)`` engine arrays; *sperm* is ``None`` when
+            none was declared.
+
+        Raises:
+            ValueError: If a selector or an age key is invalid for the
+                dimensions (surfacing the resolvers' own messages).
+        """
+        # Keep the Species reference in the key as well as its id.  The id
+        # distinguishes equal-but-distinct Species objects; retaining the
+        # reference prevents id reuse while this declaration is alive.
+        key = (
+            species, id(species), bool(discrete_generation),
+            int(n_ages), int(new_adult_age),
+        )
+        cached = self._resolved.get(key)
+        if cached is not None:
+            return cached
+        counts = (
+            resolve_discrete_initial_individual_count(
+                species=species, distribution=self._individual_count,
+            )
+            if discrete_generation
+            else resolve_age_structured_initial_individual_count(
+                species=species, distribution=self._individual_count,
+                n_ages=n_ages, new_adult_age=new_adult_age,
+            )
+        )
+        sperm: Optional[ArrayF64] = (
+            None
+            if self._sperm_storage is None or discrete_generation
+            else resolve_age_structured_initial_sperm_storage(
+                species=species,
+                sperm_storage=cast(InitialSpermStorageInput, self._sperm_storage),
+                n_ages=n_ages, new_adult_age=new_adult_age,
+            )
+        )
+        frozen_counts = cast(ArrayF64, _immutable_array(counts))
+        frozen_sperm = None if sperm is None else cast(ArrayF64, _immutable_array(sperm))
+        self._resolved[key] = (frozen_counts, frozen_sperm)
+        return frozen_counts, frozen_sperm
+
+
+
 def _resolve_sex_index(sex_key: Union[str, Sex]) -> int:
     """Resolve a sex key into an integer index (0 or 1).
 
@@ -44,7 +228,10 @@ def _resolve_sex_index(sex_key: Union[str, Sex]) -> int:
         0 for female, 1 for male.
 
     Raises:
-        TypeError: If sex_key is neither str nor Sex.
+        AssertionError: If sex_key is neither str, int, nor Sex (the type
+            check is the assertion inside :func:`resolve_sex_label`).
+        ValueError: If sex_key is an integer other than 0/1 or an
+            unrecognized sex label.
     """
     if isinstance(sex_key, Sex):
         return int(sex_key.value)
@@ -154,24 +341,28 @@ def resolve_genotype_key_ztype_index(
     if isinstance(genotype_key, Genotype):
         gt = genotype_key
     elif isinstance(genotype_key, str):
-        # An optional "@slab" suffix pins the somatic label, mirroring
-        # ZygoteTypePattern.from_slab_key's key syntax.
-        slab_name: Optional[str] = None
-        if "@" in genotype_key:
-            base, suffix = genotype_key.rsplit("@", 1)
-            gt_str = base
-            if suffix:
-                slab_name = suffix
-        else:
-            gt_str = genotype_key
+        # An optional "@slab" suffix pins the somatic label.  The split is
+        # the pattern grammar's own "@" analysis, so a malformed suffix
+        # (empty or doubled) fails here exactly as it does in the pattern
+        # entries, and a pinned label must be one exact name — sets,
+        # negations and "*" cannot identify a single ztype.
+        from natal.frontend.patterns.parser import GenotypePatternParser
+
+        gt_str, slab = GenotypePatternParser.split_label_suffix(genotype_key)
         gt = species.get_genotype_from_str(gt_str)
         indices = registry.ztype_indices_for(gt)
         if not indices:
             raise KeyError(
                 f"Genotype {gt.to_string()!r} is not in the active ztype catalog"
             )
-        if slab_name is not None:
-            return registry.ztype_index(gt, slab_name)
+        if slab is not None:
+            if slab.negate or slab.lab_set is not None or slab.lab is None:
+                raise ValueError(
+                    f"initial_state key {genotype_key!r} must pin one exact "
+                    "slab name after '@'; sets, negations and '*' cannot "
+                    "identify a single ztype"
+                )
+            return registry.ztype_index(gt, slab.lab)
         return indices[0]
     else:
         raise TypeError(
@@ -254,7 +445,10 @@ def resolve_age_structured_initial_sperm_storage(
         A 3D array ``[age, female_genotype, male_genotype]``.
 
     Raises:
-        TypeError: If storage value is not a dictionary.
+        AttributeError: If sperm_storage (or a per-female value) does not
+            provide ``.items()``. The mapping type is not validated: a
+            non-mapping input fails at the ``.items()`` access rather
+            than with a ``TypeError``.
     """
     registry = _fresh_species_registry(species)
     # Layout [age, female_genotype, male_genotype]: Rust stacks this into its

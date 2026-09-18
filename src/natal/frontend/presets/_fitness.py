@@ -45,8 +45,8 @@ _PATCH_REEXPORTS = frozenset({
 })
 
 if TYPE_CHECKING:
-    # Static-only import: precise signatures for type checkers; the runtime
-    # export stays deferred through ``__getattr__`` (cycle-safe).
+    # Intentionally empty: no static-only imports are currently needed here.
+    # The runtime re-exports stay deferred through ``__getattr__`` (cycle-safe).
     pass
 
 

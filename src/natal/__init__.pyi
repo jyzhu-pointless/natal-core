@@ -162,12 +162,13 @@ from .frontend.output import (
 )
 from .frontend.patterns import (
     GameteTypePattern,
-    GenotypePatternParser,
-    GenotypeSelector,
     IndividualSelector,
     LabPattern,
     PatternParseError,
+    SelectorKind,
     ZygoteTypePattern,
+    parse_selector,
+    parse_target,
     resolve_zygote_type,
 )
 from .frontend.population import (
@@ -263,8 +264,6 @@ __all__ = [
     "GenomeTemplate",
     "Genotype",
     "GenotypeFilter",
-    "GenotypePatternParser",
-    "GenotypeSelector",
     "GlabSelector",
     "GridTopology",
     "HaploidGenome",
@@ -315,6 +314,7 @@ __all__ = [
     "ROUTES_BY_METHOD",
     "RecombinationMap",
     "RuntimeUpdater",
+    "SelectorKind",
     "Sex",
     "SexChromosomeType",
     "SpatialPopulation",
@@ -372,6 +372,8 @@ __all__ = [
     "parse_condition",
     "parse_flattened_discrete_state",
     "parse_flattened_state",
+    "parse_selector",
+    "parse_target",
     "population_history_to_readable_dict",
     "population_history_to_readable_json",
     "population_observation_history_to_readable_dict",

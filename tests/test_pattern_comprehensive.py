@@ -6,7 +6,10 @@ Verifies:
 3. Pattern enumeration capabilities
 """
 
-from natal.frontend.patterns import GenotypePatternParser
+from natal.frontend.patterns import (
+    parse_selector,
+    parse_target,
+)
 from natal.frontend.genetics import Species
 
 
@@ -16,8 +19,7 @@ def test_basic_haploid_genome_pattern():
         "Chr2": {"C": ["C1", "C2"]},
     })
 
-    parser = GenotypePatternParser(species)
-    pattern = parser.parse_haploid_genome_pattern("A1/B1; C1")
+    pattern = parse_selector("A1/B1; C1", species=species, kind="haploid")
     filter_func = pattern.to_filter()
 
     haploid_strs = ["A1/B1; C1", "A1/B2; C1", "A2/B1; C1"]

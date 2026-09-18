@@ -12,7 +12,7 @@ class TestZygoteTypePattern:
             "zt_test", {"c1": {"l1": ["A", "a"]}},
             somatic_labels=["normal", "infected"],
         )
-        zt = nt.ZygoteTypePattern.parse("A|a@infected", sp)
+        zt = nt.parse_selector("A|a@infected", species=sp)
         assert zt.slab is not None
         assert zt.slab.matches("infected")
         assert not zt.slab.matches("normal")
@@ -21,7 +21,7 @@ class TestZygoteTypePattern:
         sp = nt.Species.from_dict(
             "zt_test2", {"c1": {"l1": ["A", "a"]}},
         )
-        zt = nt.ZygoteTypePattern.parse("A|a", sp)
+        zt = nt.parse_selector("A|a", species=sp)
         assert zt.slab is None
 
     def test_matches_with_slab(self):
@@ -29,7 +29,7 @@ class TestZygoteTypePattern:
             "zt_match", {"c1": {"l1": ["A", "a"]}},
             somatic_labels=["normal", "infected"],
         )
-        zt = nt.ZygoteTypePattern.parse("A|a@infected", sp)
+        zt = nt.parse_selector("A|a@infected", species=sp)
         gt_Aa = sp.get_genotype_from_str("A|a")
         assert zt.matches(gt_Aa, "infected")
         assert not zt.matches(gt_Aa, "normal")
@@ -38,7 +38,7 @@ class TestZygoteTypePattern:
         sp = nt.Species.from_dict(
             "zt_noslab", {"c1": {"l1": ["A", "a"]}},
         )
-        zt = nt.ZygoteTypePattern.parse("A|a", sp)
+        zt = nt.parse_selector("A|a", species=sp)
         gt_Aa = sp.get_genotype_from_str("A|a")
         assert zt.matches(gt_Aa, "default")
         assert zt.matches(gt_Aa, "anything")
@@ -49,7 +49,7 @@ class TestZygoteTypePattern:
             somatic_labels=["normal", "infected"],
         )
         gt = sp.get_genotype_from_str("A|a")
-        zt = nt.ZygoteTypePattern.from_pair(gt, "infected", sp)
+        zt = nt.parse_selector(f"{gt.to_string()}@infected", species=sp)
         assert zt.slab is not None
         assert zt.slab.matches("infected")
         assert zt.matches(gt, "infected")
@@ -172,7 +172,7 @@ class TestLabPatternAdvanced:
             somatic_labels=["normal", "infected"],
         )
         cfg = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
-        with pytest.raises(ValueError, match="No slab matches"):
+        with pytest.raises(ValueError, match="unknown ztype labels"):
             cfg.fitness(viability={"A|a@nonexistent": 0.5})
 
     def test_multi_slab_different_values(self):

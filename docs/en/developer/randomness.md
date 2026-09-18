@@ -19,9 +19,9 @@ flowchart TD
     R["reproduction: clutch per pair"] --> D1["discrete: binomial / poisson; continuous: the continuous counterparts"]
     D1 --> G["offspring genotypes: drawn from the P distribution"]
     G --> SX["sex assignment: by sex ratio or sex-chromosome rules"]
-    SX --> SUR["survival: per (sex, ZType) binomial(round(count), rate)"]
-    SUR --> DEN["density regulation: multinomial redistribution of the scaled juvenile total"]
-    DEN --> MIG["spatial: migration destinations drawn from the kernel or weights"]
+    SX --> DEN["density regulation: multinomial redistribution of the scaled juvenile total"]
+    DEN --> SUR["survival: per (sex, ZType) binomial(round(count), rate)"]
+    SUR --> MIG["spatial: migration destinations drawn from the kernel or weights"]
 ```
 
 The order matters: **the density resample happens before survival**, so the scaled integer total is what survival then samples from. Spatial migration sampling is covered in [spatial execution and migration](spatial.md).

@@ -32,7 +32,8 @@ def _make_species(name: str):
 
 def _make_entities(sp):
     """Return (locus, chrom, wt_gene, dr_gene, r2_gene, wt_haplo, dr_haplo,
-    wt_hg, dr_hg, wt_wt, wt_dr, dr_wt, dr_dr) for a simple species."""
+    r2_haplo, wt_hg, dr_hg, r2_hg, wt_wt, wt_dr, dr_wt, dr_dr) for a simple
+    species."""
     locus = sp.chromosomes[0].loci[0]
     chrom = sp.chromosomes[0]
     wt = Gene("WT", locus=locus)

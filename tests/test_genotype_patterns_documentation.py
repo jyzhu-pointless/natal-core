@@ -1,21 +1,26 @@
 """
-测试文档中 genotype_patterns.md 的所有示例代码
+Exercise the genotype-pattern examples from the documentation.
 
-确保文档中的代码示例都能正确运行且符合预期
+Covers the sections of ``docs/zh/2_genotype_patterns.md`` exercised below:
+basic syntax, ordered/unordered matching, haploid genome patterns,
+parenthesis grouping, wildcard/set/exclusion atoms, Observation and preset
+integration, and enumeration.  The ``@`` gamete/somatic label section has no
+coverage in this file.
 """
 
 import pytest
+
 import natal as nt
-from natal import GeneticPreset, GameteConversionRuleSet
+from natal import GameteConversionRuleSet, GeneticPreset
 from natal.frontend.patterns.elements._base import PatternParseError
 
 
 class TestGenotypePatternsDocumentation:
-    """测试 genotype_patterns.md 文档中的所有代码示例"""
+    """Run the documented genotype pattern examples covered below."""
 
     def setup_method(self):
-        """创建测试用的物种"""
-        # 创建支持文档中所有示例的物种
+        """Create the species used by the tests."""
+        # Species expressive enough for every documented example used here.
         self.sp = nt.Species.from_dict(
             name="TestSpecies",
             structure={
@@ -31,45 +36,45 @@ class TestGenotypePatternsDocumentation:
         )
 
     def test_basic_pattern_syntax(self):
-        """测试基本模式语法"""
-        # 测试有序匹配
+        """Test basic pattern syntax."""
+        # Ordered matching.
         pattern1 = "A1/B1|A2/B2; C1/D1|C2/D2"
         parsed1 = self.sp.parse_genotype_pattern(pattern1)
         assert parsed1 is not None
 
-        # 验证有序匹配功能
+        # Verify ordered matching.
         gt1 = self.sp.get_genotype_from_str("A1/B1|A2/B2; C1/D1|C2/D2")
         assert parsed1(gt1) is True
 
-        # 测试无序匹配
+        # Unordered matching.
         pattern2 = "A1/B1::A2/B2; C1/D1::C2/D2"
         parsed2 = self.sp.parse_genotype_pattern(pattern2)
         assert parsed2 is not None
 
-        # 验证无序匹配功能
+        # Verify unordered matching.
         assert parsed2(gt1) is True
 
     def test_haploid_genotype_pattern(self):
-        """测试单倍体基因型模式匹配"""
-        # 创建一些单倍体基因型用于测试
+        """Test haploid genotype pattern matching."""
+        # Build haploid genotypes for the tests.
         hg1 = self.sp.get_haploid_genotype_from_str("A1/B1; C1/D1")
         hg2 = self.sp.get_haploid_genotype_from_str("A2/B2; C2/D2")
 
-        # 测试模式匹配 - 修正模式以匹配实际基因型
+        # Pattern matching; the pattern is aligned with the actual genotypes.
         pattern = self.sp.parse_haploid_genome_pattern("A1/B1; C1/D1")
         assert pattern is not None
 
-        # 验证模式匹配功能
+        # Verify pattern matching.
         assert pattern(hg1) is True
         assert pattern(hg2) is False
 
-        # 测试过滤功能
+        # Filtering behavior.
         all_haploids = [hg1, hg2]
         matching_haploids = [hg for hg in all_haploids if pattern(hg)]
-        assert len(matching_haploids) == 1  # 应该只匹配 hg1
+        assert len(matching_haploids) == 1  # only hg1 should match
         assert matching_haploids[0] == hg1
 
-        # 测试枚举方法 - 修正模式以匹配实际基因型
+        # Enumeration helper; the pattern is aligned with the actual genotypes.
         results = list(self.sp.enumerate_haploid_genomes_matching_pattern("A1/B1; C1/D1", max_count=5))
         assert len(results) == 1
         assert results[0] == hg1
@@ -108,32 +113,32 @@ class TestGenotypePatternsDocumentation:
         assert haploid_pattern(simple_sp.get_haploid_genotype_from_str("A1/B1"))
 
     def test_observation_integration(self):
-        """测试与 Observation 的集成"""
+        """Test integration with Observation."""
         groups = {
             "target_group": {
-                # 有序匹配：Maternal|Paternal
+                # Ordered: Maternal|Paternal
                 "genotype": "A1/B1|A2/B2; C1/D1|C2/D2",
                 "sex": "female",
             },
             "target_group_unordered": {
-                # 无序匹配：同源染色体两条拷贝可交换
+                # Unordered: the two homolog copies may swap.
                 "genotype": "A1/B1::A2/B2; C1/D1::C2/D2",
                 "sex": "female",
             }
         }
 
-        # 验证模式语法正确
+        # Verify the pattern syntax parses.
         for group_name, group_config in groups.items():
             genotype_pattern = group_config["genotype"]
             parsed = self.sp.parse_genotype_pattern(genotype_pattern)
             assert parsed is not None, f"Failed to parse pattern for {group_name}: {genotype_pattern}"
 
-            # 验证模式匹配功能
+            # Verify pattern matching.
             gt = self.sp.get_genotype_from_str("A1/B1|A2/B2; C1/D1|C2/D2")
             assert parsed(gt) is True
 
     def test_preset_integration(self):
-        """测试与 Preset 的集成"""
+        """Test integration with a preset."""
 
         class PatternDrivenPreset(GeneticPreset):
             def __init__(self, target_pattern: str, conversion_rate: float):
@@ -157,144 +162,144 @@ class TestGenotypePatternsDocumentation:
                 return ruleset.to_gamete_modifier(population)
 
             def zygote_modifier(self, population):
-                # 实现抽象方法
+                # Implement the abstract method.
                 return None
 
-        # 测试 Preset 创建
+        # Preset construction.
         preset = PatternDrivenPreset("A1/B1|A2/B2; C1/D1|C2/D2", 0.5)
         assert preset is not None
 
-        # 测试模式解析
+        # Pattern parsing.
         pattern_filter = preset._build_filter(self.sp)
         assert pattern_filter is not None
 
-        # 验证模式匹配功能
+        # Verify pattern matching.
         gt = self.sp.get_genotype_from_str("A1/B1|A2/B2; C1/D1|C2/D2")
         assert pattern_filter(gt) is True
 
     def test_debug_and_validation(self):
-        """测试调试与验证方法"""
-        # 检查 GenotypePattern 匹配结果 - 使用精确匹配模式
+        """Test the debug and validation helpers."""
+        # GenotypePattern enumeration with an exact pattern.
         genotype_results = list(self.sp.enumerate_genotypes_matching_pattern("A1/B1|A2/B2; C1/D1|C2/D2", max_count=5))
-        assert len(genotype_results) == 1  # 应该只有一个精确匹配
+        assert len(genotype_results) == 1  # exactly one exact match expected
 
-        # 验证匹配结果正确
+        # Verify the match is correct.
         expected_gt = self.sp.get_genotype_from_str("A1/B1|A2/B2; C1/D1|C2/D2")
         assert genotype_results[0] == expected_gt
 
-        # 检查 HaploidGenotypePattern 匹配结果 - 使用精确匹配模式
+        # HaploidGenotypePattern enumeration with an exact pattern.
         haploid_results = list(self.sp.enumerate_haploid_genomes_matching_pattern("A1/B1; C1/D1", max_count=5))
         assert len(haploid_results) == 1
 
-        # 验证匹配结果正确
+        # Verify the match is correct.
         expected_hg = self.sp.get_haploid_genotype_from_str("A1/B1; C1/D1")
         assert haploid_results[0] == expected_hg
 
     def test_pattern_combinations(self):
-        """测试各种模式组合"""
-        # 精确匹配
+        """Test assorted pattern combinations."""
+        # Exact matching.
         pattern1 = "A1/B1|A2/B2; C1/D1|C2/D2"
         parsed1 = self.sp.parse_genotype_pattern(pattern1)
         assert parsed1 is not None
 
-        # 验证精确匹配功能
+        # Verify exact matching.
         gt1 = self.sp.get_genotype_from_str("A1/B1|A2/B2; C1/D1|C2/D2")
         assert parsed1(gt1) is True
 
-        # 通配混合
+        # Mixed wildcards.
         pattern2 = "A1/*|A2/B2; C1/D1|C2/*"
         parsed2 = self.sp.parse_genotype_pattern(pattern2)
         assert parsed2 is not None
 
-        # 验证通配匹配功能
+        # Verify wildcard matching.
         assert parsed2(gt1) is True
 
-        # 集合匹配
+        # Set matching.
         pattern3 = "{A1,A2}/B1|A2/B2; C1/D1|C2/D2"
         parsed3 = self.sp.parse_genotype_pattern(pattern3)
         assert parsed3 is not None
 
-        # 验证集合匹配功能
+        # Verify set matching.
         assert parsed3(gt1) is True
 
-        # 无序匹配
+        # Unordered matching.
         pattern4 = "A1/B1::A2/B2; C1/D1::C2/D2"
         parsed4 = self.sp.parse_genotype_pattern(pattern4)
         assert parsed4 is not None
 
-        # 验证无序匹配功能
+        # Verify unordered matching.
         assert parsed4(gt1) is True
 
     def test_haploid_pattern_combinations(self):
-        """测试单倍体基因型模式组合"""
-        # 精确匹配
+        """Test haploid genotype pattern combinations."""
+        # Exact matching.
         pattern1 = "A1/B1; C1/D1"
         parsed1 = self.sp.parse_haploid_genome_pattern(pattern1)
         assert parsed1 is not None
 
-        # 验证精确匹配功能
+        # Verify exact matching.
         hg1 = self.sp.get_haploid_genotype_from_str("A1/B1; C1/D1")
         assert parsed1(hg1) is True
 
-        # 通配混合
+        # Mixed wildcards.
         pattern2 = "A1/*; C1/*"
         parsed2 = self.sp.parse_haploid_genome_pattern(pattern2)
         assert parsed2 is not None
 
-        # 验证通配匹配功能
+        # Verify wildcard matching.
         assert parsed2(hg1) is True
 
-        # 集合匹配
+        # Set matching.
         pattern3 = "{A1,A2}/B1; C1/D1"
         parsed3 = self.sp.parse_haploid_genome_pattern(pattern3)
         assert parsed3 is not None
 
-        # 验证集合匹配功能
+        # Verify set matching.
         assert parsed3(hg1) is True
 
-        # 排除匹配
+        # Exclusion matching.
         pattern4 = "!A1/B1; C1/D1"
         parsed4 = self.sp.parse_haploid_genome_pattern(pattern4)
         assert parsed4 is not None
 
-        # 验证排除匹配功能
-        assert parsed4(hg1) is False  # 包含排除的等位基因
+        # Verify exclusion matching.
+        assert parsed4(hg1) is False  # carries the excluded allele
 
     def test_error_handling(self):
-        """测试错误处理"""
-        # 测试染色体段数量不匹配 - 修正为实际会抛出异常的情况
+        """Test error handling."""
+        # Chromosome-group count mismatch; adjusted to what the parser actually does.
         try:
-            # 这个模式可能不会抛出异常，因为系统可能自动补全
+            # This pattern may not raise: missing groups may be auto-completed.
             self.sp.parse_genotype_pattern("A1/B1|A2/B2")
-            # 如果没抛出异常，说明这是正常行为
+            # No exception is also acceptable behavior.
         except Exception:
-            # 如果抛出异常，说明错误处理正常
+            # An exception is acceptable error handling too.
             pass
 
-        # 测试位点数量不匹配 - 修正为实际会抛出异常的情况
+        # Locus count mismatch; adjusted to what the parser actually does.
         try:
-            # 这个模式可能不会抛出异常
+            # This pattern may not raise.
             self.sp.parse_genotype_pattern("A1|A2; C1|C2")
-            # 如果没抛出异常，说明这是正常行为
+            # No exception is also acceptable behavior.
         except Exception:
-            # 如果抛出异常，说明错误处理正常
+            # An exception is acceptable error handling too.
             pass
 
-        # 测试 GenotypePattern 特有错误 - 修正为实际会抛出异常的情况
+        # GenotypePattern-specific error; adjusted to what the parser actually does.
         try:
-            # 这个模式应该会抛出异常
+            # This pattern is expected to raise.
             self.sp.parse_genotype_pattern("C1/C1; D1/D1")
-            # 如果没抛出异常，说明这是正常行为
+            # No exception is also acceptable behavior.
         except Exception:
-            # 如果抛出异常，说明错误处理正常
+            # An exception is acceptable error handling too.
             pass
 
 
 class TestGenotypePatternsComprehensive:
-    """综合测试文档中的典型示例"""
+    """Broader tests of the documented examples."""
 
     def setup_method(self):
-        """创建更简单的测试物种"""
+        """Create a simpler test species."""
         self.sp = nt.Species.from_dict(
             name="SimpleTestSpecies",
             structure={
@@ -306,107 +311,110 @@ class TestGenotypePatternsComprehensive:
         )
 
     def test_ordered_vs_unordered_matching(self):
-        """测试有序和无序匹配的区别"""
-        # 创建测试基因型
+        """Test the difference between ordered and unordered matching."""
+        # Build test genotypes.
         gt_ordered = self.sp.get_genotype_from_str("A1/B1|A2/B2")
 
-        # 测试有序匹配
+        # Ordered matching.
         ordered_pattern = self.sp.parse_genotype_pattern("A1/B1|A2/B2")
         assert ordered_pattern(gt_ordered) is True
 
-        # 测试无序匹配
+        # Unordered matching.
         unordered_pattern = self.sp.parse_genotype_pattern("A1/B1::A2/B2")
         assert unordered_pattern(gt_ordered) is True
 
-        # 测试反向顺序（无序匹配应该通过，有序匹配应该失败）
+        # Reversed whole homolog order is equivalent after genotype canonicalization.
         gt_reversed = self.sp.get_genotype_from_str("A2/B2|A1/B1")
-        assert unordered_pattern(gt_reversed) is True  # 无序匹配通过
-        assert ordered_pattern(gt_reversed) is True    # 无序物种经规范化后匹配
+        assert unordered_pattern(gt_reversed) is True  # unordered matches
+        assert ordered_pattern(gt_reversed) is True
 
     def test_wildcard_matching(self):
-        """测试通配符匹配"""
-        # 创建测试基因型
+        """Test wildcard matching."""
+        # Build test genotypes.
         gt1 = self.sp.get_genotype_from_str("A1/B1|A2/B2")
         gt2 = self.sp.get_genotype_from_str("A1/B2|A2/B1")
 
-        # 测试通配符
+        # Wildcard atoms.
         wildcard_pattern = self.sp.parse_genotype_pattern("A1/*|A2/*")
         assert wildcard_pattern(gt1) is True
         assert wildcard_pattern(gt2) is True
 
-        # 测试部分通配
+        # Partial wildcards.
         partial_wildcard = self.sp.parse_genotype_pattern("A1/B1|A2/*")
         assert partial_wildcard(gt1) is True
-        assert partial_wildcard(gt2) is True   # 无序物种规范化后 gt1==gt2
+        assert partial_wildcard(gt2) is False  # Repulsion has no A1/B1 haplotype.
 
     def test_set_matching(self):
-        """测试集合匹配 — uses :: for unordered canonical safety."""
-        # 创建测试基因型
+        """Test set matching — uses :: for unordered canonical safety."""
+        # Build test genotypes.
         gt1 = self.sp.get_genotype_from_str("A1/B1|A2/B2")
         gt2 = self.sp.get_genotype_from_str("A2/B1|A1/B2")
 
-        # 测试集合匹配
+        # Set matching.
         set_pattern = self.sp.parse_genotype_pattern("{A1,A2}/B1|{A1,A2}/B2")
         assert set_pattern(gt1) is True
-        assert set_pattern(gt2) is True
+        assert set_pattern(gt2) is False
+        unordered_set = self.sp.parse_genotype_pattern("{A1,A2}/B1::{A1,A2}/B2")
+        assert unordered_set(gt2) is True
 
-        # 测试排除匹配
+        # Exclusion matching.
         exclude_pattern = self.sp.parse_genotype_pattern("!A1/B1|!A2/B2")
-        assert exclude_pattern(gt1) is False  # 包含排除的等位基因
+        assert exclude_pattern(gt1) is False  # carries the excluded allele
 
     def test_haploid_pattern_matching(self):
-        """测试单倍体模式匹配"""
-        # 创建测试单倍体基因型
+        """Test haploid pattern matching."""
+        # Build test haploid genotypes.
         hg1 = self.sp.get_haploid_genotype_from_str("A1/B1")
         hg2 = self.sp.get_haploid_genotype_from_str("A2/B2")
 
-        # 测试精确匹配
+        # Exact matching.
         exact_pattern = self.sp.parse_haploid_genome_pattern("A1/B1")
         assert exact_pattern(hg1) is True
         assert exact_pattern(hg2) is False
 
-        # 测试通配匹配
+        # Wildcard matching.
         wildcard_pattern = self.sp.parse_haploid_genome_pattern("A1/*")
         assert wildcard_pattern(hg1) is True
         assert wildcard_pattern(hg2) is False
 
-        # 测试集合匹配
+        # Set matching.
         set_pattern = self.sp.parse_haploid_genome_pattern("{A1,A2}/B1")
         assert set_pattern(hg1) is True
         assert set_pattern(hg2) is False
 
     def test_pattern_enumeration(self):
-        """测试模式枚举功能"""
-        # 枚举匹配特定模式的基因型
+        """Test pattern enumeration."""
+        # Enumerate genotypes matching an exact pattern.
         results = list(self.sp.enumerate_genotypes_matching_pattern("A1/B1|A2/B2", max_count=10))
-        assert len(results) == 1  # 应该只有一个精确匹配
+        assert len(results) == 1  # exactly one exact match expected
 
-        # 验证枚举结果正确
+        # Verify the enumeration result is correct.
         expected_gt = self.sp.get_genotype_from_str("A1/B1|A2/B2")
         assert results[0] == expected_gt
 
-        # 枚举通配模式
+        # Enumerate a wildcard pattern.
         wildcard_results = list(self.sp.enumerate_genotypes_matching_pattern("A1/*|A2/*", max_count=10))
-        assert len(wildcard_results) == 3  # 2x2 种组合，经规范化后 3 种
+        assert len(wildcard_results) == 4  # Linked coupling and repulsion remain distinct.
 
-        # 验证通配枚举结果包含所有可能组合（无序物种规范化后 A1/B2|A2/B1 == A1/B1|A2/B2）
+        # Verify that both linked phases are enumerated.
         expected_genotypes = [
             self.sp.get_genotype_from_str("A1/B1|A2/B1"),
             self.sp.get_genotype_from_str("A1/B1|A2/B2"),
+            self.sp.get_genotype_from_str("A1/B2|A2/B1"),
             self.sp.get_genotype_from_str("A1/B2|A2/B2")
         ]
         for gt in expected_genotypes:
             assert gt in wildcard_results
 
-        # 枚举单倍体模式
+        # Enumerate a haploid pattern.
         haploid_results = list(self.sp.enumerate_haploid_genomes_matching_pattern("A1/B1", max_count=10))
         assert len(haploid_results) == 1
 
-        # 验证单倍体枚举结果正确
+        # Verify the haploid enumeration result.
         expected_hg = self.sp.get_haploid_genotype_from_str("A1/B1")
         assert haploid_results[0] == expected_hg
 
 
 if __name__ == "__main__":
-    # 运行所有测试
+    # Run all tests.
     pytest.main([__file__, "-v"])

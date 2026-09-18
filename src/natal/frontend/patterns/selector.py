@@ -1,115 +1,13 @@
-"""Genotype selector for observation and filtering, plus zygote type resolution.
+"""Zygote-type resolution for selector strings.
 
-Provides :class:`GenotypeSelector` for resolving genotype selectors
-(integers, strings, pattern strings, or Genotype objects) into indices,
-and :func:`resolve_zygote_type` for converting selector strings to
-ZType indices with species-appropriate ordering semantics.
+Provides :func:`resolve_zygote_type`, which funnels one selector string
+through the unified selector entry and binds it to registry ZType indices.
 """
 
 from __future__ import annotations
 
-from typing import Any, Iterable, List, Optional, Sequence, Set
-
 from natal.frontend.genetics import Species
 from natal.frontend.registry.index import IndexRegistry
-
-from .elements.diploid import GenotypePattern, ZygoteTypePattern
-from .parser import GenotypePatternParser
-
-
-class GenotypeSelector:
-    """Unified genotype selector for observation and filtering.
-
-    Provides a unified interface for selecting genotypes using various
-    input formats (integers, strings, pattern strings, or Genotype
-    objects), leveraging the existing pattern matching system.
-    """
-
-    def __init__(self, species: Species):
-        """Initialize a GenotypeSelector for a specific species.
-
-        Args:
-            species: The Species object to use for pattern parsing and
-                genotype resolution.
-        """
-        self.species = species
-        self.parser = GenotypePatternParser(species)
-
-    def resolve_genotype_indices(
-        self,
-        gen_spec: Optional[Iterable[Any]],
-        diploid_genotypes: Optional[Sequence[Any]],
-    ) -> List[int]:
-        """Resolve genotype selectors into a list of indices.
-
-        This method provides the same functionality as observation.py's
-        _resolve_genotype_list() but uses the pattern matching system.
-
-        Args:
-            gen_spec: Genotype selector specification. Can be:
-                - None: select all genotypes
-                - int: genotype index
-                - str: genotype pattern string
-                - Genotype: genotype object
-                - Iterable of any of the above
-            diploid_genotypes: Sequence of diploid genotypes for resolution.
-
-        Returns:
-            List of resolved genotype indices.
-
-        Raises:
-            ValueError: If diploid_genotypes is required but missing.
-        """
-        if gen_spec is None:
-            if diploid_genotypes is None:
-                raise ValueError("diploid_genotypes required to enumerate genotypes")
-            return list(range(len(diploid_genotypes)))
-
-        # Handle single item vs iterable
-        if not isinstance(gen_spec, (list, tuple, set)):
-            gen_spec = [gen_spec]
-
-        resolved_indices: Set[int] = set()
-
-        for selector in gen_spec:
-            if isinstance(selector, int):
-                # Direct index
-                resolved_indices.add(selector)
-            elif isinstance(selector, str):
-                # Pattern string - use pattern matching system
-                pattern = self.parser.parse(selector)
-                if diploid_genotypes is None:
-                    raise ValueError("diploid_genotypes required for pattern matching")
-
-                for i, genotype in enumerate(diploid_genotypes):
-                    if pattern.matches(genotype):
-                        resolved_indices.add(i)
-            else:
-                # Assume it's a Genotype object or similar
-                if diploid_genotypes is None:
-                    raise ValueError("diploid_genotypes required for genotype matching")
-
-                for i, genotype in enumerate(diploid_genotypes):
-                    if selector == genotype:
-                        resolved_indices.add(i)
-
-        return sorted(resolved_indices)
-
-    def get_pattern_for_selector(self, selector: Any) -> Optional[GenotypePattern]:  # accepts str or GenotypePattern
-        """Convert a selector to a GenotypePattern if possible.
-
-        Args:
-            selector: Genotype selector.
-
-        Returns:
-            GenotypePattern if selector can be converted, None otherwise.
-        """
-        if isinstance(selector, str):
-            return self.parser.parse(selector)
-        elif isinstance(selector, GenotypePattern):
-            return selector
-        else:
-            return None
 
 
 def resolve_zygote_type(
@@ -119,10 +17,9 @@ def resolve_zygote_type(
 ) -> list[int]:
     """Resolve a genotype string to ZType indices, with species-appropriate matching.
 
-    For unordered species, auto-promotes ``|`` to ``::`` so that ``"A|a"``
-    matches both ordered and unordered (canonicalized) registrations.  This
-    mirrors the canonicalization logic in
-    :meth:`genetic_structures.Species.resolve_genotype_selectors`.
+    For unordered species, the selector entry promotes ``|`` to ``::`` so
+    that ``"A|a"`` matches both ordered and unordered (canonicalized)
+    registrations — the same promotion every other selector caller gets.
 
     For ordered species (e.g. sex chromosomes), ``|`` is treated strictly —
     ``"a|A"`` and ``"A|a"`` are distinct genotypes and will each only match
@@ -140,11 +37,7 @@ def resolve_zygote_type(
     Returns:
         List of matching ZType indices (may be empty if nothing matches).
     """
-    # Canonicalize | → :: for unordered species only (same pattern as
-    # Species._resolve_single_genotype_selector in genetic_structures.py).
-    # The \x00 trick preserves any :: the user already wrote.
-    if species.unordered:
-        spec = spec.replace("::", "\x00").replace("|", "::").replace("\x00", "::")
+    from .entries import parse_selector
 
-    pattern = ZygoteTypePattern.parse(spec, species)
+    pattern = parse_selector(spec, species=species, kind="ztype", context="zygote type")
     return index_registry.resolve_ztype_indices(pattern)

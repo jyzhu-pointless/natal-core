@@ -651,10 +651,9 @@ def population_observation_history_to_readable_dict(
     This is used when the population History schema stores observation-mode
     snapshots. Each row is
     ``[tick, observed.ravel()]`` where ``observed`` has shape
-    ``(n_groups, n_sexes, n_ages)``, so no per-genotype data is stored.
-
-    Falls back to ``population_history_to_readable_dict`` (raw state decoding)
-    if ``population.observation`` is the identity rule and the history is raw.
+    ``(n_groups, n_sexes)`` when the observation collapses age and
+    ``(n_groups, n_sexes, n_ages)`` otherwise, so no per-genotype data is
+    stored.
 
     Args:
         population: Population instance.
@@ -795,8 +794,9 @@ def spatial_population_to_observation_dict(
 ) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Post-hoc observation on the current spatial state (all demes + aggregate).
 
-    Builds an ``Observation`` from the first deme's registry, applies it to
-    each deme individually, then aggregates by summing across demes.
+    Compiles the group specs against each deme's own registry and observes
+    that deme individually; only the aggregate block compiles the rule from
+    the first deme's registry and applies it once to the summed deme counts.
 
     Args:
         spatial_population: Spatial population container.
@@ -1004,10 +1004,12 @@ def spatial_population_observation_history_to_readable_dict(
 ) -> Dict[str, Any]:  # Any: JSON-serializable nested dict
     """Translate pre-recorded spatial observation history into readable dict.
 
-    Each snapshot row is ``[tick, observed.ravel()]`` where ``observed`` has
-    shape ``(n_demes, n_groups, n_sexes, n_ages)``.  For each tick the
-    function expands per-deme observation payloads and a cross-deme aggregate
-    (sum over all demes).
+    Each snapshot row is ``[tick, observed.ravel()]``.  In preserve mode the
+    payload has shape ``(n_groups, len(selected_demes), n_sexes)`` plus a
+    trailing ``(n_ages,)`` unless the observation collapses age; in aggregate
+    mode it is a single ``(n_groups, n_sexes[, n_ages])`` block.  For each
+    tick the function expands per-deme observation payloads and a cross-deme
+    aggregate (sum over the selected demes only).
 
     The canonical ``spatial_population.observation`` supplies the immutable
     projection metadata used to decode every snapshot.

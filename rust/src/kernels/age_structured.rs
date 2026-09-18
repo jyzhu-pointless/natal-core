@@ -954,23 +954,13 @@ pub fn survival(
     let survival_rates = &eco.survival_rates[deme * 2 * n_ages..(deme + 1) * 2 * n_ages];
     let mut s_combined_f = vec![1.0; n_ages * n_ztypes];
     let mut s_combined_m = vec![1.0; n_ages * n_ztypes];
-    // Viability selection acts once, on the last juvenile age; every other age
-    // carries a unit viability multiplier.
-    let target_viability_age = bp.new_adult_age - 1;
+    // Viability selection based on (age, sex, ztype)
     for age in 0..n_ages {
         let age_survival_f = survival_rates[age];
         let age_survival_m = survival_rates[n_ages + age];
         for ztype in 0..n_ztypes {
-            let viability_f = if age == target_viability_age {
-                genetics.viability_fitness[age * n_ztypes + ztype]
-            } else {
-                1.0
-            };
-            let viability_m = if age == target_viability_age {
-                genetics.viability_fitness[(n_ages + age) * n_ztypes + ztype]
-            } else {
-                1.0
-            };
+            let viability_f = genetics.viability_fitness[age * n_ztypes + ztype];
+            let viability_m = genetics.viability_fitness[(n_ages + age) * n_ztypes + ztype];
             // Combined survival = age-specific survival x genotype viability.
             s_combined_f[age * n_ztypes + ztype] = age_survival_f * viability_f;
             s_combined_m[age * n_ztypes + ztype] = age_survival_m * viability_m;
@@ -1096,11 +1086,8 @@ impl EcoCtx<'_> {
             .get(growth_rate_id)
             .copied()
             .unwrap_or_else(|| self.params.low_density_growth_rate[self.deme]);
-        crate::model::validation::validate_growth_contract(
-            self.params.growth_mode[self.deme],
-            growth_rate,
-        )
-        .map_err(|err| err.to_string())?;
+        crate::model::validation::validate_growth_contract(growth_rate)
+            .map_err(|err| err.to_string())?;
         for (id, value) in values.iter().enumerate() {
             if id >= crate::hooks::interpreter::N_ECO_PARAMS {
                 break;

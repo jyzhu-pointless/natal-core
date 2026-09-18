@@ -8,7 +8,7 @@ Core components for genetic simulation: structures, entities, and population mod
 import importlib
 from typing import Any, Dict
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # Maps exported symbol names to the module that defines them.
 #
@@ -133,9 +133,9 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "spatial_population_to_readable_json",
     ],
     "frontend.patterns": [
-        "GameteTypePattern", "GenotypePatternParser", "GenotypeSelector",
-        "IndividualSelector", "LabPattern", "PatternParseError", "ZygoteTypePattern",
-        "resolve_zygote_type",
+        "GameteTypePattern", "IndividualSelector", "LabPattern",
+        "PatternParseError", "SelectorKind", "ZygoteTypePattern",
+        "parse_selector", "parse_target", "resolve_zygote_type",
     ],
     "frontend.population": [
         "BasePopulation", "AgeStructuredPopulation", "DiscreteGenerationPopulation",

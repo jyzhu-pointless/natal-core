@@ -1,0 +1,55 @@
+// Internal compilation dependency graph (FRONTEND_REFACTOR_PLAN.md §4.3).
+//
+// This file is the single place that declares which derived products exist
+// and what each of them depends on.  The compiler loads it, rejects
+// unknown nodes, missing compute implementations and cycles, and executes
+// the nodes in topological order.  It expresses dependency relationships
+// only — the compute functions and every scientific formula live in
+// Python/Rust, and user-facing semantics (preset priority, fitness
+// replace/multiply order, manual rule combination) are unchanged by it.
+//
+// "inputs" are declaration facts, not computed nodes: the locked
+// dimensions, the species' genetic indices, the raw initial-distribution
+// declaration, and the declared genetic operations.  Everything else is
+// derived from them and is recomputed by the owning phase:
+//
+//   - the derivation nodes run in PopulationBuilder._compile_products;
+//   - the publish-side nodes run, in the order declared here, inside
+//     _publish_and_build / _build_published (compression fixes the final
+//     axes first, then hooks and observation resolve against them).
+{
+  "inputs": [
+    "dimensions",
+    "genetic_indices",
+    "initial_distribution",
+    "genetic_operations"
+  ],
+  "nodes": {
+    "genetic_products": {
+      "depends": ["dimensions", "genetic_indices", "genetic_operations"]
+    },
+    "initial_counts": {
+      "depends": ["dimensions", "genetic_indices", "initial_distribution"]
+    },
+    "initial_sperm_storage": {
+      "depends": ["dimensions", "genetic_indices", "initial_distribution"]
+    },
+    "type_names": {
+      "depends": ["genetic_indices"]
+    },
+    "compression": {
+      "depends": [
+        "genetic_products",
+        "initial_counts",
+        "initial_sperm_storage",
+        "type_names"
+      ]
+    },
+    "hooks": {
+      "depends": ["compression"]
+    },
+    "observation": {
+      "depends": ["compression", "hooks"]
+    }
+  }
+}

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional
 
-from natal.frontend.genetics import Genotype, Species
+from natal.frontend.genetics import Genotype
 
 from .._groups import chromosome_groups, group_haplotype
 from .atom import LabPattern
@@ -17,28 +17,25 @@ from .chromosome import ChromosomePairPattern
 
 
 class GenotypePattern:
-    """Complete genotype pattern, optionally filtered by somatic label.
+    """Complete genotype pattern across all chromosome groups.
 
-    The ``@lab`` suffix (e.g. ``A|a@cas9_high``) is parsed and stored in
-    *lab* but is NOT checked by :meth:`matches` — label filtering is the
-    caller's responsibility (e.g. ``GenotypeSelector``).  When *lab* is
-    ``None`` the pattern effectively matches any label.
+    Matches genetic content only.  A ``Genotype`` has no label, so this
+    pattern carries none: the ``@slab`` suffix belongs to
+    :class:`ZygoteTypePattern` (and to ``IndividualSelector(ztype=...)``),
+    the types that compose a genotype pattern with a label pattern.
     """
 
     def __init__(
         self,
         chromosome_patterns: List[Optional[ChromosomePairPattern]],
-        lab: Optional[LabPattern] = None,
     ):
         """Initialize a complete genotype pattern.
 
         Args:
             chromosome_patterns: List of ChromosomePairPattern (or None for
                 omitted chromosomes).
-            lab: Optional somatic-label constraint (parsed from ``@lab``).
         """
         self.chromosome_patterns = chromosome_patterns
-        self.lab: Optional[LabPattern] = lab
 
     def matches(self, genotype: Genotype) -> bool:
         """Check if a genotype matches this pattern.
@@ -78,8 +75,7 @@ class GenotypePattern:
 
     def __repr__(self) -> str:
         """Return a string representation of this genotype pattern."""
-        base = f"GenotypePattern([{', '.join(str(cp) if cp else 'None' for cp in self.chromosome_patterns)}])"
-        return f"{base}@{self.lab}" if self.lab else base
+        return f"GenotypePattern([{', '.join(str(cp) if cp else 'None' for cp in self.chromosome_patterns)}])"
 
 
 class ZygoteTypePattern:
@@ -91,16 +87,16 @@ class ZygoteTypePattern:
     ``GenotypePattern`` — it resolves to a ``(genotype_index, slab_index)``
     pair used for ZType indexing in config arrays.
 
-    Supports both string and tuple construction::
+    Built by the unified selector entry::
 
-        ZygoteTypePattern.parse("A|a@infected", species)
-        ZygoteTypePattern.from_pair(genotype_obj, "infected", species)
+        parse_selector("A|a@infected", species=species)   # kind="ztype"
     """
 
     def __init__(
         self,
         genotype: GenotypePattern,
         slab: Optional[LabPattern] = None,
+        source_text: Optional[str] = None,
     ):
         """Initialize a ZygoteTypePattern.
 
@@ -111,66 +107,9 @@ class ZygoteTypePattern:
         """
         self.genotype = genotype
         self.slab: Optional[LabPattern] = slab
-
-    @staticmethod
-    def parse(pattern_str: str, species: Species) -> ZygoteTypePattern:
-        """Parse a ZType pattern string like ``"A|a@infected"``.
-
-        The ``@slab`` suffix is extracted; everything before it is parsed
-        as a :class:`GenotypePattern`.
-        """
-        from natal.frontend.patterns.parser import GenotypePatternParser
-
-        parser = GenotypePatternParser(species)
-        genotype = parser.parse(pattern_str)
-        return ZygoteTypePattern(genotype, genotype.lab)
-
-    @staticmethod
-    def from_pair(
-        genotype: Genotype,
-        slab: str,
-        species: Species,
-    ) -> ZygoteTypePattern:
-        """Build a ZygoteTypePattern from a (Genotype, slab_name) pair.
-
-        Args:
-            genotype: A Genotype instance.
-            slab: Somatic label name.
-            species: Species for genotype-string resolution.
-
-        Returns:
-            A ZygoteTypePattern matching the given genotype and slab.
-        """
-        from natal.frontend.patterns.parser import GenotypePatternParser
-
-        parser = GenotypePatternParser(species)
-        pattern = parser.parse(str(genotype))
-        return ZygoteTypePattern(pattern, LabPattern(lab=slab))
-
-    @staticmethod
-    def from_slab_key(key: str, species: Species) -> ZygoteTypePattern:
-        """Parse a genotype key that may include an ``@slab`` suffix.
-
-        Splits at ``@``, canonicalizes the genotype part via
-        ``species.get_genotype_from_str``, and creates a ZygoteTypePattern
-        with the resolved slab suffix.
-
-        Args:
-            key: Genotype key like ``"A|a"`` or ``"A|a@infected"``.
-            species: Species definition for genotype resolution.
-
-        Returns:
-            A ZygoteTypePattern with the canonical genotype and slab.
-        """
-        if "@" in key:
-            idx = key.rindex("@")
-            gt_part = key[:idx]
-            slab_part = key[idx:]
-        else:
-            gt_part = key
-            slab_part = ""
-        gt = species.get_genotype_from_str(gt_part)
-        return ZygoteTypePattern.parse(str(gt) + slab_part, species)
+        # Retain the grammar spelling so a structured selector can later be
+        # consumed as a conversion target without round-tripping ``repr``.
+        self.source_text = source_text
 
     def matches(self, genotype: Genotype, slab_label: str = "default") -> bool:
         """Check if this pattern matches a (genotype, slab_label) pair."""

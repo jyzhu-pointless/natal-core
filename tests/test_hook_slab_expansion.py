@@ -230,8 +230,8 @@ class TestPhaseD_MultiLocusSlab:
         reg = _registry_for_species(sp)
         result = _resolve_ztypes("*", reg, reg.index_to_genotype[0].species, reg.n_ztypes)
         assert len(result) == reg.n_ztypes
-        # 9 unordered genotypes (alleles-at-locus only) × 2 slabs = 18
-        assert reg.n_ztypes == 18
+        # Four linked haplotypes give 4*5/2 unordered pairs × 2 slabs = 20.
+        assert reg.n_ztypes == 20
 
     def test_two_locus_specific_genotype_all_slabs(self):
         sp = nt.Species.from_dict(

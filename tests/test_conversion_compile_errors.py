@@ -255,7 +255,7 @@ class TestPatternUnknownAlleles:
     not exist in the species (e.g. a typo like ``"Dr|Wt"``) currently
     compiles, matches nothing, and the rule silently never fires — exactly
     the "interpreted as match failure" outcome the contract forbids.
-    ``ZygoteTypePattern.parse("WT|Nope", species)`` and
+    ``nt.parse_selector("WT|Nope", species=species)`` and
     ``GenotypePatternParser.parse_haploid_genome_pattern("Nope")`` both
     succeed, and the compiled matcher simply returns False forever.
 
@@ -341,7 +341,7 @@ class TestRemainingCompileBranches:
         wt = reg.gtype_index(sp.get_haploid_genotype_from_str("WT"), "default")
         dr = reg.gtype_index(sp.get_haploid_genotype_from_str("Dr"), "default")
         z = reg.ztype_index(sp.get_genotype_from_str("WT|WT"), "default")
-        # Every maternal gamete here is default-labelled: no branch converts.
+        # Every maternal gamete here is default-labeled: no branch converts.
         row = rows[(wt, wt)]
         assert row[z] == pytest.approx(1.0)
         assert row.get(dr, 0.0) == pytest.approx(0.0)
@@ -353,9 +353,10 @@ class TestRemainingCompileBranches:
             )
         )
         rs = ZygoteConversionRuleSet()
-        # rsplit leaves "(" as the lab suffix, which LabPattern rejects.
+        # The filter validator owns the single '@' scan, so "(" reaches
+        # LabPattern.parse as the label part and is rejected there.
         rs.add_ztype_convert(to="*@*", rate=0.5, filters={"maternal": "WT@("})
-        with pytest.raises(ValueError, match="invalid label pattern"):
+        with pytest.raises(ValueError, match="invalid filter label"):
             rs.to_zygote_modifier(host)
 
     def test_zygote_allele_conversion_outside_axis_rejects_runtime_update(
@@ -431,3 +432,69 @@ class TestPatternTokenizerEdgeCases:
         )
         rows = rs.to_gamete_modifier(host)()
         assert rows  # a legal pattern must compile, not be rejected
+
+
+class TestSharedLabelScan:
+    """Both stages share one ``@`` scan, so malformed labels report alike.
+
+    The conversion modules used to split the ``@label`` suffix with their own
+    ``rsplit`` and parse the suffix a second time; the filter validator then
+    scanned the same string again with a different rule.  The scan now lives
+    in one function, which is what these tests pin.
+    """
+
+    @pytest.mark.parametrize("stage", ["gamete", "zygote"])
+    @pytest.mark.parametrize(
+        "pattern,message",
+        [
+            ("WT@x@y", "at most one @ separator"),
+            ("WT@", "empty genotype or label"),
+            ("@default", "empty genotype or label"),
+            ("WT@(", "invalid filter label"),
+            ("WT@nope", "unknown filter labels"),
+        ],
+    )
+    def test_malformed_label_reports_the_shared_message(
+        self, stage: str, pattern: str, message: str
+    ) -> None:
+        sp = nt.Species.from_dict(
+            name=f"_shared_label_{stage}", structure={"chr1": {"A": ["WT", "Dr"]}}
+        )
+        host = _host(sp)
+        if stage == "gamete":
+            rules = GameteConversionRuleSet().add_allele_convert(
+                from_allele="WT", to_allele="Dr", rate=1.0,
+                filters={"current": pattern},
+            )
+            compile_it = rules.to_gamete_modifier
+        else:
+            rules = ZygoteConversionRuleSet().add_ztype_convert(
+                to="*@*", rate=0.5, filters={"maternal": pattern}
+            )
+            compile_it = rules.to_zygote_modifier
+
+        with pytest.raises(ValueError, match=message):
+            compile_it(host)
+
+    @pytest.mark.parametrize("stage", ["gamete", "zygote"])
+    def test_legal_label_forms_still_compile(self, stage: str) -> None:
+        """The shared scan must not narrow the accepted label forms."""
+        sp = nt.Species.from_dict(
+            name=f"_shared_label_ok_{stage}",
+            structure={"chr1": {"A": ["WT", "Dr"]}},
+            gamete_labels=["default", "cas9"],
+        )
+        host = _host(sp)
+        for pattern in ("WT", "WT@cas9", "WT@*"):
+            if stage == "gamete":
+                rules = GameteConversionRuleSet().add_allele_convert(
+                    from_allele="WT", to_allele="Dr", rate=1.0,
+                    filters={"current": pattern},
+                )
+                modifier = rules.to_gamete_modifier(host)
+            else:
+                rules = ZygoteConversionRuleSet().add_ztype_convert(
+                    to="*@*", rate=0.5, filters={"maternal": pattern}
+                )
+                modifier = rules.to_zygote_modifier(host)
+            assert modifier is not None, pattern

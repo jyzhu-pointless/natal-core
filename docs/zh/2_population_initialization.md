@@ -86,11 +86,11 @@ builder 必须关联 `Species`，因为调整年龄也会重建遗传维度和�
 
 ### `initial_state(...)` – 初始状态
 
-初始状态参数在模拟开始时生效，为 `algorithms.py` 中的各种采样函数提供基础数据。初始个体数量分布直接影响后续的繁殖和生存计算，精子存储数据在繁殖阶段被 `sample_mating` 函数使用。
+初始状态参数在模拟开始时生效，为模拟内核的繁殖与生存采样阶段提供基础数据。初始个体数量分布直接影响后续的繁殖和生存计算，精子存储数据在繁殖阶段的交配步骤中被使用。
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `individual_count` | `Mapping` | 初始个体数量分布，格式为 `{性别: {基因型: 年龄数据}}` | 必填 | 初始状态 | 如未设置，`build()` 会报错；支持标量、序列、映射等多种格式 |
+| `individual_count` | `Mapping` | 初始个体数量分布，格式为 `{性别: {基因型: 年龄数据}}` | 必填 | 初始状态 | 如未设置，`build()` 仍会成功并产出空（零计数）种群；支持标量、序列、映射等多种格式 |
 | `sperm_storage` | `Optional[Mapping]` | 初始精子库存（年龄结构模型始终启用储精） | `None` | reproduction | 格式为三层映射 |
 
 **年龄数据（`age_data`）的格式**（所有计数必须为非负数）：
@@ -165,7 +165,7 @@ builder 必须关联 `Species`，因为调整年龄也会重建遗传维度和�
 | `male_age_based_mating_rate` | `Optional` | 雄性按年龄的交配率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时使用默认值。 |
 | `female_age_based_fertility` | `Optional` | 雌性按年龄的相对生育力权重。 | `None` | reproduction | 长度必须等于 `n_ages`；用于调节不同年龄雌性的产卵贡献。 |
 | `age_based_reproduction_rate` | `Optional` | 雌性按年龄的繁殖参与率。 | `None` | reproduction | 长度必须等于 `n_ages`；未设置时默认全为 1.0。支持标量、序列、映射、函数。 |
-| `eggs_per_female` | `float` | 每只雌性的基础产卵数。 | `50.0` | reproduction | 作为种群产卵数的基准；调参时可从中性值开始。 |
+| `eggs_per_female` | `float` | 每只雌性的基础产卵数。 | `100.0` | reproduction | 作为种群产卵数的基准；调参时可从中性值开始。 |
 | `fixed_egg_count` | `bool` | 产卵数是否固定。 | `False` | reproduction | `True` 表示固定产卵数，`False` 表示随机产卵。 |
 | `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 取值范围 `[0, 1]`；`0.5` 表示雌雄各半。当性染色体约束可以确定后代性别时（例如 XX/ZW 为雌、XY/ZZ 为雄），该参数会被忽略。 |
 | `sperm_displacement_rate` | `float` | 新精子替换旧精子的速率。 | `0.05` | reproduction | 取值范围通常为 `(0, 1]`；值越大表示新精子替换速度越快。 |
@@ -194,7 +194,10 @@ builder 必须关联 `Species`，因为调整年龄也会重建遗传维度和�
 三条验收底线：① 平衡点 x=1 时所有曲线收敛到 `s`（g(1)=s）；② 低密度 x→0 时 g(0)=r·s（三条曲线在同一平衡点共享数值）；③ 确定性模拟下曲线缩放逐位可复现。
 
 第四条规则处理"参考点不可用"：当期望竞争强度 `C*` 为 0 时（承载容量为 0，或声明的均衡分布中幼体条目全为 0），补偿型模式 2–4 的招募量为 0（缩放为 `0`），而不再回退到"不调节"的缩放 `1.0`；当 `new_adult_age == 1` 时，`eggs_per_female == 0` 也会触发该规则，因为此时 0 龄是唯一的竞争年龄。`fixed`（模式 1）以承载容量而非 `C*` 为基准，因此 `K` 为正时仍按 `K` 截断。`no_competition`（模式 0）仍是表达"不做密度调节"的方式，包括个体只来自 hook 投放的模型。
-| `low_density_growth_rate` | `float` | 低密度下的内禀增长率。 | `6.0` | 幼体密度调节 | 表示无竞争时的增长倍数；取值过大容易导致种群振荡。 |
+
+| 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
+|---|---|---|---|---|---|
+| `low_density_growth_rate` | `float` | 低密度下的内禀增长率。 | `6.0` | 幼体密度调节 | 所有模式均须为有限值且在 [1, 1000000] 内；表示无竞争时的增长倍数；取值过大容易导致种群振荡。 |
 | `age_1_carrying_capacity` | `Optional[int]` | age=1 阶段的种群承载容量。 | `None` | 幼体密度调节 | 如果显式指定，会优先使用该值（优先级最高）。 |
 | `old_juvenile_carrying_capacity` | `Optional[int]` | 与 `age_1_carrying_capacity` 功能相同的遗留参数名（已弃用）。 | `None` | 幼体密度调节 | 推荐使用 `age_1_carrying_capacity`，两者同时设置时以 `age_1_carrying_capacity` 为准。 |
 | `expected_num_new_adult_females` | `Optional[int]` | 预期的成体雌性数量，用于独立计算期望产卵量。 | `None` | 期望产卵量推导 | 与 `age_1_carrying_capacity` 解耦：一个定容量，一个定产卵量（详见下文）。 |
@@ -225,6 +228,13 @@ builder 必须关联 `Species`，因为调整年龄也会重建遗传维度和�
    - 若缺少期望产卵量：从初始状态的雌性分布计算期望产卵量
 
 无论走哪种途径，系统都会真正构建出平衡分布，然后从平衡分布计算出所有竞争相关指标。这确保了 $K$、期望产卵量和平衡存活率三者之间的一致性。自动构建的分布按**存活后的性比**拆分 age-1 总数——即出生性比经两性各自 age-0 存活率筛选后的比例——因此两性存活率不同时，标定出的平衡点仍精确落在 $K$；两性 age-0 存活率相等时它就退化为出生性比本身。
+
+有两类输入按**拥有它的引擎的实际读法**读取，因此参考状态是模型真能到达的状态：
+
+- **出生性比**：由性染色体决定性别的物种会忽略 `sex_ratio`（见上文参数表），标定遵循同一规则，按遗传上平衡的 1:1 拆分参考组成，因此写入非 0.5 的值不会移动标定出的平衡点。
+- **年龄别 fertility**：离散世代没有年龄别繁殖力，标定在那里使用隐式 1.0；年龄结构路径则把存储值裁到 `[0, 1]`——两者都与各自的 tick 一致。
+
+自动构建的参考是**野生型**背景：只由物种结构与 ecology 参数构成。适合度系数与 modifier/preset 规则集（它们改写遗传传递表）属于 overlay：会改变实际组成，带代价时还会改变实际总量，但不改变 $K$ 锚定的东西。因此施加 `viability`、`fecundity`、`zygote_viability` 后实际平衡会偏离 $K$——那是代价在生效，不是标定错误。`sexual_selection` 是例外：交配偏好只重新分配父权，每头雌性的总配对权重不变，因此总量仍停在 $K$。若某个模型想要的锚点不是野生型平衡态，用 `equilibrium_distribution` 显式声明。
 
 **期望产卵量的计算公式**：
 
@@ -267,7 +277,7 @@ total_expected_eggs = Σ( N_f[age] × P_reproducing[age] × fertility[age] × eg
 
 ### `fitness(...)` – 适应度系数
 
-适应度参数在模拟的不同阶段生效。`sexual_selection` 在繁殖阶段的 `compute_mating_probability_matrix` 中影响交配概率，`fecundity` 在 `fertilize_with_precomputed_offspring_probability_and_age_specific_reproduction` 中影响产卵数量，`viability` 在生存阶段的 `compute_viability_survival_rates` 中与年龄特定存活率结合，`zygote_viability` 在繁殖阶段结束后立即应用于新生个体。
+适应度参数在模拟的不同阶段生效。`sexual_selection` 在繁殖阶段的交配步骤中影响交配概率，`fecundity` 在受精步骤中影响产卵数量，`viability` 在生存阶段与年龄特定存活率结合，`zygote_viability` 在繁殖阶段结束后立即应用于新生个体。
 
 NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类型会在不同阶段生效：
 
@@ -378,9 +388,9 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 
 ### `build()` – 编译构建
 
-`build()` 接受可选的 `name`（种群名称）和 `hooks`（hook 注册表），有约束：
+`build()` 接受可选的 `name`（种群名称）和 `hook_items`（hook 注册表），有约束：
 
-- 必须先调用 `initial_state(...)` 设置初始状态。
+- `initial_state(...)` 是可选的；不调用它时 `build()` 仍会成功，产出空（零计数）种群。
 - 执行顺序为：
   1. 同步 equilibrium metrics（`apply()`）
   2. 合并 hooks
@@ -433,7 +443,7 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
-| `eggs_per_female` | `float` | 每只雌性每代产卵数。 | `50.0` | reproduction | 产卵的基准值；调参时可从中性值开始。 |
+| `eggs_per_female` | `float` | 每只雌性每代产卵数。 | `100.0` | reproduction | 产卵的基准值；调参时可从中性值开始。 |
 | `sex_ratio` | `float` | 后代中雌性的比例。 | `0.5` | reproduction | 取值范围 `[0, 1]`；`0.5` 表示雌雄各半。当性染色体约束可以确定后代性别时（例如 XX/ZW 为雌、XY/ZZ 为雄），该参数会被忽略。 |
 | `female_adult_mating_rate` | `float` | 成体雌性的交配率。 | `1.0` | reproduction | 表示雌性参与交配的比例；取值范围 `[0, 1]`。 |
 | `male_adult_mating_rate` | `float` | 成体雄性的交配率。 | `1.0` | reproduction | 表示雄性参与交配的比例；取值范围 `[0, 1]`。 |
@@ -444,14 +454,18 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 |---|---|---|---|---|---|
 | `female_age0_survival` | `float` | 雌性幼体（age 0）的存活率。 | `1.0` | survival | 取值范围 `[0, 1]`；`1.0` 表示全部存活。 |
 | `male_age0_survival` | `float` | 雄性幼体（age 0）的存活率。 | `1.0` | survival | 取值范围 `[0, 1]`；`1.0` 表示全部存活。 |
-| `` | `float` | 成体在世代间的存活率。 | `0.0` | survival / aging 边界 | 取值范围 `[0, 1]`；设为 `0` 表示严格的非重叠世代，较高的值允许成体跨世代存活。 |
+
+建模建议：
+
+- 两个概率应约束在 `[0, 1]` 内。
+- 离散世代模型中成体在每个 tick 被完全替换，因此成体存活率始终为 0.0，且无法覆盖（尝试设置会抛出 `ValueError`）。
 
 ### `competition(...)`
 
 | 参数 | 类型 | 说明 | 默认值 | 影响阶段 | 备注 |
 |---|---|---|---|---|---|
 | `juvenile_growth_mode` | `Union[int, str]` | 幼体生长的密度调节模式。 | `"beverton_holt"` | 幼体密度调节 | 默认 `"beverton_holt"`；也可显式使用 `"logistic"`、`"ricker"` 等其他模式。 |
-| `low_density_growth_rate` | `float` | 低密度下的内禀增长倍数。 | `6.0` | 幼体密度调节 | 表示无竞争条件下的增长倍数；取值过大容易导致振荡。 |
+| `low_density_growth_rate` | `float` | 低密度下的内禀增长倍数。 | `6.0` | 幼体密度调节 | 所有模式均须为有限值且在 [1, 1000000] 内；表示无竞争条件下的增长倍数；取值过大容易导致振荡。 |
 | `carrying_capacity` | `Optional[int]` | 幼体的承载容量。 | `None` | 密度上限 | 如果未设置，系统会尝试自动推导；显式指定的值优先级最高。 |
 
 ### `presets(...)` / `fitness(...)` / `modifiers(...)` / `hooks(...)` / `build()`
@@ -484,7 +498,7 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 
 | 错误现象 | 可能原因 | 解决方法 |
 |---|---|---|
-| `build()` 直接报错 | 忘记设置 `initial_state(...)` | 在 `build()` 之前调用 `initial_state(...)` |
+| 种群为空（所有计数为零） | 未调用 `initial_state(...)`——`build()` 会成功但产出零计数种群 | 在 `build()` 之前在链上添加 `.initial_state(...)` |
 | 初始化或编译阶段报错 | 年龄向量长度与 `n_ages` 不一致 | 确保所有年龄相关参数的长度等于 `n_ages` |
 | 结果异常或运行时错误 | `sex_ratio` 或其他概率参数越界 | 检查参数是否在合法范围内（如 `[0, 1]`） |
 | 行为与预期不符 | 同名参数多次设置导致覆盖 | 注意 `generation_time`、`equilibrium_distribution` 等参数在多个方法中都可设置，后调用会覆盖先调用 |
@@ -494,7 +508,7 @@ NATAL 支持灵活的适应度配置方案。在模拟中，以下适应度类�
 链式 API 的底层通过 `PopulationBuilder` 对象管理配置。每个链式方法立即写入 `ModelDraft` 的 NumPy 数组——无延迟执行，无中间累积。配置的生效顺序：
 
 1. **基础配置**：`setup()` 和 `age_structure()` 设置基本参数和维度
-2. **状态配置**：`initial_state()` 解析字典为 3-D 数组写入 config
+2. **状态配置**：`initial_state()` 把分布存为权威声明；3-D 数组在维度最终确定后（`age_structure()` 重建与 `build()` 时）由声明推导，因此先声明再锁定年龄结构既不会丢失数量，也不会因临时维度被拒绝
 3. **动力学配置**：`survival()`、`reproduction()`、`competition()` 写入 per-age 数组和 0-d 标量
 4. **高级配置**：`presets()`、`fitness()`、`modifiers()` 立即写入 config（非延迟）
 5. **最终构建**：`build()` 执行 equilibrium sync 并创建 `Population` 对象

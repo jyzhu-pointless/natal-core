@@ -235,6 +235,12 @@ pub(crate) fn equilibrium_metrics(
 /// (same statement order, bit-identical results) without materializing
 /// a contract pair: the sensitive-parameter sync path runs on every
 /// committed ecology write, so it must stay an O(n_ages) call.
+///
+/// ``has_sex_chromosomes`` and ``discrete_generation`` carry the two model
+/// facts the calibration must honour to describe the state the owning engine
+/// reaches: the genetic offspring sex split, and whether the tick reads
+/// per-age fertility at all.  Both default decisions live in the kernel core,
+/// so this entry point only forwards them.
 #[pyfunction]
 #[pyo3(signature = (
     carrying_capacity,
@@ -246,6 +252,8 @@ pub(crate) fn equilibrium_metrics(
     competition_weights,
     new_adult_age,
     n_ages,
+    has_sex_chromosomes,
+    discrete_generation,
     declared_distribution=None,
     external_expected_eggs=None,
 ))]
@@ -263,6 +271,8 @@ pub(crate) fn equilibrium_metrics_flat(
     competition_weights: PyReadonlyArray1<'_, f64>,
     new_adult_age: usize,
     n_ages: usize,
+    has_sex_chromosomes: bool,
+    discrete_generation: bool,
     declared_distribution: Option<PyReadonlyArray2<'_, f64>>,
     external_expected_eggs: Option<f64>,
 ) -> PyResult<(f64, f64)> {
@@ -336,7 +346,7 @@ pub(crate) fn equilibrium_metrics_flat(
     Ok(crate::kernels::equilibrium::equilibrium_metrics_core(
         carrying_capacity,
         eggs_per_female,
-        sex_ratio,
+        crate::kernels::equilibrium::effective_offspring_sex_ratio(has_sex_chromosomes, sex_ratio),
         survival,
         reproduce,
         fert,
@@ -345,5 +355,6 @@ pub(crate) fn equilibrium_metrics_flat(
         external,
         new_adult_age,
         n_ages,
+        discrete_generation,
     ))
 }

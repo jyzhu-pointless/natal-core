@@ -3,8 +3,9 @@
 Fixes the exact numerical trajectories of the default homogeneous and
 heterogeneous spatial models so the slice-5 refactoring can be verified
 bit-for-bit.  Each scenario runs a small deterministic simulation through
-all three execution paths (Python dispatch, the compiled backend codegen, Rust) and
-prints a digest of the stacked state after each tick.
+``run_tick()`` and prints a digest of the stacked state after each tick;
+the ``rust_*`` scenarios additionally drive the same models through the
+Rust engine session when the extension is importable.
 
 Usage:
     python scripts/slice5_parity_baseline.py            # print digests
@@ -447,8 +448,6 @@ def _rust_scenario(kernel_mode: bool) -> dict[str, str]:
         )
     )
     if kernel_mode:
-        # NOTE: current rust kernel-migration contract requires kernel dims to
-        # equal the topology dims; a 3x3 grid takes a 3x3 kernel.
         kernel = build_gaussian_kernel("square", size=3, sigma=0.9)
         builder = builder.migration(kernel=kernel, migration_rate=0.25)
     else:

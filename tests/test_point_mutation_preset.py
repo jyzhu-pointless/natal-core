@@ -1,6 +1,6 @@
 """PointMutation preset contract tests.
 
-Confirmed requirement (TODO.md item #14): a point mutation declares one
+Confirmed requirement (TODO.legacy.md ARCH-021): a point mutation declares one
 source allele and one or more target alleles, and the targets *compete* —
 each keeps its declared germline rate instead of losing mass to the targets
 declared before it.  ``GameteConversionRuleSet`` cascades rules in
@@ -238,7 +238,7 @@ def test_zygote_stage_channel_is_not_registered() -> None:
     """The preset is germline-only: no zygote modifier is ever returned.
 
     The embryonic channel (`zygotic_mutation_rate`) was implemented and then
-    deliberately withdrawn (TODO.md #14), so `zygote_modifier` must stay None
+    deliberately withdrawn (TODO.legacy.md ARCH-021), so `zygote_modifier` must stay None
     even for a fully configured germline preset — this catches a reappearing
     zygote-stage effect that no documented parameter could switch off.
     """

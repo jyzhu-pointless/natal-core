@@ -296,7 +296,7 @@ ruleset.add_allele_convert(
 )
 ```
 
-`W::D` selects heterozygous parents in either phase. Use `*::D` for any parent carrying D in this single-locus example. In a multilocus model, supply the full appropriate pattern rather than a substring test on the genotype name.
+`W::D` selects heterozygous parents in either left/right order of the homologous chromosomes. Use `*::D` for any parent carrying D in this single-locus example. In a multilocus model, supply the full appropriate pattern rather than a substring test on the genotype name.
 
 At the zygote stage, use `current` for a condition on the offspring itself:
 
@@ -518,6 +518,7 @@ class ComplexDrive(GeneticPreset):
 
 #### Parameter Validation Errors
 - Verify conversion rate is in range [0, 1]
+- Check every top-level key of `fitness_patch`: an unsupported key raises a `ValueError` that names it and lists the supported keys (for example `viability_allele` instead of `viability_per_allele`), and nothing is applied to the model
 
 #### Species Binding Errors
 - Ensure the preset and population use the same species

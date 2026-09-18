@@ -49,7 +49,8 @@ class GeneticPreset(ABC):
 
     Attributes:
         name (str): Human-readable preset name.
-        hook_id (Optional[int]): Optional identifier used when registering modifiers.
+        hook_id (Optional[int]): Currently unused by the framework; kept so
+            callers can attach their own identifier.
     """
 
     def __init__(
@@ -69,8 +70,9 @@ class GeneticPreset(ABC):
         # Anonymous presets fall back to the class name for readable modifier ids.
         self.name = name or self.__class__.__name__
         self.priority = priority
-        # hook_id is unused until a caller sets it; _bound_species stays None until
-        # bind_species() so presets can be constructed before a species exists.
+        # hook_id is currently unused by the framework, even when a caller
+        # sets it; _bound_species stays None until bind_species() so presets
+        # can be constructed before a species exists.
         self.hook_id: Optional[int] = None
         self._bound_species: Optional[Species] = species
         self._custom_fitness_patch: Optional[Callable[[], Optional[PresetFitnessPatch]]] = None
@@ -81,6 +83,9 @@ class GeneticPreset(ABC):
         This enables delayed species injection: users can construct presets
         without passing species, and binding happens automatically when the
         preset is applied to a population.
+
+        Args:
+            species: Species to bind; allele names resolve against it.
         """
         # First bind wins; re-binding to the same species is a no-op.
         if self._bound_species is None:
@@ -181,17 +186,20 @@ class GeneticPreset(ABC):
         Returns:
             Self for method chaining.
 
-        Example:
+        Raises:
+            TypeError: If patch_func is not callable.
+
+        Examples:
             >>> preset = (HomingDrive(...)
             ...     .with_fitness_patch(lambda: {
-            ...         'viability_allele': {'Drive': (0.8, 'dominant')}
+            ...         'viability_per_allele': {'Drive': (0.8, 'dominant')}
             ...     }))
             >>> population.apply_preset(preset)
 
             >>> # Also works with complex custom logic
             >>> def conditional_patch():
             ...     if some_condition:
-            ...         return {'fecundity_allele': {'Mut': (0.5, 'recessive')}}
+            ...         return {'fecundity_per_allele': {'Mut': (0.5, 'recessive')}}
             ...     return None
             >>>
             >>> preset = HomingDrive(...).with_fitness_patch(conditional_patch)

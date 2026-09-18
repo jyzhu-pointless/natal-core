@@ -251,7 +251,7 @@ builder 展开这些声明，并将相同配置分组。`(row, col)` 函数需�
 也不会写入运行种群。
 
 生态标量（K、eggs、sex_ratio、sperm_displacement_rate、low_density_growth_rate、
-juvenile_growth_mode、generation_time）在运行合同中均为普通标量；均衡指标
+juvenile_growth_mode）在运行合同中均为普通标量；均衡指标
 （expected_competition_strength、expected_survival_rate）为只读派生值，经
 `pop.params.<name>` 读取（现算），直接写入会抛 AttributeError。
 

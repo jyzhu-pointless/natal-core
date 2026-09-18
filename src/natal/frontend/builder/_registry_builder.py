@@ -59,7 +59,8 @@ def resolve_declared_ztypes(
     if not declared:
         return set()
     result: set[int] = set()
-    from natal.frontend.patterns.elements.diploid import ZygoteTypePattern
+    from natal.frontend.patterns.entries import parse_selector
+    from natal.frontend.patterns.parser import GenotypePatternParser
     for item in declared:
         if isinstance(item, int):
             if item < 0 or item >= len(registry.index_to_genotype):
@@ -67,12 +68,18 @@ def resolve_declared_ztypes(
             genotype = registry.index_to_genotype[item]
             result.update(registry.ztype_index(genotype, slab) for slab in registry.slab_labels)
         else:
-            pattern = ZygoteTypePattern.parse(item, species)
+            # The unified selector entry owns the unordered | → :: promotion,
+            # so a declared compressed type matches what the same spelling
+            # selects everywhere else.
+            pattern = parse_selector(item, species=species, kind="ztype", context="declared ztype")
             matches = [gt for gt in registry.index_to_genotype if pattern.genotype.matches(gt)]
             if not matches and "*" not in item:
                 # Exact unordered genotypes may be written in either parental
                 # order; the Species parser supplies their canonical identity.
-                genotype = species.get_genotype_from_str(item.split("@", 1)[0])
+                # The selector entry already validated the suffix, so the
+                # grammar's own split names the genotype part unambiguously.
+                genotype_text, _ = GenotypePatternParser.split_label_suffix(item)
+                genotype = species.get_genotype_from_str(genotype_text)
                 matches = [genotype]
             for genotype in matches:
                 result.update(registry.ztype_index(genotype, slab) for slab in registry.slab_labels)
@@ -102,8 +109,12 @@ def rebuild_config_maps(
         Updated complete maps with an empty offspring placeholder.
 
     Raises:
-        ValueError: If the catalog is published, incomplete, or reordered,
-            or a modifier declaration is invalid.
+        ValueError: If the catalog is published or does not match the
+            complete species registry (the check lives in
+            :func:`natal.frontend.genetics.compile.project_mendelian_maps`,
+            which this function delegates to), or a modifier declaration
+            is invalid.  An empty catalog is not an error: the function
+            returns *config* unchanged.
     """
     from natal.frontend.genetics.compile import (
         compile_modifier_maps,

@@ -323,7 +323,7 @@ launch_vue(pop, port=8000, title="My Simulation")
 
 启动后在浏览器打开 <http://localhost:8000>。面板提供实时曲线、逐基因型检视、hooks/遗传矩阵面板，以及 Debug 标签页（事件日志、参数审计、tick 间状态对比、原始状态数组）。模拟循环运行在服务端——关闭浏览器后模拟继续，重新打开即可查看。
 
-开发面板前端时，在 `frontend/` 目录运行 `corepack pnpm dev` 启动 Vite 开发服务器（自动代理 API），发布的 wheel 在 Python 包中内置面板，由 `launch_vue` 直接托管。在源码目录中，可从仓库根目录运行 `python scripts/build_frontend.py` 构建相同资源；包内资源不存在时，也支持本地的 `frontend/dist`。
+开发面板前端时，在 `ui/` 目录运行 `corepack pnpm dev` 启动 Vite 开发服务器（自动代理 API），发布的 wheel 在 Python 包中内置面板，由 `launch_vue` 直接托管。在源码目录中，可从仓库根目录运行 `python scripts/build_frontend.py` 构建相同资源；包内资源不存在时，也支持本地的 `ui/dist`。
 
 ---
 

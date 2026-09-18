@@ -377,11 +377,18 @@ that axis. Raises `RuntimeError` if the population has no state yet.
 
 ### pop.record_snapshot() — Manual Recording
 
-Manually record the current stable state into history outside of `run()`:
+Manually record the current stable state into history outside of `run()`.
+
+`run()` records every tick by default (`record_every=1`), so a tick advanced
+by `run_tick()` or `run()` is usually already recorded and calling
+`record_snapshot()` then raises `ValueError` (e.g. `History already contains
+tick 1`). `record_snapshot()` is for the case where the current tick has **not**
+been recorded — for example when `record_every > 1` and `run()` skipped it:
 
 ```python
-pop.run_tick()
-pop.record_snapshot()  # manually record after a single tick
+pop.record_every = 5  # run() records only every 5th tick
+pop.run(n_steps=3)    # ticks 1-3 are skipped by run()
+pop.record_snapshot() # manually record the current tick (tick 3)
 ```
 
 Call it between `run()` calls, including after an interrupted run. If the current tick is
@@ -507,18 +514,26 @@ individuals belonging to that group.
 | Argument | Type | Description |
 |----------|------|-------------|
 | `ztype` | `str` | Diploid genotype string (e.g. `"WT|Dr"`) |
-| `gtype` | `str` | Haploid genotype string |
 | `sex` | `str` or `int` | `"female"`, `"male"`, or `0` / `1` |
 | `age` | `range`, `int`, or sequence of `int` | Age or age interval |
 
-Selectors can be combined with `|` (union) and `+` (intersection) operators:
+Selectors can be combined with `|` or `+` — both operators mean union (OR):
 
 ```python
 # Union — individuals matching either selector
 combined = nt.IndividualSelector(ztype="WT|Dr") | nt.IndividualSelector(ztype="Dr|Dr")
 
-# Intersection — individuals matching both selectors
-both = nt.IndividualSelector(sex="female") + nt.IndividualSelector(age=range(2, 5))
+# + is an alias for | — this is the same union, not an intersection
+same_union = nt.IndividualSelector(sex="female") + nt.IndividualSelector(age=range(2, 5))
+```
+
+There is no cross-selector intersection operator. To constrain several fields
+at once, put all of them in a single `IndividualSelector` — fields within one
+selector combine with AND:
+
+```python
+# Female adults aged 2-4: both constraints in one selector
+both = nt.IndividualSelector(sex="female", age=range(2, 5))
 ```
 
 ### Grouping Examples

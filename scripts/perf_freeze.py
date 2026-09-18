@@ -78,9 +78,9 @@ def _ring_adjacency(n: int) -> np.ndarray:
 
 
 def _discrete(name: str, species: nt.Species) -> nt.PopulationBuilder:
-    # Beverton-Holt is explicit: the discrete default growth mode is
-    # no-competition (audit finding C2), which explodes the census and
-    # overflows the Rust Poisson sampler's lambda table.
+    # Beverton-Holt is passed explicitly even though it is already the
+    # discrete engine default (model/constants.py): the frozen perf
+    # baseline should not shift if the default growth mode ever changes.
     return (
         nt.DiscreteGenerationPopulation.setup(
             species=species, name=name, stochastic=True

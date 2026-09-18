@@ -36,12 +36,11 @@ class SpeciesMappingMixin:
     ) -> Genotype:
         """Return a canonical Genotype where maternal/paternal order is irrelevant.
 
-        Canonicalizes per-locus: at each locus the maternal allele has the
-        smaller :meth:`Locus.allele_index`.  When individual alleles must be
-        swapped between the two haploid genomes (multi-locus free combination)
-        new :class:`HaploidGenotype` objects are assembled so that every
-        genotype with the same per-locus allele composition collapses to the
-        same canonical form.
+        Canonicalizes each chromosome independently by comparing tuples of
+        :meth:`Locus.allele_index` values and swapping whole homologous
+        haplotypes. Linked phase is preserved; homolog order on different
+        chromosomes is independent. Different-type sex chromosomes retain
+        their maternal/paternal ordering.
         """
         self = cast(Species, self)
         from natal.frontend.genetics.entities.genotype import Genotype
@@ -114,14 +113,17 @@ class SpeciesMappingMixin:
         replaces the cache entry wholesale — a failed rebuild leaves no
         stale baseline reachable.
 
-        PopulationBuilder and PopulationBuilder call this during build to avoid
-        recomputing species-level arrays on every construction.
+        ``PopulationBuilder`` and ``build_runtime_definition`` call this during
+        build to avoid recomputing species-level arrays on every construction.
 
         Returns:
-            Dict with keys ``n_ztypes`` (int), ``n_gtypes``
-            (int), ``n_glabs`` (int), ``zygotes_to_gametes_map``
-            (ndarray), ``gametes_to_zygotes_map`` (ndarray),
-            ``offspring_tensor`` (empty deferred marker), and compatibility arrays
+            Dict (``SpeciesConfigBlueprint``) with keys ``n_genotypes`` (int),
+            ``n_ztypes`` (int), ``n_gtypes`` (int), ``n_glabs`` (int),
+            ``n_slabs`` (int), ``zygotes_to_gametes_map`` (ndarray),
+            ``gametes_to_zygotes_map`` (ndarray), ``offspring_tensor``
+            (empty deferred marker), ``female_ztype_compatibility`` /
+            ``male_ztype_compatibility`` (ndarray), and
+            ``female_only_by_sex_chrom`` / ``male_only_by_sex_chrom``
             (ndarray).
         """
         self = cast(Species, self)

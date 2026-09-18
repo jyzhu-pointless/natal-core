@@ -345,6 +345,11 @@ class ChildStructureRegistry(RegistryBase[S]):
         and consistent with ``GeneticStructure.__new__``, which also returns
         cached instances rather than creating duplicates.
 
+        Args:
+            name: Name of the child structure to create or retrieve.
+            **kwargs: Keyword arguments forwarded to the child structure
+                constructor.
+
         Uses Species-level caching to ensure uniqueness within the same Species.
         """
         assert isinstance(name, str), "Child structure name must be a string."

@@ -65,7 +65,7 @@ pop.run(n_steps=200, record_every=10)
 - **回调（Callback）**：单参数 `def hook(pop: TickContext) -> int`，用 `@nt.hook` 装饰后传入（也可直接传裸函数，事件在 `.hooks(..., event=...)` 上指定）。
 - **选择器回调（Selector）**：`@nt.hook(..., selectors={...})`，选择器值在构建期解析、调用时注入。
 
-`@nt.hook` 装饰器在构建期间按函数签名识别后两类形态；零参数、返回 `List[HookOp]` 的函数仍是声明式 Hook 的兼容入口：构建流程可能先调用它收集引用，再调用它进行编译，返回的 Op 都进入正常管线。推荐直接声明带有 Op 本地 `event` / `priority` 的 Op。只有需要动态组装列表时才使用工厂形式；其装饰器和调用级元数据仍遵循下文的优先级规则。
+`@nt.hook` 装饰器在构建期间按函数签名识别后两类形态；零参数、返回 `List[HookOp]` 的函数仍是声明式 Hook 的兼容入口：构建流程可能先调用它收集引用，再调用它进行编译，返回的 Op 都进入正常管线。空列表是合法的空声明；其他返回值，或列表中混入非 `HookOp` 元素，都会在构建期抛 `TypeError`（消息给出实际收到的类型），而不会静默编译成零个操作。推荐直接声明带有 Op 本地 `event` / `priority` 的 Op。只有需要动态组装列表时才使用工厂形式；其装饰器和调用级元数据仍遵循下文的优先级规则。
 
 旧的 `(state, config, deme_id)` 三参数签名已被显式拒绝（`TypeError` —— 该签名是 njit 时代的遗物，没有迁移通道）。回调 Hook 返回值 `0`（或 `RESULT_CONTINUE`）继续模拟，非零值（或 `RESULT_STOP`）停止模拟。
 
@@ -101,7 +101,7 @@ pop.run(n_steps=200, record_every=10)
 nt.Op.set_param("carrying_capacity", "K * 0.95", every=10, event="early", priority=0)
 ```
 
-- `value` 是**算术表达式**（RPN 编译）：操作数是 jsonc 参数名（`K` 是 `carrying_capacity` 的注册别名）或数字字面量，运算符是 `+ - * /`，支持括号。纯数字等价于常量表达式。表达式**每次触发时对当前值求值**，因此 `"K * 0.95"` 会复利递减。
+- `value` 是**算术表达式**（RPN 编译）：操作数只能是下面列出的 5 个可设置生态标量（或其注册别名，如 `carrying_capacity` 的别名 `K`）或数字字面量，运算符是 `+ - * /`，支持括号。表达式中出现其他参数名会在编译时抛出 `ValueError`。纯数字等价于常量表达式。表达式**每次触发时对当前值求值**，因此 `"K * 0.95"` 会复利递减。
 - `every` / `start` 控制触发计划：`tick >= start and (tick - start) % every == 0`；`when` 提供额外条件。
 - `event` 参数默认 `early`。
 - 目标是以下 **5 个生态参数**（同一组可由 `ctx.params` 直接属性写入、并由 Rust 会话作为列持有的生态标量）：
@@ -300,11 +300,11 @@ pop.run(n_steps=200, record_every=10)
 |---|---|
 | `pop.tick` | 当前模拟 tick（只读）。 |
 | `pop.deme_id` | 本次调用的 deme 索引（panmictic 为 `0`，空间模型为实际 deme 下标，只读）。 |
-| `pop.state` | 可写状态视图（短期借用；写入立即生效）。 |
-| `pop.params` | 可写参数面（与 `pop.params` 相同的写入器栈；属性写入经边界校验，同时到达 draft、Rust 会话与参数快照日志）。 |
+| `pop.state` | 可写事务候选，首次访问 state 或 metrics 时物化；回调成功后提交，失败则丢弃。 |
+| `pop.params` | 可写参数面（与 `pop.params` 相同的写入器栈；属性写入在候选中经边界校验，回调成功后到达 draft、Rust 会话与参数快照日志）。 |
 | `pop.blueprint` | 只读维度、名称目录与引擎开关（`n_sexes`、`n_ages`、`n_ztypes`、`ztype_names` 等）。 |
 | `pop.metrics` | 按需计算的指标视图（每次访问重新计算）。 |
-| `pop.rng` | 确定性随机流（每调用独立；由种群槽位、tick、deme、hook 索引派生，从不触碰全局 `numpy.random`）。 |
+| `pop.rng` | 该 deme 持久 Rust 随机流的受控采样器；每次调用会克隆该流，仅成功时提交推进量（从不触碰全局 `numpy.random`）。 |
 | `pop.update()` | 返回绑定到所属种群的 `RuntimeUpdater`（与构建链同语法）。 |
 | `pop.stop()` / `pop.stop_requested` | 在事件边界请求/查询终止当前 run。 |
 

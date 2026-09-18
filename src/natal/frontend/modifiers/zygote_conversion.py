@@ -8,9 +8,12 @@ declarations in append order and compiles them into one zygote modifier.
 Compile semantics (single owner):
 
 - Every construction starts from the species' unmodified Mendelian
-  baseline projected onto the active registry. Within that construction,
-  each rule set receives the preceding modifier's result. Rebuilding
-  therefore never reapplies rules to an already-converted run matrix.
+  baseline, compiled against the complete species registry: a published
+  host registry is replaced by a rebuilt complete one, so the compiled
+  indices are complete species coordinates and never depend on a later
+  compressed runtime axis. Within that construction, each rule set
+  receives the preceding modifier's result. Rebuilding therefore never
+  reapplies rules to an already-converted run matrix.
 - Every ``(maternal gamete, paternal gamete)`` pair carries a joint
   branch distribution keyed by exact ``(Genotype, slab)`` ztype indices;
   there is no shared ``effective_slab`` and no genotype-argmax shortcut.
@@ -44,7 +47,6 @@ from .conversion_rules import (
     ZygoteAlleleConversionRule,
     ZygoteZtypeConversionRule,
     replace_allele_in_haploid,
-    validate_filter_pattern,
 )
 
 # A compiled matcher: (c1, c2, ztype_idx) -> bool.
@@ -80,7 +82,7 @@ class _CompiledZygoteRule:
 class ZygoteConversionRuleSet:
     """Ordered cascade of zygote conversion rules.
 
-    Example:
+    Examples:
         rs = ZygoteConversionRuleSet("embryo")
         rs.add_allele_convert(
             from_allele="WT", to_allele="Dr", rate=0.4,
@@ -244,10 +246,7 @@ class ZygoteConversionRuleSet:
         """
         from natal.frontend.patterns import ZygoteTypePattern
         from natal.frontend.patterns.elements.diploid import GenotypePattern
-        from natal.frontend.patterns.parser import GenotypePatternParser
-
-        parser = GenotypePatternParser(species)
-
+        from natal.frontend.patterns.entries import parse_selector, parse_target
         compiled: List[_CompiledZygoteRule] = []
 
         # Resolve each declaration once into match/convert closures, so per-row
@@ -261,16 +260,19 @@ class ZygoteConversionRuleSet:
             for key, pattern in rule.filter_pairs:
                 if key == "current":
                     try:
-                        current_pattern = ZygoteTypePattern.parse(pattern, species)
+                        current_pattern = parse_selector(
+                            pattern, species=species, kind="ztype", validate_alleles=True,
+                            context=f"{self.name} current filter",
+                            label_catalog=tuple(
+                                dict.fromkeys(
+                                    (*species.somatic_labels, *registry.slab_labels)
+                                )
+                            ),
+                        )
                     except Exception as exc:
                         raise ValueError(
                             f"{self.name}: invalid current filter {pattern!r}"
                         ) from exc
-                    # Syntax errors surface above; unknown-allele tokens in
-                    # otherwise-valid patterns surface here.  Only the
-                    # genotype part is validated — the token after the last
-                    # '@' is a somatic-label qualifier.
-                    validate_filter_pattern(species, pattern, species.somatic_labels, self.name)
                 elif key == "maternal":
                     maternal_matcher = _compile_gamete_matcher(
                         species, pattern, self.name
@@ -281,13 +283,13 @@ class ZygoteConversionRuleSet:
                     )
 
             if isinstance(rule, ZygoteZtypeConversionRule):
-                # Parse the target through the shared pattern grammar.  The
-                # declaration stores target_parts for compatibility, while
-                # this compile-time parse also validates ``@`` and wildcard
-                # syntax consistently with current filters.
+                # Parse the target through the unified target entry: the
+                # compile-time parse validates ``@`` and wildcard syntax
+                # consistently with the filters.
                 try:
-                    target_spec = parser.compile_conversion_target(
-                        rule.to, stage="zygote conversion", require_label=True
+                    target_spec = parse_target(
+                        rule.to, species=species, stage="zygote conversion",
+                        require_label=True, validate=True,
                     )
                 except Exception as exc:
                     raise ValueError(
@@ -495,41 +497,36 @@ def _compile_gamete_matcher(
     Raises:
         ValueError: If the pattern cannot be parsed.
     """
-    from natal.frontend.patterns.elements.atom import LabPattern
-    from natal.frontend.patterns.parser import GenotypePatternParser
-
-    base, lab = pattern, None
-    # Split the optional label qualifier off the genotype pattern; both parts are
-    # validated separately against the species catalog and gamete labels.
-    if "@" in pattern:
-        base, suffix = pattern.rsplit("@", 1)
-        if suffix and suffix != "*":
-            try:
-                lab = LabPattern.parse(suffix)
-            except Exception as exc:
-                raise ValueError(
-                    f"{rs_name}: invalid label pattern {pattern!r}"
-                ) from exc
-    validate_filter_pattern(species, pattern, species.gamete_labels, rs_name)
-    parser = GenotypePatternParser(species)
     try:
-        genome_pattern = parser.parse_haploid_genome_pattern(base)
+        from natal.frontend.patterns.entries import parse_selector
+
+        parsed = parse_selector(
+            pattern, species=species, kind="gtype", validate_alleles=True,
+            context=f"{rs_name} gamete filter",
+        )
     except Exception as exc:
+        detail = str(exc)
+        if "Only one @lab suffix" in detail:
+            detail = "at most one @ separator"
+        elif "Invalid lab name" in detail:
+            detail = "invalid filter label"
+        elif "unknown gtype labels" in detail:
+            detail = "unknown filter labels"
         raise ValueError(
-            f"{rs_name}: invalid gamete pattern {pattern!r}"
+            f"{rs_name}: invalid gamete pattern {pattern!r}: {detail}"
         ) from exc
 
     def matcher(pair: Tuple[object, str]) -> bool:
         # Both the haploid-genome pattern and, when declared, the gamete-label
         # pattern must match for the forming gamete to qualify.
         haploid, glab = pair
-        if not genome_pattern.matches(cast("HaploidGenome", haploid)):
+        if not parsed.genome.matches(cast("HaploidGenome", haploid)):
             return False
-        if lab is not None and not lab.matches(glab):
+        if parsed.glab is not None and not parsed.glab.is_wildcard() and not parsed.glab.matches(glab):
             return False
         return True
 
-    return genome_pattern, matcher
+    return parsed.genome, matcher
 
 
 def _cascade_row(
@@ -542,8 +539,8 @@ def _cascade_row(
 
     Args:
         row: The baseline ``(n_ztypes,)`` probability row.
-        c1: Maternal gamete compressed index.
-        c2: Paternal gamete compressed index.
+        c1: Maternal gamete index.
+        c2: Paternal gamete index.
         compiled: The compiled rule list, in declaration order.
 
     Returns:
@@ -576,6 +573,8 @@ def _cascade_row(
                 next_branches[target] = next_branches.get(target, 0.0) + mass
         branches = next_branches
 
-    # Drop numerical dust below 1e-15; the retained mass may fall short of 1 by
-    # at most that tolerance.
+    # Drop numerical dust below 1e-15. Each discarded branch sheds at most
+    # that tolerance, and dust can be discarded once per path across the
+    # cascade, so the retained mass may fall short of 1 by up to
+    # k * tolerance, not by the tolerance alone.
     return {z: p for z, p in branches.items() if p > 1e-15}

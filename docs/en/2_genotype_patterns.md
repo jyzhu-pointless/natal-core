@@ -19,7 +19,7 @@ Pattern matching upgrades explicit enumeration of genotype lists to **semantic e
 NATAL supports two types of pattern matching:
 
 1. **`GenotypePattern`**: Pattern matching for diploid genotypes
-2. **`HaploidGenotypePattern`**: Pattern matching for haploid genotypes
+2. **`HaploidGenomePattern`**: Pattern matching for haploid genotypes
 
 Both pattern types share the same syntax fundamentals but differ in how they handle the chromosome layer.
 
@@ -53,21 +53,38 @@ Pattern strings are parsed in three layers, from outer to inner:
 
 ### Label Matching (@lab)
 
-A `@` suffix on the pattern string constrains matches to specific gamete labels (`glab`) or somatic labels (`slab`). Label syntax mirrors allele syntax:
+A `@` suffix attaches a gamete-label (`glab`) or somatic-label (`slab`)
+constraint to a selector. Pattern parsing has two semantic entries and only
+those two: `parse_selector` for matching and `parse_target` for
+keep-or-replace conversion (`natal.parse_selector` / `natal.parse_target`).
+Content patterns carry no label: `parse_selector(..., kind="genotype")` and
+`kind="haploid"`, plus the `Species` helpers built on them
+(`parse_genotype_pattern`, `enumerate_genotypes_matching_pattern`,
+`parse_haploid_genome_pattern`, `enumerate_haploid_genomes_matching_pattern`),
+reject a labelled pattern outright with a `PatternParseError` rather than
+accepting one and ignoring it. Labels belong to the label-aware kinds —
+`kind="ztype"` composes a `ZygoteTypePattern` (genotype + slab) and
+`kind="gtype"` a `GameteTypePattern` (haploid genome + glab) — and to the
+conversion-rule filters and `IndividualSelector(ztype=...)`.
+On an unordered species a selector written with `|` promotes every `|` to
+`::` before parsing, so one spelling matches through fitness, rules,
+observation and hooks alike; the content helpers above keep `|` strictly
+ordered, and targets are never promoted.
+Label syntax mirrors allele syntax:
 
 | Pattern | Meaning | Example |
 |---------|---------|---------|
 | `@X` | Exact label match | `A\|a@Cas9_high` |
 | `@!X` | Exclude label X | `A\|a@!wildtype` |
 | `@{A,B}` | Any label in set | `A\|a@{high,low}` |
-| `@!{A,B}` | Exclude labels in set | `@!{wildtype,default}` |
+| `@!{A,B}` | Exclude labels in set | `*|*@!{wildtype,default}` |
 | `@*` | Any label (same as omitting @) | `A\|a@*` |
 
-GenotypePattern uses `@` for somatic labels; HaploidGenotypePattern uses `@` for gamete labels:
+A somatic label rides `kind="ztype"`; a gamete label rides `kind="gtype"`:
 
 ```python
-parser.parse("A|a@Cas9_high")                      # somatic label
-parser.parse_haplotype_pattern("A@Cas9_deposited")  # gamete label
+nt.parse_selector("A|a@Cas9_high", species=species)                 # somatic label
+nt.parse_selector("A@Cas9_deposited", species=species, kind="gtype")  # gamete label
 ```
 
 ## GenotypePattern: Diploid Genotype Matching
@@ -87,22 +104,27 @@ parser.parse_haplotype_pattern("A@Cas9_deposited")  # gamete label
 
 ### Ordered vs Unordered Matching
 
-- **`|` (single pipe)**: Used for exact matching in pattern syntax. Whether maternal/paternal order matters depends on the Species' `unordered` setting (default `True` — order is ignored).
-- **`::` (double colon)**: Explicitly unordered matching — the two homologous chromosome copies can be swapped, regardless of the Species setting.
+- **`|` (single pipe)**: Strictly ordered — `Dr|WT` matches only the literal `Dr|WT` order, regardless of the Species' `unordered` setting. With the default `unordered=True` species (canonical heterozygote `WT|Dr`), the pattern `Dr|WT` matches nothing.
+- **`::` (double colon)**: Unordered matching — the two homologous chromosome copies can be swapped, regardless of the Species setting.
 
 ```python
-# | syntax: order matters only when Species.unordered=False (default is True)
+# | syntax: strictly ordered — matches only this exact maternal/paternal order
 pattern1 = "A1/B1|A2/B2"
 
-# :: syntax: explicit unordered — homologous chromosomes can swap
+# :: syntax: unordered — homologous chromosomes can swap
 pattern2 = "A1/B1::A2/B2"
 ```
 
-## HaploidGenotypePattern: Haploid Genotype Matching
+The `unordered`-based tolerance does exist, but at the **selector layer**, not
+in the pattern parser: when the species has `unordered=True`,
+`IndividualSelector(ztype=...)` and `Species.resolve_single_genotype_selector()`
+rewrite `|` to `::` before parsing, so selector strings match either left/right order of the homologous chromosomes. For example, `A/B::a/b` matches a whole-homolog reversal but does not match the linked phase `A/b|a/B`.
+
+## HaploidGenomePattern: Haploid Genotype Matching
 
 ### Basic Syntax
 
-`HaploidGenotypePattern` is used to match haploid genotypes, with a simpler syntax:
+`HaploidGenomePattern` is used to match haploid genotypes, with a simpler syntax:
 
 `<chr1_hap>/<...>; <chr2_hap>/<...>`
 
@@ -116,7 +138,9 @@ pattern2 = "A1/B1::A2/B2"
 ### Usage Examples
 
 ```python
-# Haploid genotype pattern matching
+# Haploid genome pattern matching.
+# Species.parse_haploid_genome_pattern() returns a filter callable,
+# not the HaploidGenomePattern object itself.
 pattern = sp.parse_haploid_genome_pattern("A1/*; C1")
 
 # Filter matching haploid genotypes
@@ -168,8 +192,8 @@ For three loci on the same chromosome, write `(A1|A2;B1::B2;C1|C2)` instead. The
 ### General Errors
 
 1. **Error**: Mismatch in the number of chromosome segments
-   - **Cause**: The number of `;`-separated segments does not match the species' chromosome count
-   - **Correction**: Complete the chromosome segments one by one according to the species definition
+   - **Cause**: The parser counts one segment per autosome plus one per sex-chromosome group (not per individual sex chromosome). More segments than the species' groups raises an error; see the per-sex-group string form in [Genetics](2_genetics.md#sex-chromosome-string-format)
+   - **Correction**: Write one segment per autosome and one per sex-chromosome group, following the species definition
 
 2. **Error**: Mismatch in the number of loci
    - **Cause**: The number of locus patterns separated by `/` does not match the locus count on that chromosome
@@ -244,7 +268,7 @@ To debug the match set, you can use the following methods for offline expansion 
 for gt in sp.enumerate_genotypes_matching_pattern("A1/*|A2/B2", max_count=5):
     print(f"Matching genotype: {gt}")
 
-# Check HaploidGenotypePattern match results
+# Check HaploidGenomePattern match results
 for hg in sp.enumerate_haploid_genomes_matching_pattern("A1/B1; C1", max_count=5):
     print(f"Matching haploid genotype: {hg}")
 ```

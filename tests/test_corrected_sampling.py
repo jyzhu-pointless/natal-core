@@ -1,4 +1,11 @@
-"""Tests for the corrected continuous binomial concentration parameter."""
+"""Sanity checks for a local continuous-binomial variance-matching variant.
+
+These tests exercise only the local helpers below — a NumPy
+re-implementation whose concentration solves ``f(f+1) = n``.  They do not
+import the library: the shipped Rust kernel (``rust/src/kernels/rng.rs``,
+``continuous_binomial``) derives its concentration as ``n - 1.0`` instead,
+so the engine's continuous binomial is not exercised by this file.
+"""
 
 import numpy as np
 

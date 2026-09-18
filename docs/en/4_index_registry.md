@@ -50,7 +50,7 @@ Both systems are **symmetric** in design:
 - If unspecified, a single `"default"` label is created automatically.
 - The engine cross-products every genotype/haplotype with every label, producing the full ZType/GType space.
 
-Slabs are used by concrete Presets such as **Wolbachia** (a maternal cytoplasmic marker: the `wolbachia` gamete label routes every offspring of an infected mother onto the `infected` slab, with optional per-slab `viability_scaling` / `fecundity_scaling`) and **TransgenicBackground** (marker expression tracked per individual). The preset models maternal inheritance and marker fitness only — it does not implement cytoplasmic incompatibility; build that cross effect with a zygote modifier (see [Modifier Mechanism](3_modifiers.md), section 5.2). Without these Presets, most simulations have a single `"default"` slab and the slab system is invisible.
+Slabs are used by concrete Presets such as **Wolbachia** (a maternal cytoplasmic marker: the `wolbachia` gamete label routes eligible normal-label offspring of an infected mother onto the `infected` slab, with optional per-slab `viability_scaling` / `fecundity_scaling`) and **TransgenicBackground** (marker expression tracked per individual). Optional incompatibility marks offspring of uninfected mothers and infected fathers with a separate slab, then applies their own embryonic viability, ordinary viability, or fecundity cost (see [Modifier Mechanism](3_modifiers.md), section 5.2). Without these Presets, most simulations have a single `"default"` slab and the slab system is invisible.
 
 ### Index Registry Structure
 
@@ -268,8 +268,7 @@ pop.state.individual_count[0, 3, idx]
 
 ```python
 # Parse the pattern with ZygoteTypePattern, then resolve indices through the registry
-from natal.frontend.patterns import ZygoteTypePattern
-pattern = ZygoteTypePattern.parse("A1|*", pop.species)
+pattern = nt.parse_selector("A1|*", species=pop.species)
 indices = list(pop.index_registry.resolve_ztype_indices(pattern))  # matching integer indices
 ```
 

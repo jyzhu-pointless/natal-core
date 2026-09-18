@@ -4,6 +4,10 @@
 
 本章沿用样章物种（`chr1` 上 A、a、X），补充两类案例：带标签的物种与有序物种。
 
+
+`parse_selector()` 返回的结构化模式可以直接传给 `IndividualSelector(ztype=...)`；模式结构会被保留，不会先转为显示字符串再解析。标签名称统一按 Species 目录与当前索引注册表中的标签校验，集合和否定表达式中的名称也会检查。压缩不会使 Species 中已知的标签变为非法名称。被排除的标签拼写错误会报错，不会被解释为选择所有标签。
+
+
 ## 一段模式字符串经过什么
 
 ```mermaid
@@ -25,7 +29,7 @@ flowchart TD
 | 合法但匹配为空 | 名字拼写不存在（`A|Q`）或条件与目录无交集 | 是一个有效查询，答案就是"没有" |
 | `ValueError`（空掩码） | 把空结果用于必须落地的选择器（`IndividualSelector.compile()`） | 调用方要求至少选中一个坐标，无法满足 |
 
-核验过的例子：`ZygoteTypePattern.parse("A|Q")` 解析成功、匹配 `[]`；而把同一个字符串交给精确解析器 `Species.get_genotype_from_str("A|Q")` 会抛 `ValueError: Cannot parse haplotype segment string 'Q'`。模式语言容忍未知名字（因为通配与集合本来就可能包含不存在的项），精确字符串不行。
+核验过的例子：`parse_selector("A|Q", species=sp)` 解析成功、匹配 `[]`；而把同一个字符串交给精确解析器 `Species.get_genotype_from_str("A|Q")` 会抛 `ValueError: Cannot parse haplotype segment string 'Q'`。模式语言容忍未知名字（因为通配与集合本来就可能包含不存在的项），精确字符串不行。
 
 ## 语法
 
@@ -45,11 +49,11 @@ flowchart TD
 `a|A` 是本章最值得记住的陷阱：
 
 ```text
-ZygoteTypePattern.parse("a|A")            → 解析成功，匹配空集
+sp.parse_genotype_pattern("a|A")          → 解析成功，匹配空集
 resolve_zygote_type("a|A", species, reg)  → 索引 1
 ```
 
-原因是无序物种的基因型对象本身就是规范化的（见[遗传对象](genetic_objects.md)），目录里只存在"母方较小"的那一种写法。公开选择入口（`resolve_zygote_type`、观察组、fitness 写入、Hook 声明）在无序物种上把 `|` 提升为 `::`，所以 `a|A` 仍然命中；直接使用 `ZygoteTypePattern.parse` 则保持严格。有序物种（`unordered=False`）下 `A|a` 与 `a|A` 是两个不同基因型，`.parse("A|a")` → 索引 1、`.parse("a|A")` → 索引 3。
+原因是无序物种的基因型对象本身就是规范化的（见[遗传对象](genetic_objects.md)），目录里只存在"母方较小"的那一种写法。所有选择入口——统一的 `parse_selector`（`resolve_zygote_type`、观察组、fitness 写入、Hook 声明都经由它）、`IndividualSelector`、转换过滤器——在无序物种上把 `|` 提升为 `::`，所以 `a|A` 仍然命中；只匹配内容的助手（`Species.parse_genotype_pattern` 等）保持 `|` 严格有序。有序物种（`unordered=False`）下 `A|a` 与 `a|A` 是两个不同基因型，`parse_selector("A|a", ...)` → 索引 1、`parse_selector("a|A", ...)` → 索引 3。
 
 结论：**判断一段选择器是否会命中，必须先确认它走的是哪个入口，以及物种是否无序**。只看字符串本身无法判断。
 
@@ -81,7 +85,7 @@ resolve_zygote_type("a|A", species, reg)  → 索引 1
 
 ## 转换目标：保留还是替换
 
-转换目标复用 pattern 语法，但描述的是如何修改来源，不是要匹配一组目的地。`GenotypePatternParser.parse_conversion_target()` 保留原始写法和解析结构；`compile_conversion_target()` 在检查来源是否可达前拒绝不允许的目标写法；`ConversionTarget.apply_zygote()` 或 `.apply_gamete()` 再根据每个来源补齐保留部分。
+转换目标复用 pattern 语法，但描述的是如何修改来源，不是要匹配一组目的地。统一的 target 入口 `parse_target()`（`natal.parse_target`）保留原始写法和解析结构；传 `validate=True` 可在检查来源是否可达前拒绝不允许的目标写法；`ConversionTarget.apply_zygote()` 或 `.apply_gamete()` 再根据每个来源补齐保留部分。
 
 | 目标中的部分 | 含义 |
 | --- | --- |

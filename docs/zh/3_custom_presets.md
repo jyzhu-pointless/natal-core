@@ -293,7 +293,7 @@ ruleset.add_allele_convert(
 )
 ```
 
-`W::D` 选择任一相位的杂合亲本。在这个单个位点的例子中，`*::D` 则选择任意携带 D 的亲本。多位点模型应提供适用的完整模式，不要在基因型名称上做子串包含判断。
+`W::D` 选择同源染色体任一左右顺序的杂合亲本。在这个单个位点的例子中，`*::D` 则选择任意携带 D 的亲本。多位点模型应提供适用的完整模式，不要在基因型名称上做子串包含判断。
 
 合子阶段若要检查后代自身，应使用 `current`：
 
@@ -515,6 +515,7 @@ class ComplexDrive(GeneticPreset):
 
 #### 参数验证错误
 - 验证转换率是否在 [0, 1] 范围内
+- 检查 `fitness_patch` 的每个顶层键：不支持的键会抛 `ValueError`，消息给出该键并列出支持的键（例如把 `viability_per_allele` 写成 `viability_allele`），且不会对模型施加任何修改
 
 #### 物种绑定错误
 - 确保预设和种群使用相同的物种
@@ -549,9 +550,9 @@ class DebugPreset(GeneticPreset):
 
 ### 小结
 
-🎉 恭喜！你已经完成了"设计自己的 Preset"的完整主线：
+恭喜！你已经完成了"设计自己的 Preset"的完整主线：
 
-1. 规则定义（Gamete 与 Zygote 转换
+1. 规则定义（Gamete 与 Zygote 转换）
 2. 规则生效范围精细化（filters）
 3. Preset 工程化、验证与发布
 

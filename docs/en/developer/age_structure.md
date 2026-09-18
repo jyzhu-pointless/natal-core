@@ -28,7 +28,7 @@ The [age-structured reproduction stage](https://github.com/jyzhu-pointless/natal
 ```mermaid
 flowchart TD
     V["females with no stored sperm (virgins)"] --> M["sample this mating's males by the mating probabilities"]
-    M --> D["already mated females are displaced with probability sperm_displacement_rate"]
+    M --> D["only females that remate this tick displace stored sperm: effective rate = sperm_displacement_rate × the age's mating probability"]
     D --> S["new sperm distributed across male types by a multinomial draw"]
     S --> F["convert each stored pair into age-0 offspring"]
 ```

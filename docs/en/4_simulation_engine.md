@@ -126,11 +126,12 @@ clutch after reproductive participation; continuous sampling retains its
 fractional value. WF modes instead sample the final generation according to
 `extreme_speed_mode`; this flag does not disable that sampling.
 
-For `linear`/`logistic`, `beverton_holt`, and `ricker`,
-`low_density_growth_rate` must be finite and at least 1. This preserves the
-non-increasing density response and avoids undefined Beverton–Holt denominators.
-`no_competition` and `fixed` do not use this rate and retain its ordinary parameter
-bounds. The same constraint applies to configuration updates and mode switches.
+`low_density_growth_rate` must be finite and in [1, 1000000] in every growth
+mode, including `no_competition` and `fixed`, which do not use this rate.
+For `linear`/`logistic`, `beverton_holt`, and `ricker`, the lower bound preserves
+the non-increasing density response and avoids undefined Beverton–Holt
+denominators. The same constraint applies to construction, runtime updates,
+and hooks.
 
 ## 4. Engine Implementation Layout
 
@@ -212,7 +213,7 @@ Typical scenarios:
 
 ### 7.2 Checkpoints and History Queries
 
-Rust sessions own history values, checkpoints, and parameter logs. Every retained `mode="raw"` record has a complete checkpoint: individual and sperm state, tick, execution phase and status, RNG, ecology parameters (including migration and custom values), and log positions. Genetics tables are not rolled back. `mode="observation"` keeps only projected values, without hidden full raw history, and cannot restore checkpoints.
+Rust sessions own history values, checkpoints, and parameter logs. Every retained `mode="raw"` record has a complete checkpoint: individual and sperm state, tick, execution phase and status, RNG, ecology parameters (including migration and custom values), and log positions. Genetics tables are not rolled back. `mode="observation"` keeps only projected values, without a hidden full raw history, and cannot restore checkpoints.
 
 `pop.restore_checkpoint(tick)` accepts only an exact retained tick; an unrecorded or evicted tick fails before changing state. Restoration keeps history through that tick and truncates future parameter logs at the recorded positions, including updates made later at the same tick. Ordinary stable boundaries restore to `Ready`; manually recorded stopped or failed boundaries retain their execution status.
 
@@ -222,7 +223,10 @@ Rust sessions own history values, checkpoints, and parameter logs. Every retaine
 
 `max_rows` bounds both retained records and checkpoints. Batch runs without Python callbacks record and evict within Rust. `clear_history()` clears records and their checkpoints while preserving current state, RNG, parameters, and parameter logs.
 
-This complete example demonstrates bounded history and log rollback:
+This complete example demonstrates bounded history and log rollback. The
+initial state is recorded as tick 0, so with unlimited capacity the ticks
+after `run(3)` would be `(0, 1, 2, 3)`; here `max_rows=3` evicts the tick-0
+row first, which is why the assertion below sees `(1, 2, 3)`:
 
 ```python
 import natal as nt

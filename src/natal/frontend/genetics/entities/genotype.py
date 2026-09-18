@@ -41,9 +41,11 @@ class Genotype:
     Represents a diploid genotype consisting of two haploid genomes.
 
     A Genotype pairs two HaploidGenotypes (maternal and paternal) that are
-    both bound to the same Species structure. The distinction between
-    maternal and paternal origin is preserved for modeling phenomena like
-    maternal effects, cytoplasmic inheritance, and genomic imprinting.
+    both bound to the same Species structure. Ordered species preserve the
+    maternal/paternal origin for modeling phenomena like maternal effects,
+    cytoplasmic inheritance, and genomic imprinting. Unordered species
+    canonicalize homolog order independently per chromosome while preserving
+    the linked phase within each chromosome.
 
     Attributes:
         species (Species): Species shared by maternal and paternal haploid genomes.
@@ -71,7 +73,9 @@ class Genotype:
         Caching ensures that the same maternal+paternal combination
         always returns the exact same object (singleton per Species).
 
-        Maternal and paternal origin are preserved for advanced modeling.
+        Ordered species preserve maternal and paternal origin. Unordered
+        species canonicalize homolog order independently per chromosome while
+        preserving linked phase.
         """
         # Ensure species cache dictionary exists
         if species not in cls._cache:
@@ -87,9 +91,10 @@ class Genotype:
             mat, pat = canonical_haploid_pair(species, maternal, paternal)
         else:
             mat, pat = maternal, paternal
-        # Canonical name from each chromosome's maternal|paternal allele chains,
-        # so the key is stable across equal-but-distinct haplotype objects and
-        # matches the instance `name`/`__str__` form.
+        # Canonical name from each chromosome's maternal|paternal allele chains;
+        # it matches the instance `name`/`__str__` form. The id() parts scope
+        # the key to the specific haploid instances, so equal-but-distinct
+        # haplotype objects get distinct keys.
         canon_parts: list[str] = []
         for chrom in species.chromosomes:
             try:
@@ -131,9 +136,10 @@ class Genotype:
     ):
         """Initialize a diploid Genotype from two haploid genomes.
 
-        Validates that both haploid genomes belong to the same species,
-        stores maternal and paternal references, and caches gamete
-        frequencies.
+        Validates that both haploid genomes belong to the same species
+        and stores maternal and paternal references. Gamete frequencies
+        are not cached here; ``produce_gametes`` recomputes them on every
+        call.
 
         Args:
             species: The Species both haploid genomes belong to.
@@ -153,6 +159,14 @@ class Genotype:
         # Validate both haploid genomes are bound to the same species
         if maternal.species is not species or paternal.species is not species:
             raise ValueError("Both haploid genomes must be bound to the same species.")
+
+        if species.unordered:
+            from natal.frontend.genetics.structures._helpers import (
+                canonical_haploid_pair,
+            )
+
+            # Store the same canonical pair used by __new__ for the cache key.
+            maternal, paternal = canonical_haploid_pair(species, maternal, paternal)
 
         self.species = species
         self.maternal = maternal
@@ -186,6 +200,9 @@ class Genotype:
     def get_alleles_at_locus(self, locus: Locus) -> Tuple[Optional[Gene], Optional[Gene]]:
         """
         Get the pair of alleles at a specific locus.
+
+        Args:
+            locus: Locus to query.
 
         Returns:
             Tuple of (maternal_allele, paternal_allele)
@@ -615,12 +632,12 @@ def compute_recombinant_haplotypes(
         >>> recomb_rates = np.array([0.1, 0.2])  # rate between 0-1 and 1-2
         >>> patterns, freqs = compute_recombinant_haplotypes(n_loci, recomb_rates, True)
         >>> patterns
-        array([[0, 0, 0],   # No crossovers: all maternal
-               [0, 0, 1],   # Crossover after locus 1: mat, mat, pat
-               [0, 1, 1],   # Crossover after locus 0: mat, pat, pat
-               [0, 1, 0]], dtype=int64)  # Two crossovers: mat, pat, mat
+        array([[0, 0, 0],   # pattern_idx 0 (no crossover bits): all maternal
+               [0, 1, 1],   # pattern_idx 1 (bit 0 set: crossover at boundary 0): mat, pat, pat
+               [0, 0, 1],   # pattern_idx 2 (bit 1 set: crossover at boundary 1): mat, mat, pat
+               [0, 1, 0]], dtype=int64)  # pattern_idx 3 (both bits: crossovers at both boundaries): mat, pat, mat
         >>> freqs
-        array([0.72, 0.02, 0.18, 0.08])  # 0.9*0.8, 0.9*0.2, 0.1*0.8, 0.1*0.2
+        array([0.72, 0.08, 0.18, 0.02])  # 0.9*0.8, 0.1*0.8, 0.9*0.2, 0.1*0.2
     """
     if n_loci < 1:
         raise ValueError("n_loci must be >= 1")

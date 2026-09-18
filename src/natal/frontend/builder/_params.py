@@ -15,6 +15,8 @@ Function overview:
     available sources (explicit, legacy alias, or initial state).
   - ``build_equilibrium_distribution()`` — propagate K through
     survival rates to produce a (2, n_ages) equilibrium array.
+  - ``engine_fertility_weights()`` — per-age fertility as the owning
+    engine consumes it (discrete: implicit 1.0; age-structured: clamped).
   - ``compute_expected_eggs_from_females()`` — forward-propagate
     a target adult female count to compute total egg production.
   - ``iter_sexual_selection_entries()`` — flatten the flexible
@@ -61,16 +63,20 @@ def resolve_age_param(
         - None: uses default.
         - numeric scalar: fills all ages with this value.
         - sequence/ndarray: truncated or padded with 0.
+        - sequence ending in ``None``: the sentinel holds the last explicit
+          value, so the entries before it are the prefix and the remainder is
+          filled with the last non-None value; an inner ``None`` is rejected
+          with ``TypeError`` and an all-``None`` list falls back to ``default``.
         - dict[int, float]: sparse age map, unspecified ages default to 1.0.
         - callable(age): returns float for each age.
 
     Args:
-        param (Optional[Any]): The flexible survival parameter to resolve.
-        expected_length (int): Required length of the output array.
-        default (List[float]): Default values to fallback to.
+        param: The flexible survival parameter to resolve.
+        expected_length: Required length of the output array.
+        default: Default values to fallback to.
 
     Returns:
-        NDArray[np.float64]: A 1D array of resolved survival rates.
+        A 1D array of resolved survival rates.
 
     Raises:
         ValueError: If rates are negative or out of range.
@@ -309,6 +315,31 @@ def build_equilibrium_distribution(
     return dist
 
 
+def engine_fertility_weights(
+    female_age_based_fertility: NDArray[np.float64],
+    discrete_generation: bool,
+) -> NDArray[np.float64]:
+    """Return per-age fertility as the owning engine consumes it.
+
+    Discrete generations have no age-dependent fertility at all (their tick
+    uses an implicit 1.0), while the age-structured tick clamps the stored
+    weight to ``[0, 1]``.  ``equilibrium_metrics_core`` in the Rust kernel
+    applies this same rule, so every Python-side derivation that feeds the
+    calibration — the Champer egg override included — must consume the same
+    values the tick does, or the reference state stops being reachable.
+
+    Args:
+        female_age_based_fertility: Stored ``(n_ages,)`` relative fertility.
+        discrete_generation: True for the non-overlapping discrete engine.
+
+    Returns:
+        The per-age weights both the tick and the equilibrium calibration read.
+    """
+    if discrete_generation:
+        return np.ones_like(female_age_based_fertility, dtype=np.float64)
+    return np.clip(female_age_based_fertility, 0.0, 1.0)
+
+
 def compute_expected_eggs_from_females(
     expected_num_new_adult_females: float,
     eggs_per_female: float,
@@ -318,6 +349,8 @@ def compute_expected_eggs_from_females(
     sex_ratio: float,
     new_adult_age: int,
     n_ages: int,
+    *,
+    discrete_generation: bool,
 ) -> float:
     """Compute total expected egg production from a target adult female count.
 
@@ -335,6 +368,9 @@ def compute_expected_eggs_from_females(
         sex_ratio: Sex ratio (not directly used in forward propagation).
         new_adult_age: First adult age class.
         n_ages: Total age classes.
+        discrete_generation: Owning engine; selects the fertility weights the
+            calibration and the tick both read (see
+            :func:`engine_fertility_weights`).
 
     Returns:
         float: Total expected egg production.
@@ -344,6 +380,10 @@ def compute_expected_eggs_from_females(
         reproduction_rates[:new_adult_age] = 0.0
     else:
         reproduction_rates = age_based_reproduction_rates
+
+    fertility = engine_fertility_weights(
+        female_age_based_fertility, discrete_generation
+    )
 
     # Build female-only adult distribution (forward propagation)
     female_dist = np.zeros(n_ages, dtype=np.float64)
@@ -355,7 +395,7 @@ def compute_expected_eggs_from_females(
     eggs = 0.0
     for age in range(new_adult_age, n_ages):
         p_reproducing = min(1.0, max(0.0, float(reproduction_rates[age])))
-        eggs += female_dist[age] * p_reproducing * female_age_based_fertility[age] * eggs_per_female
+        eggs += female_dist[age] * p_reproducing * fertility[age] * eggs_per_female
 
     return eggs
 
@@ -408,6 +448,8 @@ def compute_expected_eggs_from_distribution(
     female_age_based_fertility: NDArray[np.float64],
     new_adult_age: int,
     n_ages: int,
+    *,
+    discrete_generation: bool,
 ) -> float:
     """Compute total expected egg production from an equilibrium distribution.
 
@@ -424,13 +466,19 @@ def compute_expected_eggs_from_distribution(
         female_age_based_fertility: Relative fertility by age.
         new_adult_age: First adult age class.
         n_ages: Total age classes.
+        discrete_generation: Owning engine; selects the fertility weights the
+            calibration and the tick both read (see
+            :func:`engine_fertility_weights`).
 
     Returns:
         Total expected egg production.
     """
+    fertility = engine_fertility_weights(
+        female_age_based_fertility, discrete_generation
+    )
     eggs = 0.0
     for age in range(new_adult_age, n_ages):
         n_f = float(equilibrium_distribution[0, age])
         p_reproducing = min(1.0, max(0.0, float(age_based_reproduction_rates[age])))
-        eggs += n_f * p_reproducing * female_age_based_fertility[age] * eggs_per_female
+        eggs += n_f * p_reproducing * fertility[age] * eggs_per_female
     return eggs

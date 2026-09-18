@@ -42,6 +42,22 @@ class SpeciesPatternMixin:
             - Genotype object: exact match
             - String exact genotype syntax
             - String genotype pattern syntax
+
+        Args:
+            selector: Genotype object, exact genotype string, or genotype
+                pattern string.
+            all_genotypes: Candidate genotypes searched by the pattern
+                fallback; defaults to all genotypes of the species.
+            context: Label identifying the caller in error messages.
+
+        Returns:
+            List of matching genotypes: the selector itself for a
+            ``Genotype``, the single exact match for an exact string, or
+            every candidate matching the pattern.
+
+        Raises:
+            ValueError: If the selector is neither a valid genotype string
+                nor a valid pattern, or if the pattern matches no genotype.
         """
         self = cast(Species, self)
         from natal.frontend.genetics.entities.genotype import Genotype
@@ -59,11 +75,16 @@ class SpeciesPatternMixin:
             exact_gt = self.get_genotype_from_str(selector)
             return [self.unordered_genotype(exact_gt.maternal, exact_gt.paternal)]
         except Exception as exact_err:
-            pattern_str = str(selector)
-            if self.unordered:
-                pattern_str = str(selector).replace("::", "\x00").replace("|", "::").replace("\x00", "::")
+            from natal.frontend.patterns.entries import parse_selector
+
             try:
-                pattern_filter = self.parse_genotype_pattern(pattern_str)
+                # The selector entry owns the unordered | → :: promotion, so
+                # a genotype-level selector matches what the same spelling
+                # matches through fitness and the rules.
+                pattern = parse_selector(
+                    str(selector), species=self, kind="genotype", context=context
+                )
+                pattern_filter = pattern.to_filter()
             except Exception as pattern_err:
                 raise ValueError(
                     f"Invalid {context} selector '{selector}'. "
@@ -150,12 +171,18 @@ class SpeciesPatternMixin:
             A filter function that takes a Genotype and returns bool.
 
         Raises:
-            PatternParseError: If the pattern is invalid.
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  A ``Genotype`` has no label, so such a
+                suffix has nothing to match against; use
+                ``parse_selector(kind='ztype')`` or
+                ``IndividualSelector(ztype=...)`` to select by label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns import GenotypePatternParser
-        parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse(pattern)
+        from natal.frontend.patterns.entries import parse_selector
+        pattern_obj = parse_selector(
+            pattern, species=self, kind="genotype", ordered=True,
+            context="genotype pattern",
+        )
         return pattern_obj.to_filter()
 
     def filter_genotypes_by_pattern(
@@ -198,13 +225,18 @@ class SpeciesPatternMixin:
             Genotype objects matching the pattern.
 
         Raises:
-            PatternParseError: If the pattern is invalid.
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  A ``Genotype`` has no label, so such a
+                suffix has nothing to match against; use
+                ``parse_selector(kind='ztype')`` or
+                ``IndividualSelector(ztype=...)`` to select by label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns import GenotypePatternParser
-
-        parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse(pattern)
+        from natal.frontend.patterns.entries import parse_selector
+        pattern_obj = parse_selector(
+            pattern, species=self, kind="genotype", ordered=True,
+            context="genotype pattern",
+        )
 
         count = 0
         seen: set[int] = set()
@@ -240,12 +272,19 @@ class SpeciesPatternMixin:
             A filter function that takes a HaploidGenome and returns bool.
 
         Raises:
-            PatternParseError: If the pattern is invalid.
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  A ``HaploidGenome`` has no label, so such
+                a suffix has nothing to match against; use
+                ``parse_selector(kind='gtype')`` (a
+                ``GameteTypePattern``) or a conversion rule's ``filters`` to
+                select by gamete label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns import GenotypePatternParser
-        parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse_haploid_genome_pattern(pattern)
+        from natal.frontend.patterns.entries import parse_selector
+        pattern_obj = parse_selector(
+            pattern, species=self, kind="haploid", ordered=True,
+            context="haploid genome pattern",
+        )
         return pattern_obj.to_filter()
 
     def filter_haploid_genomes_by_pattern(
@@ -288,13 +327,19 @@ class SpeciesPatternMixin:
             HaploidGenome objects matching the pattern.
 
         Raises:
-            PatternParseError: If the pattern is invalid.
+            PatternParseError: If the pattern is invalid, or if it carries an
+                ``@label`` suffix.  A ``HaploidGenome`` has no label, so such
+                a suffix has nothing to match against; use
+                ``parse_selector(kind='gtype')`` (a
+                ``GameteTypePattern``) or a conversion rule's ``filters`` to
+                select by gamete label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns import GenotypePatternParser
-
-        parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse_haploid_genome_pattern(pattern)
+        from natal.frontend.patterns.entries import parse_selector
+        pattern_obj = parse_selector(
+            pattern, species=self, kind="haploid", ordered=True,
+            context="haploid genome pattern",
+        )
 
         count = 0
         for haploid_genome in self.iter_haploid_genotypes():

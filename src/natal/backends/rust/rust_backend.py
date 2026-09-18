@@ -39,7 +39,13 @@ class _ConfigReadSession(Protocol):
 
 
 def config_snapshot_from_session(session: _ConfigReadSession, draft: ModelDraft) -> ModelDraft:
-    """Project current native parameters onto detached declaration metadata."""
+    """Project current native parameters onto detached declaration metadata.
+
+    Args:
+        session: Read channel exposing the session-owned native values.
+        draft: Detached declaration metadata that fixes tensor shapes and
+            the set of fields to project.
+    """
     from copy import deepcopy
     from dataclasses import fields as dataclass_fields
 
@@ -348,6 +354,7 @@ class RustLifecycleBackend:
             first: Callables invoked after the ``first`` CSR event.
             early: Callables invoked after the ``early`` CSR event.
             late: Callables invoked after the ``late`` CSR event.
+            finish: Callables invoked after the ``finish`` CSR event.
         """
         self._session.set_python_callbacks(first, early, late, finish)
 
@@ -698,7 +705,14 @@ class RustDiscreteLifecycleBackend:
         late: list[Callable[..., int]],
         finish: list[Callable[..., int]] | None = None,
     ) -> None:
-        """Register Python callables fired at Rust event boundaries."""
+        """Register Python callables fired at Rust event boundaries.
+
+        Args:
+            first: Callables invoked after the ``first`` CSR event.
+            early: Callables invoked after the ``early`` CSR event.
+            late: Callables invoked after the ``late`` CSR event.
+            finish: Callables invoked after the ``finish`` CSR event.
+        """
         self._session.set_python_callbacks(first, early, late, finish)
 
     def clear_python_callbacks(self) -> None:
@@ -1289,6 +1303,7 @@ class RustHeterogeneousSpatialLifecycleBackend:
             first: Callables invoked after the ``first`` CSR event.
             early: Callables invoked after the ``early`` CSR event.
             late: Callables invoked after the ``late`` CSR event.
+            finish: Callables invoked after the ``finish`` CSR event.
         """
         self._session.set_python_callbacks(first, early, late, finish)
 
@@ -1370,7 +1385,8 @@ def ecology_columns_from_drafts(
     The layout is the heterogeneous Rust session's stage-2 boundary: every
     scalar becomes an ``(n_demes,)`` column (``growth_mode`` int64, the
     external-eggs sentinel ``None`` becomes ``-1.0``), and every ecology
-    vector is tiled into a flat ``(n_demes, ...)`` row-major column.
+    vector becomes a flat ``(n_demes, ...)`` row-major column: the first
+    draft fixes the extent, then each deme fills its own segment.
 
     Args:
         drafts: One fully built ``ModelDraft`` per deme, in deme order.
@@ -1628,7 +1644,7 @@ class RustDemeParameters:
             self._invalidate_state()
 
     def execution_state(self) -> tuple[str, int]:
-        """Read the owning spatial session's lifecycle status for this deme."""
+        """Read the owning spatial session's shared lifecycle status."""
         return self._session.execution_state()
 
     def current_tick(self) -> int:

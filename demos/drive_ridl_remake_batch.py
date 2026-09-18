@@ -338,7 +338,7 @@ def plot_heatmap(
 ) -> None:
     """Plot a square heatmap image with a shared normalization range."""
     masked = np.ma.masked_invalid(mean_suppression_weeks)
-    cmap = plt.cm.get_cmap("magma_r").copy()
+    cmap = plt.get_cmap("magma_r").copy()
     cmap.set_bad(color="#9c9c9c")
 
     fig, ax = plt.subplots(figsize=(3.2, 3.2), dpi=150)
@@ -376,7 +376,7 @@ def plot_heatmap(
 
 def save_shared_colorbar(norm: Normalize) -> None:
     """Save a single horizontal colorbar shared by all heatmaps."""
-    cmap = plt.cm.get_cmap("magma_r").copy()
+    cmap = plt.get_cmap("magma_r").copy()
     cmap.set_bad(color="#9c9c9c")
 
     cbar_fig, cbar_ax = plt.subplots(figsize=(3.2, 0.7), dpi=150)

@@ -34,10 +34,22 @@ class IndexRegistry:
     GType = (haplogenotype, glab_label) for the gamete layer.
 
     Examples:
-        ic = IndexRegistry()
-        gid = ic.register_genotype('g1')
-        hid = ic.register_haplogenotype('h1')
-        glid = ic.register_gamete_label('gl1')
+        >>> from natal.frontend.genetics import Species
+        >>> from natal.frontend.registry.index import IndexRegistry
+        >>> species = Species.from_dict(
+        ...     name="ExampleSpecies",
+        ...     structure={"chr1": {"loci": {"A": ["g", "w"]}}},
+        ...     gamete_labels=["default"],
+        ... )
+        >>> ic = IndexRegistry()
+        >>> ic.register_gamete_label("gl1")
+        0
+        >>> haplo = species.get_haploid_genotype_from_str("g")
+        >>> ic.register_haplogenotype(haplo)  # one GType index per glab label
+        [0]
+        >>> geno = species.get_genotype_from_str("g|w")
+        >>> ic.register_genotype(geno)  # one ZType index per slab label
+        [0]
 
     Attributes:
         slab_labels: List of registered somatic (slab) label strings.
@@ -119,12 +131,17 @@ class IndexRegistry:
         """Computed dict of unique haplotypes from the GType space.
 
         Derived from ``_index_to_gtype`` so that after compression only
-        surviving haplotypes appear.
+        surviving haplotypes appear.  Values are the ordinal of first
+        appearance — each haplotype's position in ``index_to_haplo`` — not
+        the GType index (GTypes are (haplogenotype, glab) pairs; use
+        ``gtype_indices_for`` for those).
         """
         result: dict[HaploidGenotype, int] = {}
         seen: set[HaploidGenotype] = set()
         for hg, _glab in self._index_to_gtype:
             if hg not in seen:
+                # Ordinal of first appearance == position in index_to_haplo,
+                # not a GType index.
                 result[hg] = len(seen)
                 seen.add(hg)
         return result
@@ -338,6 +355,13 @@ class IndexRegistry:
         Iterates ``_index_to_ztype`` and tests each (genotype, slab_label)
         pair against *pattern*.  When *pattern* has no slab constraint
         (``slab is None``), all slab variants of matching genotypes match.
+
+        Args:
+            pattern: Pattern tested against every registered
+                (genotype, slab_label) pair.
+
+        Returns:
+            Matching ZType indices in registration order.
         """
         indices: list[int] = []
         for i, (gt, slab) in enumerate(self._index_to_ztype):
@@ -350,6 +374,9 @@ class IndexRegistry:
 
         Used by ``initial_state`` which places individuals in the first
         (default) slab when no ``@slab`` is specified.
+
+        Raises:
+            KeyError: If no registered ZType matches the pattern.
         """
         for i, (gt, slab) in enumerate(self._index_to_ztype):
             if pattern.matches(gt, slab):
@@ -362,6 +389,12 @@ class IndexRegistry:
         Scans ``_index_to_ztype`` — does NOT require ``species.unordered_genotype()``
         because both the stored and input genotypes are already canonicalized
         via ``Genotype.__new__`` cache key normalization.
+
+        Args:
+            genotype: A ``Genotype`` instance.
+
+        Returns:
+            List of ZType indices for this genotype (one per slab label).
         """
         return [i for i, (gt, _) in enumerate(self._index_to_ztype) if gt == genotype]
 

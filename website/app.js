@@ -1,7 +1,7 @@
 'use strict';
 
 const english = {
-  skip: 'Skip to content', docs: 'Docs ↗', release: 'v0.3.0 · Open-source population genetics',
+  skip: 'Skip to content', docs: 'Docs ↗',
   hero1: 'Population genetics.', hero2: 'Through aggregation.',
   intro: "A forward-time population genetics simulation engine based on numerical aggregation. Configurable lifecycles support studies of gene drives and other population genetics processes.",
   start: 'Start modeling', technology: 'Model in Python · Compute in Rust',
@@ -57,6 +57,36 @@ function setLanguage(next) {
 }
 languageButton.addEventListener('click', () => setLanguage(language === 'en' ? 'zh' : 'en'));
 setLanguage(language);
+
+const versionLink = document.querySelector('.version');
+let latestReleaseTag = null;
+function renderReleaseVersion() {
+  versionLink.textContent = latestReleaseTag || (language === 'en' ? 'Latest release' : '最新版本');
+}
+document.addEventListener('site-language-change', renderReleaseVersion);
+renderReleaseVersion();
+async function loadLatestRelease() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch('https://api.github.com/repos/jyzhu-pointless/natal-core/releases/latest', {
+      headers: {Accept: 'application/vnd.github+json'},
+      cache: 'no-cache',
+      signal: controller.signal,
+    });
+    if (!response.ok) return;
+    const release = await response.json();
+    if (release.draft || release.prerelease || typeof release.tag_name !== 'string' || !release.tag_name.trim()) return;
+    latestReleaseTag = release.tag_name.trim();
+    versionLink.href = `https://github.com/jyzhu-pointless/natal-core/releases/tag/${encodeURIComponent(latestReleaseTag)}`;
+    renderReleaseVersion();
+  } catch {
+    // Keep the latest-release link usable when offline or rate limited.
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+loadLatestRelease();
 
 const copyButton = document.querySelector('.copy');
 copyButton.addEventListener('click', async () => {

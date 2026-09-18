@@ -1,6 +1,6 @@
 # 种群模型（Panmictic）
 
-`Population` 类是 NATAL Core 的核心组件，负责管理种群的遗传状态和模拟过程。
+种群对象是 NATAL Core 的核心组件，负责管理种群的遗传状态和模拟过程。并不存在名为 `Population` 的类——panmictic 模型是 `DiscreteGenerationPopulation` 与 `AgeStructuredPopulation`，二者都是 `BasePopulation` 的子类。
 
 > **说明**：`DiscreteGenerationPopulation` 和 `AgeStructuredPopulation` 是 **panmictic（单 deme、均匀混合）** 种群模型。如需构建多 deme 空间种群、配置迁移拓扑或异构 deme 参数，参见 [Spatial 模拟指南](3_spatial_simulation.md)。
 
@@ -153,7 +153,9 @@ print(f"Var 等位基因频率: {var_freq}")
 
 ### 历史记录配置
 
-在 `build()` 前选择历史模式和容量；默认模式是 `"raw"`，默认容量不限：
+在 `build()` 前选择历史模式和容量；默认模式是 `"raw"`，默认容量是种群的有界
+`max_history`（5000 行）——达到上限后最旧的行按 FIFO 淘汰，被淘汰的行会连带丢弃
+配对的恢复检查点：
 
 ```python
 pop = (
@@ -308,6 +310,6 @@ pop = nt.DiscreteGenerationPopulation.setup(
 
 ### 效果
 
-- **GType 压缩**：初始仅含 A|A 的单 locus 种群，HL 从 2 压缩到 1
-- **ZType 压缩**：仅 A|A 可达时，G 从 4 压缩到 1；offspring_tensor 仅在发布时按最终运行时轴生成
+- **GType 压缩**：初始仅含 A|A 的单 locus 种群，单倍型从 2 压缩到 1
+- **ZType 压缩**：仅 A|A 可达时，基因型从 3 压缩到 1（默认 `unordered=True` 的注册表对每个杂合子只保留一个规范相位，双等位基因单位点物种共有 3 个基因型而非 4 个）；offspring_tensor 仅在发布时按最终运行时轴生成
 - **双轴同时**：综合减少可达 98% 以上

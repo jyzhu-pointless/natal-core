@@ -19,7 +19,7 @@ NATAL 的模式匹配机制允许用户用格式化的字符串描述和批量�
 NATAL 支持两种模式匹配：
 
 1. **`GenotypePattern`**：用于二倍体基因型的模式匹配
-2. **`HaploidGenotypePattern`**：用于单倍体基因型的模式匹配
+2. **`HaploidGenomePattern`**：用于单倍体基因型的模式匹配
 
 两种模式共享相同的语法基础，但在染色体层级处理上有所不同。
 
@@ -53,24 +53,24 @@ NATAL 支持两种模式匹配：
 
 ### 标签匹配（@lab）
 
-模式字符串末尾可以用 `@` 附加标签约束，匹配特定配子标签（`glab`）或体细胞标签（`slab`）的基因型/单倍体。标签语法与等位基因模式一致：
+模式字符串末尾可以用 `@` 附加配子标签（`glab`）或体细胞标签（`slab`）约束。模式解析只有两个语义入口：匹配用的 `parse_selector` 与保留/替换转换用的 `parse_target`（`natal.parse_selector` / `natal.parse_target`）。内容模式本身不携带标签：`parse_selector(..., kind="genotype")` 与 `kind="haploid"`，以及建立在其上的 `Species` 辅助入口（`parse_genotype_pattern`、`enumerate_genotypes_matching_pattern`、`parse_haploid_genome_pattern`、`enumerate_haploid_genomes_matching_pattern`），对带标签的模式**直接报错**（`PatternParseError`），不再"接受后忽略"。标签属于标签感知的 kind——`kind="ztype"` 组合出 `ZygoteTypePattern`（基因型 + slab），`kind="gtype"` 组合出 `GameteTypePattern`（单倍体基因组 + glab）——以及转换规则过滤器与 `IndividualSelector(ztype=...)`。无序物种上，选择器里的 `|` 在解析前会**全部**提升为 `::`，因此同一写法在 fitness、规则、观测与 hook 中命中一致；上面的内容入口保持 `|` 严格有序；target 永不提升。标签语法与等位基因模式一致：
 
 | 模式 | 含义 | 示例 |
 |---|---|---|
 | `@X` | 精确匹配标签 `X` | `A\|a@Cas9_high` |
 | `@!X` | 排除标签 `X` | `A\|a@!wildtype` |
 | `@{A,B}` | 匹配集合中的任一标签 | `A\|a@{high,low}` |
-| `@!{A,B}` | 排除集合中的标签 | `@!{wildtype,default}` |
+| `@!{A,B}` | 排除集合中的标签 | `*|*@!{wildtype,default}` |
 | `@*` | 任意标签（等同于不加 @） | `A\|a@*` |
 
-**GenotypePattern** 使用 `@` 匹配体细胞标签（slab），**HaploidGenotypePattern** 使用 `@` 匹配配子标签（glab）：
+体细胞标签走 `kind="ztype"`，配子标签走 `kind="gtype"`：
 
 ```python
 # 匹配携带 Cas9_high 体细胞标签的 A|a 基因型
-parser.parse("A|a@Cas9_high")
+nt.parse_selector("A|a@Cas9_high", species=species)
 
 # 匹配携带 Cas9_deposited 配子标签的单倍体
-parser.parse_haplotype_pattern("A@Cas9_deposited")
+nt.parse_selector("A@Cas9_deposited", species=species, kind="gtype")
 ```
 
 ## GenotypePattern：二倍体基因型匹配
@@ -90,22 +90,27 @@ parser.parse_haplotype_pattern("A@Cas9_deposited")
 
 ### 有序 vs 无序匹配
 
-- **`|`（单竖线）**：仅在 `Species.unordered=False` 时严格区分母本和父本顺序。默认 `unordered=True` 下，系统自动规范化，`A|a` 与 `a|A` 视为同一基因型。
-- **`::`（双冒号）**：显式无序匹配——无论 Species 设置如何，同源染色体两条拷贝均可交换。
+- **`|`（单竖线）**：严格有序——`Dr|WT` 只匹配字面顺序 `Dr|WT`，与 Species 的 `unordered` 设置无关。默认 `unordered=True` 物种的规范杂合子是 `WT|Dr`，此时模式 `Dr|WT` 不会命中任何基因型。
+- **`::`（双冒号）**：无序匹配——无论 Species 设置如何，同源染色体两条拷贝均可交换。
 
 ```python
-# 有序匹配：Maternal|Paternal 严格区分
+# 有序匹配：只匹配这一精确的母本/父本顺序
 pattern1 = "A1/B1|A2/B2"
 
 # 无序匹配：同源染色体可交换
 pattern2 = "A1/B1::A2/B2"
 ```
 
-## HaploidGenotypePattern：单倍体基因型匹配
+基于 `unordered` 的宽容确实存在，但位于**选择器层**而非模式解析器：当物种
+`unordered=True` 时，`IndividualSelector(ztype=...)` 与
+`Species.resolve_single_genotype_selector()` 会先把 `|` 改写为 `::` 再解析，
+因此选择器字符串可以匹配同源染色体的任一左右顺序。例如，`A/B::a/b` 允许整条同源染色体交换，但不匹配连锁相位不同的 `A/b|a/B`。
+
+## HaploidGenomePattern：单倍体基因型匹配
 
 ### 基本语法
 
-`HaploidGenotypePattern` 用于匹配单倍体基因型，语法更简洁：
+`HaploidGenomePattern` 用于匹配单倍体基因型，语法更简洁：
 
 `<chr1_hap>/<...>; <chr2_hap>/<...>`
 
@@ -119,7 +124,9 @@ pattern2 = "A1/B1::A2/B2"
 ### 使用示例
 
 ```python
-# 单倍体基因型模式匹配
+# 单倍体基因型模式匹配。
+# Species.parse_haploid_genome_pattern() 返回过滤函数（callable），
+# 而不是 HaploidGenomePattern 对象本身。
 pattern = sp.parse_haploid_genome_pattern("A1/*; C1")
 
 # 过滤符合条件的单倍体基因型
@@ -171,8 +178,8 @@ assert not pattern2(multiple.get_genotype_from_str("A1/B2|A2/B1;C2|C1"))
 ### 通用错误
 
 1. **错误**：染色体段数量不匹配
-   - **原因**：`;` 分段数与物种染色体数不一致
-   - **修正**：按物种定义逐段补齐染色体段
+   - **原因**：解析器按"每条常染色体一段 + 每个性染色体组一段"计数（不是按每条性染色体计）。段数超过物种的组数会报错；性染色体组的字符串写法见 [遗传学架构](2_genetics.md) 中"性染色体的字符串格式"一节
+   - **修正**：按物种定义，每条常染色体写一段、每个性染色体组写一段
 
 2. **错误**：位点数量不匹配
    - **原因**：`/` 分隔后的位点模式数量与该染色体位点数不一致
@@ -247,7 +254,7 @@ class PatternDrivenPreset(GeneticPreset):
 for gt in sp.enumerate_genotypes_matching_pattern("A1/*|A2/B2", max_count=5):
     print(f"匹配的基因型: {gt}")
 
-# 检查 HaploidGenotypePattern 匹配结果
+# 检查 HaploidGenomePattern 匹配结果
 for hg in sp.enumerate_haploid_genomes_matching_pattern("A1/B1; C1", max_count=5):
     print(f"匹配的单倍体基因型: {hg}")
 ```

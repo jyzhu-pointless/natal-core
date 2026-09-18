@@ -67,11 +67,8 @@ from natal.frontend.builder._routes import (
     lookup_or_none,
 )
 from natal.frontend.builder._runtime import (
-    competition_writes,
     expected_females_eggs,
     fitness_writes,
-    reproduction_writes,
-    survival_writes,
 )
 from natal.frontend.builder._writers import (
     DraftWriter,
@@ -82,9 +79,7 @@ from natal.frontend.model import (
     ModelDraft,
 )
 from natal.frontend.model.initial_state import (
-    resolve_age_structured_initial_individual_count,
-    resolve_age_structured_initial_sperm_storage,
-    resolve_discrete_initial_individual_count,
+    InitialDistributionDeclaration,
 )
 from natal.frontend.registry.index import IndexRegistry
 
@@ -172,10 +167,11 @@ def set_param(
     (:mod:`natal.frontend.builder._routes`): the name (full key,
     short name, or alias) resolves to a route entry, the value is
     parsed and validated according to the entry's ``kind``, and the
-    write is committed into the draft.  Entries flagged ``sensitive``
-    in ``parameters.jsonc`` (carrying capacity, eggs per female, sex
-    ratio, the Champer overrides) automatically refresh the equilibrium
-    metric caches unless ``_sync_equilibrium=False`` is passed.
+    write is committed into the draft.  There is no separate
+    equilibrium-cache refresh step: the equilibrium metrics
+    (``pop.params.expected_competition_strength`` /
+    ``expected_survival_rate``) are derived on read and nothing is
+    cached, so sensitive writes need no extra handling.
 
     Scalar NamedTuple slots (including the ecology scalars) are written
     through ``_replace``, so the returned draft must be rebound to the
@@ -183,8 +179,8 @@ def set_param(
 
         config = set_param(config, "competition.carrying_capacity", 5000.0)
 
-    Array-backed fields (custom slots and vector/tensor contents) are
-    mutated in place and the same draft is returned.
+    Custom slot writes (``config.custom`` entries) mutate the shared
+    slot dict in place and the same draft is returned.
 
     Usable from pure Python and PopulationBuilder chain methods.
 
@@ -251,6 +247,10 @@ def collect_hook_genotype_refs(hook_calls: list[HookCall]) -> set[str]:
     Ensures genotypes introduced only via hooks survive BFS pruning:
     declarative op lists contribute their ``op.genotypes`` strings, and
     selector hooks contribute their resolved ``selectors`` specs.
+
+    Args:
+        hook_calls: Stored ``.hooks()`` calls — ``(items, kwargs)`` pairs
+            as recorded by :meth:`PopulationBuilder.hooks`.
     """
     from natal.frontend.hooks.types import HookOp
 
@@ -373,8 +373,15 @@ def _declared(
         # own rollback restores state; this ordering keeps the journal
         # consistent with it, so replay never re-applies a failed call.
         result = method(self, *args, **kwargs)
+        # Journal a detached container snapshot.  In particular, an
+        # initial_state() call may be replayed after age_structure(); keeping
+        # the caller's nested dict here would let later mutation change the
+        # meaning of that already accepted declaration.  Opaque resources
+        # (Genotype objects, recipes, hooks) retain their identity.
+        from natal.frontend.model.definition import copy_declaration_value
+
         self._declaration_log.append(  # pyright: ignore[reportPrivateUsage]  # the journal lives on the instance this decorator wraps
-            (method.__name__, declared)
+            (method.__name__, cast(dict[str, object], copy_declaration_value(declared)))
         )
         return result
 
@@ -489,10 +496,6 @@ class PopulationBuilder:
         # the values are (re)applied to the draft.
         self._custom_kwargs: dict[str, object] = {}
 
-        # Discrete-specific scalar overrides (stored here so build() can
-        # (discrete scalars now normalize into the unified draft vectors
-        # at write time — no end-of-build extraction exists anymore).
-
         # Index compression flag — enabled via setup(compress=True).
         # Applied during rebuild_config_maps (build-time) or
         # refresh_modifier_maps() (runtime).
@@ -516,6 +519,15 @@ class PopulationBuilder:
         # container-level plan pins hooks per deme); panmictic builders
         # normalize non-wildcard selectors with a warning at compile time.
         self._spatial_template: bool = False
+
+        # The user's raw initial distribution — the authoritative input
+        # (FRONTEND_REFACTOR_PLAN.md §4.1/B1).  Declaration stores it as
+        # passed; engine arrays are derived from it only once the final
+        # dimensions are known: on ``age_structure()`` rebuilds and at
+        # build-time compile.  Nothing resolves at declaration time, so a
+        # distribution valid for the final structure is never rejected
+        # against provisional dimensions.
+        self._initial_distribution: InitialDistributionDeclaration | None = None
 
         # Declaration journal (ModelDefinition needs the semantic
         # declaration ORDER).  Every public chaining call records
@@ -743,8 +755,9 @@ class PopulationBuilder:
 
         *compress* enables index compression at build time.  It enables both
         GType (gamete-axis) and ZType (genotype-axis) compression in one flag.
-        The older ``compress_gametes()`` / ``compress_genotypes()`` chain
-        methods have been removed — use this parameter instead.
+        The deprecated ``compress_gametes()`` / ``compress_genotypes()``
+        chain methods are still present but only emit deprecation
+        warnings — prefer this parameter.
 
         *declared_zygote_types* is a sequence of genotype strings (``"WT|WT"``) or
         integer indices that are treated as reachable by the BFS even if they
@@ -757,7 +770,11 @@ class PopulationBuilder:
             for ``declared_zygote_types`` and still works.
 
         Args:
-            name: Population name (falls back to ``"Population"`` at build time).
+            name: Population name stored for :meth:`build`.  When never
+                set, ``build()`` keeps the constructor's preset name —
+                ``"AgeStructuredPop"`` / ``"DiscreteGenerationPop"`` via
+                the factory methods, or ``"Population"`` for a
+                raw-constructor builder.
             stochastic: If ``False``, use deterministic (median) outcomes.
             continuous_sampling: If ``True``, sample from continuous
                 distributions instead of discrete counts.
@@ -838,15 +855,17 @@ class PopulationBuilder:
             Self for chaining.
 
         Raises:
-            RuntimeError: When no Species is attached, on a discrete-generation draft
-                (fixed at 2 ages by normalization) or after domain
-                methods have already been called.
+            RuntimeError: When no Species is attached or on a
+                discrete-generation draft (fixed at 2 ages by
+                normalization).
             ValueError: When *n_ages*/*new_adult_age* are inconsistent.
 
         Note:
-            Must be called before any domain method (competition,
-            reproduction, survival, etc.).  Calling it after domain
-            methods will raise ``RuntimeError``.
+            Calling this after domain methods is legal: every declared
+            call is re-projected onto the rebuilt draft, so competition /
+            reproduction / survival parameters survive a dimensional
+            rebuild (FRONTEND_REFACTOR_PLAN.md §4.2 — the manual ordering
+            guard is replaced by re-projection).
         """
         if self._species is None:
             raise RuntimeError("age_structure() requires a Species to rebuild genetic dimensions")
@@ -854,12 +873,6 @@ class PopulationBuilder:
             raise RuntimeError(
                 "age_structure() is not applicable to discrete-generation "
                 "populations: their draft is normalized to 2 age classes."
-            )
-        if getattr(self, "_has_domain_params", False):
-            raise RuntimeError(
-                "age_structure() must be called before any domain method "
-                "(competition(), reproduction(), survival(), etc.). "
-                "Domain methods have already been called on this builder."
             )
         if n_ages <= 1:
             raise ValueError(f"n_ages must be at least 2, got {n_ages}")
@@ -882,7 +895,7 @@ class PopulationBuilder:
         female_only_bp = bp["female_only_by_sex_chrom"]
         male_only_bp = bp["male_only_by_sex_chrom"]
 
-        self._config = build_population_config(
+        candidate_config = build_population_config(
             n_genotypes=raw_genotype_count,
             n_gtypes=gtype_count,
             n_ages=n_ages,
@@ -903,10 +916,38 @@ class PopulationBuilder:
         )
         from natal.frontend.model.definition_compiler import FITNESS_FIELDS
 
-        self._fitness_base = tuple(getattr(self._config, name).copy() for name in FITNESS_FIELDS)
+        candidate_fitness_base = tuple(
+            getattr(candidate_config, name).copy() for name in FITNESS_FIELDS
+        )
+        candidate_registry = build_registry(self._species)
+        # Dimensions changed: re-project every declared call onto the new
+        # draft through the single declaration interpreter, so rebuilding
+        # after domain methods neither loses their parameters nor needs a
+        # manual ordering guard (a declared age outside the new structure
+        # fails here with the resolver's own error).
+        from natal.frontend.builder._declarations import project_declaration_record
+
+        projected = project_declaration_record(
+            self._species,
+            [
+                (name, kwargs) for (name, kwargs) in self._declaration_log
+                if name != "age_structure"
+            ],
+            base_draft=candidate_config,
+            initial_distribution=self._initial_distribution,
+            registry=candidate_registry,
+        )
+
+        # Projection can fail when an accepted initial declaration no longer
+        # fits the requested dimensions.  Keep every committed product and
+        # cache untouched until the complete candidate has succeeded.
+        self._config = projected.draft
+        self._fitness_base = candidate_fitness_base
         self._compiled_draft = None
         self._cached_compilation_key = None
-        self._registry = build_registry(self._species)
+        self._registry = candidate_registry
+        self._initial_distribution = projected.initial_distribution
+        self._custom_kwargs = dict(self._config.custom)
         return self
 
     @_declared
@@ -945,28 +986,33 @@ class PopulationBuilder:
 
         Returns:
             Self for chaining.
+
+        Raises:
+            ValueError: If *competition_strength* is given while the
+                draft's ``new_adult_age < 2``.  The weight it sets
+                belongs to the second juvenile age class, so it only
+                takes effect when ``new_adult_age >= 2`` (build with
+                ``age_structure(..., new_adult_age >= 2)`` first).
         """
-        self._has_domain_params = True
-        # ---- carrying capacity (K) fallback chain ----
-        # Only auto-detect K during initial build (no live Population).
-        writes = competition_writes(
-            carrying_capacity=carrying_capacity,
-            low_density_growth_rate=low_density_growth_rate,
-            juvenile_growth_mode=juvenile_growth_mode,
-            growth_mode=growth_mode,
-            competition_strength=competition_strength,
-            equilibrium_distribution=equilibrium_distribution,
-            age_1_carrying_capacity=age_1_carrying_capacity,
-            old_juvenile_carrying_capacity=old_juvenile_carrying_capacity,
-            draft=self._config,
-            allow_initial_k_detection=True,
+        from natal.frontend.builder._declarations import apply_competition
+
+        self._config = apply_competition(
+            self._config,
+            {
+                "carrying_capacity": carrying_capacity,
+                "low_density_growth_rate": low_density_growth_rate,
+                "juvenile_growth_mode": juvenile_growth_mode,
+                "growth_mode": growth_mode,
+                "competition_strength": competition_strength,
+                "expected_num_new_adult_females": expected_num_new_adult_females,
+                "equilibrium_distribution": equilibrium_distribution,
+                "age_1_carrying_capacity": age_1_carrying_capacity,
+                "old_juvenile_carrying_capacity": old_juvenile_carrying_capacity,
+            },
+            species=self._species,
+            registry=self._registry,
+            initial=self._initial_distribution,
         )
-        if writes:
-            writer = self._make_writer(writes)
-            writer.apply(writes)
-            self._config = writer.draft
-        if expected_num_new_adult_females is not None:
-            self._declare_expected_females(float(expected_num_new_adult_females))
         return self
 
     def _declare_expected_females(self, target_females: float) -> None:
@@ -1046,24 +1092,25 @@ class PopulationBuilder:
                 discrete-generation draft (use the discrete vocabulary
                 instead).
         """
-        self._has_domain_params = True
-        writes = reproduction_writes(
-            discrete_generation=self._config.discrete_generation,
-            eggs_per_female=eggs_per_female,
-            sex_ratio=sex_ratio,
-            sperm_displacement_rate=sperm_displacement_rate,
-            female_age_based_mating_rate=female_age_based_mating_rate,
-            male_age_based_mating_rate=male_age_based_mating_rate,
-            age_based_reproduction_rate=age_based_reproduction_rate,
-            female_age_based_fertility=female_age_based_fertility,
-            female_adult_mating_rate=female_adult_mating_rate,
-            male_adult_mating_rate=male_adult_mating_rate,
-            fixed_egg_count=fixed_egg_count,
+        from natal.frontend.builder._declarations import apply_reproduction
+
+        self._config = apply_reproduction(
+            self._config,
+            {
+                "eggs_per_female": eggs_per_female,
+                "sex_ratio": sex_ratio,
+                "sperm_displacement_rate": sperm_displacement_rate,
+                "female_age_based_mating_rate": female_age_based_mating_rate,
+                "male_age_based_mating_rate": male_age_based_mating_rate,
+                "age_based_reproduction_rate": age_based_reproduction_rate,
+                "female_age_based_fertility": female_age_based_fertility,
+                "female_adult_mating_rate": female_adult_mating_rate,
+                "male_adult_mating_rate": male_adult_mating_rate,
+                "fixed_egg_count": fixed_egg_count,
+            },
+            species=self._species,
+            registry=self._registry,
         )
-        if writes:
-            writer = self._make_writer(writes)
-            writer.apply(writes)
-            self._config = writer.draft
         return self
 
     @_declared
@@ -1100,17 +1147,19 @@ class PopulationBuilder:
         Returns:
             Self for chaining.
         """
-        self._has_domain_params = True
-        writes = survival_writes(
-            female_age_based_survival=female_age_based_survival,
-            male_age_based_survival=male_age_based_survival,
-            female_age0_survival=female_age0_survival,
-            male_age0_survival=male_age0_survival,
+        from natal.frontend.builder._declarations import apply_survival
+
+        self._config = apply_survival(
+            self._config,
+            {
+                "female_age_based_survival": female_age_based_survival,
+                "male_age_based_survival": male_age_based_survival,
+                "female_age0_survival": female_age0_survival,
+                "male_age0_survival": male_age0_survival,
+            },
+            species=self._species,
+            registry=self._registry,
         )
-        if writes:
-            writer = self._make_writer(writes)
-            writer.apply(writes)
-            self._config = writer.draft
         return self
 
     @_declared
@@ -1124,7 +1173,7 @@ class PopulationBuilder:
         ]
         | None = None,
     ) -> Self:
-        """Set the initial population distribution (deferred — applied at build time).
+        """Set the initial population distribution.
 
         *individual_count* is a dict like
         ``{"female": {"WT|WT": 5000}, "male": {"WT|WT": 5000}}``.
@@ -1135,10 +1184,17 @@ class PopulationBuilder:
         discrete resolution and ignore sperm storage; age-structured
         drafts resolve per-age distributions.
 
-        The distribution is NOT written to config immediately.  Instead it is
-        stored in a deferred buffer and applied during :meth:`build` — after
-        index compression, so that genotype selectors resolve to compressed
-        indices.
+        The declaration is authoritative: the user's distribution is
+        stored as passed (containers copied, ``Genotype`` references
+        kept) and resolved into the draft's ``initial_individual_count``
+        (plus ``initial_sperm_storage`` on age-structured drafts) only
+        once the final dimensions are known — on ``age_structure()``
+        rebuilds and at ``build()``.  Declaring the distribution before
+        locking the final age structure therefore neither loses it nor
+        gets rejected against provisional dimensions
+        (FRONTEND_REFACTOR_PLAN.md §4.5); resolution errors — unknown
+        genotype or sex names, ages outside the final structure —
+        surface at those points, not at declaration time.
 
         .. note::
 
@@ -1153,7 +1209,8 @@ class PopulationBuilder:
                 Nested as ``{sex: {genotype_selector: count}}``.
             sperm_storage: Per-sex, per-genotype initial stored sperm,
                 same nesting structure as *individual_count*.  Ignored
-                (with a warning) for discrete-generation models.
+                (with a warning) for discrete-generation models. Omission
+                preserves an earlier storage declaration.
 
         Returns:
             Self for chaining.
@@ -1164,43 +1221,64 @@ class PopulationBuilder:
                 "Use PopulationBuilder.from_species() to create the instance."
             )
 
-        if self._config.discrete_generation:
-            array = resolve_discrete_initial_individual_count(
-                species=self._species,
-                distribution=individual_count,
+        import warnings
+
+        if self._config.discrete_generation and sperm_storage is not None:
+            warnings.warn(
+                "sperm_storage is ignored for discrete-generation populations.",
+                UserWarning,
+                stacklevel=2,
             )
-            overrides: dict[str, object] = {"initial_individual_count": array}
-            if sperm_storage is not None:
-                import warnings
-
-                warnings.warn(
-                    "sperm_storage is ignored for discrete-generation populations.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            self._config = self._config._replace(**overrides)
-            return self
-
-        n_ages = self._config.n_ages
-        new_adult_age = self._config.new_adult_age
-        array = resolve_age_structured_initial_individual_count(
-            species=self._species,
-            distribution=individual_count,
-            n_ages=n_ages,
-            new_adult_age=new_adult_age,
+        # Omission preserves the previously declared storage, matching
+        # the immediate-write API even when no build occurred in between.
+        effective_sperm = (
+            self._initial_distribution.sperm_storage
+            if sperm_storage is None and self._initial_distribution is not None
+            else sperm_storage
         )
-        overrides = {"initial_individual_count": array}
-        if sperm_storage is not None:
-            overrides["initial_sperm_storage"] = (
-                resolve_age_structured_initial_sperm_storage(
-                    species=self._species,
-                    sperm_storage=sperm_storage,
-                    n_ages=n_ages,
-                    new_adult_age=new_adult_age,
-                )
-            )
-        self._config = self._config._replace(**overrides)
+        self._initial_distribution = InitialDistributionDeclaration.capture(
+            individual_count, effective_sperm
+        )
         return self
+
+    def _resolve_initial_distribution(self) -> None:
+        """Derive the initial arrays from the stored declaration.
+
+        Runs against whatever dimensions are current, so the same
+        declaration serves the declaration-time write, every
+        ``age_structure()`` rebuild, and the build-time compile.  Does
+        nothing when no distribution was declared.
+        """
+        self._resolve_initial_counts()
+        self._resolve_initial_sperm()
+
+    def _resolve_initial_counts(self) -> None:
+        """Derive ``initial_individual_count`` from the stored declaration."""
+        declaration = self._initial_distribution
+        if declaration is None or self._species is None:
+            return
+        counts, _sperm = declaration.resolve(
+            self._species,
+            discrete_generation=bool(self._config.discrete_generation),
+            n_ages=int(self._config.n_ages),
+            new_adult_age=int(self._config.new_adult_age),
+        )
+        self._config = self._config._replace(initial_individual_count=counts.copy())
+
+    def _resolve_initial_sperm(self) -> None:
+        """Derive ``initial_sperm_storage`` from the stored declaration."""
+        declaration = self._initial_distribution
+        if declaration is None or self._species is None:
+            return
+        _counts, sperm = declaration.resolve(
+            self._species,
+            discrete_generation=bool(self._config.discrete_generation),
+            n_ages=int(self._config.n_ages),
+            new_adult_age=int(self._config.new_adult_age),
+        )
+        if sperm is None:
+            return
+        self._config = self._config._replace(initial_sperm_storage=sperm.copy())
 
     # -- custom fields ---------------------------------------------------------
 
@@ -1217,13 +1295,10 @@ class PopulationBuilder:
         Returns:
             Self for chaining.
         """
-        from natal.frontend.model import build_custom_slots
+        from natal.frontend.builder._declarations import apply_custom
 
-        merged = dict(self._config.custom)
-        merged.update(kwargs)
-        normalized = build_custom_slots(merged)
-        self._custom_kwargs = dict(normalized)
-        self._config = self._config._replace(custom=normalized)
+        self._config = apply_custom(self._config, dict(self._custom_kwargs), kwargs)
+        self._custom_kwargs = dict(self._config.custom)
         return self
 
     # -- presets / modifiers / fitness (immediate — applied directly to config) --
@@ -1345,13 +1420,20 @@ class PopulationBuilder:
         writes = fitness_writes(viability, fecundity, sexual_selection, zygote_viability)
         if writes:
             # geno_tensor kind: pattern dicts delegate to
-            # write_fitness_field inside the writer; the writer also
-            # pushes the whole tensors to the live Rust session.
+            # write_fitness_field inside the writer.  This build-path
+            # writer is session-less (draft-only); pushing the tensors
+            # to the live Rust session happens only on the runtime
+            # writer (RuntimeUpdater.fitness()).
             writer = self._make_writer()
             writer.apply(writes, mode=mode)
             self._config = writer.draft
             step: dict[str, object] = {name: value for name, value in (("viability", viability), ("fecundity", fecundity), ("sexual_selection", sexual_selection), ("zygote_viability", zygote_viability)) if value is not None}
             step["mode"] = mode
+            # The leading int is a sort key: the number of presets
+            # registered when this step was declared.  Compilation
+            # interleaves explicit steps with preset fitness patches by
+            # that key — each step applies after the first
+            # ``min(key, len(presets))`` presets, in priority order.
             self._fitness_steps.append((len(self._presets), deepcopy(step)))
             if self._compiled_draft is not None:
                 # Fitness edits do not invalidate recipe products: the
@@ -1363,6 +1445,10 @@ class PopulationBuilder:
 
     def compress_gametes(self, enabled: bool = True) -> Self:
         """Enable GType compression (deprecated — use setup(compress=True)).
+
+        Args:
+            enabled: Whether to set the compression flag; ``False``
+                clears it.
 
         .. deprecated::
             Use ``setup(compress=True)`` instead.  This method will be
@@ -1380,6 +1466,10 @@ class PopulationBuilder:
 
     def compress_genotypes(self, enabled: bool = True) -> Self:
         """Enable ZType compression (deprecated — use setup(compress=True)).
+
+        Args:
+            enabled: Whether to set the compression flag; ``False``
+                clears it.
 
         .. deprecated::
             Use ``setup(compress=True)`` instead.  This method will be
@@ -1431,12 +1521,19 @@ class PopulationBuilder:
         Returns:
             Self for chaining.
 
+        Note:
+            The declarations are stored unvalidated; they are checked
+            only when ``build()`` compiles them (see
+            :meth:`_compile_hook_descriptors`).  ``hooks()`` itself
+            raises nothing.
+
         Raises:
-            TypeError: If an item has an unsupported shape (including the
-                removed ``(state, config, deme_id)`` signature).
-            ValueError: If an event name is unknown or cannot be resolved,
-                or a list mixes ops with differing priorities and no
-                ``priority`` is given.
+            TypeError: At ``build()`` time, if an item has an unsupported
+                shape (including the removed ``(state, config, deme_id)``
+                signature).
+            ValueError: At ``build()`` time, if an event name is unknown
+                or cannot be resolved, or a list mixes ops with differing
+                priorities and no ``priority`` is given.
         """
         self._hook_calls.append(
             (
@@ -1511,9 +1608,43 @@ class PopulationBuilder:
         self._record_history_max_rows: Optional[int] = max_rows
         return self
 
+    def _draft_with_initial_resolved(self) -> ModelDraft:
+        """Return the draft with the declared initial arrays derived.
+
+        Pure with respect to the builder: the arrays the declaration
+        implies are resolved (memoized per dimensions on the declaration)
+        into a replacement draft, so capturing a definition never mutates
+        the draft other holders alias.  With no declaration the draft
+        passes through unchanged.
+        """
+        declaration = self._initial_distribution
+        if declaration is None or self._species is None:
+            return self._config
+        counts, sperm = declaration.resolve(
+            self._species,
+            discrete_generation=bool(self._config.discrete_generation),
+            n_ages=int(self._config.n_ages),
+            new_adult_age=int(self._config.new_adult_age),
+        )
+        # Copies: the memoized arrays are shared read-only state; a draft
+        # holder that ever writes cells in place must not leak into the
+        # cache.
+        overrides: dict[str, object] = {"initial_individual_count": counts.copy()}
+        if sperm is not None:
+            overrides["initial_sperm_storage"] = sperm.copy()
+        return self._config._replace(**overrides)
+
     def _definition_for_compile(self, *, build_name: str | None = None) -> ModelDefinition:
-        """Capture the full declaration rather than reconstructing it from outputs."""
+        """Capture the full declaration rather than reconstructing it from outputs.
+
+        The captured draft carries the arrays the declared initial
+        distribution implies against the current dimensions (derived into
+        a copy), so every consumer of the definition — candidate compiles,
+        the spatial group compiler, runtime rebuilds — sees one consistent
+        declaration.
+        """
         from natal.frontend.model.definition import ModelDefinition
+
 
         return ModelDefinition(
             self.species, bool(self._config.discrete_generation),
@@ -1527,7 +1658,8 @@ class PopulationBuilder:
             history_max_rows=self._record_history_max_rows,
             compress=self._compress,
             declared_zygote_types=None if self._declared_zygote_types is None else cast("frozenset[str] | frozenset[int]", frozenset(self._declared_zygote_types)),
-            draft=self._config,
+            initial_distribution=self._initial_distribution,
+            draft=self._draft_with_initial_resolved(),
             registry=self.registry,
             fitness_base=self._fitness_base,
             fitness_steps=tuple(self._fitness_steps),
@@ -1585,12 +1717,12 @@ class PopulationBuilder:
     # -- apply / build ---------------------------------------------------------
 
     def apply(self) -> Self:
-        """Sync derived values (equilibrium metrics).
+        """No-op, retained for chain compatibility.
 
-        All routed writes already refresh the equilibrium caches on
-        their own (driven by the jsonc ``sensitive`` column), so this is
-        only needed when you modify config arrays directly (outside
-        PopulationBuilder) or want to force a re-derivation before build.
+        The equilibrium metrics (``pop.params.expected_*``) are always
+        derived on read — there is nothing to sync or re-derive, so this
+        method performs no work.  It remains so existing ``...apply()``
+        chains keep running.
 
         Returns:
             Self for chaining.
@@ -1675,10 +1807,10 @@ class PopulationBuilder:
 
         This is the terminal method of the build chain::
 
-            PopulationBuilder.from_species()
+            PopulationBuilder.from_species(species)
                 .age_structure(5, 2)
-                .competition(K=5000)
-                .reproduction(eggs=100)
+                .competition(carrying_capacity=5000)
+                .reproduction(eggs_per_female=100)
                 .build(name="pop")
 
         Build finalizes the normalized declaration, reuses already compiled
@@ -1688,8 +1820,11 @@ class PopulationBuilder:
         methods run; build preserves those values on the final active axes.
 
         Args:
-            name: Population name (falls back to ``.setup(name=...)``
-                or ``"Population"``).
+            name: Population name.  Resolution order: this argument, then
+                ``.setup(name=...)``, then the factory-preset
+                granularity name (``"AgeStructuredPop"`` /
+                ``"DiscreteGenerationPop"``); a raw-constructor builder
+                falls back to ``"Population"``.
             hook_items: Additional hook declarations (same item shapes
                 as :meth:`hooks`); declaration sugar that feeds the same
                 build-time compilation as :meth:`hooks` calls.
@@ -1706,6 +1841,10 @@ class PopulationBuilder:
     def _compile_products(self) -> CompiledProducts:
         """Compile complete unpublished axes without constructing a native model.
 
+        The derivation order comes from the internal dependency graph
+        (``model/dependencies.jsonc``): genetic products, the initial
+        arrays re-derived from their declaration, and the type names each
+        run as a node whose dependencies the graph declares and validates.
         Cached recipe products are reused only for the same declaration.
         The builder stays unpublished and can supply multiple isolated builds.
 
@@ -1717,20 +1856,41 @@ class PopulationBuilder:
             CompiledProducts,
             compile_definition,
         )
+        from natal.frontend.model.dependency_graph import (
+            DerivationPipeline,
+            load_dependency_graph,
+        )
 
         self.registry.require_unpublished()
-        if self._cached_compilation_key is self._compilation_key and self._compiled_draft is not None:
+
+        def _compile_genetic_products() -> None:
+            if self._cached_compilation_key is self._compilation_key and self._compiled_draft is not None:
+                self._config = self._config._replace(
+                    **{field: getattr(self._compiled_draft, field).copy() for field in GENETIC_PRODUCT_FIELDS}
+                )
+            else:
+                result = compile_definition(self._definition_for_compile())
+                self._accept_products(*result)
+
+        def _apply_type_names() -> None:
             self._config = self._config._replace(
-                **{field: getattr(self._compiled_draft, field).copy() for field in GENETIC_PRODUCT_FIELDS}
+                ztype_names=ztype_names_from_registry(self.registry.index_to_ztype),
+                gtype_names=gtype_names_from_registry(self.registry.index_to_gtype),
             )
-        else:
-            result = compile_definition(self._definition_for_compile())
-            self._accept_products(*result)
+
+        pipeline = DerivationPipeline(load_dependency_graph())
+        pipeline.graph.require_implementations((
+            "genetic_products", "initial_counts", "initial_sperm_storage", "type_names",
+            "compression", "hooks", "observation",
+        ))
+        pipeline.register("genetic_products", _compile_genetic_products)
+        pipeline.register("initial_counts", self._resolve_initial_counts)
+        pipeline.register("initial_sperm_storage", self._resolve_initial_sperm)
+        pipeline.register("type_names", _apply_type_names)
+        pipeline.run((
+            "genetic_products", "initial_counts", "initial_sperm_storage", "type_names",
+        ))
         self.apply()
-        self._config = self._config._replace(
-            ztype_names=ztype_names_from_registry(self.registry.index_to_ztype),
-            gtype_names=gtype_names_from_registry(self.registry.index_to_gtype),
-        )
         self._compiled_draft = self._config
         return CompiledProducts(
             self._config, self.registry, list(self.gamete_modifiers), list(self.zygote_modifiers),
@@ -1755,6 +1915,10 @@ class PopulationBuilder:
         Returns:
             A population with a fixed published layout.
         """
+        from natal.frontend.model.dependency_graph import (
+            DerivationPipeline,
+            load_dependency_graph,
+        )
         from natal.frontend.model.publication import publish_products
 
         products.registry.require_unpublished()
@@ -1767,10 +1931,17 @@ class PopulationBuilder:
         # Only this detached finalizer sees the published coordinates. The
         # source builder and its captured declaration retain complete axes.
         definition = self._definition_for_compile(build_name=name)
-        published = publish_products(
+        pipeline = DerivationPipeline(load_dependency_graph())
+        pipeline.register("compression", lambda: publish_products(
             products, compress=self._compress, full_ztype_indices=declared,
             projection=projection, genetic_template=genetic_template,
-        )
+        ))
+        # This node is registered above with the publisher's concrete return type.
+        published = cast("CompiledProducts", pipeline.run(
+            ("compression",), completed=(
+                "genetic_products", "initial_counts", "initial_sperm_storage", "type_names",
+            ),
+        )["compression"])
         finalizer = copy(self)
         finalizer._config = published.config
         finalizer._registry = published.registry
@@ -1809,7 +1980,18 @@ class PopulationBuilder:
         # model uses, and the packed plan is injected into the population at
         # construction.  Identity dedupe mirrors the historical
         # registration idempotency (same object, same event → one hook).
-        hook_descriptors = self._compile_hook_descriptors(final_config)
+        from natal.frontend.model.dependency_graph import (
+            DerivationPipeline,
+            load_dependency_graph,
+        )
+
+        pipeline = DerivationPipeline(load_dependency_graph())
+        completed = ("genetic_products", "initial_counts", "initial_sperm_storage", "type_names", "compression")
+        pipeline.register("hooks", lambda: self._compile_hook_descriptors(final_config))
+        # Hook compilation must finish before constructing the native population.
+        hook_descriptors = cast("tuple[CompiledHookDescriptor, ...]", pipeline.run(
+            ("hooks",), completed=completed,
+        )["hooks"])
 
         if final_config.discrete_generation:
             from natal.frontend.population.discrete_generation import (
@@ -1869,7 +2051,8 @@ class PopulationBuilder:
         pop._initialize_session()  # type: ignore[reportAttributeAccessIssue]  # both concrete Population classes expose this method
 
         # Compile and freeze the recording plan.
-        self._compile_recording_plan(pop)
+        pipeline.register("observation", lambda: self._compile_recording_plan(pop))
+        pipeline.run(("observation",), completed=(*completed, "hooks"))
         return pop
 
     def _compile_recording_plan(

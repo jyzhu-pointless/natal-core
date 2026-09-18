@@ -2,6 +2,225 @@
 
 ## Unreleased
 
+## v0.3.1 (2026-09-19)
+
+### Added
+
+- An internal compilation dependency graph (FRONTEND_REFACTOR_PLAN.md
+  §4.3): `model/dependencies.jsonc` declares every derived product and its
+  dependencies, and `model/dependency_graph.py` loads it, rejects unknown
+  nodes, missing compute implementations and cycles, and executes the
+  derivation nodes of `build()` in topological order (genetic products,
+  initial counts, initial sperm storage, type names; the publish-side
+  nodes declare their order of record).
+- Two semantic pattern entries, `natal.parse_selector` and
+  `natal.parse_target`, are the only public ways to parse a selector or a
+  conversion target (FRONTEND_REFACTOR_PLAN.md §5.1). `parse_selector`
+  takes `kind="ztype"` (default), `"genotype"`, `"gtype"` or `"haploid"` and
+  returns the corresponding pattern object; `parse_target` parses a
+  keep-or-replace target with an optional eager `validate=True` stage. On an
+  unordered species a selector written with `|` promotes every separator to
+  `::` before parsing (any `::` already written is preserved), so one
+  spelling matches identically through fitness, presets, rules, conversion
+  filters, observation and hooks; the content-only `Species` helpers keep
+  `|` strictly ordered, and targets are never promoted.
+
+### Changed
+
+- Build-path performance restored after the declaration refactor: a
+  cross-version benchmark (v0.3.0/b1/b0 vs this series, release wheels,
+  unloaded, same seed) showed the spatial batch-build microbenchmark
+  ~62 % slower than v0.3.0 while the end-to-end demo was unaffected.
+  Two hot spots fixed: the initial-distribution declaration now memoizes
+  its resolved arrays per dimension key (a resolution is a pure function
+  of declaration + dimensions; drafts receive copies, and the species
+  catalog is no longer re-enumerated for every projection, capture, and
+  variant), and the packaged dependency graph is parsed once per process
+  instead of once per build.  The batch-build microbenchmark lands within
+  ~13 % of v0.3.0 and the full RIDL batch demo is at parity (34–36 s
+  wall across all four versions).
+- Spatial groups compile from projected declarations, not replayed
+  methods (FRONTEND_REFACTOR_PLAN.md §4.4/§4.5-4, the plan's last open
+  item).  A new pure projector (`builder/_declarations.py`) is the single
+  interpreter of the declaration journal: the chain methods
+  (competition/reproduction/survival/custom) delegate to it for their
+  immediate writes, and every deme's concrete declarations are projected
+  onto a fresh baseline and handed straight to `compile_definition`.
+  `_builder_for_group` (method replay), the `_can_use_replace` fallback
+  and `_build_variant_config` are deleted; a batched build executes no
+  builder method (pinned by a spy test) and each deme's compiled result
+  equals the equivalent single-population declaration.  Derived scalars
+  (e.g. the Champer egg override) stay frozen at the group's computation
+  unless re-declared — the established variant contract.  The template's
+  compile cache is inherited when a group's genetics match it, so recipes
+  never re-run for identical content.
+- `age_structure()` no longer refuses to run after domain methods: the
+  rebuild re-projects every declared call onto the new draft through the
+  same projector, so competition / reproduction / survival parameters
+  survive a dimensional rebuild instead of being silently wiped behind a
+  `RuntimeError` guard.  `_has_domain_params` is retired with the guard.
+- The orphaned `natal.frontend.modifiers.conditions` module (the
+  `ztype_has`/`is_maternal`/`is_paternal` Condition DSL) is deleted: the
+  modifier system stopped constructing Condition objects in the CR-1
+  rework, nothing in `src`, the exports, the stub, or the docs referenced
+  the module, and its lazy pattern compile was unreachable.  Plan item 6
+  (fixing that DSL's docstrings) is thereby superseded by the removal.
+- `initial_state()` stores the distribution as the authoritative
+  declaration instead of resolving it into the draft immediately
+  (FRONTEND_REFACTOR_PLAN.md §4.1/§4.5, the plan review's first blocking
+  finding).  The engine arrays are derived once the final dimensions are
+  known — on `age_structure()` rebuilds and at `build()` — so declaring
+  the distribution before locking the age structure no longer silently
+  zeroes the population (single and spatial builds alike; order-
+  equivalence is pinned by tests).  Two visible consequences: resolution
+  errors (unknown genotype or sex names, ages outside the final
+  structure) surface at those points rather than at the
+  `initial_state()` call, and reading `builder.config.initial_individual_count`
+  before a capture/build returns zeros.  Scalar counts keep their
+  documented meaning of one count per adult age.  Carrying-capacity
+  auto-detection (`competition()` without an explicit K) now reads the
+  derived declaration, and spatial group replays and rebuilds-from-
+  definition re-derive from the travelling declaration.
+- One selector spelling now means one match set everywhere. The fitness
+  writer and the preset fitness patch used to promote only the first `|` to
+  `::` on an unordered species while `IndividualSelector` promoted all of
+  them, so `*|A; *|B@infected` selected four ZTypes in one and wrote two in
+  the other; the runtime params view promoted nothing at all. All selector
+  callers now funnel through `parse_selector`, which owns the promotion
+  rule (external plan review finding 2). Mixed `::`+`|` spellings promote
+  the ordered separators; ordered species never promote.
+- The old public parse paths are retired (§5.4): `ZygoteTypePattern.parse`
+  and `.from_pair`, `GenotypePatternParser.parse`,
+  `.parse_haploid_genome_pattern`, `.parse_haplotype_pattern`,
+  `.parse_conversion_target`, `.compile_conversion_target`, the
+  `GenotypeSelector` class, and the `GenotypePatternParser` /
+  `GenotypeSelector` top-level exports are gone. The grammar lives on as
+  private implementation behind the two entries; the `Species` content
+  helpers (`parse_genotype_pattern` and friends) remain public and delegate
+  internally. `parse_target` replaces `parse_conversion_target` /
+  `compile_conversion_target` (the latter's parse+validate pair becomes
+  `validate=True`).
+- `Op.convert`'s selector form reads its target through the new
+  `IndividualSelector.as_target_spec()` accessor instead of reinterpreting
+  the serialized `to_dict()` form, and compiles the ztype expression
+  through `parse_target`. The legacy string form keeps its contract (a
+  complete zygote-type name resolving to exactly one ztype) but its check
+  now lives in the unified target flow: keep-or-replace forms are rejected
+  with a pointer to the `from_=`/`to=` selectors instead of being
+  reinterpreted, and an unknown allele name reports as a zero-match target.
+- Conversion rule declarations no longer store a `target_parts` split; the
+  declaration-time `[genotype or *]@[label or *]` check shares the grammar's
+  own analysis, and compile-time parsing goes through `parse_target`.
+- An `initial_state` genotype key that pins a slab must now pin **one exact
+  name**: an empty `@` suffix fails with the grammar's own "Empty @lab
+  suffix" error (it used to silently mean the default slab), and sets,
+  negations and `@*` are rejected as unable to identify a single ztype.
+
+- `natal.Blueprint` carries a new `discrete_generation` flag, positioned
+  between `has_sex_chromosomes` and `extreme_speed_mode` (23 fields, up from
+  22). The frozen spec must say which engine it describes, because the
+  equilibrium kernel reads per-age `fertility` differently in each (implicit
+  1.0 vs `clamp01`). Keyword construction is unaffected; positional
+  construction of the previously 22-field tuple is not. The field is derived
+  from the draft the population was built from, not a user-settable parameter.
+- The private `natal._engine_rs.equilibrium_metrics_flat` helper gained two
+  required positional arguments (`has_sex_chromosomes`, `discrete_generation`)
+  before its two defaulted sentinels; `src/natal/_engine_rs.pyi` matches the
+  new order.
+
+- The five pattern entries that match genetic content only —
+  `Species.parse_genotype_pattern`, `Species.enumerate_genotypes_matching_pattern`,
+  `Species.parse_haploid_genome_pattern`,
+  `Species.enumerate_haploid_genomes_matching_pattern` and
+  `GenotypePatternParser.parse_haploid_genome_pattern` — now reject an
+  `@label` suffix with `PatternParseError`. The suffix used to be parsed and
+  then never consulted, so a labelled query matched every label of the
+  genotypes it named. `filter_*` and the selector resolvers inherit the
+  rejection; the label-aware spellings (`parse_selector` with
+  `kind="ztype"`/`"gtype"`, `IndividualSelector`, conversion-rule
+  `filters`) keep taking labels through the grammar's shared guard.
+- The parser's genotype entry (now the private grammar implementation
+  behind `parse_selector(kind="genotype")`) joins that list: it returns a
+  `GenotypePattern`, which carries no label, so it rejects `@label`
+  instead of storing a suffix nothing reads. Content patterns no longer keep it at all —
+  `GenotypePattern.lab` and `HaploidGenomePattern.lab` are gone (the latter was
+  always `None`), and with them the `lab=` constructor argument. The label
+  lives where it is matched: `ZygoteTypePattern.slab` and
+  `GameteTypePattern.glab`. One visible consequence: `parse` returns the same
+  cached object for `"A|a"` however a caller previously spelled the label,
+  because the cache keys on the label-free spelling.
+- `GameteTypePattern` pairs the gamete label with a complete
+  `HaploidGenomePattern` through its new `glab` and `genome` attributes,
+  replacing the flattened `HaplotypePath` + `lab` pair.
+  The gtype selector entry shares its content parsing with the haploid
+  one (the private `_parse_haploid_content`), so
+  a multi-chromosome gamete selector describes each chromosome the way a
+  content-only haploid pattern does; the old form merged every chromosome's
+  loci into one path. `ZygoteTypePattern.from_slab_key` is removed: it had no
+  callers, and `parse_selector(kind="ztype")` accepts the same
+  `genotype@slab` spelling (without the exact-name genotype
+  canonicalization).
+- The `@` analysis has one spelling: `GenotypePatternParser.split_label_suffix`
+  (renamed from the private `_strip_lab`), used by the label-aware entries and
+  the conversion-target splitter. The `Species` genotype helpers no longer run
+  their own copy of the content-only guard — the parser entry owns it — and
+  the private `_parse_haplotype_path` no longer strips an `@` suffix: every
+  entry resolves the label before splitting chromosomes, so that strip could
+  never run on a label it was meant to remove.
+- Conversion filter patterns are analysed once instead of three times: the
+  strict validator owns the `@` scan and returns the label matcher, so a
+  malformed label reports one message ("invalid filter label") on both the
+  gamete and zygote stages instead of each module's own wording.
+
+### Fixed
+
+- Unordered genotypes preserve linked phase by swapping whole homologous chromosomes independently; canonical cache keys and stored parents now agree regardless of construction order.
+
+- Initial declarations own nested input containers, and memoized resolutions cannot be mutated through a published definition. Failed age-structure changes preserve the accepted builder state.
+- Spatial batch values preserve declaration order and positional ownership: ordinary overrides replace earlier batch values, and batch presets never replace hook items.
+- Structured selector inputs retain their pattern objects, and unknown label names are rejected consistently, including within negations and sets.
+- Dependency graph loading rejects malformed, cyclic, or unresolved dependencies before caching; cached graph data is immutable and publication checks declared prerequisites.
+
+- The equilibrium calibration reads the offspring sex ratio the way the owning
+  engine does: a species whose sex is determined by sex chromosomes ignores
+  `sex_ratio` exactly as its tick already did, instead of letting a non-0.5
+  value split the reference composition and move the equilibrium away from the
+  declared carrying capacity (up to +56.9 % at 0.2 and -28.2 % at 0.7 in the
+  reported probes; both engines shared the error).
+- The equilibrium calibration consumes per-age `fertility` as the owning tick
+  does: discrete generations use an implicit 1.0 (their tick reads no
+  age-dependent fertility at all) and the age-structured path clamps the
+  stored weight to `[0, 1]`. A raw `params.tensor_write("fertility", ...)`
+  value outside the builder's domain no longer moves the equilibrium by the
+  written factor.
+- The Champer egg override (`competition(expected_num_new_adult_females=...)`)
+  derives its total from the same per-age fertility weights the owning tick
+  reads, so a discrete model ignores the stored tensor there and the
+  age-structured path clamps it. Previously the raw stored values moved the
+  override — and through it the realized equilibrium — by the written factor.
+
+- A preset's `fitness_patch()` now rejects an unknown top-level key with a
+  `ValueError` naming it and listing the supported keys. Unknown keys used to
+  be skipped in silence, so the misspelled `viability_allele` in the documented
+  example produced a completely ineffective patch.
+- A preset's `fitness_patch()` honours an `@slab` label in a selector key,
+  exactly as the `fitness()` chain does: only that slab is written, and a label
+  no ZType carries is rejected. The label used to be dropped and every slab of
+  the matched genotype was written.
+- A spatial `presets()` or `hooks()` call that fails leaves neither a
+  declaration-log entry nor a batch entry behind, and a failed call no longer
+  overwrites a batch entry an earlier successful call committed.
+- `initial_sperm_storage` input type errors raise `TypeError` instead of
+  tripping an `assert`, so `python -O` no longer skips the checks and lets a
+  malformed mapping reach an unrelated failure.
+- A declarative hook that returns something other than a list, or a list
+  carrying an element that is not a `HookOp`, raises `TypeError` at build time.
+  It used to compile to a zero-operation hook and silently do nothing; an empty
+  list is still a legal no-op.
+- `compile_definition` rejects a declared fitness baseline that does not cover
+  every field, and one whose shape does not match the draft, instead of
+  silently truncating it or replacing it with `np.ones_like`.
+
 ## v0.3.0 (2026-09-16)
 
 The first final 0.3 release retains the Rust engine and public model interfaces
@@ -10,7 +229,7 @@ from the beta series, with the numerical and spatial fixes below. Changes since
 changes in the `v0.3.0b0` and `v0.3.0b1` sections.
 
 The Population/Landscape separation and the broader builder, runtime-update,
-preset, and hook redesign are deferred (TODO-020). Spatial Python callbacks
+preset, and hook redesign are deferred (TODO-019). Spatial Python callbacks
 still run serially per deme; cross-deme global hooks and hook-driven migration
 updates are not part of this release. The new density-regulation demo is an
 independent design sketch, not a supported NATAL API.
@@ -18,7 +237,7 @@ independent design sketch, not a supported NATAL API.
 Population-level readable exports currently require the registry genotype
 labels to match the state axis. Multi-somatic-label states can raise a dimension
 mismatch; use `pop.observe()` or project raw history through an Observation for
-those models (TODO-021).
+those models (TODO-020).
 
 ### Added
 

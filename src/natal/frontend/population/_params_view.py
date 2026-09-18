@@ -1,8 +1,6 @@
 """``pop.params`` — the domain-A parameter surface.
 
-A live, validated view over a population's parameters.  Design points
-:
-
+A live, validated view over a population's parameters.  Design points:
 - **Ecology section**: attribute writes go through the route table with
   full bounds validation (``pop.params.carrying_capacity = 8000``) and
   name the jsonc parameter names — no invented shorthand.  Every write
@@ -334,11 +332,15 @@ class ParamsView:
         """Build the pattern -> ztype-indices resolver."""
 
         def resolve(pattern: str) -> list[int]:
-            from natal.frontend.patterns import ZygoteTypePattern
+            from natal.frontend.patterns.entries import parse_selector
 
             # Parse against the species, then map to this population's ztype
             # indices: the registry is the axis reference, not the species.
-            parsed = ZygoteTypePattern.parse(pattern, self._species())
+            # parse_selector owns the unordered promotion, so a runtime
+            # pattern matches what the same spelling selected at build time.
+            parsed = parse_selector(
+                pattern, species=self._species(), kind="ztype", context="params pattern"
+            )
             return list(self._registry().resolve_ztype_indices(parsed))
 
         return resolve
@@ -392,7 +394,8 @@ class ParamsView:
                 (e.g. ``"viability_fitness"``, ``"survival_rates"``).
 
         Returns:
-            Scalars as Python numbers; vectors as copies; genetics
+            Scalars as Python numbers; routing-name vectors as copies;
+            contract-field vectors (e.g. ``survival_rates``) and genetics
             tensors as read-only :class:`TensorView` facades.
 
         Raises:

@@ -45,7 +45,7 @@
 ## 当前目录与职责
 
 Python 包位于 `src/natal/`，顶层实体包树为 `frontend/`、`backends/` 和 `contracts/`。
-仓库根目录的 `frontend/` 是 Vue 应用源码，与 Python 的 `src/natal/frontend/` 不同。
+仓库根目录的 `ui/` 是 Vue 应用源码，与 Python 的 `src/natal/frontend/` 不同。
 
 | 路径 | 职责 |
 |---|---|
@@ -70,7 +70,7 @@ Python 包位于 `src/natal/`，顶层实体包树为 `frontend/`、`backends/` 
 | `src/natal/frontend/webui/` | FastAPI 服务、REST/WebSocket 通道及面向 Vue 的结果序列化 |
 | `src/natal/backends/rust/` | Python 与 Rust 会话之间的适配、检查点和错误转换 |
 | `src/natal/contracts/` | Blueprint、Params 及从草稿物化契约数据的边界 |
-| `frontend/` | Vue/Vite 仪表盘；构建产物由 Python Web 服务提供 |
+| `ui/` | Vue/Vite 仪表盘；构建产物由 Python Web 服务提供 |
 
 Rust 执行层位于 `rust/src/`：
 
@@ -106,7 +106,7 @@ Rust 执行层位于 `rust/src/`：
 - **Hook 更新通过事件事务进行**：回调操作候选状态、参数和随机流，并接受校验和生命周期约束；它不是长期持有会话可变数组的入口。
 - **历史存储归 Rust 所有**：Python History 保留维度、标签及 schema，提供查询与导出；Python 中存在 HistoryBatch 类型不意味着 Python 拥有运行历史的写入权。
 - **顶层导出是显式契约**：仅向子模块 `__all__` 添加符号不会自动发布到 `natal` 顶层；需同步 `_PUBLIC_EXPORTS` 和生成的 stub。`tests/test_phase0_shims.py` 检查相关一致性。
-- **Web UI 使用 Vue 与 FastAPI**：发布 wheel 包含包内静态资源，源码环境也可使用 `frontend/dist` 或 Vite 开发服务；具体资源选择逻辑位于 `src/natal/frontend/webui/app.py`。
+- **Web UI 使用 Vue 与 FastAPI**：发布 wheel 包含包内静态资源，源码环境也可使用 `ui/dist` 或 Vite 开发服务；具体资源选择逻辑位于 `src/natal/frontend/webui/app.py`。
 
 ## 历史路径与维护范围
 

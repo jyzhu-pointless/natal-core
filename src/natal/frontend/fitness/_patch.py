@@ -31,6 +31,59 @@ from natal.frontend.presets._types import (
 )
 from natal.frontend.utils.helpers import resolve_sex_label
 
+from ._selector_resolution import resolve_selector_ztypes
+
+
+def _resolve_patch_selector_ztypes(
+    deps: RecipeHost,
+    selector: Union[Genotype, str, Tuple[Union[Genotype, str], ...]],
+    all_genotypes: List[Genotype],
+    context: str,
+) -> List[List[int]]:
+    """Resolve one patch selector to the ZType index lists it addresses.
+
+    A selector that carries an ``@slab`` suffix is resolved through
+    ``ZygoteTypePattern``, which is label-aware, exactly like the ``fitness()``
+    chain path.  ``species.resolve_genotype_selectors`` matches genotypes only,
+    so a labelled selector used to be matched without its label and every slab
+    of the matched genotypes was written — the declared label was dropped in
+    silence.
+
+    Unlabelled selectors keep the genotype-level resolution unchanged.
+
+    Args:
+        deps: Compilation host providing the species and index registry.
+        selector: Patch key — a genotype selector string or a ``Genotype``.
+        all_genotypes: Candidate genotypes for the unlabelled fallback.
+        context: Error-message prefix naming the patch branch.
+
+    Returns:
+        One ZType index list per matched genotype for a selector without a
+        label — every slab of that genotype.  A selector carrying a label is
+        resolved as one set, so the result is a single list holding only the
+        ZTypes whose label matches.
+
+    Raises:
+        ValueError: If a labelled selector matches no ZType.
+    """
+    if not (isinstance(selector, str) and "@" in selector):
+        return [
+            deps.index_registry.ztype_indices_for(genotype)
+            for genotype in deps.species.resolve_genotype_selectors(
+                selector=selector,
+                all_genotypes=all_genotypes,
+                context=context,
+            )
+        ]
+
+    # A labelled selector is one flat set of ZTypes, resolved by the same code
+    # the ``fitness()`` chain path uses so both entries select identically.
+    return [
+        resolve_selector_ztypes(
+            deps.species, deps.index_registry, selector, all_genotypes, context
+        )
+    ]
+
 
 def _apply_viability_allele_scaling(
     deps: RecipeHost,
@@ -47,7 +100,8 @@ def _apply_viability_allele_scaling(
     viability_arr = deps.config.viability_fitness
     default_age = int(deps.config.new_adult_age) - 1
 
-    # Resolve one or more alleles
+    # Resolve one or more alleles: a patch key may join several allele names
+    # with '+' (e.g. "WT+Dr"); their copies are counted together.
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
@@ -130,7 +184,8 @@ def _apply_fecundity_allele_scaling(
     # As with viability, this function multiplies current values.
     fecundity_arr = deps.config.fecundity_fitness
 
-    # Resolve one or more alleles
+    # Resolve one or more alleles: a patch key may join several allele names
+    # with '+' (e.g. "WT+Dr"); their copies are counted together.
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
@@ -185,7 +240,8 @@ def _apply_sexual_selection_allele_scaling(
     # Effect is computed from male allele copies, then applied per pair.
     sex_sel_arr = deps.config.sexual_selection_fitness
 
-    # Resolve one or more alleles
+    # Resolve one or more alleles: a patch key may join several allele names
+    # with '+' (e.g. "WT+Dr"); their copies are counted together.
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
@@ -233,7 +289,8 @@ def _apply_zygote_viability_allele_scaling(
     # so multiple presets/patches compose multiplicatively.
     zygote_arr = deps.config.zygote_viability_fitness
 
-    # Resolve one or more alleles
+    # Resolve one or more alleles: a patch key may join several allele names
+    # with '+' (e.g. "WT+Dr"); their copies are counted together.
     target_genes: List[Gene] = []
     names = allele_name if isinstance(allele_name, tuple) else str(allele_name).split('+')
 
@@ -357,6 +414,27 @@ def _apply_zygote_slab_scaling(
                 arr[sex, z] = current * float(factor)
 
 
+#: Complete set of top-level keys ``apply_preset_fitness_patch`` accepts.
+#: Keep in sync with the patch schema documented on that function; an
+#: unknown key is rejected before any tensor is written.
+SUPPORTED_PRESET_FITNESS_PATCH_KEYS: frozenset[str] = frozenset(
+    {
+        "viability",
+        "fecundity",
+        "sexual_selection",
+        "viability_per_allele",
+        "fecundity_per_allele",
+        "sexual_selection_per_allele",
+        "zygote",
+        "zygote_per_allele",
+        "viability_per_slab",
+        "fecundity_per_slab",
+        "sexual_selection_per_slab",
+        "zygote_per_slab",
+    }
+)
+
+
 def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> None:
     """Apply a declarative preset fitness patch to population config tensors.
 
@@ -364,9 +442,56 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     - viability: Dict[genotype_selector, ViabilityScalingConfig]
     - fecundity: Dict[genotype_selector, FecundityScalingConfig]
     - sexual_selection: Dict[female_selector, Union[float, Dict[male_selector, float]]]
+    - viability_per_allele: Dict[allele_name, ViabilityScalingConfig]
+    - fecundity_per_allele: Dict[allele_name, FecundityScalingConfig]
+    - sexual_selection_per_allele: Dict[allele_name, SexualSelectionScalingConfig]
+    - zygote: Dict[genotype_selector, ZygoteViabilityScalingConfig]
+    - zygote_per_allele: Dict[allele_name, ZygoteViabilityScalingConfig]
+    - viability_per_slab: Dict[slab_name, float]
+    - fecundity_per_slab: Dict[slab_name, float]
+    - sexual_selection_per_slab: Dict[slab_name, float]
+    - zygote_per_slab: Dict[slab_name, float]
+
+    Per-allele keys accept a single allele name or several names joined
+    with ``+`` (e.g. ``"WT+Dr"``).  Every top-level key is validated
+    against this schema before any tensor is written, so a patch carrying
+    an unknown key changes nothing.
+
+    The genotype-selector keys accept an optional ``@slab`` qualifier
+    (``"WT|Dr@infected"``), honoured exactly as it is on the ``fitness()``
+    chain path: only that slab is written, and a label no ZType carries is
+    rejected rather than ignored.
+
+    Args:
+        deps: Compilation host providing the species, index registry, and
+            config tensors that receive the patch.
+        patch: Declarative patch mapping schema keys to their scaling
+            configurations.
+
+    Raises:
+        ValueError: If *patch* carries a top-level key outside the schema.
+            The message names the unknown keys and lists the supported
+            ones.
     """
     if not patch:
         return
+
+    # Sort by ``repr`` so the ordering stays total even when a caller passes
+    # keys that are not mutually comparable (an int and a tuple, say): the
+    # contract is a ValueError naming the bad keys, and a plain ``sorted``
+    # would raise a sort TypeError instead.
+    unknown_keys = sorted(
+        (key for key in patch if key not in SUPPORTED_PRESET_FITNESS_PATCH_KEYS),
+        key=repr,
+    )
+    if unknown_keys:
+        raise ValueError(
+            "Unknown preset fitness patch key(s): "
+            + ", ".join(repr(key) for key in unknown_keys)
+            + ". Supported keys: "
+            + ", ".join(sorted(SUPPORTED_PRESET_FITNESS_PATCH_KEYS))
+            + "."
+        )
 
     all_genotypes = deps.index_registry.index_to_genotype
 
@@ -380,13 +505,9 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     # ----------------------------------------------------------------------
     viability_patch = patch.get('viability', {})
     for selector, config in viability_patch.items():
-        matched = deps.species.resolve_genotype_selectors(
-            selector=selector,
-            all_genotypes=all_genotypes,
-            context='preset.viability',
-        )
-        for genotype in matched:
-            z_indices = deps.index_registry.ztype_indices_for(genotype)
+        for z_indices in _resolve_patch_selector_ztypes(
+            deps, selector, all_genotypes, 'preset.viability'
+        ):
 
             # scalar: both sexes at default viability age
             if isinstance(config, (int, float)):
@@ -434,13 +555,9 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     # ----------------------------------------------------------------------
     fecundity_patch = patch.get('fecundity', {})
     for selector, config in fecundity_patch.items():
-        matched = deps.species.resolve_genotype_selectors(
-            selector=selector,
-            all_genotypes=all_genotypes,
-            context='preset.fecundity',
-        )
-        for genotype in matched:
-            z_indices = deps.index_registry.ztype_indices_for(genotype)
+        for z_indices in _resolve_patch_selector_ztypes(
+            deps, selector, all_genotypes, 'preset.fecundity'
+        ):
 
             if isinstance(config, (int, float)):
                 for z_idx in z_indices:
@@ -467,10 +584,8 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     # ----------------------------------------------------------------------
     sexual_selection_patch = patch.get('sexual_selection', {})
     for female_selector, male_config in sexual_selection_patch.items():
-        female_matched = deps.species.resolve_genotype_selectors(
-            selector=female_selector,
-            all_genotypes=all_genotypes,
-            context='preset.sexual_selection(female)',
+        female_z_lists = _resolve_patch_selector_ztypes(
+            deps, female_selector, all_genotypes, 'preset.sexual_selection(female)'
         )
 
         # Allow shorthand: female_selector -> scalar means all-male targets
@@ -484,15 +599,12 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
                 raise TypeError(
                     f"Invalid sexual_selection scale for female selector '{female_selector}'"
                 )
-            male_matched = deps.species.resolve_genotype_selectors(
-                selector=coerce_selector(male_selector),
-                all_genotypes=all_genotypes,
-                context='preset.sexual_selection(male)',
+            male_z_lists = _resolve_patch_selector_ztypes(
+                deps, coerce_selector(male_selector), all_genotypes,
+                'preset.sexual_selection(male)',
             )
-            for f_genotype in female_matched:
-                f_z_indices = deps.index_registry.ztype_indices_for(f_genotype)
-                for m_genotype in male_matched:
-                    m_z_indices = deps.index_registry.ztype_indices_for(m_genotype)
+            for f_z_indices in female_z_lists:
+                for m_z_indices in male_z_lists:
                     for f_z in f_z_indices:
                         for m_z in m_z_indices:
                             deps.config.set_sexual_selection_fitness(f_z, m_z, float(scale))
@@ -530,13 +642,9 @@ def apply_preset_fitness_patch(deps: RecipeHost, patch: PresetFitnessPatch) -> N
     # 5) Zygote fitness patch
     zygote_patch = patch.get('zygote', {})
     for selector, config in zygote_patch.items():
-        matched = deps.species.resolve_genotype_selectors(
-            selector=selector,
-            all_genotypes=all_genotypes,
-            context='preset.zygote',
-        )
-        for genotype in matched:
-            z_indices = deps.index_registry.ztype_indices_for(genotype)
+        for z_indices in _resolve_patch_selector_ztypes(
+            deps, selector, all_genotypes, 'preset.zygote'
+        ):
             if isinstance(config, (int, float)):
                 for z_idx in z_indices:
                     deps.config.set_zygote_viability_fitness(0, z_idx, float(config))

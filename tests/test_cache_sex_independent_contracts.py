@@ -100,11 +100,10 @@ def test_sex_group_roundtrip_and_pattern_independent_of_chromosome_order(
         name=f"independent_order_{system}_{unordered}_{''.join(map(str, order))}",
         structure=dict(parts[index] for index in order), unordered=unordered,
     )
-    parser = nt.GenotypePatternParser(species)
     for genotype in species.get_all_genotypes(unordered=unordered):
         text = genotype.to_string()
         assert species.get_genotype_from_str(text) is genotype
-        assert parser.parse(text).matches(genotype), text
+        assert nt.parse_selector(text, species=species, kind="genotype").matches(genotype), text
     for haploid in species.get_all_haploid_genotypes():
         assert species.get_haploid_genome_from_str(haploid.to_string()) is haploid
 

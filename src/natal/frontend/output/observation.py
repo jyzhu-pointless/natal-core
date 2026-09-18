@@ -118,7 +118,12 @@ class ObservationResult:
         return self._labels
 
     def to_dict(self) -> Dict[str, Any]:  # Any: JSON-serializable values, axes, and labels
-        """Serialize to a JSON-friendly dict."""
+        """Serialize to a JSON-friendly dict.
+
+        Returns:
+            Dict with ``tick``, nested ``values``, ``axes``, and per-axis
+            ``labels`` lists.
+        """
         return {
             "tick": self.tick,
             "values": self._values.tolist(),
@@ -174,7 +179,12 @@ class Observation:
 
     @property
     def axes(self) -> Tuple[str, ...]:
-        """Axis names produced by :meth:`apply` for this Observation."""
+        """Axis names :meth:`apply` produces for a 4-D spatial tensor.
+
+        The ``"deme"`` axis is declared whenever a spatial selection exists
+        in ``"preserve"`` mode; :meth:`apply` emits it only for a 4-D input
+        and omits it for lower-rank (non-spatial) counts.
+        """
         axes: Tuple[str, ...] = ("group",)
         if self.deme_indices is not None and self.deme_mode == "preserve":
             axes += ("deme",)
@@ -335,7 +345,13 @@ class Observation:
         )
 
     def to_dict(self) -> Dict[str, Any]:  # Any: JSON-serializable group metadata
-        """Serialize observation metadata for export."""
+        """Serialize observation metadata for export.
+
+        Returns:
+            Dict with ``labels``, ``collapse_age``, and ``n_groups``; spatial
+            observations add ``demes`` and ``deme_mode``, and identity
+            observations add ``identity``.
+        """
         result: Dict[str, Any] = {  # Any: JSON-serializable group metadata
             "labels": list(self.labels),
             "collapse_age": self.collapse_age,
@@ -578,6 +594,8 @@ class ObservationFilter:
         )
         patterns: List[str] = []
         for entry in entries:
+            # Any "*" short-circuits to a full wildcard: patterns collected so
+            # far and all remaining entries of this sequence are discarded.
             if entry == "*":
                 return []
             if isinstance(entry, bool):
@@ -863,8 +881,10 @@ class ObservationFilter:
 
         Args:
             diploid_genotypes: Optional sequence of genotypes, Species, or
-                population object used to resolve identity groups (``None``
-                groups) and genotype-index selectors.
+                population object.  Only its length is used, to size the
+                identity groups built when ``groups`` is ``None``;
+                genotype-index selectors are resolved through the registry
+                instead.
             groups: Group specification (None, list/tuple, or dict).
             collapse_age: Whether the projection sums the age axis away;
                 the baked selector mask keeps 4-D age resolution either way.
