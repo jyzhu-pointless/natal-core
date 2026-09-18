@@ -49,7 +49,7 @@ class TestZygoteTypePattern:
             somatic_labels=["normal", "infected"],
         )
         gt = sp.get_genotype_from_str("A|a")
-        zt = nt.parse_selector(f"{gt.to_string()}@{"infected"}", species=sp)
+        zt = nt.parse_selector(f"{gt.to_string()}@infected", species=sp)
         assert zt.slab is not None
         assert zt.slab.matches("infected")
         assert zt.matches(gt, "infected")
