@@ -131,39 +131,25 @@ _build_heterogeneous_demes():
     3. 按签名分组 → {sig: [deme_index, ...]}
 
     4. 对每组:
-       a. 首个 deme → 模板 builder 的副本（deme 0）
-          或 _builder_for_group(values[first]) 完整重放
-          → _compile_products() → 该组的基础 config
-       b. 组内其余 deme：仅生态差异的 variant 在 _can_use_replace()
-          允许时通过 ModelDraft._replace 从基础 config 派生；
-          否则由 _builder_for_group() 完整重放
+       a. _projected_group(values[first]) 解析该 deme 的日志
+          （代入该 deme 的批值），经唯一声明解释器投影到全新基线
+          ——不重新执行任何 builder 方法
+       b. _carrier_from_projection 从投影恢复未发布载体；遗传与
+          模板匹配的组 0 继承模板编译缓存（配方不重跑）
+       c. carrier._compile_products() → compile_definition 产出该组产物
+       d. 组内其余 deme：仅生态差异的 variant 只把*不同*的声明
+          投影到组 config；派生标量冻结于组计算值
 
     5. 按索引组装所有 deme，构造 SpatialPopulation
 ```
 
-`_builder_for_group` 是回放的核心：
-
-```python
-def _builder_for_group(self, sig_map):
-    # 为该组新建单 deme builder（与 SpatialPopulationBuilder.__init__ 同一入口）
-    template = PopulationBuilder.from_species(self._species, discrete=(self._pop_type != "age_structured"))
-
-    for method_name, kwargs in self._declaration_log:
-        resolved = {}
-        for key, value in kwargs.items():
-            if key in sig_map:
-                resolved[key] = sig_map[key]   # 替换为该组的标量值
-            elif isinstance(value, BatchSetting):
-                resolved[key] = value.first_value()  # 未覆盖的 batch 取首个值
-            else:
-                resolved[key] = value           # 非 batch 参数原样传递
-
-        getattr(template, method_name)(**resolved)
-
-    return template  # 完整轴的未发布 builder，由调用方编译
-```
-
-组内第一个候选编译完成后，后续仅生态差异的 variant 通过 `ModelDraft._replace` 共享未替换字段的大数组；可替换参数的发现、读取时派生的平衡态指标与不支持异构的参数见 [异构 Config 共享机制](spatial_config_replace.md)。
+投影取代了旧的重放核心：不是在全新 builder 上重新执行日志里的
+builder 方法，而是由 `project_declaration_record`
+（`builder/_declarations.py`）解释日志——与链式方法委托的是同一组
+纯 `apply_*` 函数。因此带 batch 的构建执行零个 builder 方法（有
+spy 测试钉住），且每个 deme 的编译结果与等价单种群声明一致。
+可投影参数、读取时派生的平衡态指标与不支持异构的参数见
+[异构 Config 共享机制](spatial_config_replace.md)。
 
 ## `_clone_deme`：零编译开销的克隆
 
@@ -231,6 +217,6 @@ batch_setting(lambda i: 10000 if i < 50 else 5000)  # kind="spatial"
 
 ## 边界与限制
 
-1. **影响遗传学的 batch 值不走 `_replace` 快路径** — `fitness` 的行参数与 `presets` 都支持 `batch_setting`，但每个不同的取值都会形成自己的遗传学组、各走一次完整 builder 重放；只有仅生态差异的 variant 才通过 `ModelDraft._replace` 共享大数组（见[异构 Config 共享机制](spatial_config_replace.md)）
+1. **影响遗传学的 batch 值各成编译组** — `fitness` 的行参数与 `presets` 都支持 `batch_setting`，但每个不同的取值都会形成自己的遗传学组、经 `compile_definition` 各编译一次；组内仅生态差异的 variant 共享该组的遗传产物大数组（见[异构 Config 共享机制](spatial_config_replace.md)）
 2. **spatial kind 需要 topology** — `batch_setting(lambda row, col: ...)` 形式的回调要求 builder 传入了 topology 参数，否则 expand 时报错；`(flat_idx)` 形式不依赖 topology（按参数个数自动识别）
 3. **同构 deme 共享同一 `_config` 引用** — 这是构建期的数据去重，不代表运行期可以直接写 `_config`。直接改 `pop.demes[0]._config` 的数组字段既绕过会话同步，也会影响所有共享该 config 的 deme；运行期修改单个 deme 用 `deme(i).write_ecology(...)` / `write_genetics(...)`，批量修改用 `pop.params.tensor_write(...)`

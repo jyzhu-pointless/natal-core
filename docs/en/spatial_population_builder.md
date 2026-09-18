@@ -50,7 +50,7 @@ SpatialPopulation.builder(...)
 
 1. **Delegates to `_template`** — the template `PopulationBuilder` always receives scalar values, maintaining correct internal state
 2. **Detects `BatchSetting`** — intercepts and stores them in `_batch_settings`; template only sees `first_value()`
-3. **Records in `_declaration_log`** — preserves original arguments (including BatchSetting objects) for heterogeneous scenario replay
+3. **Records in `_declaration_log`** — preserves original arguments (including BatchSetting objects) for the group declaration projector
 
 ### Frozen Declaration
 
@@ -98,7 +98,7 @@ User passes age_1_carrying_capacity ─┘
 
 Priority: `age_1_carrying_capacity` > `old_juvenile_carrying_capacity` > `carrying_capacity`.
 
-This unifies key names in `_declaration_log`, ensuring parameter names match the template `PopulationBuilder` method signatures during heterogeneous replay.
+This unifies key names in `_declaration_log`, ensuring parameter names match the template `PopulationBuilder` method signatures the projector interprets.
 
 ## Two Build Paths
 
@@ -131,39 +131,31 @@ _build_heterogeneous_demes():
     3. Group by signature → {sig: [deme_index, ...]}
 
     4. For each group:
-       a. First deme → copy of the template builder (deme 0)
-          or _builder_for_group(values[first]) full replay
-          → _compile_products() → the group's base config
-       b. Remaining demes: ecology-only variants are derived from the base
-          config via ModelDraft._replace when _can_use_replace() allows;
-          otherwise _builder_for_group() replays them in full
+       a. _projected_group(values[first]) resolves the deme's journal
+          (per-deme batch values substituted) and projects it onto a
+          fresh baseline through the single declaration interpreter —
+          no builder method is re-executed
+       b. _carrier_from_projection restores an unpublished carrier from
+          the projection; group-0 with template-matching genetics
+          inherits the template's compile cache (recipes never re-run)
+       c. carrier._compile_products() → compile_definition produces the
+          group's products
+       d. Remaining demes: ecology-only variants project only their
+          *differing* declarations onto the group config; derived
+          scalars stay frozen at the group's computation
 
     5. Assemble all demes by index, construct SpatialPopulation
 ```
 
-`_builder_for_group` is the core of replay:
-
-```python
-def _builder_for_group(self, sig_map):
-    # New single-deme builder for this group (same entry as SpatialPopulationBuilder.__init__)
-    template = PopulationBuilder.from_species(self._species, discrete=(self._pop_type != "age_structured"))
-
-    for method_name, kwargs in self._declaration_log:
-        resolved = {}
-        for key, value in kwargs.items():
-            if key in sig_map:
-                resolved[key] = sig_map[key]   # Replace with this group's scalar value
-            elif isinstance(value, BatchSetting):
-                resolved[key] = value.first_value()  # Uncovered batch takes first value
-            else:
-                resolved[key] = value           # Non-batch parameters pass through as-is
-
-        getattr(template, method_name)(**resolved)
-
-    return template  # complete-axis unpublished builder, compiled by the caller
-```
-
-After the first candidate of a group is compiled, later ecology-only variants share the large arrays of unreplaced fields through `ModelDraft._replace`; parameter discovery, read-side equilibrium derivation, and the parameters that cannot be heterogeneous live in [Heterogeneous Config Sharing](spatial_config_replace.md).
+The projection replaces the old replay core: instead of re-running the
+journaled builder methods on a fresh builder, the journal is interpreted
+by `project_declaration_record` (`builder/_declarations.py`) — the same
+pure `apply_*` functions the chain methods delegate to.  A batched build
+therefore executes zero builder methods (pinned by a spy test), and each
+deme's compiled result equals the equivalent single-population
+declaration.  Parameter projectability, read-side equilibrium
+derivation, and the parameters that cannot be heterogeneous live in
+[Heterogeneous Config Sharing](spatial_config_replace.md).
 
 ## `_clone_deme`: Zero-Compilation-Overhead Cloning
 
@@ -232,6 +224,6 @@ This page reports no historical measurements: the former table carried no versio
 
 ## Limitations
 
-1. **Genetics-affecting batch values skip the `_replace` fast path** — `fitness` rows and `presets` accept `batch_setting`, but every distinct value forms its own genetics group compiled by a full builder replay; only ecology-only variants share heavy arrays through `ModelDraft._replace` (see [Heterogeneous Config Sharing](spatial_config_replace.md))
+1. **Genetics-affecting batch values form their own compile groups** — `fitness` rows and `presets` accept `batch_setting`, but every distinct value forms its own genetics group compiled once through `compile_definition`; within a group, ecology-only variants share the group's compiled genetic product arrays (see [Heterogeneous Config Sharing](spatial_config_replace.md))
 2. **spatial kind requires topology** — a `batch_setting(lambda row, col: ...)` callable requires the topology parameter to have been passed to the builder, otherwise `expand()` will raise an error; the `(flat_idx)` form does not depend on topology (the form is auto-detected by parameter count)
 3. **Homogeneous demes share the same `_config` reference** — this is build-time deduplication, not writable runtime sharing. Writing array fields of `pop.demes[0]._config` directly bypasses session sync and affects every deme sharing that config; modify a single running deme with `deme(i).write_ecology(...)` / `write_genetics(...)`, or many demes with `pop.params.tensor_write(...)`

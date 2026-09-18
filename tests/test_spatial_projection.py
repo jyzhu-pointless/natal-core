@@ -103,6 +103,104 @@ def test_each_deme_matches_the_equivalent_single_population(species: nt.Species)
         )
 
 
+def test_genetically_distinct_groups_each_match_single_population(species: nt.Species) -> None:
+    """§4.5-4 with *different genetics* per group: presets split the groups.
+
+    Two genetic groups (per-deme ``presets(batch_setting(...))``) plus an
+    ecology-only variant inside group A: every deme's compiled config —
+    ecology scalars, initial arrays, genetic maps, fitness, offspring
+    tensor — equals the equivalent single-population declaration.  Recipe
+    call counts pin the compile contract: the template's declaration runs
+    each preset once, group A inherits that cache (no re-run), and the
+    genetically distinct group B compiles exactly once.
+    """
+    from natal.frontend.presets import PointMutation
+
+    call_log: list[str] = []
+
+    class CountingMutation(PointMutation):
+        def gamete_modifier(self, host):  # type: ignore[override]
+            call_log.append(self.name)
+            return super().gamete_modifier(host)
+
+    pm_a = CountingMutation("pm_a", "WT", target_allele="Dr", mutation_rate=0.1)
+    pm_b = CountingMutation("pm_b", "WT", target_allele="Dr", mutation_rate=0.5)
+    eggs = [20.0, 10.0, 15.0]
+    caps = [500.0, 200.0, 800.0]
+    presets = [pm_a, pm_b, pm_a]
+
+    spatial = (
+        nt.SpatialPopulation.builder(species, n_demes=3, pop_type="age_structured")
+        .setup(stochastic=False)
+        .age_structure(3, 1)
+        .initial_state(individual_count={"female": {"WT|WT": 50}, "male": {"WT|WT": 50}})
+        .survival(female_age_based_survival=[0.8, 0.9, 0.9], male_age_based_survival=[0.8, 0.9, 0.9])
+        .reproduction(eggs_per_female=batch_setting(eggs))
+        .competition(carrying_capacity=batch_setting(caps))
+        .presets(batch_setting(presets))
+        .build()
+    )
+    # Snapshot before the reference single-population builds below run
+    # their own recipes (each ``.presets()`` call compiles once by design).
+    spatial_phase_calls = list(call_log)
+    for i in range(3):
+        single = (
+            nt.AgeStructuredPopulation.setup(species, stochastic=False)
+            .age_structure(3, 1)
+            .initial_state(individual_count={"female": {"WT|WT": 50}, "male": {"WT|WT": 50}})
+            .survival(female_age_based_survival=[0.8, 0.9, 0.9], male_age_based_survival=[0.8, 0.9, 0.9])
+            .reproduction(eggs_per_female=eggs[i])
+            .competition(carrying_capacity=caps[i])
+            .presets(presets[i])
+            .build()
+        )
+        spatial_cfg = spatial._deme_object(i).config
+        single_cfg = single.config
+        assert spatial_cfg.eggs_per_female == pytest.approx(single_cfg.eggs_per_female)
+        assert spatial_cfg.carrying_capacity == pytest.approx(single_cfg.carrying_capacity)
+        for field in (
+            "age_based_survival_rates", "initial_individual_count",
+            "zygotes_to_gametes_map", "gametes_to_zygotes_map",
+            "viability_fitness", "offspring_tensor",
+        ):
+            np.testing.assert_array_equal(
+                getattr(spatial_cfg, field), getattr(single_cfg, field),
+                err_msg=f"deme {i} field {field}",
+            )
+    # Template declaration ran each preset once; group A (demes 0, 2)
+    # inherited that cache, group B compiled once — no per-deme re-runs.
+    assert spatial_phase_calls.count("pm_a") == 1, f"pm_a recipe re-ran: {spatial_phase_calls}"
+    assert spatial_phase_calls.count("pm_b") == 1, (
+        f"pm_b recipe ran {spatial_phase_calls.count('pm_b')} times: {spatial_phase_calls}"
+    )
+
+
+def test_resolved_group_journal_expands_live_batchsetting_entries(species: nt.Species) -> None:
+    """A journal still carrying live ``BatchSetting`` presets resolves per deme.
+
+    ``_definition_for_compile`` normalizes journals before a build, but the
+    group journal resolver must also honour a live ``presets`` entry whose
+    ``preset_list`` still holds the ``BatchSetting`` itself: the per-deme
+    ``_preset_<i>`` value wins, and a missing key falls back to the first
+    value (the template's consumed placeholder).
+    """
+    from natal.frontend.presets import PointMutation
+
+    first = PointMutation("live_first", "WT", target_allele="Dr", mutation_rate=0.1)
+    other = PointMutation("live_other", "WT", target_allele="Dr", mutation_rate=0.5)
+    builder = nt.SpatialPopulation.builder(species, n_demes=2, pop_type="age_structured")
+    builder._declaration_log.append(  # pyright: ignore[reportPrivateUsage]  # journal-shaped live entry under test.
+        ("presets", {"preset_list": (batch_setting([first, other]),)})
+    )
+    resolved = builder._resolved_group_journal(  # pyright: ignore[reportPrivateUsage]  # the resolver under contract test.
+        {"_preset_0": other}
+    )
+    assert resolved == [("presets", {"__args__": (other,)})]
+    # No per-deme value staged: the placeholder first value is used.
+    fallback = builder._resolved_group_journal({})  # pyright: ignore[reportPrivateUsage]
+    assert fallback == [("presets", {"__args__": (first,)})]
+
+
 def test_replay_machinery_is_gone() -> None:
     """The retired mechanisms stay retired (§5.6-style inaccessibility)."""
     assert not hasattr(SpatialPopulationBuilder, "_builder_for_group")

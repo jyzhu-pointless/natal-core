@@ -4,15 +4,18 @@
 
 ## 问题
 
-`SpatialPopulationBuilder._build_heterogeneous_demes()` 按**遗传学**签名分组编译 builder 管线（`_genetics_batch_names()` 决定哪些 batch kwarg 属于遗传学；仅生态参数的差异不会拆分组）。组内每个额外的 variant 仍需要自己的 `ModelDraft`：要么从该组的基础 config 派生，要么由 `_builder_for_group()` 完整重放 builder 管线（`setup → … → build()`），每次都编译出全新的 `ModelDraft`。
+`SpatialPopulationBuilder._build_heterogeneous_demes()` 按**遗传学**签名分组编译（`_genetics_batch_names()` 决定哪些 batch kwarg 属于遗传学；仅生态参数的差异不会拆分组）。每个 deme 都需要自己的 `ModelDraft`；若每个都从头编译，所有大数组（`zygotes_to_gametes_map`、`gametes_to_zygotes_map`、`viability_fitness`、`fecundity_fitness` 等）都会被复制，造成内存浪费。
 
-如果不存在 `_replace` 快路径，每个仅生态参数不同的 variant 都需要完整重放，所有大数组（`zygotes_to_gametes_map`、`gametes_to_zygotes_map`、`viability_fitness`、`fecundity_fitness` 等）都会被重复创建，造成内存浪费。
+## 方案：声明投影 + 组内共享遗传产物
+
+每个 deme 的具体声明（按该 deme 批值解析后的日志）经唯一声明解释器（`builder/_declarations.py`）投影到全新基线——不重新执行任何 builder 方法。遗传组经 `compile_definition` 编译一次；组内每个 deme 原样挂接该组的遗传产物字段，大数组由此共享：
 
 ```
-2601 个 deme，每个有唯一的 carrying_capacity
-→ 2601 个完整 ModelDraft（每个 deme 一次完整重放）
-→ 大数组被复制 2601 次
+组编译：  投影组 0 声明 → compile_definition → products
+deme i：  仅投影与组值不同的声明到 products.config
+          → 共享该组的遗传产物数组
 ```
+
 
 ## 方案：`_replace` 快路径
 
@@ -26,49 +29,12 @@ variant 2: base_config._replace(carrying_capacity=3000)       → 共享所有�
 variant N: base_config._replace(initial_individual_count=arr) → 只重建 initial_individual_count
 ```
 
-## 参数发现机制
+## 哪些参数可以按 deme 不同
 
-不维护硬编码的白名单，而是通过分层策略自动发现可 `_replace` 的参数：
+不再有映射表。差量投影复用链式方法自身的写入路径（`competition()` / `reproduction()` / `survival()` / `initial_state()` 背后的路由表 writer），因此这些方法接受的每个参数都可按 deme 投影：标量（`carrying_capacity`、`eggs_per_female`、`sex_ratio` 等）、按年龄向量（`female_age_based_survival` 等），以及初始分布（`individual_count` / `sperm_storage` 字典由 `natal.frontend.model.initial_state` 的纯解析函数转成数组）。
 
-### 1. 数组字段（显式）
+影响遗传学的 kwarg（`presets`、`fitness` 各行、自定义 modifier）不走差量投影：它们把 deme 拆成不同的遗传组，每组经 `compile_definition` 编译一次。遗传内容与模板相同的组继承模板的编译缓存，配方不会为相同内容重跑。派生标量（例如 `expected_num_new_adult_females` 推导的 Champer 卵覆盖）冻结于组计算值，除非用户为该 deme 重新声明。
 
-需要 dict → numpy array 转换的 builder 参数，定义在 `_ARRAY_KWARGS`：
-
-| Builder kwarg | Config 字段 | 转换方式 |
-|---|---|---|
-| `individual_count` | `initial_individual_count` | `initial_state.resolve_*_initial_individual_count()` |
-| `sperm_storage` | `initial_sperm_storage` | `initial_state.resolve_age_structured_initial_sperm_storage()` |
-
-### 2. 多字段映射（显式）
-
-离散世代标量 builder kwarg 各自写入统一 `(2, n_ages)` 向量 config 字段的**一个单元格**，定义在 `_DISCRETE_VECTOR_CELLS`。写入前会先复制目标向量，variant 不会与 base 产生别名：
-
-| Builder kwarg | Config 字段 | 单元格 |
-|---|---|---|
-| `female_age0_survival` | `age_based_survival_rates` | `(0, 0)` |
-| `male_age0_survival` | `age_based_survival_rates` | `(1, 0)` |
-| `female_adult_mating_rate` | `age_based_mating_rates` | `(0, 1)` |
-| `male_adult_mating_rate` | `age_based_mating_rates` | `(1, 1)` |
-
-### 3. 重命名（显式）
-
-builder kwarg 名与 config 字段名不同，定义在 `_KWARG_RENAMES`：
-
-| Builder kwarg | Config 字段 |
-|---|---|
-| `eggs_per_female` | `eggs_per_female` |
-
-### 4. 动态发现（隐式）
-
-不在上述三类中的 kwarg，通过 `hasattr(base_config, kwarg_name)` 检测是否为有效 config 字段。例如 `low_density_growth_rate`、`juvenile_growth_mode`、`sex_ratio`、`sperm_displacement_rate` 等，由于 builder kwarg 名与 config 字段名一致，**无需任何映射配置即可自动支持**。
-
-添加新的 batch-able 标量参数通常不需要修改映射表 —— 只要 builder kwarg 名与 config 字段名相同即可。
-
-影响遗传学的 kwarg（`presets`、`fitness` 的行参数如 `viability` / `fecundity`、自定义 modifier 等）不会走 `_replace`：它们把 deme 拆分进不同的遗传学组，每组各走一次完整 builder 重放。组内未通过 `hasattr` 检测的非遗传学 kwarg 同样回退到完整重放；重放得到的 variant 随后与基础 config 共享遗传学产物字段。
-
-### 故意不支持异构的参数
-
-`stochastic` 和 `continuous_sampling` 是 simulation mode 级别的参数，不应在不同 deme 间变化。`setup()` 直接接收它们，不经过 batch 机制，因此这些参数**无法**通过 `batch_setting` 传递。
 
 ## 平衡态指标在读取时派生
 
@@ -95,38 +61,27 @@ builder kwarg 名与 config 字段名不同，定义在 `_KWARG_RENAMES`：
 ```
 _build_heterogeneous_demes()
   │
-  ├─ 1. 展开所有 batch_setting 为 per-deme 值列表
-  ├─ 2. _genetics_batch_names() → 找出影响遗传学的 batch kwarg
-  ├─ 3. 按纯遗传学签名对 deme 分组
-  │     （生态参数差异不会拆分组）
+  ├─ 1. 把所有 batch_settings 展开为按 deme 的值列表
+  ├─ 2. _genetics_batch_names() → 影响遗传学段的 batch kwarg
+  ├─ 3. 按仅遗传学签名分组（生态差异不拆组）
   │
-  └─ 4. 每个遗传学组 —— 编译候选：
+  └─ 4. 每个遗传组——编译候选：
        │
-       ├─ 第一个 deme → 模板 builder 的副本（deme 0）
-       │              或 _builder_for_group() 完整重放
-       │              → _compile_products() → base_config
+       ├─ _projected_group(values[first])
+       │     解析该 deme 日志 → 投影到全新基线
+       │     （唯一解释器；零 builder 方法执行）
+       ├─ _carrier_from_projection(...)
+       │     遗传与模板匹配的组 0 继承模板编译缓存（配方不重跑）
+       ├─ carrier._compile_products() → compile_definition
        │
-       └─ 组内其他 deme：
-            ├─ 与更早 deme 完整签名相同 → 复用其候选
-            ├─ _can_use_replace(生态 kwarg, base_config)
-            │   ├─ 是 → _build_variant_config(sig_map, base_config)
-            │   │        │
-            │   │        ├─ 数组字段 → initial_state 的 resolve_* → _replace
-            │   │        ├─ 离散标量 → 复制向量、写一个单元格 → _replace
-            │   │        ├─ 重命名 → _replace(renamed_field=val)
-            │   │        └─ 动态发现 → hasattr → _replace
-            │   └─ 否 → _builder_for_group() 完整重放，再
-            │            从 base_config _replace 遗传学产物字段
+       └─ 组内其余 deme：
+            ├─ 完整签名与先前 deme 相同 → 复用其候选
+            └─ _projected_variant_config(group_config, values_i, values_first)
+                  仅投影*不同*的声明；派生标量冻结于组计算值
   │
-  ├─ 5. _spatial_projection() → 共享注册表投影
-  │     （所有组路由表的并集）
+  ├─ 5. _spatial_projection() → 共享 registry 投影（各组路由表之并）
   │
-  └─ 6. 每个遗传学组 —— 发布：
-       ├─ 每个唯一 config → builder._publish_and_build()
-       │    （首个发布的 deme 成为遗传学模板）
-       └─ 共享签名的 deme → _clone_deme() → _clone()
-            （从模板复制 state 数组；大数组共享）
-```
+  └─ 6. 每个遗传组——发布：每个唯一 config → builder._publish_and_build()
 
 ## 内存效果
 
@@ -156,12 +111,9 @@ _build_heterogeneous_demes()
 
 | 符号 | 作用 |
 |---|---|
-| `_ARRAY_KWARGS` | 需 dict→array 转换的参数集合 |
-| `_DISCRETE_VECTOR_CELLS` | 离散标量 kwarg → 统一向量字段的一个单元格 |
-| `_KWARG_RENAMES` | builder kwarg → config 字段重命名 |
+| `_projected_group()` | 解析 deme 日志并投影到全新基线 |
+| `_projected_variant_config()` | 把 deme 与组不同的声明投影到组 config |
+| `builder/_declarations.py` | 两条路径共享的唯一声明解释器 |
 | `_genetics_batch_names()` | 选出会拆分遗传学组的 batch kwarg |
 | `SpatialPopulationBuilder._build_heterogeneous_demes()` | 异构构建主流程 |
-| `SpatialPopulationBuilder._builder_for_group()` | 将一个组重放为完整轴的未发布 builder |
-| `SpatialPopulationBuilder._can_use_replace(sig_map, base_config)` | 判断是否可用 `_replace` |
-| `SpatialPopulationBuilder._build_variant_config()` | 创建 variant config |
 | `_clone_deme()` → `PopulationInstance._clone()` | 克隆已发布的 deme，共享编译状态与 config |
