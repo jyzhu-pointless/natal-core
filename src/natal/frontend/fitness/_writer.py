@@ -378,29 +378,21 @@ def _write_fitness_field_flat(
             continue
         # ── end tuple branch ──
 
-        from natal.frontend.patterns import ZygoteTypePattern
+        from natal.frontend.patterns.entries import parse_selector
 
         selector_str = str(selector)
-        pattern = ZygoteTypePattern.parse(selector_str, species)
+        # parse_selector owns the unordered | → :: promotion, so the same
+        # spelling matches exactly what IndividualSelector, the conversion
+        # filters and the rules match (FRONTEND_REFACTOR_PLAN.md §5.6).
+        pattern = parse_selector(
+            selector_str, species=species, kind="ztype",
+            context=f"fitness.{field_name}",
+        )
         z_indices = registry.resolve_ztype_indices(pattern)
-
-        # For | patterns (not ::), also try :: for unordered matching.
-        # Ordered | may only partially match (e.g. *|A → AA but not Aa).
-        # Only promote for unordered species (consistent with
-        # genetic_structures.Species._resolve_single_genotype_selector).
-        if species.unordered and "|" in selector_str and "::" not in selector_str:
-            try:
-                unordered_str = selector_str.replace("|", "::", 1)
-                unordered_pattern = ZygoteTypePattern.parse(unordered_str, species)
-                unordered_indices = registry.resolve_ztype_indices(unordered_pattern)
-                if len(unordered_indices) >= len(z_indices):
-                    z_indices = unordered_indices
-            except Exception:
-                pass
 
         if not z_indices:
             # Check for invalid slab first — give a specific error.  A slab
-            # constraint means a suffix was written, and ZygoteTypePattern.parse
+            # constraint means a suffix was written, and the selector entry
             # already ran the grammar's @ analysis over selector_str, so the
             # read below only spells that suffix for the message.
             slab_pattern = pattern.slab

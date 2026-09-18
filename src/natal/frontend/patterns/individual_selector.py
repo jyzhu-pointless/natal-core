@@ -456,7 +456,7 @@ class IndividualSelector:
         out: list[int] = []
         seen: set[int] = set()
 
-        from natal.frontend.patterns import ZygoteTypePattern
+        from natal.frontend.patterns.entries import parse_selector
 
         for spec in atom.ztype_patterns:
             if spec == "*":
@@ -467,11 +467,9 @@ class IndividualSelector:
                 species = index_registry.index_to_genotype[0].species
 
             if species is not None:
-                if species.unordered:
-                    # Canonicalize | → :: for unordered species; the \x00
-                    # placeholder preserves any :: the user already wrote.
-                    spec = spec.replace("::", "\x00").replace("|", "::").replace("\x00", "::")
-                pattern = ZygoteTypePattern.parse(spec, species)
+                # parse_selector owns the unordered | → :: promotion, so this
+                # spelling matches exactly what fitness and the rules match.
+                pattern = parse_selector(spec, species=species, kind="ztype", context="ztype selector")
                 indices = index_registry.resolve_ztype_indices(pattern)
             else:
                 continue

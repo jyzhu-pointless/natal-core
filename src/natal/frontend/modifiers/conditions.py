@@ -183,11 +183,13 @@ class _ZtypeHas(Condition):
             self._compiled_from_pattern = True
 
     def _lazy_compile(self, genotype: Genotype) -> bool:
-        from natal.frontend.patterns import GenotypePatternParser
+        from natal.frontend.patterns.entries import parse_selector
 
-        self._check = GenotypePatternParser(genotype.species).parse(
-            self._pattern
-        ).to_filter()
+        pattern = parse_selector(
+            self._pattern, species=genotype.species,
+            kind="genotype", context="condition pattern",
+        )
+        self._check = pattern.to_filter()
         return self._check(genotype)
 
     def _matches(

@@ -60,7 +60,7 @@ def resolve_declared_ztypes(
         return set()
     result: set[int] = set()
     from natal.frontend.patterns import GenotypePatternParser
-    from natal.frontend.patterns.elements.diploid import ZygoteTypePattern
+    from natal.frontend.patterns.entries import parse_selector
     for item in declared:
         if isinstance(item, int):
             if item < 0 or item >= len(registry.index_to_genotype):
@@ -68,12 +68,15 @@ def resolve_declared_ztypes(
             genotype = registry.index_to_genotype[item]
             result.update(registry.ztype_index(genotype, slab) for slab in registry.slab_labels)
         else:
-            pattern = ZygoteTypePattern.parse(item, species)
+            # The unified selector entry owns the unordered | → :: promotion,
+            # so a declared compressed type matches what the same spelling
+            # selects everywhere else.
+            pattern = parse_selector(item, species=species, kind="ztype", context="declared ztype")
             matches = [gt for gt in registry.index_to_genotype if pattern.genotype.matches(gt)]
             if not matches and "*" not in item:
                 # Exact unordered genotypes may be written in either parental
                 # order; the Species parser supplies their canonical identity.
-                # ZygoteTypePattern.parse already validated the suffix, so the
+                # The selector entry already validated the suffix, so the
                 # grammar's own split names the genotype part unambiguously.
                 genotype_text, _ = GenotypePatternParser.split_label_suffix(item)
                 genotype = species.get_genotype_from_str(genotype_text)

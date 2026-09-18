@@ -9,12 +9,15 @@ Provides regex-like pattern matching for genetic sequences:
 - HaploidGenomePattern: Pattern for a complete haploid genome
 - GenotypePatternParser: Parser for pattern syntax strings
 - GenotypeSelector: Unified genotype selector for observation/filtering
+- parse_selector / parse_target: The two semantic entries — one for
+  matching, one for keep-or-replace conversion targeting
 """
 
 from .elements._base import PatternParseError
 from .elements.atom import LabPattern
 from .elements.diploid import ZygoteTypePattern
 from .elements.haploid import GameteTypePattern
+from .entries import SelectorKind, parse_selector, parse_target
 from .individual_selector import IndividualSelector
 from .parser import GenotypePatternParser
 from .selector import GenotypeSelector, resolve_zygote_type
@@ -26,6 +29,9 @@ __all__ = [
     "IndividualSelector",
     "LabPattern",
     "PatternParseError",
+    "SelectorKind",
     "ZygoteTypePattern",
+    "parse_selector",
+    "parse_target",
     "resolve_zygote_type",
 ]

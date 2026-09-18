@@ -248,6 +248,7 @@ class ZygoteConversionRuleSet:
         """
         from natal.frontend.patterns import ZygoteTypePattern
         from natal.frontend.patterns.elements.diploid import GenotypePattern
+        from natal.frontend.patterns.entries import parse_selector
         from natal.frontend.patterns.parser import GenotypePatternParser
 
         parser = GenotypePatternParser(species)
@@ -265,7 +266,10 @@ class ZygoteConversionRuleSet:
             for key, pattern in rule.filter_pairs:
                 if key == "current":
                     try:
-                        current_pattern = ZygoteTypePattern.parse(pattern, species)
+                        current_pattern = parse_selector(
+                            pattern, species=species, kind="ztype",
+                            context=f"{self.name} current filter",
+                        )
                     except Exception as exc:
                         raise ValueError(
                             f"{self.name}: invalid current filter {pattern!r}"

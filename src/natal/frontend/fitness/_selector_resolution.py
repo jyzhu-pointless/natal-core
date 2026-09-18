@@ -8,10 +8,10 @@ select the same ZTypes on both (FRONTEND_REFACTOR_PLAN.md §5.6).  This module
 is the resolution both entries call for a labelled selector; a selector
 without a label is resolved genotype-by-genotype at each call site.
 
-``_writer.py``'s flat viability/fecundity/zygote path still carries its own
-inline copy of the labelled logic.  A 252-case scan (3 species x 3 fields x 28
-labelled selectors, preset against chain) found no divergence, and folding
-that copy in is part of the §5 migration rather than a behaviour fix.
+Labelled parsing goes through the unified selector entry
+(``natal.frontend.patterns.entries.parse_selector``), so the unordered
+``|`` → ``::`` promotion is whatever that one entry defines — fitness,
+presets, rules, observation and hooks share it by construction.
 
 Private module — not part of the public API.
 """
@@ -38,10 +38,10 @@ def resolve_selector_ztypes(
 ) -> List[int]:
     """Resolve one selector to the ZType indices it addresses.
 
-    A selector carrying an ``@slab`` suffix is resolved through
-    ``ZygoteTypePattern``, which is label-aware: only ZTypes whose label
-    matches come back, and a label that no ZType carries raises instead of
-    being ignored.  A selector without a label keeps the genotype-level
+    A selector carrying an ``@slab`` suffix is resolved through the unified
+    selector entry, which is label-aware: only ZTypes whose label matches
+    come back, and a label that no ZType carries raises instead of being
+    ignored.  A selector without a label keeps the genotype-level
     resolution unchanged — match genotypes, then address every slab of each.
 
     Args:
@@ -82,22 +82,10 @@ def _labelled_selector_ztypes(
     context: str,
 ) -> List[int]:
     """Resolve a selector whose ``@slab`` qualifier must take part in matching."""
-    from natal.frontend.patterns import ZygoteTypePattern
+    from natal.frontend.patterns.entries import parse_selector
 
-    ztypes = list(registry.resolve_ztype_indices(ZygoteTypePattern.parse(selector, species)))
-    # ``|`` asks for an ordered pair.  On an unordered species the registry
-    # holds only the canonical phase, so an ordered spelling can miss matches
-    # that its ``::`` form finds; retry with the unordered separator and keep
-    # the wider result.  This mirrors the chain path exactly, so adding a label
-    # never narrows the genotype match set.
-    if species.unordered and "|" in selector and "::" not in selector:
-        try:
-            promoted = ZygoteTypePattern.parse(selector.replace("|", "::", 1), species)
-            promoted_ztypes = list(registry.resolve_ztype_indices(promoted))
-            if len(promoted_ztypes) >= len(ztypes):
-                ztypes = promoted_ztypes
-        except Exception:
-            pass
+    pattern = parse_selector(selector, species=species, kind="ztype", context=context)
+    ztypes = list(registry.resolve_ztype_indices(pattern))
     if not ztypes:
         raise ValueError(
             f"{context}: selector {selector!r} matches no ZType in species "

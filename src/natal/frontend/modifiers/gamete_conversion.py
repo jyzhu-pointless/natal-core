@@ -246,7 +246,7 @@ class GameteConversionRuleSet:
         Raises:
             ValueError: When a declaration cannot be resolved.
         """
-        from natal.frontend.patterns import ZygoteTypePattern
+        from natal.frontend.patterns.entries import parse_selector
         from natal.frontend.patterns.parser import GenotypePatternParser
         from natal.frontend.utils.helpers import resolve_sex_label  # noqa: F401
 
@@ -277,7 +277,10 @@ class GameteConversionRuleSet:
                     # last '@' is a somatic-label qualifier, not an allele.
                     validate_filter_pattern(species, pattern, species.somatic_labels, self.name)
                     try:
-                        parent_pattern = ZygoteTypePattern.parse(pattern, species)
+                        parent_pattern = parse_selector(
+                            pattern, species=species, kind="ztype",
+                            context=f"{self.name} parent filter",
+                        )
                     except Exception as exc:
                         raise ValueError(
                             f"{self.name}: invalid parent filter {pattern!r}"

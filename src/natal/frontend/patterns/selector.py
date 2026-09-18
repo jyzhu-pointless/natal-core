@@ -13,7 +13,7 @@ from typing import Any, Iterable, List, Optional, Sequence, Set
 from natal.frontend.genetics import Species
 from natal.frontend.registry.index import IndexRegistry
 
-from .elements.diploid import GenotypePattern, ZygoteTypePattern
+from .elements.diploid import GenotypePattern
 from .parser import GenotypePatternParser
 
 
@@ -119,10 +119,9 @@ def resolve_zygote_type(
 ) -> list[int]:
     """Resolve a genotype string to ZType indices, with species-appropriate matching.
 
-    For unordered species, auto-promotes ``|`` to ``::`` so that ``"A|a"``
-    matches both ordered and unordered (canonicalized) registrations.  This
-    mirrors the canonicalization logic in
-    :meth:`genetic_structures.Species.resolve_genotype_selectors`.
+    For unordered species, the selector entry promotes ``|`` to ``::`` so
+    that ``"A|a"`` matches both ordered and unordered (canonicalized)
+    registrations — the same promotion every other selector caller gets.
 
     For ordered species (e.g. sex chromosomes), ``|`` is treated strictly —
     ``"a|A"`` and ``"A|a"`` are distinct genotypes and will each only match
@@ -140,11 +139,7 @@ def resolve_zygote_type(
     Returns:
         List of matching ZType indices (may be empty if nothing matches).
     """
-    # Canonicalize | → :: for unordered species only (same pattern as
-    # Species._resolve_single_genotype_selector in genetic_structures.py).
-    # The \x00 trick preserves any :: the user already wrote.
-    if species.unordered:
-        spec = spec.replace("::", "\x00").replace("|", "::").replace("\x00", "::")
+    from .entries import parse_selector
 
-    pattern = ZygoteTypePattern.parse(spec, species)
+    pattern = parse_selector(spec, species=species, kind="ztype", context="zygote type")
     return index_registry.resolve_ztype_indices(pattern)

@@ -134,7 +134,8 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
     ],
     "frontend.patterns": [
         "GameteTypePattern", "GenotypePatternParser", "GenotypeSelector",
-        "IndividualSelector", "LabPattern", "PatternParseError", "ZygoteTypePattern",
+        "IndividualSelector", "LabPattern", "PatternParseError", "SelectorKind",
+        "ZygoteTypePattern", "parse_selector", "parse_target",
         "resolve_zygote_type",
     ],
     "frontend.population": [

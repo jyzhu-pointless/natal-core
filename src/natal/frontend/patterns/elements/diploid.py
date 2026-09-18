@@ -112,22 +112,16 @@ class ZygoteTypePattern:
     def parse(pattern_str: str, species: Species) -> ZygoteTypePattern:
         """Parse a ZType pattern string like ``"A|a@infected"``.
 
-        The ``@slab`` suffix is split off by the grammar's shared ``@``
-        analysis and the content before it is parsed by
-        :meth:`GenotypePatternParser.parse`, which accepts content only; the
-        label-aware composition happens here.
-
-        Args:
-            pattern_str: ZType pattern, e.g. ``"A|a@infected"`` or ``"A|a"``.
-            species: Species used to resolve chromosome groups.
-
-        Returns:
-            A pattern whose ``slab`` is ``None`` when no suffix was given.
+        Thin spelling of the unified selector entry
+        (:func:`natal.frontend.patterns.entries.parse_selector` with
+        ``kind="ztype"``), kept for callers that already hold a
+        :class:`ZygoteTypePattern` context.  The entry owns the unordered
+        ``|`` → ``::`` promotion and the label split; new callers should
+        call it directly.
         """
-        from natal.frontend.patterns.parser import GenotypePatternParser
+        from natal.frontend.patterns.entries import parse_selector
 
-        content, slab = GenotypePatternParser.split_label_suffix(pattern_str.strip())
-        return ZygoteTypePattern(GenotypePatternParser(species).parse(content), slab)
+        return parse_selector(pattern_str, species=species, kind="ztype", context="zygote type pattern")
 
     @staticmethod
     def from_pair(

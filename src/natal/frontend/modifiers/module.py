@@ -208,9 +208,15 @@ def evaluate_genotype_filter(
         return genotype_filter(genotype), compiled_filter
 
     if compiled_filter is None:
-        from natal.frontend.patterns import GenotypePatternParser
+        from natal.frontend.patterns.entries import parse_selector
         try:
-            pattern = GenotypePatternParser(genotype.species).parse(genotype_filter)
+            # The selector entry owns the unordered | → :: promotion, so a
+            # modifier filter matches what the same spelling matches in
+            # fitness and the rules.
+            pattern = parse_selector(
+                genotype_filter, species=genotype.species,
+                kind="genotype", context="genotype_filter",
+            )
         except Exception as exc:
             raise ValueError(
                 f"Invalid genotype_filter pattern: {genotype_filter}"

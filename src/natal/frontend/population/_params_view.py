@@ -332,11 +332,15 @@ class ParamsView:
         """Build the pattern -> ztype-indices resolver."""
 
         def resolve(pattern: str) -> list[int]:
-            from natal.frontend.patterns import ZygoteTypePattern
+            from natal.frontend.patterns.entries import parse_selector
 
             # Parse against the species, then map to this population's ztype
             # indices: the registry is the axis reference, not the species.
-            parsed = ZygoteTypePattern.parse(pattern, self._species())
+            # parse_selector owns the unordered promotion, so a runtime
+            # pattern matches what the same spelling selected at build time.
+            parsed = parse_selector(
+                pattern, species=self._species(), kind="ztype", context="params pattern"
+            )
             return list(self._registry().resolve_ztype_indices(parsed))
 
         return resolve

@@ -75,11 +75,16 @@ class SpeciesPatternMixin:
             exact_gt = self.get_genotype_from_str(selector)
             return [self.unordered_genotype(exact_gt.maternal, exact_gt.paternal)]
         except Exception as exact_err:
-            pattern_str = str(selector)
-            if self.unordered:
-                pattern_str = str(selector).replace("::", "\x00").replace("|", "::").replace("\x00", "::")
+            from natal.frontend.patterns.entries import parse_selector
+
             try:
-                pattern_filter = self.parse_genotype_pattern(pattern_str)
+                # The selector entry owns the unordered | → :: promotion, so
+                # a genotype-level selector matches what the same spelling
+                # matches through fitness and the rules.
+                pattern = parse_selector(
+                    str(selector), species=self, kind="genotype", context=context
+                )
+                pattern_filter = pattern.to_filter()
             except Exception as pattern_err:
                 raise ValueError(
                     f"Invalid {context} selector '{selector}'. "
