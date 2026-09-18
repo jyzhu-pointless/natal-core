@@ -638,11 +638,9 @@ class GenotypePatternParser:
     def _parse_haplotype_path(self, haplotype_str: str) -> HaplotypePath:
         """Parse one chromosome's haplotype pattern string into HaplotypePath.
 
-        Only label-free content reaches this helper: :meth:`parse`,
-        :meth:`parse_haploid_genome_pattern` and :meth:`parse_haplotype_pattern`
-        handle the ``@lab`` suffix before splitting chromosomes, so a label
-        written in a nested position is a malformed allele pattern rather than
-        something silently dropped here.
+        Only label-free content reaches this helper: every entry resolves the
+        ``@lab`` suffix before it splits chromosomes, so a label never arrives
+        here to be stripped or dropped.
 
         Args:
             haplotype_str: Label-free pattern string like ``"A1/B1"`` or

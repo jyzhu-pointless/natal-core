@@ -45,14 +45,15 @@
   a multi-chromosome gamete selector describes each chromosome the way a
   content-only haploid pattern does; the old form merged every chromosome's
   loci into one path. `ZygoteTypePattern.from_slab_key` is removed: it had no
-  callers, and `ZygoteTypePattern.parse` covers the form.
+  callers, and `ZygoteTypePattern.parse` accepts the same `genotype@slab`
+  spelling (without the exact-name genotype canonicalization).
 - The `@` analysis has one spelling: `GenotypePatternParser.split_label_suffix`
   (renamed from the private `_strip_lab`), used by the label-aware entries and
   the conversion-target splitter. The `Species` genotype helpers no longer run
   their own copy of the content-only guard — the parser entry owns it — and
-  the private `_parse_haplotype_path` no longer strips an `@label` it finds
-  nested inside a haplotype: a label there is now rejected as an invalid allele
-  pattern instead of being dropped.
+  the private `_parse_haplotype_path` no longer strips an `@` suffix: every
+  entry resolves the label before splitting chromosomes, so that strip could
+  never run on a label it was meant to remove.
 - Conversion filter patterns are analysed once instead of three times: the
   strict validator owns the `@` scan and returns the label matcher, so a
   malformed label reports one message ("invalid filter label") on both the
