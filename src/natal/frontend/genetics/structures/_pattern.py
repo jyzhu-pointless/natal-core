@@ -178,9 +178,11 @@ class SpeciesPatternMixin:
                 ``IndividualSelector(ztype=...)`` to select by label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns.parser import GenotypePatternParser
-        parser = GenotypePatternParser(self)
-        pattern_obj = parser._parse(pattern)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the public entries
+        from natal.frontend.patterns.entries import parse_selector
+        pattern_obj = parse_selector(
+            pattern, species=self, kind="genotype", ordered=True,
+            context="genotype pattern",
+        )
         return pattern_obj.to_filter()
 
     def filter_genotypes_by_pattern(
@@ -230,10 +232,11 @@ class SpeciesPatternMixin:
                 ``IndividualSelector(ztype=...)`` to select by label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns.parser import GenotypePatternParser
-
-        parser = GenotypePatternParser(self)
-        pattern_obj = parser._parse(pattern)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the public entries
+        from natal.frontend.patterns.entries import parse_selector
+        pattern_obj = parse_selector(
+            pattern, species=self, kind="genotype", ordered=True,
+            context="genotype pattern",
+        )
 
         count = 0
         seen: set[int] = set()
@@ -277,9 +280,11 @@ class SpeciesPatternMixin:
                 select by gamete label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns.parser import GenotypePatternParser
-        parser = GenotypePatternParser(self)
-        pattern_obj = parser._parse_haploid(pattern)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the public entries
+        from natal.frontend.patterns.entries import parse_selector
+        pattern_obj = parse_selector(
+            pattern, species=self, kind="haploid", ordered=True,
+            context="haploid genome pattern",
+        )
         return pattern_obj.to_filter()
 
     def filter_haploid_genomes_by_pattern(
@@ -330,10 +335,11 @@ class SpeciesPatternMixin:
                 select by gamete label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns.parser import GenotypePatternParser
-
-        parser = GenotypePatternParser(self)
-        pattern_obj = parser._parse_haploid(pattern)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the public entries
+        from natal.frontend.patterns.entries import parse_selector
+        pattern_obj = parse_selector(
+            pattern, species=self, kind="haploid", ordered=True,
+            context="haploid genome pattern",
+        )
 
         count = 0
         for haploid_genome in self.iter_haploid_genotypes():

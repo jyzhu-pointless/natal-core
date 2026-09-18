@@ -36,6 +36,7 @@ def species() -> nt.Species:
     return nt.Species.from_dict(
         "selector_entries_two_chr",
         {"c1": {"l1": ["A", "a"]}, "c2": {"l2": ["B", "b"]}},
+        gamete_labels=["default", "deposited", "x"],
         somatic_labels=["default", "infected"],
     )
 
@@ -301,5 +302,4 @@ class TestLegacyConvertTarget:
                 registry.register_ztype(gt, slab)
         with _pytest.raises(ValueError, match="must match exactly one"):
             _compile_convert_target_legacy("A|A", species, registry)
-
 

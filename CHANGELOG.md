@@ -172,6 +172,13 @@
 
 ### Fixed
 
+- Unordered genotypes preserve linked phase by swapping whole homologous chromosomes independently; canonical cache keys and stored parents now agree regardless of construction order.
+
+- Initial declarations own nested input containers, and memoized resolutions cannot be mutated through a published definition. Failed age-structure changes preserve the accepted builder state.
+- Spatial batch values preserve declaration order and positional ownership: ordinary overrides replace earlier batch values, and batch presets never replace hook items.
+- Structured selector inputs retain their pattern objects, and unknown label names are rejected consistently, including within negations and sets.
+- Dependency graph loading rejects malformed, cyclic, or unresolved dependencies before caching; cached graph data is immutable and publication checks declared prerequisites.
+
 - The equilibrium calibration reads the offspring sex ratio the way the owning
   engine does: a species whose sex is determined by sex chromosomes ignores
   `sex_ratio` exactly as its tick already did, instead of letting a non-0.5

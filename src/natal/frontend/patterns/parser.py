@@ -681,7 +681,9 @@ class GenotypePatternParser:
             PatternParseError: If the pattern is invalid.
         """
         content, glab = GenotypePatternParser.split_label_suffix(pattern_str.strip())
-        return GameteTypePattern(self._parse_haploid_content(content), glab)
+        return GameteTypePattern(
+            self._parse_haploid_content(content), glab, source_text=content.strip()
+        )
 
     def _parse_haploid(self, pattern_str: str) -> HaploidGenomePattern:
         """Parse a haploid genome pattern (single DNA strand of individual).

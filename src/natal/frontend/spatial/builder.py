@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from natal.frontend.genetics.compile import GameteList, ZygoteList
     from natal.frontend.model.definition import ModelDefinition
     from natal.frontend.model.definition_compiler import CompiledProducts
+    from natal.frontend.model.initial_state import InitialDistributionDeclaration
     from natal.frontend.model.publication import IndexProjection
     from natal.frontend.presets import GeneticPreset
 
@@ -259,6 +260,21 @@ class BatchSetting(Generic[_T]):
             return None
         return None  # spatial kind: deferred until expand() has topology
 
+    def snapshot(self) -> BatchSetting[_T]:
+        """Return a detached batch while preserving opaque element identity."""
+        from natal.frontend.model.definition import copy_declaration_value
+
+        if self._kind == self._KIND_SPATIAL:
+            return BatchSetting(cast(Callable[..., float], self._fn))
+        if self._kind == self._KIND_ARRAY:
+            if self._values_array is None:
+                raise ValueError("BatchSetting array values are None")
+            return cast(BatchSetting[_T], BatchSetting(self._values_array.copy()))
+        if self._values is None:
+            raise ValueError("BatchSetting scalar values are None")
+        copied = copy_declaration_value(self._values)
+        return BatchSetting(cast(Sequence[_T], copied))
+
 
 def batch_setting(
     values: Union[
@@ -333,6 +349,23 @@ def _make_hashable(
 # offspring maps just like genetics-section fitness rows do.
 _PRESET_KWARG_PREFIX = "_preset_"
 _MODIFIER_KWARGS = frozenset({"gamete_modifiers", "zygote_modifiers"})
+_BATCH_KEY_SEPARATOR = "#"
+_BATCH_KEYS_FIELD = "__spatial_batch_keys__"
+
+
+def _batch_key_base(name: str) -> str:
+    """Return the user-facing name encoded by an internal batch key."""
+    return name.split(_BATCH_KEY_SEPARATOR, 1)[0]
+
+
+def _declaration_field(method: str, name: str) -> str:
+    """Resolve a declaration argument to the draft field it writes."""
+    from natal.frontend.builder._routes import ROUTES_BY_METHOD
+
+    for route in ROUTES_BY_METHOD.get(method, ()):
+        if name == route.name or name in route.aliases:
+            return route.config_field or route.name
+    return name
 
 
 def _genetics_route_names() -> frozenset[str]:
@@ -410,9 +443,9 @@ def _genetics_batch_names(batch_param_names: List[str]) -> List[str]:
     return [
         name
         for name in batch_param_names
-        if name in route_names
-        or name in _MODIFIER_KWARGS
-        or name.startswith(_PRESET_KWARG_PREFIX)
+        if _batch_key_base(name) in route_names
+        or _batch_key_base(name) in _MODIFIER_KWARGS
+        or _batch_key_base(name).startswith(_PRESET_KWARG_PREFIX)
     ]
 
 
@@ -560,6 +593,10 @@ class SpatialPopulationBuilder:
         # @_declared wrapper (see _call_template) so no second journal
         # entry is written for the same declaration.
         self._declaration_log: List[tuple[str, Dict[str, Any]]] = []
+        # Batch keys are declaration-local.  This prevents repeated positional
+        # preset calls from sharing the same ``_preset_<i>`` slot.
+        self._batch_bindings: List[Dict[str, str]] = []
+        self._batch_key_serial: int = 0
 
         # Spatial migration parameters.  ``migration_rate`` keeps the raw
         # declaration: a plain rate form is normalized by the container,
@@ -649,6 +686,34 @@ class SpatialPopulationBuilder:
                 concrete[key] = value
         return concrete, staged
 
+    def _commit_batch_settings(
+        self, staged: Mapping[str, BatchSetting[Any]]
+    ) -> Dict[str, str]:
+        """Commit staged batches and return declaration-local key bindings."""
+        bindings: Dict[str, str] = {}
+        for name, batch in staged.items():
+            key = name
+            if key in self._batch_settings:
+                self._batch_key_serial += 1
+                key = f"{name}{_BATCH_KEY_SEPARATOR}{self._batch_key_serial}"
+            self._batch_settings[key] = batch.snapshot()
+            bindings[name] = key
+        return bindings
+
+    def _append_declaration(
+        self,
+        method_name: str,
+        kwargs: Dict[str, Any],
+        batch_bindings: Optional[Mapping[str, str]] = None,
+    ) -> None:
+        """Append one journal entry and its local batch binding map."""
+        from natal.frontend.model.definition import copy_declaration_value
+
+        self._declaration_log.append(
+            (method_name, cast(Dict[str, Any], copy_declaration_value(kwargs)))
+        )
+        self._batch_bindings.append(dict(batch_bindings or {}))
+
     def _detect_and_delegate(
         self,
         method_name: str,
@@ -690,10 +755,10 @@ class SpatialPopulationBuilder:
         # replayable declaration log nor in the batch configuration.
         filtered = {k: v for k, v in concrete.items() if v is not None}
         self._call_template(method_name, **filtered)
-        self._batch_settings.update(staged)
+        bindings = self._commit_batch_settings(staged)
         # Record the original call with BatchSetting objects preserved,
         # for the group declaration projector.
-        self._declaration_log.append((method_name, dict(kwargs)))
+        self._append_declaration(method_name, dict(kwargs), bindings)
         return self
 
     def setup(
@@ -744,7 +809,7 @@ class SpatialPopulationBuilder:
         self._call_template("setup", **template_kwargs)  # type: ignore[arg-type]  # template_kwargs has mixed value types; setup validates at runtime
         # Journal only after the template call succeeded — failed calls
         # stay out of the replayable declaration log.
-        self._declaration_log.append(("setup", replay_kwargs))
+        self._append_declaration("setup", replay_kwargs)
         if compress:
             self._compress = True
         if declared_zygote_types is not None:
@@ -1034,8 +1099,8 @@ class SpatialPopulationBuilder:
         # concrete_args contains GeneticPreset instances resolved from potential
         # BatchSetting wrappers; cast needed because first_value() returns object.
         self._call_template("presets", *cast("list[GeneticPreset]", concrete_args))
-        self._batch_settings.update(staged)
-        self._declaration_log.append(("presets", {"preset_list": preset_list}))
+        bindings = self._commit_batch_settings(staged)
+        self._append_declaration("presets", {"preset_list": preset_list}, bindings)
         return self
 
     def fitness(
@@ -1127,17 +1192,15 @@ class SpatialPopulationBuilder:
             deme=deme,
             name=name,
         )
-        self._declaration_log.append(
-            (
-                "hooks",
-                {
-                    "hook_items": hook_items,
-                    "event": event,
-                    "priority": priority,
-                    "deme": deme,
-                    "name": name,
-                },
-            )
+        self._append_declaration(
+            "hooks",
+            {
+                "hook_items": hook_items,
+                "event": event,
+                "priority": priority,
+                "deme": deme,
+                "name": name,
+            },
         )
         return self
 
@@ -1506,10 +1569,19 @@ class SpatialPopulationBuilder:
             return copy_declaration_value(value)
 
         kernel_bank, kernel_ids = self._resolve_migration_kernels()
+        group_calls: list[tuple[str, dict[str, Any]]] = []
+        for index, (name, kwargs) in enumerate(self._declaration_log):
+            normalized = normalize(kwargs)
+            if index < len(self._batch_bindings) and self._batch_bindings[index]:
+                # Keep this metadata in SpatialInputs only.  ModelDefinition's
+                # public journal remains the clean replay journal, while a
+                # detached spatial compiler retains declaration identity.
+                normalized[_BATCH_KEYS_FIELD] = dict(self._batch_bindings[index])
+            group_calls.append((name, normalized))
         controls = SpatialInputs(
             self._n_demes, self._topology, self._pop_type, self._spatial_name,
             tuple(expanded.items()),
-            tuple((name, normalize(kwargs)) for name, kwargs in self._declaration_log),
+            tuple(group_calls),
             {
                 "adjacency": self._migration_adjacency, "kernel": self._migration_kernel,
                 "strategy": self._migration_strategy, "kernel_bank": kernel_bank,
@@ -1583,6 +1655,10 @@ class SpatialPopulationBuilder:
         compiler._template = template
         compiler._batch_settings = {name: BatchSetting(values) for name, values in controls.batch_values}
         compiler._declaration_log = list(controls.group_calls)
+        compiler._batch_bindings = [
+            cast(Dict[str, str], kwargs.get(_BATCH_KEYS_FIELD, {}))
+            for _, kwargs in controls.group_calls
+        ]
         template._declaration_log = compiler._resolved_group_journal({})  # pyright: ignore[reportPrivateUsage]  # preserve provenance without replaying recipes.
         compiler._spatial_name = controls.name
         compiler._observation_groups = None if controls.observation_groups is None else dict(controls.observation_groups)
@@ -1679,6 +1755,8 @@ class SpatialPopulationBuilder:
         group_config: ModelDraft,
         deme_values: Mapping[str, object],
         group_values: Mapping[str, object],
+        *,
+        initial_distribution: InitialDistributionDeclaration | None = None,
     ) -> ModelDraft:
         """Project one deme's *differing* declarations onto the group config.
 
@@ -1694,15 +1772,53 @@ class SpatialPopulationBuilder:
         group_journal = self._resolved_group_journal(group_values)
         deme_journal = self._resolved_group_journal(deme_values)
         delta: list[tuple[str, Dict[str, Any]]] = []
-        for (name, group_kwargs), (_, deme_kwargs) in zip(group_journal, deme_journal):
+        for declaration_index, ((name, group_kwargs), (_, deme_kwargs)) in enumerate(
+            zip(group_journal, deme_journal)
+        ):
             differing = {
                 key for key, value in deme_kwargs.items()
                 if key not in group_kwargs or not _values_equal(group_kwargs[key], value)
             }
+            superseded_keys: set[str] = set()
             if differing:
-                delta.append((name, dict(deme_kwargs)))
+                # A later uniform declaration supersedes an earlier value when
+                # it is uniform across the group and variant.  The full group
+                # projection already applied that later write; carrying the
+                # earlier difference into the variant delta would incorrectly
+                # write it back afterwards.
+                for later_index in range(declaration_index + 1, len(group_journal)):
+                    later_name, later_group = group_journal[later_index]
+                    _, later_deme = deme_journal[later_index]
+                    for key in tuple(deme_kwargs):
+                        if key in {_BATCH_KEYS_FIELD, "__args__"}:
+                            continue
+                        field = _declaration_field(name, key)
+                        superseded = any(
+                            later_value is not None
+                            and later_key in later_deme
+                            and _declaration_field(later_name, later_key) == field
+                            and _values_equal(later_value, later_deme[later_key])
+                            for later_key, later_value in later_group.items()
+                            if later_key != _BATCH_KEYS_FIELD
+                        )
+                        if superseded:
+                            superseded_keys.add(key)
+                differing.difference_update(superseded_keys)
+            if differing:
+                # Preserve the complete declaration so coupled fields and
+                # derived values are recomputed in their original order.
+                # Only fields proven superseded by a later uniform write are
+                # removed; equal fields remain part of the same declaration.
+                delta.append(
+                    (name, {
+                        key: value
+                        for key, value in deme_kwargs.items()
+                        if key not in superseded_keys
+                    })
+                )
         return project_declaration_record(
             self._species, delta, base_draft=group_config,
+            initial_distribution=initial_distribution,
         ).draft
 
     def _carrier_from_projection(
@@ -1804,6 +1920,7 @@ class SpatialPopulationBuilder:
                 # re-declares them — the established variant contract.
                 variant = self._projected_variant_config(
                     products.config, values[i], values[first],
+                    initial_distribution=builder._initial_distribution,  # pyright: ignore[reportPrivateUsage]  # group projection carries the final raw initial declaration.
                 )
                 variant_builder = copy(builder)
                 variant_builder._config = variant  # pyright: ignore[reportPrivateUsage]  # complete unpublished axes.
@@ -1884,23 +2001,37 @@ class SpatialPopulationBuilder:
         """Record concrete group inputs without executing their declarations again."""
         # Any: journal arguments include opaque recipe objects and nested selectors.
         result: list[tuple[str, dict[str, Any]]] = []
-        for method, kwargs in self._declaration_log:
-            resolved = {key: values.get(key, value) for key, value in kwargs.items()}
+        for declaration_index, (method, kwargs) in enumerate(self._declaration_log):
+            bindings: Mapping[str, str] = {}
+            if _BATCH_KEYS_FIELD in kwargs:
+                bindings = cast(Mapping[str, str], kwargs[_BATCH_KEYS_FIELD])
+            elif declaration_index < len(self._batch_bindings):
+                bindings = self._batch_bindings[declaration_index]
+            resolved = {
+                key: values.get(bindings[key], value) if key in bindings else value
+                for key, value in kwargs.items()
+                if key != _BATCH_KEYS_FIELD
+            }
             if method in ("presets", "hooks"):
                 source = "preset_list" if method == "presets" else "hook_items"
                 items = _object_sequence(resolved.pop(source, ()), name=source)
-                # Positional batch values (``presets(batch_setting(...))``)
-                # journal the BatchSetting itself; the per-deme expansion
-                # lives under the ``_preset_<i>`` value keys.
+                # Resolve only positional items belonging to this declaration.
+                # A global ``_preset_<i>`` lookup would let a preset batch
+                # replace an unrelated hooks item at the same position.
                 journal_items: list[object] = list(cast("list[object]", items)) + list(cast("list[object]", resolved.pop("__args__", ())))
                 expanded_items: list[object] = []
                 for index, item in enumerate(journal_items):
-                    concrete = values.get(f"_preset_{index}")
-                    if isinstance(item, BatchSetting):
-                        first = cast("object", item.first_value())
-                        expanded_items.append(concrete if concrete is not None else first)
-                    elif concrete is not None:
-                        expanded_items.append(concrete)
+                    batch_name = bindings.get(f"_preset_{index}")
+                    if batch_name is not None:
+                        expanded_items.append(values.get(batch_name, item))
+                    elif isinstance(item, BatchSetting):
+                        # Compatibility for a manually inserted live journal
+                        # entry that predates declaration-local bindings.
+                        legacy_name = f"_preset_{index}"
+                        fallback = values.get(
+                            legacy_name, cast(object, item.first_value())
+                        )
+                        expanded_items.append(fallback)
                     elif item is not None:
                         expanded_items.append(item)
                 resolved["__args__"] = tuple(

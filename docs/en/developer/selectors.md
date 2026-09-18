@@ -4,6 +4,10 @@ A declaration names what it wants to affect — "every X heterozygote", "adult f
 
 The chapter reuses the sample species (A, a, X on `chr1`) and adds two cases: a labelled species and an ordered species.
 
+
+Structured patterns returned by `parse_selector()` can be passed directly to `IndividualSelector(ztype=...)`; they retain their structure instead of being converted to display text and parsed again. Label names are checked against the species catalog together with any labels registered in the current index registry, including names inside sets and negations. Compression does not make a known species label invalid. A misspelled excluded label is an error, not a request to select every label.
+
+
 ## What a pattern string goes through
 
 ```mermaid

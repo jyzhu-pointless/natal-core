@@ -96,6 +96,7 @@ class ZygoteTypePattern:
         self,
         genotype: GenotypePattern,
         slab: Optional[LabPattern] = None,
+        source_text: Optional[str] = None,
     ):
         """Initialize a ZygoteTypePattern.
 
@@ -106,6 +107,9 @@ class ZygoteTypePattern:
         """
         self.genotype = genotype
         self.slab: Optional[LabPattern] = slab
+        # Retain the grammar spelling so a structured selector can later be
+        # consumed as a conversion target without round-tripping ``repr``.
+        self.source_text = source_text
 
     def matches(self, genotype: Genotype, slab_label: str = "default") -> bool:
         """Check if this pattern matches a (genotype, slab_label) pair."""

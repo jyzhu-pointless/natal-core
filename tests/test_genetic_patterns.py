@@ -56,12 +56,14 @@ class TestExactMatch:
             structure={"chr1": {"loc": ["WT", "Dr", "R2"]}},
         )
         gt_dr_wt = _build_genotype(sp, "Dr", "WT")
-        # Grammar: | stays strictly ordered, so WT|Dr does not match Dr|WT.
-        strict = sp.parse_genotype_pattern("WT|Dr")
+        # Direct construction canonicalizes the stored pair to WT|Dr.
+        assert gt_dr_wt.to_string() == "WT|Dr"
+        # Grammar | is strict, whereas selector | permits homolog reversal.
+        strict = sp.parse_genotype_pattern("Dr|WT")
         assert strict(gt_dr_wt) is False
         # Selector: an unordered species promotes | to ::, so one spelling
         # matches both parental orders everywhere.
-        promoted = nt.parse_selector("WT|Dr", species=sp, kind="genotype")
+        promoted = nt.parse_selector("Dr|WT", species=sp, kind="genotype")
         assert promoted.matches(gt_dr_wt) is True
 
     def test_dr_wt_matches_dr_wt(self):
@@ -362,18 +364,23 @@ class TestPatternOmissionSyntax:
         enum = list(sp.enumerate_genotypes_matching_pattern(pattern))
         result = self.normalize_enum_output(sp, enum)
 
-        # After normalization, symmetric pairs collapse (16 → 12 entries)
+        # Two maternal A choices * two maternal B * two paternal B * two C pairs = 16.
+        # Reversing B alone changes linked phase and cannot collapse entries.
         expected = [
             "A1/B1|A3/B1;C1|C1",
             "A1/B1|A3/B1;C1|C2",
             "A1/B1|A3/B2;C1|C1",
             "A1/B1|A3/B2;C1|C2",
+            "A1/B2|A3/B1;C1|C1",
+            "A1/B2|A3/B1;C1|C2",
             "A1/B2|A3/B2;C1|C1",
             "A1/B2|A3/B2;C1|C2",
             "A2/B1|A3/B1;C1|C1",
             "A2/B1|A3/B1;C1|C2",
             "A2/B1|A3/B2;C1|C1",
             "A2/B1|A3/B2;C1|C2",
+            "A2/B2|A3/B1;C1|C1",
+            "A2/B2|A3/B1;C1|C2",
             "A2/B2|A3/B2;C1|C1",
             "A2/B2|A3/B2;C1|C2",
         ]
@@ -568,6 +575,7 @@ class TestLabPatternOnZygoteType:
         return nt.Species.from_dict(
             "lab_test", {"c1": {"l1": ["A", "a"]}},
             gamete_labels=["default"],
+            somatic_labels=["default", "cas9_high", "cas9_low", "high", "low"],
         )
 
     def test_genotype_with_lab(self):

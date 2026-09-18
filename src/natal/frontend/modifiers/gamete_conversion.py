@@ -38,14 +38,12 @@ from .conversion_rules import (
     GameteAlleleConversionRule,
     GameteGtypeConversionRule,
     replace_allele_in_haploid,
-    split_and_validate_filter_pattern,
-    validate_filter_pattern,
 )
 
 if TYPE_CHECKING:
     from natal.frontend.genetics.compile import RecipeHost
     from natal.frontend.patterns import ZygoteTypePattern
-    from natal.frontend.patterns.parser import ConversionTarget, GenotypePatternParser
+    from natal.frontend.patterns.parser import ConversionTarget
 
 # A compiled matcher: (sex_idx, ztype_idx, gtype_idx) -> bool.
 _GtypeMatcher = Callable[[int, int, int], bool]
@@ -247,10 +245,8 @@ class GameteConversionRuleSet:
             ValueError: When a declaration cannot be resolved.
         """
         from natal.frontend.patterns.entries import parse_selector, parse_target
-        from natal.frontend.patterns.parser import GenotypePatternParser
         from natal.frontend.utils.helpers import resolve_sex_label  # noqa: F401
 
-        parser = GenotypePatternParser(species)
         compiled: List[_CompiledGtypeRule] = []
 
         # Resolve each declaration once into match/convert closures, so per-row
@@ -275,11 +271,15 @@ class GameteConversionRuleSet:
                 elif key == "parent":
                     # Validate only the genotype part; the token after the
                     # last '@' is a somatic-label qualifier, not an allele.
-                    validate_filter_pattern(species, pattern, species.somatic_labels, self.name)
                     try:
                         parent_pattern = parse_selector(
-                            pattern, species=species, kind="ztype",
+                            pattern, species=species, kind="ztype", validate_alleles=True,
                             context=f"{self.name} parent filter",
+                            label_catalog=tuple(
+                                dict.fromkeys(
+                                    (*species.somatic_labels, *registry.slab_labels)
+                                )
+                            ),
                         )
                     except Exception as exc:
                         raise ValueError(
@@ -287,7 +287,7 @@ class GameteConversionRuleSet:
                         ) from exc
                 elif key == "current":
                     current_pattern, current_lab = _compile_gamete_pattern(
-                        parser, pattern, self.name, species
+                        pattern, self.name, species
                     )
 
             if isinstance(rule, GameteGtypeConversionRule):
@@ -411,7 +411,6 @@ def _require_same_locus(
 
 
 def _compile_gamete_pattern(
-    parser: GenotypePatternParser,
     pattern: str,
     rs_name: str,
     species: Species,
@@ -424,20 +423,26 @@ def _compile_gamete_pattern(
     Raises:
         ValueError: If the pattern cannot be parsed.
     """
-    # The strict validator owns the single '@' scan: it returns the genotype
-    # part and the label matcher, so this function must not split the string a
-    # second time with a rule of its own.  Every malformed form — more than one
-    # '@', an empty part, an unknown label — is rejected there.
-    base, lab = split_and_validate_filter_pattern(
-        species, pattern, species.gamete_labels, rs_name
-    )
     try:
-        genome_pattern = parser._parse_haploid(base)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the entries
+        from natal.frontend.patterns.entries import parse_selector
+
+        parsed = parse_selector(
+            pattern, species=species, kind="gtype", validate_alleles=True,
+            context=f"{rs_name} current filter",
+        )
     except Exception as exc:
+        detail = str(exc)
+        if "Only one @lab suffix" in detail:
+            detail = "at most one @ separator"
+        elif "Invalid lab name" in detail:
+            detail = "invalid filter label"
+        elif "unknown gtype labels" in detail:
+            detail = "unknown filter labels"
         raise ValueError(
-            f"{rs_name}: invalid gamete pattern {pattern!r}"
+            f"{rs_name}: invalid gamete pattern {pattern!r}: {detail}"
         ) from exc
-    return genome_pattern, lab
+    lab = parsed.glab if parsed.glab and not parsed.glab.is_wildcard() else None
+    return parsed.genome, lab
 
 
 def _cascade_row(

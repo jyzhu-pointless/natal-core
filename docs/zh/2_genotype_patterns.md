@@ -94,7 +94,7 @@ nt.parse_selector("A@Cas9_deposited", species=species, kind="gtype")
 - **`::`（双冒号）**：无序匹配——无论 Species 设置如何，同源染色体两条拷贝均可交换。
 
 ```python
-# 有序匹配：只匹配这一精确的母本/父本相位
+# 有序匹配：只匹配这一精确的母本/父本顺序
 pattern1 = "A1/B1|A2/B2"
 
 # 无序匹配：同源染色体可交换
@@ -104,7 +104,7 @@ pattern2 = "A1/B1::A2/B2"
 基于 `unordered` 的宽容确实存在，但位于**选择器层**而非模式解析器：当物种
 `unordered=True` 时，`IndividualSelector(ztype=...)` 与
 `Species.resolve_single_genotype_selector()` 会先把 `|` 改写为 `::` 再解析，
-因此选择器字符串可以匹配任意相位。
+因此选择器字符串可以匹配同源染色体的任一左右顺序。例如，`A/B::a/b` 允许整条同源染色体交换，但不匹配连锁相位不同的 `A/b|a/B`。
 
 ## HaploidGenomePattern：单倍体基因型匹配
 

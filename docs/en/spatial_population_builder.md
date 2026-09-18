@@ -60,30 +60,9 @@ Batch functions expand once when inputs are frozen, and finalization reuses cach
 
 ### Delegation Mechanism
 
-Every chained method ultimately passes through `_detect_and_delegate`:
+Domain calls validate their concrete template arguments first. Only a successful call commits its batch settings and declaration record. `presets()` and `hooks()` keep separate positional arguments: a batch preset cannot replace a hook.
 
-```python
-# Example: .competition(carrying_capacity=batch_setting([10000, 5000, 5000, 8000]))
-
-def _detect_and_delegate(self, method_name, kwargs):
-    concrete = {}
-    for key, value in kwargs.items():
-        if isinstance(value, BatchSetting):
-            self._batch_settings[key] = value        # Store the original object
-            first = value.first_value()               # Take the first scalar value
-            if first is not None:
-                concrete[key] = first                 # Template only sees scalar
-        else:
-            concrete[key] = value                     # Normal parameters pass through as-is
-
-    self._declaration_log.append((method_name, dict(kwargs)))  # Record original call
-
-    method = getattr(self._template, method_name)
-    method(**{k: v for k, v in concrete.items() if v is not None})
-    return self
-```
-
-`presets()` and `hooks()` have positional arguments and use `_delegate_positional`, with the same logic.
+Batch values belong to the declaration that supplied them. A later ordinary value overrides an earlier batch setting for that parameter; later batch settings likewise take effect in declaration order. For example, declaring `eggs_per_female=batch_setting([10, 20])` and then `eggs_per_female=30` gives both demes 30 eggs per female. Genetic operations retain their accumulation and priority rules.
 
 ### Parameter Aliasing
 

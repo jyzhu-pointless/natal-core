@@ -35,7 +35,7 @@ def copy_declaration_value(value: Any) -> Any:
     """Copy owned arrays/containers while preserving opaque recipes and resources.
 
     Args:
-        value: The declaration value to detach. NumPy arrays, dicts,
+        value: The declaration value to detach. NumPy arrays, mappings,
             lists, and tuples are copied recursively; any other object
             (recipes, hooks, and other opaque user resources) is returned
             unchanged with its identity preserved.
@@ -49,8 +49,8 @@ def copy_declaration_value(value: Any) -> Any:
 
     if isinstance(value, np.ndarray):
         return cast("np.ndarray[Any, Any]", value).copy()
-    if isinstance(value, dict):
-        return {key: copy_declaration_value(item) for key, item in cast("dict[object, Any]", value).items()}
+    if isinstance(value, Mapping):
+        return {key: copy_declaration_value(item) for key, item in cast("Mapping[object, Any]", value).items()}
     if isinstance(value, list):
         return [copy_declaration_value(item) for item in cast("list[Any]", value)]
     if type(value) is tuple:
@@ -295,6 +295,7 @@ class ModelDefinition:
             observation_collapse_age=self.observation_collapse_age,
             history_mode=self.history_mode, history_max_rows=self.history_max_rows,
             compress=self.compress, declared_zygote_types=self.declared_zygote_types,
+            initial_distribution=self.initial_distribution,
             draft=self._draft, registry=self._registry,
             fitness_base=self._fitness_base, fitness_steps=self._fitness_steps,
             hook_calls=self._hook_calls, observation_groups=self._observation_groups,

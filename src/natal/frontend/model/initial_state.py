@@ -14,6 +14,7 @@ and at ``build()``).
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Dict, Optional, Tuple, TypeAlias, Union, cast
 
 import numpy as np
@@ -41,32 +42,84 @@ InitialIndividualCountInput: TypeAlias = Mapping[str, Mapping[Any, InitialAgeCou
 InitialSpermStorageInput: TypeAlias = Mapping[Any, Mapping[Any, InitialAgeCountValue]]
 
 
+class _FrozenList(tuple[Any, ...]):
+    """Tuple-backed marker retaining that the source value was a list."""
+
+
+def _immutable_array(value: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
+    """Return an array whose backing storage cannot be made writable."""
+    contiguous: np.ndarray[Any, Any] = np.ascontiguousarray(value)
+    return cast(
+        "np.ndarray[Any, Any]",
+        np.frombuffer(contiguous.tobytes(), dtype=contiguous.dtype).reshape(
+            contiguous.shape
+        ),
+    )
+
+
+def _freeze_declaration_value(value: Any) -> Any:
+    """Recursively own declaration containers while preserving opaque objects."""
+    if isinstance(value, np.ndarray):
+        return _immutable_array(cast("np.ndarray[Any, Any]", value))
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[Any, Any], value)
+        frozen: dict[Any, Any] = {
+            key: _freeze_declaration_value(item) for key, item in mapping.items()
+        }
+        return MappingProxyType(frozen)
+    if isinstance(value, list):
+        items = cast(list[Any], value)
+        return _FrozenList(_freeze_declaration_value(item) for item in items)
+    if isinstance(value, tuple):
+        items = cast(tuple[Any, ...], value)
+        return tuple(_freeze_declaration_value(item) for item in items)
+    return value
+
+
+def _copy_declaration_value(value: Any) -> Any:
+    """Return an isolated mutable copy for the public declaration surface."""
+    if isinstance(value, np.ndarray):
+        return cast("np.ndarray[Any, Any]", value.copy())
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[Any, Any], value)
+        return {
+            key: _copy_declaration_value(item) for key, item in mapping.items()
+        }
+    if isinstance(value, _FrozenList):
+        return [_copy_declaration_value(item) for item in value]
+    if isinstance(value, tuple):
+        items = cast(tuple[Any, ...], value)
+        return tuple(_copy_declaration_value(item) for item in items)
+    return value
+
+
 class InitialDistributionDeclaration:
     """A user's raw initial-distribution declaration.
 
-    The authoritative input the builder keeps: containers are copied on
-    construction (per the ownership contract), while opaque references —
-    ``Genotype`` objects and arrays inside the nested values — are kept
-    as-is.  Resolution into engine arrays happens against whatever
-    dimensions are current; a resolution is a pure function of
-    (declaration, dimensions), so resolved arrays are memoized per
-    dimension key and shared between the builder, its definition
-    captures, and the spatial group projections.  They are treated as
-    read-only; drafts that may be written get fresh copies through
-    ``ModelDefinition``'s detachment.
+    The authoritative input the builder keeps: nested containers and numeric
+    arrays are recursively owned and frozen on construction, while opaque
+    references such as ``Genotype`` objects keep their identity.  Resolution
+    into engine arrays happens against whatever dimensions are current; a
+    resolution is a pure function of (species identity, declaration,
+    dimensions), so resolved arrays are memoized and safely shared as
+    immutable views.  Drafts that may be written get fresh copies.
     """
 
-    __slots__ = ("individual_count", "sperm_storage", "_resolved")
+    __slots__ = ("_individual_count", "_sperm_storage", "_resolved")
 
     def __init__(
         self,
         individual_count: InitialIndividualCountInput,
         sperm_storage: InitialSpermStorageInput | None,
     ) -> None:
-        """Store the copied declaration containers."""
-        self.individual_count = individual_count
-        self.sperm_storage = sperm_storage
-        self._resolved: Dict[Tuple[bool, int, int], Tuple[ArrayF64, Optional[ArrayF64]]] = {}
+        """Store recursively owned, immutable declaration containers."""
+        self._individual_count = _freeze_declaration_value(individual_count)
+        self._sperm_storage = (
+            None if sperm_storage is None else _freeze_declaration_value(sperm_storage)
+        )
+        self._resolved: Dict[
+            Tuple[Species, int, bool, int, int], Tuple[ArrayF64, Optional[ArrayF64]]
+        ] = {}
 
     @classmethod
     def capture(
@@ -74,7 +127,7 @@ class InitialDistributionDeclaration:
         individual_count: InitialIndividualCountInput,
         sperm_storage: InitialSpermStorageInput | None,
     ) -> InitialDistributionDeclaration:
-        """Copy the declaration's containers, keeping opaque references.
+        """Capture the declaration, keeping opaque references.
 
         Args:
             individual_count: The ``{sex: {genotype: count}}`` mapping as
@@ -85,11 +138,19 @@ class InitialDistributionDeclaration:
         Returns:
             The frozen declaration.
         """
-        return cls(
-            {sex: dict(counts) for sex, counts in individual_count.items()},
-            None if sperm_storage is None
-            else {sex: dict(counts) for sex, counts in sperm_storage.items()},
-        )
+        return cls(individual_count, sperm_storage)
+
+    @property
+    def individual_count(self) -> InitialIndividualCountInput:
+        """Return an isolated copy of the raw individual-count declaration."""
+        return cast(InitialIndividualCountInput, _copy_declaration_value(self._individual_count))
+
+    @property
+    def sperm_storage(self) -> InitialSpermStorageInput | None:
+        """Return an isolated copy of the raw sperm-storage declaration."""
+        if self._sperm_storage is None:
+            return None
+        return cast(InitialSpermStorageInput, _copy_declaration_value(self._sperm_storage))
 
     def resolve(
         self,
@@ -101,8 +162,8 @@ class InitialDistributionDeclaration:
     ) -> Tuple[ArrayF64, Optional[ArrayF64]]:
         """Resolve the declared arrays against the given dimensions.
 
-        Memoized per dimension key: the same declaration resolved for the
-        same dimensions always yields the same arrays, so builders,
+        Memoized per Species and dimension key: the same declaration resolved
+        for the same inputs always yields the same arrays, so builders,
         definition captures, and group projections share one resolution
         instead of re-enumerating the species catalog each time.
 
@@ -121,30 +182,39 @@ class InitialDistributionDeclaration:
             ValueError: If a selector or an age key is invalid for the
                 dimensions (surfacing the resolvers' own messages).
         """
-        key = (bool(discrete_generation), int(n_ages), int(new_adult_age))
+        # Keep the Species reference in the key as well as its id.  The id
+        # distinguishes equal-but-distinct Species objects; retaining the
+        # reference prevents id reuse while this declaration is alive.
+        key = (
+            species, id(species), bool(discrete_generation),
+            int(n_ages), int(new_adult_age),
+        )
         cached = self._resolved.get(key)
         if cached is not None:
             return cached
         counts = (
             resolve_discrete_initial_individual_count(
-                species=species, distribution=self.individual_count,
+                species=species, distribution=self._individual_count,
             )
             if discrete_generation
             else resolve_age_structured_initial_individual_count(
-                species=species, distribution=self.individual_count,
+                species=species, distribution=self._individual_count,
                 n_ages=n_ages, new_adult_age=new_adult_age,
             )
         )
         sperm: Optional[ArrayF64] = (
             None
-            if self.sperm_storage is None or discrete_generation
+            if self._sperm_storage is None or discrete_generation
             else resolve_age_structured_initial_sperm_storage(
-                species=species, sperm_storage=self.sperm_storage,
+                species=species,
+                sperm_storage=cast(InitialSpermStorageInput, self._sperm_storage),
                 n_ages=n_ages, new_adult_age=new_adult_age,
             )
         )
-        self._resolved[key] = (counts, sperm)
-        return counts, sperm
+        frozen_counts = cast(ArrayF64, _immutable_array(counts))
+        frozen_sperm = None if sperm is None else cast(ArrayF64, _immutable_array(sperm))
+        self._resolved[key] = (frozen_counts, frozen_sperm)
+        return frozen_counts, frozen_sperm
 
 
 

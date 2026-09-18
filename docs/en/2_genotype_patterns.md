@@ -104,11 +104,11 @@ nt.parse_selector("A@Cas9_deposited", species=species, kind="gtype")  # gamete l
 
 ### Ordered vs Unordered Matching
 
-- **`|` (single pipe)**: Strictly ordered — `Dr|WT` matches only the literal `Dr|WT` phase, regardless of the Species' `unordered` setting. With the default `unordered=True` species (canonical heterozygote `WT|Dr`), the pattern `Dr|WT` matches nothing.
+- **`|` (single pipe)**: Strictly ordered — `Dr|WT` matches only the literal `Dr|WT` order, regardless of the Species' `unordered` setting. With the default `unordered=True` species (canonical heterozygote `WT|Dr`), the pattern `Dr|WT` matches nothing.
 - **`::` (double colon)**: Unordered matching — the two homologous chromosome copies can be swapped, regardless of the Species setting.
 
 ```python
-# | syntax: strictly ordered — matches only this exact maternal/paternal phase
+# | syntax: strictly ordered — matches only this exact maternal/paternal order
 pattern1 = "A1/B1|A2/B2"
 
 # :: syntax: unordered — homologous chromosomes can swap
@@ -118,7 +118,7 @@ pattern2 = "A1/B1::A2/B2"
 The `unordered`-based tolerance does exist, but at the **selector layer**, not
 in the pattern parser: when the species has `unordered=True`,
 `IndividualSelector(ztype=...)` and `Species.resolve_single_genotype_selector()`
-rewrite `|` to `::` before parsing, so selector strings match either phase.
+rewrite `|` to `::` before parsing, so selector strings match either left/right order of the homologous chromosomes. For example, `A/B::a/b` matches a whole-homolog reversal but does not match the linked phase `A/b|a/B`.
 
 ## HaploidGenomePattern: Haploid Genotype Matching
 

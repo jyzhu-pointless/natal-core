@@ -39,13 +39,11 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Mapping, Optional, cast
 
-from natal.frontend.genetics import Species
 from natal.frontend.patterns.elements._base import PatternParseError
 from natal.frontend.patterns.parser import GenotypePatternParser
 
 if TYPE_CHECKING:
     from natal.frontend.genetics.entities.haplotype import HaploidGenotype
-    from natal.frontend.patterns.elements.atom import LabPattern
 
 __all__ = [
     "GameteAlleleConversionRule",
@@ -445,125 +443,3 @@ def replace_allele_in_haploid(
             return HaploidGenotype(species=species, haplotypes=new_haplotypes)
 
     return None
-
-
-def validate_pattern_alleles(
-    species: Species,
-    base_pattern: str,
-    context: str,
-) -> None:
-    """Reject filter patterns naming alleles unknown to the species.
-
-    Pattern parsing itself accepts arbitrary tokens; a typo'd allele name
-    would otherwise compile into a matcher that never fires — the
-    "interpreted as match failure" outcome the CR-1 contract forbids.
-    Only the genotype part of a pattern is validated here; the ``@label``
-    suffix must be stripped by the caller.
-
-    Args:
-        species: Species providing the gene catalog.
-        base_pattern: The genotype part of the pattern (no ``@`` suffix).
-        context: Error-message prefix (ruleset name).
-
-    Raises:
-        ValueError: If any identifier token is not a registered allele.
-    """
-    import re
-
-    tokens = sorted(set(re.findall(r"[A-Za-z0-9_]+", base_pattern)))
-    # Every identifier token must be a registered allele: a typo would otherwise
-    # compile into a matcher that silently never fires (forbidden by CR-1).
-    for token in tokens:
-        if species.get_gene(token) is None:
-            raise ValueError(
-                f"{context}: filter pattern names unknown allele {token!r}; "
-                "every allele in a filter pattern must be registered in the "
-                "species"
-            )
-
-
-def split_and_validate_filter_pattern(
-    species: Species, pattern: str, labels: list[str], context: str,
-) -> tuple[str, Optional[LabPattern]]:
-    """Validate filter allele names and label names, returning both parts.
-
-    One scan owns the ``@`` syntax: the genotype part, the label matcher and
-    every validation error all come out of the same analysis, so callers must
-    not re-split the string with a second rule of their own.
-
-    Labels use the existing exact/set/negated pattern syntax. Every named
-    label must exist even when negated, so a typo cannot silently broaden
-    or disable a rule.
-
-    Args:
-        species: Species providing the gene catalog.
-        pattern: The full filter pattern, with at most one ``@label``
-            suffix.
-        labels: The valid label set for the pattern's suffix (gamete or
-            somatic labels, depending on the calling stage).
-        context: Error-message prefix (ruleset name).
-
-    Returns:
-        ``(base, lab)`` — the genotype part with the suffix stripped, and the
-        parsed label matcher, or ``None`` when the pattern carries no label or
-        the wildcard label ``"*"``, which imposes no restriction.
-
-    Raises:
-        ValueError: If the pattern has more than one ``@``, an empty
-            genotype or label part, an unknown label, or an unregistered
-            allele name.
-    """
-    from natal.frontend.patterns.elements.atom import LabPattern
-
-    base = pattern
-    lab: Optional[LabPattern] = None
-    # At most one '@'; both sides must be non-empty, and every named label must
-    # exist even when negated, so a typo cannot broaden or disable a rule.
-    if "@" in pattern:
-        if pattern.count("@") != 1:
-            raise ValueError(f"{context}: filter must contain at most one @ separator")
-        base, suffix = (part.strip() for part in pattern.split("@"))
-        if not base or not suffix:
-            raise ValueError(f"{context}: empty genotype or label in filter {pattern!r}")
-        try:
-            parsed = LabPattern.parse(suffix)
-        except Exception as exc:
-            raise ValueError(f"{context}: invalid filter label {suffix!r}") from exc
-        names = parsed.lab_set or ({parsed.lab} if parsed.lab is not None else set())
-        # LabPattern exposes either an explicit label or a set (which may encode
-        # negations); collect the named labels for the existence check.
-        unknown = names - set(labels or ["default"])
-        if unknown:
-            raise ValueError(f"{context}: unknown filter labels {sorted(unknown)!r}")
-        if suffix != "*":
-            lab = parsed
-    validate_pattern_alleles(species, base, context)
-    return base, lab
-
-
-def validate_filter_pattern(
-    species: Species, pattern: str, labels: list[str], context: str,
-) -> str:
-    """Validate filter allele names and label names, returning the genotype part.
-
-    Thin wrapper over :func:`split_and_validate_filter_pattern` for callers
-    that only need the genotype part; both share the single ``@`` scan.
-
-    Args:
-        species: Species providing the gene catalog.
-        pattern: The full filter pattern, with at most one ``@label``
-            suffix.
-        labels: The valid label set for the pattern's suffix (gamete or
-            somatic labels, depending on the calling stage).
-        context: Error-message prefix (ruleset name).
-
-    Returns:
-        The genotype part of the pattern, with the ``@label`` suffix
-        stripped.
-
-    Raises:
-        ValueError: If the pattern has more than one ``@``, an empty
-            genotype or label part, an unknown label, or an unregistered
-            allele name.
-    """
-    return split_and_validate_filter_pattern(species, pattern, labels, context)[0]

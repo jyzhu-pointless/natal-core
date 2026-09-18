@@ -9,8 +9,9 @@ coverage in this file.
 """
 
 import pytest
+
 import natal as nt
-from natal import GeneticPreset, GameteConversionRuleSet
+from natal import GameteConversionRuleSet, GeneticPreset
 from natal.frontend.patterns.elements._base import PatternParseError
 
 
@@ -322,10 +323,10 @@ class TestGenotypePatternsComprehensive:
         unordered_pattern = self.sp.parse_genotype_pattern("A1/B1::A2/B2")
         assert unordered_pattern(gt_ordered) is True
 
-        # Reversed phase (unordered matches; ordered matches only after canonicalization).
+        # Reversed whole homolog order is equivalent after genotype canonicalization.
         gt_reversed = self.sp.get_genotype_from_str("A2/B2|A1/B1")
         assert unordered_pattern(gt_reversed) is True  # unordered matches
-        assert ordered_pattern(gt_reversed) is True    # this unordered species canonicalizes phases
+        assert ordered_pattern(gt_reversed) is True
 
     def test_wildcard_matching(self):
         """Test wildcard matching."""
@@ -341,7 +342,7 @@ class TestGenotypePatternsComprehensive:
         # Partial wildcards.
         partial_wildcard = self.sp.parse_genotype_pattern("A1/B1|A2/*")
         assert partial_wildcard(gt1) is True
-        assert partial_wildcard(gt2) is True   # unordered species: gt1 and gt2 canonicalize equal
+        assert partial_wildcard(gt2) is False  # Repulsion has no A1/B1 haplotype.
 
     def test_set_matching(self):
         """Test set matching — uses :: for unordered canonical safety."""
@@ -352,7 +353,9 @@ class TestGenotypePatternsComprehensive:
         # Set matching.
         set_pattern = self.sp.parse_genotype_pattern("{A1,A2}/B1|{A1,A2}/B2")
         assert set_pattern(gt1) is True
-        assert set_pattern(gt2) is True
+        assert set_pattern(gt2) is False
+        unordered_set = self.sp.parse_genotype_pattern("{A1,A2}/B1::{A1,A2}/B2")
+        assert unordered_set(gt2) is True
 
         # Exclusion matching.
         exclude_pattern = self.sp.parse_genotype_pattern("!A1/B1|!A2/B2")
@@ -391,12 +394,13 @@ class TestGenotypePatternsComprehensive:
 
         # Enumerate a wildcard pattern.
         wildcard_results = list(self.sp.enumerate_genotypes_matching_pattern("A1/*|A2/*", max_count=10))
-        assert len(wildcard_results) == 3  # 2x2 combinations collapse to 3 after canonicalization
+        assert len(wildcard_results) == 4  # Linked coupling and repulsion remain distinct.
 
-        # Verify the wildcard enumeration covers every canonical form (unordered species: A1/B2|A2/B1 == A1/B1|A2/B2).
+        # Verify that both linked phases are enumerated.
         expected_genotypes = [
             self.sp.get_genotype_from_str("A1/B1|A2/B1"),
             self.sp.get_genotype_from_str("A1/B1|A2/B2"),
+            self.sp.get_genotype_from_str("A1/B2|A2/B1"),
             self.sp.get_genotype_from_str("A1/B2|A2/B2")
         ]
         for gt in expected_genotypes:

@@ -36,12 +36,11 @@ class SpeciesMappingMixin:
     ) -> Genotype:
         """Return a canonical Genotype where maternal/paternal order is irrelevant.
 
-        Canonicalizes per-locus: at each locus the maternal allele has the
-        smaller :meth:`Locus.allele_index`.  When individual alleles must be
-        swapped between the two haploid genomes (multi-locus free combination)
-        new :class:`HaploidGenotype` objects are assembled so that every
-        genotype with the same per-locus allele composition collapses to the
-        same canonical form.
+        Canonicalizes each chromosome independently by comparing tuples of
+        :meth:`Locus.allele_index` values and swapping whole homologous
+        haplotypes. Linked phase is preserved; homolog order on different
+        chromosomes is independent. Different-type sex chromosomes retain
+        their maternal/paternal ordering.
         """
         self = cast(Species, self)
         from natal.frontend.genetics.entities.genotype import Genotype

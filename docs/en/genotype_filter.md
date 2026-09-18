@@ -34,7 +34,7 @@ ruleset.add_allele_convert(
 )
 ```
 
-`W::D` selects heterozygous parents in either phase. Use `*::D` for any parent carrying D in this single-locus example. In a multilocus model, supply the full appropriate pattern rather than a substring test on the genotype name.
+`W::D` selects heterozygous parents in either left/right order of the homologous chromosomes. Use `*::D` for any parent carrying D in this single-locus example. In a multilocus model, supply the full appropriate pattern rather than a substring test on the genotype name.
 
 At the zygote stage, use `current` for a condition on the offspring itself:
 

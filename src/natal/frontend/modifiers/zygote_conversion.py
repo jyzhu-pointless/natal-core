@@ -47,8 +47,6 @@ from .conversion_rules import (
     ZygoteAlleleConversionRule,
     ZygoteZtypeConversionRule,
     replace_allele_in_haploid,
-    split_and_validate_filter_pattern,
-    validate_filter_pattern,
 )
 
 # A compiled matcher: (c1, c2, ztype_idx) -> bool.
@@ -263,18 +261,18 @@ class ZygoteConversionRuleSet:
                 if key == "current":
                     try:
                         current_pattern = parse_selector(
-                            pattern, species=species, kind="ztype",
+                            pattern, species=species, kind="ztype", validate_alleles=True,
                             context=f"{self.name} current filter",
+                            label_catalog=tuple(
+                                dict.fromkeys(
+                                    (*species.somatic_labels, *registry.slab_labels)
+                                )
+                            ),
                         )
                     except Exception as exc:
                         raise ValueError(
                             f"{self.name}: invalid current filter {pattern!r}"
                         ) from exc
-                    # Syntax errors surface above; unknown-allele tokens in
-                    # otherwise-valid patterns surface here.  Only the
-                    # genotype part is validated — the token after the last
-                    # '@' is a somatic-label qualifier.
-                    validate_filter_pattern(species, pattern, species.somatic_labels, self.name)
                 elif key == "maternal":
                     maternal_matcher = _compile_gamete_matcher(
                         species, pattern, self.name
@@ -499,34 +497,36 @@ def _compile_gamete_matcher(
     Raises:
         ValueError: If the pattern cannot be parsed.
     """
-    from natal.frontend.patterns.parser import GenotypePatternParser
-
-    # The strict validator owns the single '@' scan: it returns the genotype
-    # part and the label matcher, so this function must not split the string a
-    # second time with a rule of its own.  Every malformed form — more than one
-    # '@', an empty part, an unknown label — is rejected there.
-    base, lab = split_and_validate_filter_pattern(
-        species, pattern, species.gamete_labels, rs_name
-    )
-    parser = GenotypePatternParser(species)
     try:
-        genome_pattern = parser._parse_haploid(base)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the entries
+        from natal.frontend.patterns.entries import parse_selector
+
+        parsed = parse_selector(
+            pattern, species=species, kind="gtype", validate_alleles=True,
+            context=f"{rs_name} gamete filter",
+        )
     except Exception as exc:
+        detail = str(exc)
+        if "Only one @lab suffix" in detail:
+            detail = "at most one @ separator"
+        elif "Invalid lab name" in detail:
+            detail = "invalid filter label"
+        elif "unknown gtype labels" in detail:
+            detail = "unknown filter labels"
         raise ValueError(
-            f"{rs_name}: invalid gamete pattern {pattern!r}"
+            f"{rs_name}: invalid gamete pattern {pattern!r}: {detail}"
         ) from exc
 
     def matcher(pair: Tuple[object, str]) -> bool:
         # Both the haploid-genome pattern and, when declared, the gamete-label
         # pattern must match for the forming gamete to qualify.
         haploid, glab = pair
-        if not genome_pattern.matches(cast("HaploidGenome", haploid)):
+        if not parsed.genome.matches(cast("HaploidGenome", haploid)):
             return False
-        if lab is not None and not lab.matches(glab):
+        if parsed.glab is not None and not parsed.glab.is_wildcard() and not parsed.glab.matches(glab):
             return False
         return True
 
-    return genome_pattern, matcher
+    return parsed.genome, matcher
 
 
 def _cascade_row(

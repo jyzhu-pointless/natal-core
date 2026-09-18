@@ -461,15 +461,15 @@ Pattern syntax maintains compatibility with the precise string format; all preci
 
 When `Species.unordered=True` (the default), the system normalizes maternal/paternal order so that `A|a` and `a|A` resolve to the same `Genotype` instance.
 
-The algorithm performs a per-locus allele index comparison. At each locus, the maternal and paternal allele indices are compared; if the maternal index is greater than the paternal index, the two haplotypes for that chromosome are swapped. This logic lives in `canonical_haploid_pair()` in `_helpers.py`.
+The algorithm compares the allele-index tuples of whole homologous haplotypes lexicographically, independently for each chromosome. It swaps whole haplotypes, preserving linked phase: `A/B|a/b` and `A/b|a/B` are different genotypes, while `A|a;B|b` and `A|a;b|B` are the same genotype. Recombination rate does not change this identity, including at 0.5. This logic lives in `canonical_haploid_pair()` in `_helpers.py`.
 
 **When does it happen?**
 
-Canonicalization occurs at `Genotype.__new__` time, via a call to `canonical_haploid_pair()`. Combined with the instance cache, the canonical form hits the cache first, so `A|a` and `a|A` return the **same `Genotype` object**.
+Both `Genotype.__new__` and `Genotype.__init__` use `canonical_haploid_pair()`, so the cache key and stored parental haplotypes agree. `A|a` and `a|A` return the **same `Genotype` object** with the same canonical spelling regardless of construction order.
 
 **Sex chromosome special handling**
 
-Sex chromosomes with different types (`X|Y`, `Z|W`) preserve their maternal/paternal ordering — the swap logic is skipped. Same-type sex chromosomes (`X|X`, `Z|Z`) are canonicalized per-locus like autosomes.
+Sex chromosomes with different types (`X|Y`, `Z|W`) preserve their maternal/paternal ordering — the swap logic is skipped. Same-type sex chromosomes (`X|X`, `Z|Z`) are canonicalized as whole haplotypes like autosomes.
 
 **When to use `unordered=False`**
 
@@ -481,7 +481,7 @@ Sex chromosomes with different types (`X|Y`, `Z|W`) preserve their maternal/pate
 
 - `|` in a pattern passed to `parse_genotype_pattern`: strict order — `Dr|WT` does not match the canonical `WT|Dr`, regardless of `Species.unordered` (canonicalization only means the stored `A|a` and `a|A` resolve to the same `Genotype` in the registry)
 - `::` in pattern: explicitly unordered match, works regardless of order
-- With `unordered=True` (default): the promotion of `|` to `::` happens only at the **selector layer** — `IndividualSelector(ztype=...)` and `Species.resolve_single_genotype_selector()` rewrite `|` to `::` before parsing, so selector strings match either phase
+- With `unordered=True` (default): the promotion of `|` to `::` happens only at the **selector layer** — `IndividualSelector(ztype=...)` and `Species.resolve_single_genotype_selector()` rewrite `|` to `::` before parsing, so selector strings match either left/right order of the homologous chromosomes
 
 **Migration note**
 

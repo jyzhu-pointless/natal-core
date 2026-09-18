@@ -240,7 +240,7 @@ class TestLabelledFitnessSelector:
 
     def test_unknown_label_in_a_preset_selector_is_rejected(self):
         sp = self._species()
-        with pytest.raises(ValueError, match="matches no ZType"):
+        with pytest.raises(ValueError, match="unknown ztype labels"):
             self._build_with_preset(sp, "labelled_unknown", "WT|WT@nope")
 
     def test_preset_and_chain_paths_agree_on_a_labelled_selector(self):

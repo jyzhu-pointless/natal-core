@@ -459,15 +459,15 @@ Pattern 语法保持了与精确字符串格式的兼容性，所有精确字符
 
 当 `Species.unordered=True`（默认）时，系统会标准化母本/父本顺序，使 `A|a` 和 `a|A` 解析为同一个 `Genotype` 实例。
 
-算法逐位点比较等位基因索引。在每个位点，比较母本和父本的等位基因索引；如果母本索引大于父本索引，则交换该染色体的两个单倍体。该逻辑实现在 `_helpers.py` 的 `canonical_haploid_pair()` 中。
+算法对每条染色体独立比较完整同源单倍型的等位基因索引元组，按字典序交换整条单倍型，保留连锁相位：`A/B|a/b` 与 `A/b|a/B` 是不同基因型，而 `A|a;B|b` 与 `A|a;b|B` 是同一个基因型。身份不随重组率变化，包括重组率为 0.5 的情况。该逻辑实现在 `_helpers.py` 的 `canonical_haploid_pair()` 中。
 
 **何时发生？**
 
-规范化在 `Genotype.__new__` 时通过调用 `canonical_haploid_pair()` 完成。结合实例缓存机制，规范化后的形式首先命中缓存，因此 `A|a` 和 `a|A` 返回**同一个 `Genotype` 对象**。
+`Genotype.__new__` 与 `Genotype.__init__` 都使用 `canonical_haploid_pair()`，使缓存键与实例保存的双亲一致。`A|a` 和 `a|A` 返回**同一个 `Genotype` 对象**，规范字符串不受构造顺序影响。
 
 **性染色体特殊处理**
 
-不同类型性染色体（`X|Y`、`Z|W`）保持母本/父本顺序——跳过交换逻辑。同类型性染色体（`X|X`、`Z|Z`）按常染色体方式逐位点规范化。
+不同类型性染色体（`X|Y`、`Z|W`）保持母本/父本顺序——跳过交换逻辑。同类型性染色体（`X|X`、`Z|Z`）与常染色体一样按完整单倍型规范化。
 
 **何时使用 `unordered=False`**
 
@@ -479,7 +479,7 @@ Pattern 语法保持了与精确字符串格式的兼容性，所有精确字符
 
 - 传给 `parse_genotype_pattern` 的模式中，`|` 严格有序——`Dr|WT` 不会匹配规范的 `WT|Dr`，与 `Species.unordered` 无关（规范化只意味着存储的 `A|a` 和 `a|A` 在注册表中解析为同一个 `Genotype`）
 - `::` 模式：显式无序匹配，与顺序无关
-- `unordered=True`（默认）时：`|` 到 `::` 的改写只发生在**选择器层**——`IndividualSelector(ztype=...)` 与 `Species.resolve_single_genotype_selector()` 会先把 `|` 改写为 `::` 再解析，因此选择器字符串可以匹配任意相位
+- `unordered=True`（默认）时：`|` 到 `::` 的改写只发生在**选择器层**——`IndividualSelector(ztype=...)` 与 `Species.resolve_single_genotype_selector()` 会先把 `|` 改写为 `::` 再解析，因此选择器字符串可以匹配同源染色体的任一左右顺序
 
 **迁移说明**
 

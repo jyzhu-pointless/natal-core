@@ -71,6 +71,10 @@ The registry on a compilation product is the **complete catalog**, unpublished: 
 - Chain methods trial-compile on a copy and adopt only on success, so an interrupted call never leaves a half-finished model behind.
 - Compilation requires the registry to be **unpublished and complete**: unpublished means "the candidate is still editable", complete means "indices match the species catalog one-to-one". Failing either raises `ValueError` rather than repairing itself.
 
+Initial distributions own their nested mappings, sequences, and numeric arrays. Changing the original input or a value returned from `population.definition` does not change later builds. Resolution is cached by species identity and dimensions; cached arrays cannot be made writable, while drafts receive independent copies. A later `initial_state()` call that omits sperm storage preserves its earlier declaration, whether or not a build occurred in between. A failed `age_structure()` change leaves the accepted dimensions, declarations, and compilation state intact.
+
+The internal dependency graph is validated when loaded and cached as an immutable object. Both derivation and publication check their prerequisites before running their compute functions; adding a node without an implementation raises an error.
+
 ## What happens on failure
 
 `compile_definition()` fails explicitly: it publishes nothing, restores the species binding of every preset, and re-raises. The declaration journal and the caller's preset objects are left as they were, so a failure can be fixed in one place and recompiled without rebuilding the whole model.

@@ -133,10 +133,14 @@ def test_set_pattern():
 
     test_genotypes = [
         ("A2/B1|A2/B2; C1|C2", True),   # A2 in set
-        ("A3/B1|A2/B2; C1|C2", True),   # A3 in set
+        ("A3/B1|A2/B2; C1|C2", False),  # Canonical A2/B2 is maternal; | is ordered.
         ("A1/B1|A2/B2; C1|C2", False),  # A1 not in set
         ("A2/B1|A2/B1; C1|C2", False),  # Wrong paternal B
     ]
+
+    # Unordered grammar still accepts the reversed whole homologs.
+    unordered = TEST_SPECIES.parse_genotype_pattern(pattern.replace("|", "::"))
+    assert unordered(TEST_SPECIES.get_genotype_from_str("A3/B1|A2/B2; C1|C2"))
 
     print(f"Pattern: {pattern}")
     print("Test cases:")
@@ -169,10 +173,14 @@ def test_negation_pattern():
 
     test_genotypes = [
         ("A2/B1|A2/B2; C1|C2", True),   # A2 is not A1
-        ("A3/B1|A2/B2; C1|C2", True),   # A3 is not A1
+        ("A3/B1|A2/B2; C1|C2", False),  # Canonical A2/B2 is maternal; | is ordered.
         ("A1/B1|A2/B2; C1|C2", False),  # A1 matches negation (excluded)
         ("A2/B1|A2/B1; C1|C2", False),  # Wrong paternal B
     ]
+
+    # Unordered grammar still accepts the reversed whole homologs.
+    unordered = TEST_SPECIES.parse_genotype_pattern(pattern.replace("|", "::"))
+    assert unordered(TEST_SPECIES.get_genotype_from_str("A3/B1|A2/B2; C1|C2"))
 
     print(f"Pattern: {pattern}")
     print("Test cases:")

@@ -141,17 +141,16 @@ class TestConstructionZtype:
         expected[:, 0, 0] = True
         _assert_mask_equal(mask, expected)
 
-    def test_ztype_as_zygote_type_pattern_normalizes_via_str(self, simple_species, simple_registry):
-        """ztype=ZygoteTypePattern → normalized via str() (produces repr).
-        The repr of a ZygoteTypePattern is not a valid pattern syntax,
-        so _resolve_ztype will raise PatternParseError at compile time."""
-        from natal.frontend.patterns import PatternParseError, ZygoteTypePattern
+    def test_ztype_as_zygote_type_pattern_retains_structure(self, simple_species, simple_registry):
+        """A structured ZygoteTypePattern is retained for direct matching."""
         pattern = nt.parse_selector("*|Dr", species=simple_species)
         s = IndividualSelector(ztype=pattern)
-        # _to_tuple_ztype calls str(value) which gives the repr string
-        # repr is not re-parseable → PatternParseError in _resolve_ztype
-        with pytest.raises(PatternParseError):
-            s.compile(simple_registry, n_sexes=2, n_ages=1)
+        expected = IndividualSelector(ztype="*|Dr").compile(
+            simple_registry, n_sexes=2, n_ages=1
+        )
+        np.testing.assert_array_equal(
+            s.compile(simple_registry, n_sexes=2, n_ages=1), expected
+        )
 
     def test_invalid_ztype_spec_type_raises(self):
         """Non-string, non-tuple, non-ZTP ztype → TypeError."""

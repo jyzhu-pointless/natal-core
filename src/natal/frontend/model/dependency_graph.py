@@ -16,7 +16,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Mapping
+from types import MappingProxyType
+from typing import Callable, Mapping, cast
 
 _GRAPH_FILE = Path(__file__).parent / "dependencies.jsonc"
 
@@ -60,6 +61,20 @@ class DependencyGraph:
 
     inputs: frozenset[str]
     dependencies: Mapping[str, tuple[str, ...]]
+    _order: tuple[str, ...] | None = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Detach containers so the process-wide graph cannot be mutated."""
+        object.__setattr__(self, "inputs", frozenset(self.inputs))
+        object.__setattr__(self, "dependencies", MappingProxyType({
+            name: tuple(deps) for name, deps in self.dependencies.items()
+        }))
+
+    def require_implementations(self, names: tuple[str, ...]) -> None:
+        """Reject graph nodes that none of the compiler phases implements."""
+        missing = sorted(set(self.dependencies) - set(names))
+        if missing:
+            raise ValueError(f"Dependency graph nodes missing compute implementations: {missing!r}")
 
     def order(self) -> tuple[str, ...]:
         """Return every computed node in a dependency-respecting order.
@@ -68,6 +83,8 @@ class DependencyGraph:
             ValueError: If a node names a dependency the graph does not
                 declare, or if the dependencies form a cycle.
         """
+        if self._order is not None:
+            return self._order
         for node, deps in self.dependencies.items():
             known = set(self.dependencies) | set(self.inputs)
             unknown = [dep for dep in deps if dep not in known]
@@ -93,7 +110,9 @@ class DependencyGraph:
                 resolved.append(node)
                 done.add(node)
                 del remaining[node]
-        return tuple(resolved)
+        ordered = tuple(resolved)
+        object.__setattr__(self, "_order", ordered)
+        return ordered
 
 
 @dataclass
@@ -121,12 +140,15 @@ class DerivationPipeline:
             )
         self._computes[node] = compute
 
-    def run(self, nodes: tuple[str, ...]) -> dict[str, object]:
+    def run(
+        self, nodes: tuple[str, ...], *, completed: tuple[str, ...] = (),
+    ) -> dict[str, object]:
         """Execute the given nodes, and only those, in graph order.
 
         Args:
             nodes: The nodes this phase owns; they run in the graph's
                 topological order restricted to this set.
+            completed: Products already supplied by earlier phases.
 
         Returns:
             Each executed node's compute result keyed by node name.
@@ -140,8 +162,20 @@ class DerivationPipeline:
                 f"Dependency graph nodes missing compute implementations: "
                 f"{sorted(missing)!r}"
             )
+        order = self.graph.order()
+        available = set(self.graph.inputs) | set(completed)
+        # Validate the whole phase before running any effectful compute.
+        for node in order:
+            if node in nodes:
+                missing_dependencies = set(self.graph.dependencies[node]) - available
+                if missing_dependencies:
+                    raise ValueError(
+                        f"Dependency graph node {node!r} requires unfinished products "
+                        f"{sorted(missing_dependencies)!r}"
+                    )
+                available.add(node)
         results: dict[str, object] = {}
-        for node in self.graph.order():
+        for node in order:
             if node in nodes:
                 results[node] = self._computes[node]()
         return results
@@ -170,23 +204,36 @@ def load_dependency_graph(text: str | None = None) -> DependencyGraph:
         if _cached_graph is not None:
             return _cached_graph
     source = text if text is not None else _GRAPH_FILE.read_text(encoding="utf-8")
-    data = json.loads(_strip_jsonc_comments(source))
+    data: object = json.loads(_strip_jsonc_comments(source))
+    if not isinstance(data, dict):
+        raise ValueError("Dependency graph config must be an object")
+    # JSON object values remain unknown until each schema field is checked.
+    fields = cast(dict[str, object], data)
     try:
-        inputs_raw = data["inputs"]
-        nodes_raw = data["nodes"]
+        inputs_raw = fields["inputs"]
+        nodes_raw = fields["nodes"]
     except KeyError as exc:
         raise ValueError(f"Dependency graph config is missing {exc.args[0]!r}") from exc
-    inputs = frozenset(inputs_raw)
-    dependencies = {
-        node: tuple(spec.get("depends", ()))
-        for node, spec in nodes_raw.items()
-    }
+    if not isinstance(inputs_raw, list) or not all(isinstance(item, str) for item in cast(list[object], inputs_raw)):
+        raise ValueError("Dependency graph inputs must be a list of names")
+    if not isinstance(nodes_raw, dict):
+        raise ValueError("Dependency graph nodes must be an object")
+    inputs = frozenset(cast(list[str], inputs_raw))
+    dependencies: dict[str, tuple[str, ...]] = {}
+    for node, spec in cast(dict[str, object], nodes_raw).items():
+        if not isinstance(spec, dict):
+            raise ValueError(f"Dependency graph node {node!r} must be an object")
+        deps = cast(dict[str, object], spec).get("depends", [])
+        if not isinstance(deps, list) or not all(isinstance(item, str) for item in cast(list[object], deps)):
+            raise ValueError(f"Dependency graph node {node!r} dependencies must be a list of names")
+        dependencies[node] = tuple(cast(list[str], deps))
     overlap = sorted(set(inputs) & set(dependencies))
     if overlap:
         raise ValueError(
             f"Dependency graph nodes are both inputs and computed: {overlap!r}"
         )
     graph = DependencyGraph(inputs=inputs, dependencies=dependencies)
+    graph.order()
     if text is None:
         _cached_graph = graph
     return graph

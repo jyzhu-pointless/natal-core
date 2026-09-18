@@ -50,7 +50,7 @@ SpatialPopulation.builder(...)
 
 1. **代理给 `_template`** — 模板 `PopulationBuilder` 始终收到标量值，保持正确的内部状态
 2. **检测 `BatchSetting`** — 拦截并存储到 `_batch_settings`，template 只拿到 `first_value()`
-3. **记录到 `_declaration_log`** — 保留原始参数（含 BatchSetting 对象），供异构场景回放
+3. **记录到 `_declaration_log`** — 保留原始参数（含 BatchSetting 对象），供各组声明投影
 
 ### 冻结声明
 
@@ -60,30 +60,9 @@ batch 函数在冻结时展开一次；已缓存的模板遗传产物在最终�
 
 ### 代理机制
 
-每一个链式方法最终都经过 `_detect_and_delegate`：
+领域方法先让模板校验本次具体参数，成功后才提交 batch 设置和声明记录。`presets()` 和 `hooks()` 分别保留自己的位置参数，batch preset 不会替换 hook。
 
-```python
-# 以 .competition(carrying_capacity=batch_setting([10000, 5000, 5000, 8000])) 为例
-
-def _detect_and_delegate(self, method_name, kwargs):
-    concrete = {}
-    for key, value in kwargs.items():
-        if isinstance(value, BatchSetting):
-            self._batch_settings[key] = value        # 存储原对象
-            first = value.first_value()               # 取第一个标量值
-            if first is not None:
-                concrete[key] = first                 # template 只看到标量
-        else:
-            concrete[key] = value                     # 普通参数原样传递
-
-    self._declaration_log.append((method_name, dict(kwargs)))  # 记录原始调用
-
-    method = getattr(self._template, method_name)
-    method(**{k: v for k, v in concrete.items() if v is not None})
-    return self
-```
-
-`presets()` 和 `hooks()` 有位置参数，走 `_delegate_positional`，逻辑相同。
+batch 值归属于声明它的那次调用。对于同一参数，后声明的普通值会覆盖此前的 batch 设置，后声明的 batch 设置也按调用顺序生效。例如先声明 `eggs_per_female=batch_setting([10, 20])`，再声明 `eggs_per_female=30`，两个 deme 最终均使用 30。遗传操作仍遵守其累积和优先级规则。
 
 ### 参数别名
 
@@ -98,7 +77,7 @@ def _detect_and_delegate(self, method_name, kwargs):
 
 优先级：`age_1_carrying_capacity` > `old_juvenile_carrying_capacity` > `carrying_capacity`。
 
-这在 `_declaration_log` 中统一键名，确保异构回放时参数名与模板 `PopulationBuilder` 的方法签名一致。
+这在 `_declaration_log` 中统一键名，确保声明投影时参数名与对应 `PopulationBuilder` 方法一致。
 
 ## 两条构建路径
 

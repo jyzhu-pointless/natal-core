@@ -44,7 +44,8 @@ __all__ = ["IndividualSelector"]
 
 # ── Input type aliases ──────────────────────────────────────────────────────
 
-ZTypeSpec = Optional[Union[str, "ZygoteTypePattern", Tuple["Genotype", str]]]
+ZTypeValue = Union[str, "ZygoteTypePattern", Tuple["Genotype", str]]
+ZTypeSpec = Optional[ZTypeValue]
 SexInput = Optional[Union[Sex, str, int, Collection[Union[Sex, str, int]]]]
 AgeInput = Optional[Union[int, range, Collection[int]]]
 
@@ -149,21 +150,19 @@ def _to_tuple_sex(value: SexInput) -> Tuple[int, ...]:
     return tuple(sorted(out))
 
 
-def _to_tuple_ztype(value: ZTypeSpec) -> Tuple[str, ...]:
-    """Normalize a ztype spec to a tuple of canonical string patterns."""
+def _to_tuple_ztype(value: ZTypeSpec) -> Tuple[ZTypeValue, ...]:
+    """Normalize a ztype spec while retaining parsed pattern objects."""
     if value is None:
         return ()
     if isinstance(value, str):
         return (value,)
-    # ZygoteTypePattern duck-type: has genotype attribute
+    # Keep a parsed pattern as a structured value.  Reconstructing it through
+    # ``str()`` would produce its debugging representation, not grammar text.
     if getattr(value, "genotype", None) is not None:
-        return (str(value),)
+        return (value,)
     # (Genotype, slab_label) tuple
     if isinstance(value, tuple):
-        gt, slab = value
-        if slab:
-            return (f"{gt}@{slab}",)
-        return (str(gt),)
+        return (value,)
     raise TypeError(f"Unsupported ztype spec type: {type(value).__qualname__}")
 
 
@@ -185,6 +184,16 @@ def _build_fingerprint(*components: object) -> str:
     return hasher.hexdigest()[:16]
 
 
+def _ztype_export(value: ZTypeValue) -> str:
+    """Render a ztype value for the human-readable selector export."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, tuple):
+        genotype, slab = value
+        return f"{genotype}@{slab}" if slab else str(genotype)
+    return repr(value)
+
+
 # ── Internal atom — single AND-group ─────────────────────────────────────────
 
 
@@ -197,7 +206,7 @@ class _SelectorAtom:
     ``reportPrivateUsage``.
     """
 
-    ztype_patterns: Tuple[str, ...]
+    ztype_patterns: Tuple[ZTypeValue, ...]
     sex_values: Tuple[int, ...]  # Sex enum ints
     age_values: Tuple[int, ...]
 
@@ -459,17 +468,31 @@ class IndividualSelector:
         from natal.frontend.patterns.entries import parse_selector
 
         for spec in atom.ztype_patterns:
-            if spec == "*":
+            if isinstance(spec, str) and spec == "*":
                 return list(range(n_ztypes))
 
             species = None
             if index_registry.n_ztypes > 0:
                 species = index_registry.index_to_genotype[0].species
 
-            if species is not None:
+            if isinstance(spec, tuple):
+                gt, slab = spec
+                indices = [
+                    idx for idx in index_registry.ztype_indices_for(gt)
+                    if not slab or index_registry.index_to_ztype[idx][1] == slab
+                ]
+            elif species is not None:
                 # parse_selector owns the unordered | → :: promotion, so this
                 # spelling matches exactly what fitness and the rules match.
-                pattern = parse_selector(spec, species=species, kind="ztype", context="ztype selector")
+                label_catalog = tuple(
+                    dict.fromkeys(
+                        (*species.somatic_labels, *index_registry.slab_labels)
+                    )
+                )
+                pattern = parse_selector(
+                    spec, species=species, kind="ztype", context="ztype selector",
+                    label_catalog=label_catalog,
+                )
                 indices = index_registry.resolve_ztype_indices(pattern)
             else:
                 continue
@@ -519,7 +542,9 @@ class IndividualSelector:
 
     # ── Serialization helpers ─────────────────────────────────────────────
 
-    def as_target_spec(self) -> tuple[Optional[int], Optional[int], Optional[str]]:
+    def as_target_spec(
+        self,
+    ) -> tuple[Optional[int], Optional[int], Optional[Union[str, ZygoteTypePattern]]]:
         """Return the single destination this selector pins, as a target.
 
         A conversion target must describe one destination per source, so a
@@ -553,7 +578,14 @@ class IndividualSelector:
                 )
         sex = atom.sex_values[0] if atom.sex_values else None
         age = atom.age_values[0] if atom.age_values else None
-        ztype = atom.ztype_patterns[0] if atom.ztype_patterns else None
+        ztype_value = atom.ztype_patterns[0] if atom.ztype_patterns else None
+        if isinstance(ztype_value, tuple):
+            genotype, slab = ztype_value
+            ztype: Optional[Union[str, ZygoteTypePattern]] = (
+                f"{genotype}@{slab}" if slab else str(genotype)
+            )
+        else:
+            ztype = ztype_value
         return sex, age, ztype
 
     def to_dict(self) -> _SelectorDict:
@@ -562,7 +594,7 @@ class IndividualSelector:
         for atom in self._atoms:
             atom_dict: _SelectorAtomDict = {}
             if not atom.wildcard_ztype:
-                atom_dict["ztype"] = list(atom.ztype_patterns)
+                atom_dict["ztype"] = [_ztype_export(v) for v in atom.ztype_patterns]
             if not atom.wildcard_sex:
                 atom_dict["sex"] = list(atom.sex_values)
             if not atom.wildcard_age:

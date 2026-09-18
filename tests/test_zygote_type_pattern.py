@@ -172,7 +172,7 @@ class TestLabPatternAdvanced:
             somatic_labels=["normal", "infected"],
         )
         cfg = nt.PopulationBuilder.from_species(sp).setup(stochastic=False)
-        with pytest.raises(ValueError, match="No slab matches"):
+        with pytest.raises(ValueError, match="unknown ztype labels"):
             cfg.fitness(viability={"A|a@nonexistent": 0.5})
 
     def test_multi_slab_different_values(self):

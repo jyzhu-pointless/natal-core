@@ -49,7 +49,7 @@
       "depends": ["compression"]
     },
     "observation": {
-      "depends": ["compression"]
+      "depends": ["compression", "hooks"]
     }
   }
 }

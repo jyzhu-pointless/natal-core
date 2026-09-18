@@ -8,7 +8,6 @@ import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
-    from natal.frontend.genetics.entities.gene import Gene
     from natal.frontend.genetics.entities.haplotype import HaploidGenotype, Haplotype
 
     from .species import Species
@@ -21,14 +20,14 @@ def canonical_haploid_pair(
 ) -> tuple[HaploidGenotype, HaploidGenotype]:
     """Return the canonical (maternal, paternal) pair for unordered species.
 
-    Per-locus allele-index comparison.  When alleles at a locus must be
-    swapped between the two haploid genomes, new Haplotype/HaploidGenotype
-    objects are assembled.  Does NOT construct Genotype objects — safe
-    to call from Genotype.__new__ without recursion.
+    Compare allele-index tuples and swap whole homologous haplotypes
+    independently for each chromosome. Never move individual alleles
+    between homologs: linked phase must be preserved. Does not construct
+    Genotype objects, so this is safe to call from Genotype.__new__.
 
     Sex chromosomes with different types (X|Y, Z|W) preserve their
-    maternal/paternal ordering.  Same-type sex chromosomes (X|X, Z|Z)
-    are canonicalized per-locus like autosomes.
+    maternal/paternal ordering. Same-type sex chromosomes (X|X, Z|Z)
+    are canonicalized as whole haplotypes like autosomes.
 
     Args:
         species: Species whose chromosome order and sex groups drive the
@@ -36,7 +35,7 @@ def canonical_haploid_pair(
         hg1: First haploid genome.
         hg2: Second haploid genome.
     """
-    from natal.frontend.genetics.entities.haplotype import HaploidGenotype, Haplotype
+    from natal.frontend.genetics.entities.haplotype import HaploidGenotype
 
     maternal_haps: list[Haplotype] = []
     paternal_haps: list[Haplotype] = []
@@ -70,49 +69,25 @@ def canonical_haploid_pair(
         if hap1 is None or hap2 is None:
             continue
 
-        mat_genes: list[Gene] = []
-        pat_genes: list[Gene] = []
-        for locus, g1, g2 in zip(chromosome.loci, hap1.genes, hap2.genes):
-            idx1 = locus.allele_index(g1.name)
-            idx2 = locus.allele_index(g2.name)
-            if idx1 <= idx2:
-                mat_genes.append(g1)
-                pat_genes.append(g2)
-            else:
-                mat_genes.append(g2)
-                pat_genes.append(g1)
-                needs_reassembly = True
-
-        if needs_reassembly:
-            maternal_haps.append(Haplotype(chromosome=chromosome, genes=mat_genes))
-            paternal_haps.append(Haplotype(chromosome=chromosome, genes=pat_genes))
-        else:
-            maternal_haps.append(hap1)
-            paternal_haps.append(hap2)
+        key1 = tuple(
+            locus.allele_index(gene.name)
+            for locus, gene in zip(chromosome.loci, hap1.genes)
+        )
+        key2 = tuple(
+            locus.allele_index(gene.name)
+            for locus, gene in zip(chromosome.loci, hap2.genes)
+        )
+        if key1 > key2:
+            hap1, hap2 = hap2, hap1
+            needs_reassembly = True
+        maternal_haps.append(hap1)
+        paternal_haps.append(hap2)
 
     if needs_reassembly:
         new_maternal = HaploidGenotype(species=species, haplotypes=maternal_haps)
         new_paternal = HaploidGenotype(species=species, haplotypes=paternal_haps)
         return (new_maternal, new_paternal)
 
-    for chromosome in species.chromosomes:
-        try:
-            hap1 = hg1.get_haplotype_for_chromosome(chromosome)
-        except ValueError:
-            continue
-        try:
-            hap2 = hg2.get_haplotype_for_chromosome(chromosome)
-        except ValueError:
-            continue
-        if chromosome.is_sex_chromosome and hap1.chromosome is not hap2.chromosome:
-            continue
-        for locus, g1, g2 in zip(chromosome.loci, hap1.genes, hap2.genes):
-            idx1 = locus.allele_index(g1.name)
-            idx2 = locus.allele_index(g2.name)
-            if idx1 < idx2:
-                return (hg1, hg2)
-            elif idx1 > idx2:
-                return (hg2, hg1)
     return (hg1, hg2)
 
 

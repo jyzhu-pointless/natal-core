@@ -22,8 +22,13 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, cast
 
 if TYPE_CHECKING:
     from natal.frontend.genetics import Species
+    from natal.frontend.genetics.compile import GameteList, ZygoteList
     from natal.frontend.model.draft import ModelDraft
-    from natal.frontend.model.initial_state import InitialDistributionDeclaration
+    from natal.frontend.model.initial_state import (
+        InitialDistributionDeclaration,
+        InitialIndividualCountInput,
+        InitialSpermStorageInput,
+    )
     from natal.frontend.patterns import IndividualSelector
     from natal.frontend.registry.index import IndexRegistry
 
@@ -251,8 +256,8 @@ class ProjectedDeclarations:
     draft: ModelDraft
     initial_distribution: InitialDistributionDeclaration | None = None
     presets: list[GeneticPreset] = field(default_factory=list[GeneticPreset])
-    manual_gamete: list[tuple[int, None, Any]] = field(default_factory=list[tuple[int, None, Any]])
-    manual_zygote: list[tuple[int, None, Any]] = field(default_factory=list[tuple[int, None, Any]])
+    manual_gamete: GameteList = field(default_factory=lambda: cast("GameteList", []))
+    manual_zygote: ZygoteList = field(default_factory=lambda: cast("ZygoteList", []))
     fitness_steps: list[tuple[int, dict[str, Any]]] = field(default_factory=list[tuple[int, dict[str, Any]]])
     hook_calls: list[tuple[tuple[object, ...], dict[str, Any]]] = field(default_factory=list[tuple[tuple[object, ...], dict[str, Any]]])
     observation_groups: Mapping[str, IndividualSelector] | None = None
@@ -300,6 +305,18 @@ def project_declaration_record(
     from natal.frontend.genetics.compile import next_modifier_id
 
     out = ProjectedDeclarations(draft=base_draft, initial_distribution=initial_distribution)
+    # Structural declarations establish the axes for every subsequent resolver.
+    # The last age declaration wins, while all user operations below retain
+    # their original order (including initial distributions used by competition).
+    for method_name, kwargs in reversed(journal):
+        if method_name == "age_structure":
+            positional = kwargs.get("__args__", ())
+            call = dict(kwargs)
+            for index, name in enumerate(("n_ages", "new_adult_age", "generation_time")):
+                if index < len(positional):
+                    call[name] = positional[index]
+            out.draft = apply_age_structure(out.draft, species, call)
+            break
     for method_name, kwargs in journal:
         kwargs = {k: v for k, v in kwargs.items() if v is not None} or dict(kwargs)
         if method_name == "setup":
@@ -312,18 +329,7 @@ def project_declaration_record(
             if declared is not None:
                 out.declared_zygote_types = set(declared)
         elif method_name == "age_structure":
-            positional = kwargs.get("__args__", ())
-            call = dict(kwargs)
-            if positional:
-                # Positional spelling journals under "__args__"; restore
-                # the parameter names the projector reads.
-                for index, name in enumerate(("n_ages", "new_adult_age", "generation_time")):
-                    if index < len(positional):
-                        call[name] = positional[index]
-            out.draft = apply_age_structure(out.draft, species, call)
-            # Subsequent resolvers read the initial arrays; re-derive them
-            # on the new dimensions, exactly as the chained call does.
-            out.draft = _draft_with_initial(out.draft, species, out.initial_distribution)
+            continue
         elif method_name == "competition":
             out.draft = apply_competition(
                 out.draft, kwargs, species=species, registry=registry,
@@ -347,8 +353,19 @@ def project_declaration_record(
             if positional:
                 counts = positional[0]
                 sperm = positional[1] if len(positional) > 1 else None
-            cast_counts = cast("Any", counts)
-            cast_sperm = cast("Any", sperm)
+            # Journal entries originate from the typed initial_state boundary.
+            cast_counts: InitialIndividualCountInput | None = cast(
+                "InitialIndividualCountInput | None", counts
+            )
+            cast_sperm: InitialSpermStorageInput | None = cast(
+                "InitialSpermStorageInput | None", sperm
+            )
+            if cast_counts is None and out.initial_distribution is not None:
+                cast_counts = out.initial_distribution.individual_count
+            if cast_sperm is None and out.initial_distribution is not None:
+                cast_sperm = out.initial_distribution.sperm_storage
+            if cast_counts is None:
+                raise ValueError("initial_state requires individual_count")
             out.initial_distribution = InitialDistributionDeclaration.capture(cast_counts, cast_sperm)
             out.draft = _draft_with_initial(out.draft, species, out.initial_distribution)
         elif method_name == "presets":
@@ -360,9 +377,9 @@ def project_declaration_record(
                     out.presets.append(preset)
         elif method_name == "modifiers":
             for modifier in kwargs.get("gamete_modifiers") or ():
-                out.manual_gamete.append((next_modifier_id(cast("Any", out.manual_gamete)), None, modifier))
+                out.manual_gamete.append((next_modifier_id(out.manual_gamete), None, modifier))
             for modifier in kwargs.get("zygote_modifiers") or ():
-                out.manual_zygote.append((next_modifier_id(cast("Any", out.manual_zygote)), None, modifier))
+                out.manual_zygote.append((next_modifier_id(out.manual_zygote), None, modifier))
         elif method_name == "fitness":
             from copy import deepcopy
 

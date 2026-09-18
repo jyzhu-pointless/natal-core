@@ -41,9 +41,11 @@ class Genotype:
     Represents a diploid genotype consisting of two haploid genomes.
 
     A Genotype pairs two HaploidGenotypes (maternal and paternal) that are
-    both bound to the same Species structure. The distinction between
-    maternal and paternal origin is preserved for modeling phenomena like
-    maternal effects, cytoplasmic inheritance, and genomic imprinting.
+    both bound to the same Species structure. Ordered species preserve the
+    maternal/paternal origin for modeling phenomena like maternal effects,
+    cytoplasmic inheritance, and genomic imprinting. Unordered species
+    canonicalize homolog order independently per chromosome while preserving
+    the linked phase within each chromosome.
 
     Attributes:
         species (Species): Species shared by maternal and paternal haploid genomes.
@@ -71,7 +73,9 @@ class Genotype:
         Caching ensures that the same maternal+paternal combination
         always returns the exact same object (singleton per Species).
 
-        Maternal and paternal origin are preserved for advanced modeling.
+        Ordered species preserve maternal and paternal origin. Unordered
+        species canonicalize homolog order independently per chromosome while
+        preserving linked phase.
         """
         # Ensure species cache dictionary exists
         if species not in cls._cache:
@@ -155,6 +159,14 @@ class Genotype:
         # Validate both haploid genomes are bound to the same species
         if maternal.species is not species or paternal.species is not species:
             raise ValueError("Both haploid genomes must be bound to the same species.")
+
+        if species.unordered:
+            from natal.frontend.genetics.structures._helpers import (
+                canonical_haploid_pair,
+            )
+
+            # Store the same canonical pair used by __new__ for the cache key.
+            maternal, paternal = canonical_haploid_pair(species, maternal, paternal)
 
         self.species = species
         self.maternal = maternal

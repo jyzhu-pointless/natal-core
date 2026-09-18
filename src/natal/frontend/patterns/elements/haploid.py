@@ -34,6 +34,7 @@ class GameteTypePattern:
         self,
         genome: HaploidGenomePattern,
         glab: Optional[LabPattern] = None,
+        source_text: Optional[str] = None,
     ):
         """Initialize a GameteTypePattern.
 
@@ -43,6 +44,7 @@ class GameteTypePattern:
         """
         self.genome = genome
         self.glab: Optional[LabPattern] = glab
+        self.source_text = source_text
 
     def __repr__(self) -> str:
         """Return a string representation of this gamete type pattern."""
