@@ -378,7 +378,7 @@ def _write_fitness_field_flat(
             continue
         # ── end tuple branch ──
 
-        from natal.frontend.patterns import LabPattern, ZygoteTypePattern
+        from natal.frontend.patterns import ZygoteTypePattern
 
         selector_str = str(selector)
         pattern = ZygoteTypePattern.parse(selector_str, species)
@@ -399,11 +399,14 @@ def _write_fitness_field_flat(
                 pass
 
         if not z_indices:
-            # Check for invalid slab first — give a specific error
-            if "@" in selector_str:
+            # Check for invalid slab first — give a specific error.  A slab
+            # constraint means a suffix was written, and ZygoteTypePattern.parse
+            # already ran the grammar's @ analysis over selector_str, so the
+            # read below only spells that suffix for the message.
+            slab_pattern = pattern.slab
+            if slab_pattern is not None:
                 _, s_str = selector_str.rsplit("@", 1)
-                lab = LabPattern.parse(s_str)
-                matching_slabs = [s for s in raw_slabs if lab.matches(s)]
+                matching_slabs = [s for s in raw_slabs if slab_pattern.matches(s)]
                 if not matching_slabs:
                     raise ValueError(
                         f"No slab matches '{s_str}' in fitness.{field_name} "

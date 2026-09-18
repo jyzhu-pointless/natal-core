@@ -59,6 +59,7 @@ def resolve_declared_ztypes(
     if not declared:
         return set()
     result: set[int] = set()
+    from natal.frontend.patterns import GenotypePatternParser
     from natal.frontend.patterns.elements.diploid import ZygoteTypePattern
     for item in declared:
         if isinstance(item, int):
@@ -72,7 +73,10 @@ def resolve_declared_ztypes(
             if not matches and "*" not in item:
                 # Exact unordered genotypes may be written in either parental
                 # order; the Species parser supplies their canonical identity.
-                genotype = species.get_genotype_from_str(item.split("@", 1)[0])
+                # ZygoteTypePattern.parse already validated the suffix, so the
+                # grammar's own split names the genotype part unambiguously.
+                genotype_text, _ = GenotypePatternParser.split_label_suffix(item)
+                genotype = species.get_genotype_from_str(genotype_text)
                 matches = [genotype]
             for genotype in matches:
                 result.update(registry.ztype_index(genotype, slab) for slab in registry.slab_labels)
