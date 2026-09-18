@@ -269,7 +269,7 @@ pop.state.individual_count[0, 3, idx]
 ```python
 # 用 ZygoteTypePattern 解析模式，再交给注册表解析索引
 from natal.frontend.patterns import ZygoteTypePattern
-pattern = ZygoteTypePattern.parse("A1|*", pop.species)
+pattern = nt.parse_selector("A1|*", species=pop.species)
 indices = list(pop.index_registry.resolve_ztype_indices(pattern))  # 匹配的整数索引
 ```
 

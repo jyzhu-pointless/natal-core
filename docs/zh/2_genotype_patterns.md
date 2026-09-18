@@ -53,7 +53,7 @@ NATAL 支持两种模式匹配：
 
 ### 标签匹配（@lab）
 
-模式字符串末尾可以用 `@` 附加配子标签（`glab`）或体细胞标签（`slab`）约束。内容模式本身不携带标签：裸 `GenotypePattern` / `HaploidGenomePattern` 只匹配遗传内容，而返回它们的入口对带标签的模式**直接报错**（`PatternParseError`），不再"接受后忽略"——包括 `GenotypePatternParser.parse`、`GenotypePatternParser.parse_haploid_genome_pattern`，以及建立在其上的 `Species` 辅助入口（`parse_genotype_pattern`、`enumerate_genotypes_matching_pattern`、`parse_haploid_genome_pattern`、`enumerate_haploid_genomes_matching_pattern`）。标签过滤只在模式与标签感知类型组合后才生效：转换规则过滤器、`ZygoteTypePattern`、`IndividualSelector` 或 `GenotypePatternParser.parse_haplotype_pattern`。标签语法与等位基因模式一致：
+模式字符串末尾可以用 `@` 附加配子标签（`glab`）或体细胞标签（`slab`）约束。模式解析只有两个语义入口：匹配用的 `parse_selector` 与保留/替换转换用的 `parse_target`（`natal.parse_selector` / `natal.parse_target`）。内容模式本身不携带标签：`parse_selector(..., kind="genotype")` 与 `kind="haploid"`，以及建立在其上的 `Species` 辅助入口（`parse_genotype_pattern`、`enumerate_genotypes_matching_pattern`、`parse_haploid_genome_pattern`、`enumerate_haploid_genomes_matching_pattern`），对带标签的模式**直接报错**（`PatternParseError`），不再"接受后忽略"。标签属于标签感知的 kind——`kind="ztype"` 组合出 `ZygoteTypePattern`（基因型 + slab），`kind="gtype"` 组合出 `GameteTypePattern`（单倍体基因组 + glab）——以及转换规则过滤器与 `IndividualSelector(ztype=...)`。无序物种上，选择器里的 `|` 在解析前会**全部**提升为 `::`，因此同一写法在 fitness、规则、观测与 hook 中命中一致；上面的内容入口保持 `|` 严格有序；target 永不提升。标签语法与等位基因模式一致：
 
 | 模式 | 含义 | 示例 |
 |---|---|---|
@@ -63,14 +63,14 @@ NATAL 支持两种模式匹配：
 | `@!{A,B}` | 排除集合中的标签 | `*|*@!{wildtype,default}` |
 | `@*` | 任意标签（等同于不加 @） | `A\|a@*` |
 
-体细胞标签由 `ZygoteTypePattern`（基因型 + slab）承载，配子标签由 `GameteTypePattern`（单倍体基因组 + glab）承载：
+体细胞标签走 `kind="ztype"`，配子标签走 `kind="gtype"`：
 
 ```python
 # 匹配携带 Cas9_high 体细胞标签的 A|a 基因型
-ZygoteTypePattern.parse("A|a@Cas9_high", species)
+nt.parse_selector("A|a@Cas9_high", species=species)
 
 # 匹配携带 Cas9_deposited 配子标签的单倍体
-parser.parse_haplotype_pattern("A@Cas9_deposited")
+nt.parse_selector("A@Cas9_deposited", species=species, kind="gtype")
 ```
 
 ## GenotypePattern：二倍体基因型匹配

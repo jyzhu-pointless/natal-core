@@ -242,7 +242,7 @@ class GenotypePatternParser:
         """Split a target declaration without resolving species names.
 
         This is the declaration-time counterpart of
-        :meth:`parse_conversion_target`; it intentionally shares the same
+        :meth:`_parse_conversion_target`; it intentionally shares the same
         ``@`` handling and validation instead of maintaining a modifier-local
         string splitter.
         """
@@ -267,7 +267,7 @@ class GenotypePatternParser:
         return base.strip(), original.rsplit("@", 1)[1].strip()
 
     @staticmethod
-    def require_unlabelled_pattern(pattern_str: str, *, haploid: bool) -> str:
+    def _require_unlabelled_pattern(pattern_str: str, *, haploid: bool) -> str:
         """Return *pattern_str* without a label suffix, rejecting a labelled one.
 
         Entries that match genetic content only — a genotype or a
@@ -292,9 +292,9 @@ class GenotypePatternParser:
         if lab is None:
             return base
         alternatives = (
-            "GenotypePatternParser.parse_haplotype_pattern for a gamete label"
+            "parse_selector(kind='gtype') for a gamete label"
             if haploid
-            else "ZygoteTypePattern.parse or IndividualSelector(ztype=...) "
+            else "parse_selector(kind='ztype') or IndividualSelector(ztype=...) "
             "for a somatic label"
         )
         kind = "haploid-genome" if haploid else "genotype"
@@ -335,7 +335,7 @@ class GenotypePatternParser:
             return base, LabPattern.parse(suffix)
         return pattern_str, None
 
-    def parse(self, pattern_str: str) -> GenotypePattern:
+    def _parse(self, pattern_str: str) -> GenotypePattern:
         """Parse a pattern string into a content-only GenotypePattern.
 
         Supported syntax includes:
@@ -358,10 +358,10 @@ class GenotypePatternParser:
 
         Raises:
             PatternParseError: If the pattern is invalid, or if it carries an
-                ``@label`` suffix.  Use ``ZygoteTypePattern.parse`` or
+                ``@label`` suffix.  Use ``parse_selector(kind='ztype')`` or
                 ``IndividualSelector(ztype=...)`` to select by somatic label.
         """
-        original = GenotypePatternParser.require_unlabelled_pattern(
+        original = GenotypePatternParser._require_unlabelled_pattern(
             pattern_str.strip(), haploid=False
         )
 
@@ -399,7 +399,7 @@ class GenotypePatternParser:
         except Exception as e:
             raise PatternParseError(f"Failed to parse pattern '{original}'") from e
 
-    def parse_conversion_target(
+    def _parse_conversion_target(
         self, target: object, *, stage: str = "conversion", haploid: bool = False,
         require_label: bool = False,
     ) -> ConversionTarget:
@@ -434,35 +434,9 @@ class GenotypePatternParser:
             raise PatternParseError(
                 f"{stage} target {target!r} must be '[genotype or *]@[label or *]'"
             )
-        genotype = self.parse_haploid_genome_pattern(genotype_text) if haploid else self.parse(genotype_text)
+        genotype = self._parse_haploid(genotype_text) if haploid else self._parse(genotype_text)
         label_text = original.rsplit("@", 1)[1].strip() if label is not None else "*"
         return ConversionTarget(genotype_text.strip(), label_text, genotype, label or LabPattern())
-
-    def compile_conversion_target(
-        self, target: object, *, stage: str = "conversion", haploid: bool = False,
-        require_label: bool = False,
-    ) -> ConversionTarget:
-        """Parse and validate target forms before inspecting any source branches.
-
-        Args:
-            target: Unvalidated target pattern from the declaration boundary.
-            stage: Context included in errors.
-            haploid: Whether the target describes a gamete.
-            require_label: Require the legacy explicit label suffix.
-
-        Returns:
-            A target with only unambiguous keep-or-replace forms.
-
-        Raises:
-            TypeError: If target is not a string.
-            PatternParseError: If the expression is malformed.
-            ValueError: If the target uses a forbidden selection form.
-        """
-        parsed = self.parse_conversion_target(
-            target, stage=stage, haploid=haploid, require_label=require_label
-        )
-        parsed.validate(self.species)
-        return parsed
 
     def _split_by_semicolon_respecting_parens(self, s: str) -> List[str]:
         """Split by semicolon, but ignore semicolons inside parentheses.
@@ -687,12 +661,12 @@ class GenotypePatternParser:
 
         return HaplotypePath(locus_patterns)
 
-    def parse_haplotype_pattern(self, pattern_str: str) -> GameteTypePattern:
+    def _parse_gamete(self, pattern_str: str) -> GameteTypePattern:
         """Parse a gamete type pattern: genetic content plus gamete label.
 
         The ``@glab`` suffix is split off by the grammar's shared ``@``
         analysis, and the content is parsed by the same helper as
-        :meth:`parse_haploid_genome_pattern`, so a gamete selector and a
+        :meth:`_parse_haploid`, so a gamete selector and a
         content-only haploid pattern describe every chromosome the same way.
 
         Args:
@@ -709,7 +683,7 @@ class GenotypePatternParser:
         content, glab = GenotypePatternParser.split_label_suffix(pattern_str.strip())
         return GameteTypePattern(self._parse_haploid_content(content), glab)
 
-    def parse_haploid_genome_pattern(self, pattern_str: str) -> HaploidGenomePattern:
+    def _parse_haploid(self, pattern_str: str) -> HaploidGenomePattern:
         """Parse a haploid genome pattern (single DNA strand of individual).
 
         For haploid genomes:
@@ -728,11 +702,11 @@ class GenotypePatternParser:
         Raises:
             PatternParseError: If the pattern is invalid, or if it carries an
                 ``@label`` suffix.  The suffix has nothing to match against
-                here; use :meth:`parse_haplotype_pattern` (a
+                here; use :meth:`_parse_gamete` (a
                 ``GameteTypePattern``) or a conversion rule's ``filters`` to
                 select by gamete label.
         """
-        content = GenotypePatternParser.require_unlabelled_pattern(
+        content = GenotypePatternParser._require_unlabelled_pattern(
             pattern_str.strip(), haploid=True
         )
         return self._parse_haploid_content(content)
@@ -740,8 +714,8 @@ class GenotypePatternParser:
     def _parse_haploid_content(self, pattern_str: str) -> HaploidGenomePattern:
         """Parse the label-free content of a haploid genome pattern.
 
-        Shared by :meth:`parse_haploid_genome_pattern` and
-        :meth:`parse_haplotype_pattern`, which differ only in whether a gamete
+        Shared by :meth:`_parse_haploid` and
+        :meth:`_parse_gamete`, which differ only in whether a gamete
         label accompanies the content.
 
         Args:

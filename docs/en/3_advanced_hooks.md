@@ -132,7 +132,7 @@ def balance_population(pop: TickContext, drive: int, wt: int) -> int:
     return 0
 ```
 
-> **Note**: selector values go through the full genotype-pattern pipeline, so pattern syntax is supported — `'WT::*'`, `'WT|*'` and `'{WT,Var}|Var'` all compile. On the default `unordered=True` species, `|` in a selector is canonicalized to `::` before parsing, so either phase matches. Pre-resolving to index arrays with `GenotypeSelector` remains available but is not required for pattern matching.
+> **Note**: selector values go through the full genotype-pattern pipeline, so pattern syntax is supported — `'WT::*'`, `'WT|*'` and `'{WT,Var}|Var'` all compile. On the default `unordered=True` species, `|` in a selector is canonicalized to `::` before parsing, so either phase matches. Pre-resolving to index arrays is not required for pattern matching.
 
 ## Random Sampling Inside Hooks
 

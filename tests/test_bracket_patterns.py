@@ -4,7 +4,12 @@ Uses a single global species to avoid caching issues.
 """
 
 from natal.frontend.genetics import Species
-from natal.frontend.patterns import GenotypePatternParser, PatternParseError
+from natal.frontend.patterns.parser import GenotypePatternParser
+from natal.frontend.patterns import (
+    PatternParseError,
+    parse_selector,
+    parse_target,
+)
 
 TEST_SPECIES = Species.from_dict('test_bracket', {
     'chr1': {'A': ['A1', 'A2', 'A3'], 'B': ['B1', 'B2']},
@@ -89,7 +94,7 @@ def test_genotype_bracket_invalid_format():
 def test_conversion_target_uses_shared_parser_and_preserves_omissions():
     """Conversion targets share @ parsing and retain omitted chromosome groups."""
     parser = GenotypePatternParser(TEST_SPECIES)
-    target = parser.parse_conversion_target("A1|* @ infected", stage="test")
+    target = parse_target("A1|* @ infected", stage="test", species=TEST_SPECIES)
 
     assert target.genotype_text == "A1|*"
     assert target.label_text == "infected"
@@ -105,15 +110,15 @@ def test_conversion_target_rejects_missing_parts_through_shared_entrypoint():
 
     parser = GenotypePatternParser(TEST_SPECIES)
     with pytest.raises(PatternParseError):
-        parser.parse_conversion_target("A1|*", stage="test", require_label=True)
+        parse_target("A1|*", stage="test", require_label=True, species=TEST_SPECIES)
     with pytest.raises(PatternParseError):
-        parser.parse_conversion_target("@infected", stage="test", require_label=True)
+        parse_target("@infected", stage="test", require_label=True, species=TEST_SPECIES)
 
 
 def test_conversion_target_applies_partial_diploid_state():
     parser = GenotypePatternParser(TEST_SPECIES)
     source = TEST_SPECIES.get_genotype_from_str("A1/B1|A2/B2;C1|C2")
-    target = parser.parse_conversion_target("A2/B2|* @ infected", stage="zygote")
+    target = parse_target("A2/B2|* @ infected", stage="zygote", species=TEST_SPECIES)
 
     converted, label = target.apply_zygote(source, "default", TEST_SPECIES)
     assert str(converted) == "A2/B2|A2/B2;C1|C2"
@@ -123,7 +128,7 @@ def test_conversion_target_applies_partial_diploid_state():
 def test_conversion_target_applies_partial_haploid_state():
     parser = GenotypePatternParser(TEST_SPECIES)
     source = TEST_SPECIES.get_haploid_genotype_from_str("A1/B1;C1")
-    target = parser.parse_conversion_target("A2/B2;* @ tagged", stage="gamete", haploid=True)
+    target = parse_target("A2/B2;* @ tagged", stage="gamete", haploid=True, species=TEST_SPECIES)
 
     converted, label = target.apply_gamete(source, "default", TEST_SPECIES)
     assert str(converted) == "A2/B2;C1"

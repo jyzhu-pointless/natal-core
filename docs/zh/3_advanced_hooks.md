@@ -140,7 +140,7 @@ def balance_population(pop: TickContext, drive: int, wt: int) -> int:
 
 > **注意**：选择器取值走完整的基因型模式管线，支持 pattern 语法——`'WT::*'`、
 > `'WT|*'`、`'{WT,Var}|Var'` 都能编译。在默认 `unordered=True` 的物种上，选择器中的
-> `|` 会先规范为 `::` 再解析，两种相位都能匹配。仍可预先用 `GenotypeSelector`
+> `|` 会先规范为 `::` 再解析，两种相位都能匹配。仍可预先解析成索引数组，
 > 解析为索引数组，但 pattern 匹配并不需要这一步。
 
 ## Hook 内随机采样

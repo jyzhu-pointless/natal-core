@@ -431,7 +431,7 @@ class TestParamsSessionSurface:
         pop = self._rust_age_pop()
         arr = np.asarray(pop.config.viability_fitness)
         for pattern in ("A|*", "*", "B|B"):
-            parsed = nt.ZygoteTypePattern.parse(pattern, pop.species)
+            parsed = nt.parse_selector(pattern, species=pop.species)
             indices = pop.index_registry.resolve_ztype_indices(parsed)
             assert indices, pattern
             expected = float(arr[0, 1, tuple(indices)].sum())

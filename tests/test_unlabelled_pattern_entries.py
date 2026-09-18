@@ -5,10 +5,9 @@ FRONTEND_REFACTOR_PLAN.md §5.2: "纯 Genotype/HaploidGenome 输入遇到 ``@lab
 object and then never consulted by ``matches()``, so a labelled query silently
 matched every label of the genotypes it named.
 
-The label-aware entries keep taking labels: ``ZygoteTypePattern.parse`` (which
-composes a genotype pattern with a slab), ``IndividualSelector(ztype=...)``,
-the conversion-rule filters, and
-``GenotypePatternParser.parse_haplotype_pattern`` (a ``GameteTypePattern``).
+The label-aware entries keep taking labels: ``parse_selector`` with
+``kind="ztype"`` or ``kind="gtype"`` (the unified selector entry),
+``IndividualSelector(ztype=...)``, and the conversion-rule filters.
 """
 
 from __future__ import annotations
@@ -74,12 +73,12 @@ def test_malformed_suffix_keeps_its_own_message(
 
 def test_label_aware_entries_still_accept_labels(species: nt.Species) -> None:
     het = species.get_genotype_from_str("WT|Dr")
-    labelled = ZygoteTypePattern.parse("WT|Dr@infected", species)
+    labelled = nt.parse_selector("WT|Dr@infected", species=species)
     assert labelled.slab is not None
     assert labelled.matches(het, "infected")
     assert not labelled.matches(het, "default")
     assert nt.IndividualSelector(ztype="WT|Dr@infected") is not None
-    assert GenotypePatternParser(species).parse_haplotype_pattern("WT@cas9") is not None
+    assert nt.parse_selector("WT@cas9", species=species, kind="gtype") is not None
 
 
 def test_haploid_filter_helper_rejects_a_label_too(species: nt.Species) -> None:
@@ -101,7 +100,7 @@ def test_content_parser_entry_rejects_a_label(
     here rather than being re-checked by each caller.
     """
     with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
-        GenotypePatternParser(species).parse(pattern)
+        nt.parse_selector(pattern, species=species, kind="genotype")
 
 
 @pytest.mark.parametrize(
@@ -112,7 +111,7 @@ def test_content_parser_entry_keeps_the_suffix_diagnostics(
 ) -> None:
     """A malformed suffix is still reported by the shared ``@`` analysis."""
     with pytest.raises(PatternParseError, match=message):
-        GenotypePatternParser(species).parse(pattern)
+        nt.parse_selector(pattern, species=species, kind="genotype")
 
 
 @pytest.mark.parametrize("pattern", ["WT|Dr@infected", "WT|Dr@*", "WT|Dr@cas9"])
@@ -153,14 +152,14 @@ def test_haploid_parser_entry_rejects_a_label(
     (FRONTEND_REFACTOR_PLAN.md §5.2, §5.6 "HaploidGenome 不携带标签").
     """
     with pytest.raises(PatternParseError, match="does not take an '@label' suffix"):
-        GenotypePatternParser(species).parse_haploid_genome_pattern(pattern)
+        nt.parse_selector(pattern, species=species, kind="haploid")
 
 
 @pytest.mark.parametrize(
     "attr,pattern,alternative",
     [
-        ("parse_genotype_pattern", "WT|Dr@infected", "ZygoteTypePattern.parse"),
-        ("parse_haploid_genome_pattern", "WT@cas9", "parse_haplotype_pattern"),
+        ("parse_genotype_pattern", "WT|Dr@infected", "parse_selector(kind='ztype')"),
+        ("parse_haploid_genome_pattern", "WT@cas9", "parse_selector(kind='gtype')"),
     ],
 )
 def test_guard_message_names_the_label_aware_entry_for_its_kind(
@@ -177,9 +176,9 @@ def test_guard_message_names_the_label_aware_entry_for_its_kind(
     message = str(excinfo.value)
     assert alternative in message
     other = (
-        "parse_haplotype_pattern"
-        if alternative == "ZygoteTypePattern.parse"
-        else "ZygoteTypePattern.parse"
+        "parse_selector(kind='gtype')"
+        if alternative == "parse_selector(kind='ztype')"
+        else "parse_selector(kind='ztype')"
     )
     assert other not in message
 

@@ -174,13 +174,13 @@ class SpeciesPatternMixin:
             PatternParseError: If the pattern is invalid, or if it carries an
                 ``@label`` suffix.  A ``Genotype`` has no label, so such a
                 suffix has nothing to match against; use
-                :meth:`ZygoteTypePattern.parse` or
+                ``parse_selector(kind='ztype')`` or
                 ``IndividualSelector(ztype=...)`` to select by label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns import GenotypePatternParser
+        from natal.frontend.patterns.parser import GenotypePatternParser
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse(pattern)
+        pattern_obj = parser._parse(pattern)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the public entries
         return pattern_obj.to_filter()
 
     def filter_genotypes_by_pattern(
@@ -226,14 +226,14 @@ class SpeciesPatternMixin:
             PatternParseError: If the pattern is invalid, or if it carries an
                 ``@label`` suffix.  A ``Genotype`` has no label, so such a
                 suffix has nothing to match against; use
-                :meth:`ZygoteTypePattern.parse` or
+                ``parse_selector(kind='ztype')`` or
                 ``IndividualSelector(ztype=...)`` to select by label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns import GenotypePatternParser
+        from natal.frontend.patterns.parser import GenotypePatternParser
 
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse(pattern)
+        pattern_obj = parser._parse(pattern)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the public entries
 
         count = 0
         seen: set[int] = set()
@@ -272,14 +272,14 @@ class SpeciesPatternMixin:
             PatternParseError: If the pattern is invalid, or if it carries an
                 ``@label`` suffix.  A ``HaploidGenome`` has no label, so such
                 a suffix has nothing to match against; use
-                ``GenotypePatternParser.parse_haplotype_pattern`` (a
+                ``parse_selector(kind='gtype')`` (a
                 ``GameteTypePattern``) or a conversion rule's ``filters`` to
                 select by gamete label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns import GenotypePatternParser
+        from natal.frontend.patterns.parser import GenotypePatternParser
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse_haploid_genome_pattern(pattern)
+        pattern_obj = parser._parse_haploid(pattern)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the public entries
         return pattern_obj.to_filter()
 
     def filter_haploid_genomes_by_pattern(
@@ -325,15 +325,15 @@ class SpeciesPatternMixin:
             PatternParseError: If the pattern is invalid, or if it carries an
                 ``@label`` suffix.  A ``HaploidGenome`` has no label, so such
                 a suffix has nothing to match against; use
-                ``GenotypePatternParser.parse_haplotype_pattern`` (a
+                ``parse_selector(kind='gtype')`` (a
                 ``GameteTypePattern``) or a conversion rule's ``filters`` to
                 select by gamete label.
         """
         self = cast(Species, self)
-        from natal.frontend.patterns import GenotypePatternParser
+        from natal.frontend.patterns.parser import GenotypePatternParser
 
         parser = GenotypePatternParser(self)
-        pattern_obj = parser.parse_haploid_genome_pattern(pattern)
+        pattern_obj = parser._parse_haploid(pattern)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the public entries
 
         count = 0
         for haploid_genome in self.iter_haploid_genotypes():

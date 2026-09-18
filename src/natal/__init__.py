@@ -133,10 +133,9 @@ _PUBLIC_EXPORTS: dict[str, list[str]] = {
         "spatial_population_to_readable_json",
     ],
     "frontend.patterns": [
-        "GameteTypePattern", "GenotypePatternParser", "GenotypeSelector",
-        "IndividualSelector", "LabPattern", "PatternParseError", "SelectorKind",
-        "ZygoteTypePattern", "parse_selector", "parse_target",
-        "resolve_zygote_type",
+        "GameteTypePattern", "IndividualSelector", "LabPattern",
+        "PatternParseError", "SelectorKind", "ZygoteTypePattern",
+        "parse_selector", "parse_target", "resolve_zygote_type",
     ],
     "frontend.population": [
         "BasePopulation", "AgeStructuredPopulation", "DiscreteGenerationPopulation",

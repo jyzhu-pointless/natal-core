@@ -8,7 +8,7 @@ builder consume these as plain functions.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, Optional, Tuple, TypeAlias, Union, cast
+from typing import Any, Dict, Tuple, TypeAlias, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -157,27 +157,28 @@ def resolve_genotype_key_ztype_index(
     if isinstance(genotype_key, Genotype):
         gt = genotype_key
     elif isinstance(genotype_key, str):
-        # An optional "@slab" suffix pins the somatic label.  This is the
-        # remaining ad-hoc "@" split: it scans the string itself instead of
-        # the pattern grammar's shared analysis, so an empty suffix means
-        # "default slab" here where the pattern entries reject it
-        # (FRONTEND_REFACTOR_PLAN.md §5.3, initial-state row).
-        slab_name: Optional[str] = None
-        if "@" in genotype_key:
-            base, suffix = genotype_key.rsplit("@", 1)
-            gt_str = base
-            if suffix:
-                slab_name = suffix
-        else:
-            gt_str = genotype_key
+        # An optional "@slab" suffix pins the somatic label.  The split is
+        # the pattern grammar's own "@" analysis, so a malformed suffix
+        # (empty or doubled) fails here exactly as it does in the pattern
+        # entries, and a pinned label must be one exact name — sets,
+        # negations and "*" cannot identify a single ztype.
+        from natal.frontend.patterns.parser import GenotypePatternParser
+
+        gt_str, slab = GenotypePatternParser.split_label_suffix(genotype_key)
         gt = species.get_genotype_from_str(gt_str)
         indices = registry.ztype_indices_for(gt)
         if not indices:
             raise KeyError(
                 f"Genotype {gt.to_string()!r} is not in the active ztype catalog"
             )
-        if slab_name is not None:
-            return registry.ztype_index(gt, slab_name)
+        if slab is not None:
+            if slab.negate or slab.lab_set is not None or slab.lab is None:
+                raise ValueError(
+                    f"initial_state key {genotype_key!r} must pin one exact "
+                    "slab name after '@'; sets, negations and '*' cannot "
+                    "identify a single ztype"
+                )
+            return registry.ztype_index(gt, slab.lab)
         return indices[0]
     else:
         raise TypeError(

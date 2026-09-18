@@ -146,7 +146,7 @@ class TestConstructionZtype:
         The repr of a ZygoteTypePattern is not a valid pattern syntax,
         so _resolve_ztype will raise PatternParseError at compile time."""
         from natal.frontend.patterns import PatternParseError, ZygoteTypePattern
-        pattern = ZygoteTypePattern.parse("*|Dr", simple_species)
+        pattern = nt.parse_selector("*|Dr", species=simple_species)
         s = IndividualSelector(ztype=pattern)
         # _to_tuple_ztype calls str(value) which gives the repr string
         # repr is not re-parseable → PatternParseError in _resolve_ztype

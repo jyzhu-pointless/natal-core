@@ -59,8 +59,8 @@ def resolve_declared_ztypes(
     if not declared:
         return set()
     result: set[int] = set()
-    from natal.frontend.patterns import GenotypePatternParser
     from natal.frontend.patterns.entries import parse_selector
+    from natal.frontend.patterns.parser import GenotypePatternParser
     for item in declared:
         if isinstance(item, int):
             if item < 0 or item >= len(registry.index_to_genotype):

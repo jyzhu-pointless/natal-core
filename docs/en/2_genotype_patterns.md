@@ -54,17 +54,22 @@ Pattern strings are parsed in three layers, from outer to inner:
 ### Label Matching (@lab)
 
 A `@` suffix attaches a gamete-label (`glab`) or somatic-label (`slab`)
-constraint to a pattern. Content patterns carry no label: a bare
-`GenotypePattern` or `HaploidGenomePattern` matches genetic content only, and
-every entry that returns one rejects a labelled pattern outright with a
-`PatternParseError` rather than accepting one and ignoring it —
-`GenotypePatternParser.parse`, `GenotypePatternParser.parse_haploid_genome_pattern`,
-and the `Species` helpers built on them (`parse_genotype_pattern`,
-`enumerate_genotypes_matching_pattern`, `parse_haploid_genome_pattern`,
-`enumerate_haploid_genomes_matching_pattern`). Label filtering takes effect
-where the pattern is composed with a label-aware type: conversion-rule
-filters, `ZygoteTypePattern`, `IndividualSelector`, or
-`GenotypePatternParser.parse_haplotype_pattern`.
+constraint to a selector. Pattern parsing has two semantic entries and only
+those two: `parse_selector` for matching and `parse_target` for
+keep-or-replace conversion (`natal.parse_selector` / `natal.parse_target`).
+Content patterns carry no label: `parse_selector(..., kind="genotype")` and
+`kind="haploid"`, plus the `Species` helpers built on them
+(`parse_genotype_pattern`, `enumerate_genotypes_matching_pattern`,
+`parse_haploid_genome_pattern`, `enumerate_haploid_genomes_matching_pattern`),
+reject a labelled pattern outright with a `PatternParseError` rather than
+accepting one and ignoring it. Labels belong to the label-aware kinds —
+`kind="ztype"` composes a `ZygoteTypePattern` (genotype + slab) and
+`kind="gtype"` a `GameteTypePattern` (haploid genome + glab) — and to the
+conversion-rule filters and `IndividualSelector(ztype=...)`.
+On an unordered species a selector written with `|` promotes every `|` to
+`::` before parsing, so one spelling matches through fitness, rules,
+observation and hooks alike; the content helpers above keep `|` strictly
+ordered, and targets are never promoted.
 Label syntax mirrors allele syntax:
 
 | Pattern | Meaning | Example |
@@ -75,12 +80,11 @@ Label syntax mirrors allele syntax:
 | `@!{A,B}` | Exclude labels in set | `*|*@!{wildtype,default}` |
 | `@*` | Any label (same as omitting @) | `A\|a@*` |
 
-A somatic label is carried by `ZygoteTypePattern` (genotype + slab); a gamete
-label by `GameteTypePattern` (haploid genome + glab):
+A somatic label rides `kind="ztype"`; a gamete label rides `kind="gtype"`:
 
 ```python
-ZygoteTypePattern.parse("A|a@Cas9_high", species)     # somatic label
-parser.parse_haplotype_pattern("A@Cas9_deposited")    # gamete label
+nt.parse_selector("A|a@Cas9_high", species=species)                 # somatic label
+nt.parse_selector("A@Cas9_deposited", species=species, kind="gtype")  # gamete label
 ```
 
 ## GenotypePattern: Diploid Genotype Matching

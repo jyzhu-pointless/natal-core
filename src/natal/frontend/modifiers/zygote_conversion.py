@@ -248,10 +248,10 @@ class ZygoteConversionRuleSet:
         """
         from natal.frontend.patterns import ZygoteTypePattern
         from natal.frontend.patterns.elements.diploid import GenotypePattern
-        from natal.frontend.patterns.entries import parse_selector
+        from natal.frontend.patterns.entries import parse_selector, parse_target
         from natal.frontend.patterns.parser import GenotypePatternParser
 
-        parser = GenotypePatternParser(species)
+        GenotypePatternParser(species)
 
         compiled: List[_CompiledZygoteRule] = []
 
@@ -289,13 +289,13 @@ class ZygoteConversionRuleSet:
                     )
 
             if isinstance(rule, ZygoteZtypeConversionRule):
-                # Parse the target through the shared pattern grammar.  The
-                # declaration stores target_parts for compatibility, while
-                # this compile-time parse also validates ``@`` and wildcard
-                # syntax consistently with current filters.
+                # Parse the target through the unified target entry: the
+                # compile-time parse validates ``@`` and wildcard syntax
+                # consistently with the filters.
                 try:
-                    target_spec = parser.compile_conversion_target(
-                        rule.to, stage="zygote conversion", require_label=True
+                    target_spec = parse_target(
+                        rule.to, species=species, stage="zygote conversion",
+                        require_label=True, validate=True,
                     )
                 except Exception as exc:
                     raise ValueError(
@@ -514,7 +514,7 @@ def _compile_gamete_matcher(
     )
     parser = GenotypePatternParser(species)
     try:
-        genome_pattern = parser.parse_haploid_genome_pattern(base)
+        genome_pattern = parser._parse_haploid(base)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the entries
     except Exception as exc:
         raise ValueError(
             f"{rs_name}: invalid gamete pattern {pattern!r}"

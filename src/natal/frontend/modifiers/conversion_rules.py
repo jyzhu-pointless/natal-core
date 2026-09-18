@@ -126,7 +126,7 @@ def _validate_filters(
 
 
 def _parse_target_str(target: object, stage: str) -> str:
-    """Require a string target and return it (see :func:`_parse_target`).
+    """Require a string target and return it for the declaration.
 
     Raises:
         TypeError: If *target* is not a string.
@@ -138,16 +138,19 @@ def _parse_target_str(target: object, stage: str) -> str:
     return target
 
 
-def _parse_target(target: object, stage: str) -> tuple[str, str]:
-    """Split a whole-state target into its ``(genotype_part, label_part)``.
 
-    Both parts must be given explicitly; ``*`` keeps the input part.
+def _validate_target_declaration(target: str, stage: str) -> None:
+    """Validate the ``[genotype or *]@[label or *]`` spelling at declaration time.
+
+    Both parts must be given explicitly; ``*`` keeps the input part.  The
+    compile-time parse goes through the unified target entry; this is only
+    the early, species-unbound check, sharing the same ``@`` analysis.
 
     Raises:
         ValueError: If the target is malformed.
     """
     try:
-        return GenotypePatternParser.split_conversion_target(target, stage=stage)
+        GenotypePatternParser.split_conversion_target(target, stage=stage)
     except PatternParseError as exc:
         raise ValueError(str(exc)) from exc
 
@@ -218,9 +221,11 @@ class GameteGtypeConversionRule(GameteStageRule):
                 malformed.
         """
         self.to: str = _parse_target_str(to, "gamete gtype conversion")
-        # Shape checked here; the genotype/label names are resolved against the
-        # species and registry only when the owning rule set compiles.
-        self.target_parts = _parse_target(self.to, "gamete gtype conversion")
+        # Declaration-time validation of the "[genotype or *]@[label or *]"
+        # spelling through the shared target analysis; the genotype/label
+        # names are resolved against the species and registry only when the
+        # owning rule set compiles through the unified target entry.
+        _validate_target_declaration(self.to, "gamete gtype conversion")
         self._init_common(rate, filters, name, GAMETE_FILTER_KEYS, "gamete")
 
     def __repr__(self) -> str:
@@ -259,7 +264,7 @@ class ZygoteZtypeConversionRule(ZygoteStageRule):
                 malformed.
         """
         self.to: str = _parse_target_str(to, "zygote ztype conversion")
-        self.target_parts = _parse_target(self.to, "zygote ztype conversion")
+        _validate_target_declaration(self.to, "zygote ztype conversion")
         self._init_common(rate, filters, name, ZYGOTE_FILTER_KEYS, "zygote")
 
     def __repr__(self) -> str:

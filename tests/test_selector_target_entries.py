@@ -205,8 +205,99 @@ def test_parser_entries_survive_as_delegating_spellings(
     species: nt.Species,
 ) -> None:
     """The old spellings still parse; they delegate to the same entry."""
-    parser = GenotypePatternParser(species)
-    from_type = ZygoteTypePattern.parse("A|a@infected", species)
+    from_type = nt.parse_selector("A|a@infected", species=species)
     from_entry = parse_selector("A|a@infected", species=species, kind="ztype")
     assert repr(from_type) == repr(from_entry)  # LabPattern has no __eq__
-    assert parser.parse_haplotype_pattern("A@x").glab is not None
+    assert nt.parse_selector("A@x", species=species, kind="gtype").glab is not None
+
+
+class TestInitialStateSlabPinning:
+    """The initial_state key reader shares the grammar's @ analysis."""
+
+    @staticmethod
+    def _species() -> nt.Species:
+        return nt.Species.from_dict(
+            "initial_state_slab_pin",
+            {"c1": {"l1": ["A", "a"]}},
+            somatic_labels=["default", "infected"],
+        )
+
+    def _registry(self, species: nt.Species) -> "nt.IndexRegistry":
+        from natal.frontend.registry.index import IndexRegistry
+
+        registry = IndexRegistry()
+        for slab in ("default", "infected"):
+            registry.register_somatic_label(slab)
+        for gt in species.get_all_genotypes():
+            for slab in ("default", "infected"):
+                registry.register_ztype(gt, slab)
+        return registry
+
+    def test_exact_pin_still_resolves(self) -> None:
+        from natal.frontend.model.initial_state import resolve_genotype_key_ztype_index
+
+        species = self._species()
+        registry = self._registry(species)
+        gt = species.get_genotype_from_str("A|a")
+        assert resolve_genotype_key_ztype_index(
+            "A|a@infected", species, registry
+        ) == registry.ztype_index(gt, "infected")
+        assert resolve_genotype_key_ztype_index(
+            "A|a", species, registry
+        ) == registry.ztype_indices_for(gt)[0]
+
+    def test_empty_suffix_is_rejected_like_everywhere_else(self) -> None:
+        from natal.frontend.model.initial_state import resolve_genotype_key_ztype_index
+        from natal.frontend.registry.index import IndexRegistry
+
+        species = self._species()
+        with pytest.raises(PatternParseError, match="Empty @lab suffix"):
+            resolve_genotype_key_ztype_index("A|a@", species, IndexRegistry())
+
+    @pytest.mark.parametrize("key", ["A|a@*", "A|a@!infected", "A|a@{default,infected}"])
+    def test_non_exact_labels_cannot_pin_one_ztype(self, key: str) -> None:
+        from natal.frontend.model.initial_state import resolve_genotype_key_ztype_index
+
+        species = self._species()
+        with pytest.raises(ValueError, match="must pin one exact slab name"):
+            resolve_genotype_key_ztype_index(key, species, self._registry(species))
+
+
+class TestLegacyConvertTarget:
+    """The legacy Op.convert target name compiles through the target flow."""
+
+    @staticmethod
+    def _population() -> "nt.Population":
+        species = nt.Species.from_dict(
+            "legacy_convert_target",
+            {"c1": {"l1": ["A", "a"]}},
+            somatic_labels=["default", "infected"],
+        )
+        return (
+            nt.PopulationBuilder.from_species(species)
+            .setup(stochastic=False)
+            .hooks(lambda pop: 0)
+            .build()
+        )
+
+    def test_label_less_target_on_multi_slab_species_rejected(self) -> None:
+        """A wildcard label matches two slabs — the legacy form wants one."""
+        import pytest as _pytest
+
+        from natal.frontend.hooks.entry.declarative import _compile_convert_target_legacy
+
+        species = nt.Species.from_dict(
+            "legacy_convert_multi_slab",
+            {"c1": {"l1": ["A", "a"]}},
+            somatic_labels=["default", "infected"],
+        )
+        from natal.frontend.registry.index import IndexRegistry
+
+        registry = IndexRegistry()
+        for slab in ("default", "infected"):
+            registry.register_somatic_label(slab)
+        for gt in species.get_all_genotypes():
+            for slab in ("default", "infected"):
+                registry.register_ztype(gt, slab)
+        with _pytest.raises(ValueError, match="must match exactly one"):
+            _compile_convert_target_legacy("A|A", species, registry)

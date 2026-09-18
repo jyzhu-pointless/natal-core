@@ -60,7 +60,7 @@ def test_cached_carrier_pattern_survives_locus_replacement():
             "Y": {"sex_type": "Y", "loci": {"ly": ["Y"]}},
         },
     )
-    pattern = nt.GenotypePatternParser(species).parse(carrier_pattern(species, "D"))
+    pattern = nt.parse_selector(carrier_pattern(species, "D"), species=species, kind="genotype")
     assert pattern.matches(species.get_genotype_from_str("D|Y"))
     chrom = species.get_chromosome("X")
     chrom.remove_locus("lx")

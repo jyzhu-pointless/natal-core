@@ -7,8 +7,6 @@ Provides regex-like pattern matching for genetic sequences:
 - ChromosomePairPattern: Pattern for a pair of homologous chromosomes
 - GenotypePattern: Pattern for a complete diploid genotype
 - HaploidGenomePattern: Pattern for a complete haploid genome
-- GenotypePatternParser: Parser for pattern syntax strings
-- GenotypeSelector: Unified genotype selector for observation/filtering
 - parse_selector / parse_target: The two semantic entries — one for
   matching, one for keep-or-replace conversion targeting
 """
@@ -19,13 +17,10 @@ from .elements.diploid import ZygoteTypePattern
 from .elements.haploid import GameteTypePattern
 from .entries import SelectorKind, parse_selector, parse_target
 from .individual_selector import IndividualSelector
-from .parser import GenotypePatternParser
-from .selector import GenotypeSelector, resolve_zygote_type
+from .selector import resolve_zygote_type
 
 __all__ = [
     "GameteTypePattern",
-    "GenotypePatternParser",
-    "GenotypeSelector",
     "IndividualSelector",
     "LabPattern",
     "PatternParseError",

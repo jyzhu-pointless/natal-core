@@ -519,6 +519,43 @@ class IndividualSelector:
 
     # ── Serialization helpers ─────────────────────────────────────────────
 
+    def as_target_spec(self) -> tuple[Optional[int], Optional[int], Optional[str]]:
+        """Return the single destination this selector pins, as a target.
+
+        A conversion target must describe one destination per source, so a
+        selector used as ``Op.convert(to=...)`` may hold exactly one atom
+        with at most one explicit value per field.  This is the structured
+        read of that contract — consumers must not reinterpret the
+        serialized :meth:`to_dict` form (FRONTEND_REFACTOR_PLAN.md §5.2).
+
+        Returns:
+            ``(sex, age, ztype)`` where each entry is the single pinned
+            value or ``None`` when the field is left open (retain source).
+
+        Raises:
+            ValueError: If the selector has more than one atom, or a field
+                pins more than one value.
+        """
+        if len(self._atoms) != 1:
+            raise ValueError(
+                f"Conversion target selector must contain exactly one atom, "
+                f"got {len(self._atoms)}"
+            )
+        atom = self._atoms[0]
+        for field, values in (
+            ("sex", atom.sex_values), ("age", atom.age_values),
+            ("ztype", atom.ztype_patterns),
+        ):
+            if len(values) > 1:
+                raise ValueError(
+                    f"Conversion target field {field!r} must specify at most "
+                    f"one value, got {len(values)}"
+                )
+        sex = atom.sex_values[0] if atom.sex_values else None
+        age = atom.age_values[0] if atom.age_values else None
+        ztype = atom.ztype_patterns[0] if atom.ztype_patterns else None
+        return sex, age, ztype
+
     def to_dict(self) -> _SelectorDict:
         """Serialize selector to a human-readable dict (for export)."""
         atoms_list: list[_SelectorAtomDict] = []

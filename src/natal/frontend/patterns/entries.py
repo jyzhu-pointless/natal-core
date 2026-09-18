@@ -126,13 +126,13 @@ def parse_selector(
     parser = GenotypePatternParser(species)
     if kind == "ztype":
         content, slab = GenotypePatternParser.split_label_suffix(text)
-        return ZygoteTypePattern(parser.parse(content), slab)
+        return ZygoteTypePattern(parser._parse(content), slab)  # pyright: ignore[reportPrivateUsage]  # this entry IS the public path
     if kind == "genotype":
-        return parser.parse(text)
+        return parser._parse(text)  # pyright: ignore[reportPrivateUsage]  # this entry IS the public path
     if kind == "gtype":
-        return parser.parse_haplotype_pattern(text)
+        return parser._parse_gamete(text)  # pyright: ignore[reportPrivateUsage]  # this entry IS the public path
     if kind == "haploid":
-        return parser.parse_haploid_genome_pattern(text)
+        return parser._parse_haploid(text)  # pyright: ignore[reportPrivateUsage]  # this entry IS the public path
     raise ValueError(
         f"{context} selector kind {kind!r} is unknown; expected one of "
         "'genotype', 'haploid', 'ztype', 'gtype'"
@@ -183,7 +183,7 @@ def parse_target(
             alternatives instead of specifying a change.
     """
     parser = GenotypePatternParser(species)
-    parsed = parser.parse_conversion_target(
+    parsed = parser._parse_conversion_target(  # pyright: ignore[reportPrivateUsage]  # this entry IS the public path
         target, stage=stage, haploid=haploid, require_label=require_label
     )
     if validate:

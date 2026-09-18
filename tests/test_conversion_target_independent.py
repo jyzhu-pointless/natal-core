@@ -54,10 +54,9 @@ def test_unordered_partial_target_cannot_choose_a_source_side() -> None:
         structure={"first": {"one": ["A", "B", "C"]}},
         unordered=False,
     )
-    parser = GenotypePatternParser(species)
     source = species.get_genotype_from_str("A|B")
     with pytest.raises(ValueError):
-        parser.parse_conversion_target("C::*@*").apply_zygote(source, "default", species)
+        nt.parse_target("C::*@*", species=species).apply_zygote(source, "default", species)
 
 
 def test_complete_target_preserves_exact_parser_chromosome_identity_semantics() -> None:
@@ -67,10 +66,9 @@ def test_complete_target_preserves_exact_parser_chromosome_identity_semantics() 
         structure={"first": {"one": ["A", "a"]}, "second": {"two": ["B", "b"]}},
         unordered=False,
     )
-    parser = GenotypePatternParser(species)
     source = species.get_genotype_from_str("A|A;B|B")
     expected = species.get_genotype_from_str("B|b;A|a")
-    actual, label = parser.parse_conversion_target("B|b;A|a@*").apply_zygote(source, "default", species)
+    actual, label = nt.parse_target("B|b;A|a@*", species=species).apply_zygote(source, "default", species)
     assert actual == expected
     assert label == "default"
 
@@ -86,10 +84,9 @@ def test_complete_target_can_replace_sex_chromosome_identity() -> None:
         },
         unordered=False,
     )
-    parser = GenotypePatternParser(species)
     source = species.get_genotype_from_str("A|A;X1|X1")
     expected = species.get_genotype_from_str("A|A;X1|Y1")
-    actual, label = parser.parse_conversion_target("A|A;X1|Y1@*").apply_zygote(source, "default", species)
+    actual, label = nt.parse_target("A|A;X1|Y1@*", species=species).apply_zygote(source, "default", species)
     assert actual == expected
     assert label == "default"
 
@@ -105,9 +102,8 @@ def test_ordered_partial_locus_replacement_preserves_other_source_positions(targ
         structure={"chr": {"one": ["A", "a"], "two": ["B", "b"]}},
         unordered=False,
     )
-    parser = GenotypePatternParser(species)
     source = species.get_genotype_from_str("A/B|a/b")
-    actual, label = parser.parse_conversion_target(target).apply_zygote(source, "existing", species)
+    actual, label = nt.parse_target(target, species=species).apply_zygote(source, "existing", species)
     assert actual == species.get_genotype_from_str(expected)
     assert label == "existing"
 
@@ -148,7 +144,7 @@ def test_partial_target_cannot_invent_locus_correspondence(target: str) -> None:
     )
     source = species.get_genotype_from_str("A/B|a/b;C|C")
     with pytest.raises(ValueError):
-        parsed = GenotypePatternParser(species).parse_conversion_target(target)
+        parsed = nt.parse_target(target, species=species)
         parsed.apply_zygote(source, "default", species)
 
 
@@ -156,11 +152,10 @@ def test_target_stage_mismatch_is_rejected_explicitly() -> None:
     """A compiled haploid target must not be applied to a diploid source, or vice versa."""
     species = nt.Species.from_dict("independent_target_stage_error", {"chr": {"loc": ["A"]}})
     source = species.get_genotype_from_str("A|A")
-    parser = GenotypePatternParser(species)
     with pytest.raises(TypeError, match="diploid"):
-        parser.parse_conversion_target("*@*", haploid=True).apply_zygote(source, "default", species)
+        nt.parse_target("*@*", haploid=True, species=species).apply_zygote(source, "default", species)
     with pytest.raises(TypeError, match="haploid"):
-        parser.parse_conversion_target("*@*").apply_gamete(source.maternal, "default", species)
+        nt.parse_target("*@*", species=species).apply_gamete(source.maternal, "default", species)
 
 
 def test_target_parser_rejects_nontext_inputs() -> None:
@@ -169,7 +164,7 @@ def test_target_parser_rejects_nontext_inputs() -> None:
     with pytest.raises(TypeError):
         GenotypePatternParser.split_conversion_target(42)
     with pytest.raises(TypeError):
-        GenotypePatternParser(species).parse_conversion_target(42)
+        nt.parse_target(42, species=species)
 
 
 @pytest.mark.parametrize("stage", ["gamete", "zygote"])

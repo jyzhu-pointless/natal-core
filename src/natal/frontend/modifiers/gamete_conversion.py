@@ -246,7 +246,7 @@ class GameteConversionRuleSet:
         Raises:
             ValueError: When a declaration cannot be resolved.
         """
-        from natal.frontend.patterns.entries import parse_selector
+        from natal.frontend.patterns.entries import parse_selector, parse_target
         from natal.frontend.patterns.parser import GenotypePatternParser
         from natal.frontend.utils.helpers import resolve_sex_label  # noqa: F401
 
@@ -292,8 +292,9 @@ class GameteConversionRuleSet:
 
             if isinstance(rule, GameteGtypeConversionRule):
                 try:
-                    target_spec = parser.compile_conversion_target(
-                        rule.to, stage="gamete conversion", haploid=True, require_label=True
+                    target_spec = parse_target(
+                        rule.to, species=species, stage="gamete conversion",
+                        haploid=True, require_label=True, validate=True,
                     )
                 except Exception as exc:
                     raise ValueError(
@@ -431,7 +432,7 @@ def _compile_gamete_pattern(
         species, pattern, species.gamete_labels, rs_name
     )
     try:
-        genome_pattern = parser.parse_haploid_genome_pattern(base)
+        genome_pattern = parser._parse_haploid(base)  # pyright: ignore[reportPrivateUsage]  # grammar impl behind the entries
     except Exception as exc:
         raise ValueError(
             f"{rs_name}: invalid gamete pattern {pattern!r}"

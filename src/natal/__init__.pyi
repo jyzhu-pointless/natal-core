@@ -162,8 +162,6 @@ from .frontend.output import (
 )
 from .frontend.patterns import (
     GameteTypePattern,
-    GenotypePatternParser,
-    GenotypeSelector,
     IndividualSelector,
     LabPattern,
     PatternParseError,
@@ -266,8 +264,6 @@ __all__ = [
     "GenomeTemplate",
     "Genotype",
     "GenotypeFilter",
-    "GenotypePatternParser",
-    "GenotypeSelector",
     "GlabSelector",
     "GridTopology",
     "HaploidGenome",

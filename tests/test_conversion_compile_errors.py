@@ -255,7 +255,7 @@ class TestPatternUnknownAlleles:
     not exist in the species (e.g. a typo like ``"Dr|Wt"``) currently
     compiles, matches nothing, and the rule silently never fires — exactly
     the "interpreted as match failure" outcome the contract forbids.
-    ``ZygoteTypePattern.parse("WT|Nope", species)`` and
+    ``nt.parse_selector("WT|Nope", species=species)`` and
     ``GenotypePatternParser.parse_haploid_genome_pattern("Nope")`` both
     succeed, and the compiled matcher simply returns False forever.
 

@@ -2,7 +2,56 @@
 
 ## Unreleased
 
+### Added
+
+- Two semantic pattern entries, `natal.parse_selector` and
+  `natal.parse_target`, are the only public ways to parse a selector or a
+  conversion target (FRONTEND_REFACTOR_PLAN.md §5.1). `parse_selector`
+  takes `kind="ztype"` (default), `"genotype"`, `"gtype"` or `"haploid"` and
+  returns the corresponding pattern object; `parse_target` parses a
+  keep-or-replace target with an optional eager `validate=True` stage. On an
+  unordered species a selector written with `|` promotes every separator to
+  `::` before parsing (any `::` already written is preserved), so one
+  spelling matches identically through fitness, presets, rules, conversion
+  filters, observation and hooks; the content-only `Species` helpers keep
+  `|` strictly ordered, and targets are never promoted.
+
 ### Changed
+
+- One selector spelling now means one match set everywhere. The fitness
+  writer and the preset fitness patch used to promote only the first `|` to
+  `::` on an unordered species while `IndividualSelector` promoted all of
+  them, so `*|A; *|B@infected` selected four ZTypes in one and wrote two in
+  the other; the runtime params view promoted nothing at all. All selector
+  callers now funnel through `parse_selector`, which owns the promotion
+  rule (external plan review finding 2). Mixed `::`+`|` spellings promote
+  the ordered separators; ordered species never promote.
+- The old public parse paths are retired (§5.4): `ZygoteTypePattern.parse`
+  and `.from_pair`, `GenotypePatternParser.parse`,
+  `.parse_haploid_genome_pattern`, `.parse_haplotype_pattern`,
+  `.parse_conversion_target`, `.compile_conversion_target`, the
+  `GenotypeSelector` class, and the `GenotypePatternParser` /
+  `GenotypeSelector` top-level exports are gone. The grammar lives on as
+  private implementation behind the two entries; the `Species` content
+  helpers (`parse_genotype_pattern` and friends) remain public and delegate
+  internally. `parse_target` replaces `parse_conversion_target` /
+  `compile_conversion_target` (the latter's parse+validate pair becomes
+  `validate=True`).
+- `Op.convert`'s selector form reads its target through the new
+  `IndividualSelector.as_target_spec()` accessor instead of reinterpreting
+  the serialized `to_dict()` form, and compiles the ztype expression
+  through `parse_target`. The legacy string form keeps its contract (a
+  complete zygote-type name resolving to exactly one ztype) but its check
+  now lives in the unified target flow: keep-or-replace forms are rejected
+  with a pointer to the `from_=`/`to=` selectors instead of being
+  reinterpreted, and an unknown allele name reports as a zero-match target.
+- Conversion rule declarations no longer store a `target_parts` split; the
+  declaration-time `[genotype or *]@[label or *]` check shares the grammar's
+  own analysis, and compile-time parsing goes through `parse_target`.
+- An `initial_state` genotype key that pins a slab must now pin **one exact
+  name**: an empty `@` suffix fails with the grammar's own "Empty @lab
+  suffix" error (it used to silently mean the default slab), and sets,
+  negations and `@*` are rejected as unable to identify a single ztype.
 
 - `natal.Blueprint` carries a new `discrete_generation` flag, positioned
   between `has_sex_chromosomes` and `extreme_speed_mode` (23 fields, up from

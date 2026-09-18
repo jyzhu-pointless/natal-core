@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional
 
-from natal.frontend.genetics import Genotype, Species
+from natal.frontend.genetics import Genotype
 
 from .._groups import chromosome_groups, group_haplotype
 from .atom import LabPattern
@@ -87,10 +87,9 @@ class ZygoteTypePattern:
     ``GenotypePattern`` — it resolves to a ``(genotype_index, slab_index)``
     pair used for ZType indexing in config arrays.
 
-    Supports both string and tuple construction::
+    Built by the unified selector entry::
 
-        ZygoteTypePattern.parse("A|a@infected", species)
-        ZygoteTypePattern.from_pair(genotype_obj, "infected", species)
+        parse_selector("A|a@infected", species=species)   # kind="ztype"
     """
 
     def __init__(
@@ -107,43 +106,6 @@ class ZygoteTypePattern:
         """
         self.genotype = genotype
         self.slab: Optional[LabPattern] = slab
-
-    @staticmethod
-    def parse(pattern_str: str, species: Species) -> ZygoteTypePattern:
-        """Parse a ZType pattern string like ``"A|a@infected"``.
-
-        Thin spelling of the unified selector entry
-        (:func:`natal.frontend.patterns.entries.parse_selector` with
-        ``kind="ztype"``), kept for callers that already hold a
-        :class:`ZygoteTypePattern` context.  The entry owns the unordered
-        ``|`` → ``::`` promotion and the label split; new callers should
-        call it directly.
-        """
-        from natal.frontend.patterns.entries import parse_selector
-
-        return parse_selector(pattern_str, species=species, kind="ztype", context="zygote type pattern")
-
-    @staticmethod
-    def from_pair(
-        genotype: Genotype,
-        slab: str,
-        species: Species,
-    ) -> ZygoteTypePattern:
-        """Build a ZygoteTypePattern from a (Genotype, slab_name) pair.
-
-        Args:
-            genotype: A Genotype instance.
-            slab: Somatic label name.
-            species: Species for genotype-string resolution.
-
-        Returns:
-            A ZygoteTypePattern matching the given genotype and slab.
-        """
-        from natal.frontend.patterns.parser import GenotypePatternParser
-
-        parser = GenotypePatternParser(species)
-        pattern = parser.parse(str(genotype))
-        return ZygoteTypePattern(pattern, LabPattern(lab=slab))
 
     def matches(self, genotype: Genotype, slab_label: str = "default") -> bool:
         """Check if this pattern matches a (genotype, slab_label) pair."""
