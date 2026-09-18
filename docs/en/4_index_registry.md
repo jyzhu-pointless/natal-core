@@ -268,7 +268,6 @@ pop.state.individual_count[0, 3, idx]
 
 ```python
 # Parse the pattern with ZygoteTypePattern, then resolve indices through the registry
-from natal.frontend.patterns import ZygoteTypePattern
 pattern = nt.parse_selector("A1|*", species=pop.species)
 indices = list(pop.index_registry.resolve_ztype_indices(pattern))  # matching integer indices
 ```

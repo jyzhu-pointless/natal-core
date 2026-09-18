@@ -102,13 +102,13 @@
   `@label` suffix with `PatternParseError`. The suffix used to be parsed and
   then never consulted, so a labelled query matched every label of the
   genotypes it named. `filter_*` and the selector resolvers inherit the
-  rejection; the label-aware entries (`ZygoteTypePattern.parse`,
-  `IndividualSelector`, conversion-rule `filters`,
-  `GenotypePatternParser.parse_haplotype_pattern`) keep taking labels, and the
-  new `GenotypePatternParser.require_unlabelled_pattern` is their shared guard.
-- `GenotypePatternParser.parse` joins that list: it returns a `GenotypePattern`,
-  which carries no label, so it now rejects `@label` instead of storing a
-  suffix nothing reads. Content patterns no longer keep it at all —
+  rejection; the label-aware spellings (`parse_selector` with
+  `kind="ztype"`/`"gtype"`, `IndividualSelector`, conversion-rule
+  `filters`) keep taking labels through the grammar's shared guard.
+- The parser's genotype entry (now the private grammar implementation
+  behind `parse_selector(kind="genotype")`) joins that list: it returns a
+  `GenotypePattern`, which carries no label, so it rejects `@label`
+  instead of storing a suffix nothing reads. Content patterns no longer keep it at all —
   `GenotypePattern.lab` and `HaploidGenomePattern.lab` are gone (the latter was
   always `None`), and with them the `lab=` constructor argument. The label
   lives where it is matched: `ZygoteTypePattern.slab` and
@@ -118,13 +118,14 @@
 - `GameteTypePattern` pairs the gamete label with a complete
   `HaploidGenomePattern` through its new `glab` and `genome` attributes,
   replacing the flattened `HaplotypePath` + `lab` pair.
-  `parse_haplotype_pattern` shares its content parsing with
-  `parse_haploid_genome_pattern` (the new private `_parse_haploid_content`), so
+  The gtype selector entry shares its content parsing with the haploid
+  one (the private `_parse_haploid_content`), so
   a multi-chromosome gamete selector describes each chromosome the way a
   content-only haploid pattern does; the old form merged every chromosome's
   loci into one path. `ZygoteTypePattern.from_slab_key` is removed: it had no
-  callers, and `ZygoteTypePattern.parse` accepts the same `genotype@slab`
-  spelling (without the exact-name genotype canonicalization).
+  callers, and `parse_selector(kind="ztype")` accepts the same
+  `genotype@slab` spelling (without the exact-name genotype
+  canonicalization).
 - The `@` analysis has one spelling: `GenotypePatternParser.split_label_suffix`
   (renamed from the private `_strip_lab`), used by the label-aware entries and
   the conversion-target splitter. The `Species` genotype helpers no longer run

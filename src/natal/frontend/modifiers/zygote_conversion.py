@@ -249,10 +249,6 @@ class ZygoteConversionRuleSet:
         from natal.frontend.patterns import ZygoteTypePattern
         from natal.frontend.patterns.elements.diploid import GenotypePattern
         from natal.frontend.patterns.entries import parse_selector, parse_target
-        from natal.frontend.patterns.parser import GenotypePatternParser
-
-        GenotypePatternParser(species)
-
         compiled: List[_CompiledZygoteRule] = []
 
         # Resolve each declaration once into match/convert closures, so per-row
