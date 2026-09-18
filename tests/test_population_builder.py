@@ -1495,11 +1495,24 @@ class TestAgeStructureValidation:
         with pytest.raises(ValueError, match="new_adult_age"):
             PopulationBuilder.from_species(species).age_structure(n_ages=3, new_adult_age=10)
 
-    def test_age_structure_after_domain_method_raises(self, species):
-        """Calling age_structure() after a domain method must raise RuntimeError."""
-        cfg = PopulationBuilder.from_species(species).competition(carrying_capacity=5000)
-        with pytest.raises(RuntimeError, match="domain method"):
-            cfg.age_structure(n_ages=5, new_adult_age=2)
+    def test_age_structure_after_domain_method_reprojects(self, species):
+        """Rebuilding dimensions after domain methods re-projects them.
+
+        The manual ordering guard retired with the declaration projector
+        (§4.2): a dimensional rebuild re-applies every declared call, so
+        domain parameters survive instead of being silently wiped.
+        """
+        cfg = (
+            PopulationBuilder.from_species(species)
+            .competition(carrying_capacity=5000, growth_mode="fixed")
+            .reproduction(eggs_per_female=40)
+            .survival(female_age_based_survival=[0.5, 0.9])
+            .age_structure(n_ages=5, new_adult_age=2)
+        )
+        assert cfg._config.carrying_capacity == pytest.approx(5000.0)
+        assert cfg._config.eggs_per_female == pytest.approx(40.0)
+        assert cfg._config.age_based_survival_rates[0, 0] == pytest.approx(0.5)
+        assert cfg._config.age_based_survival_rates[0, 1] == pytest.approx(0.9)
 
 
 # ══════════════════════════════════════════════════════════════════════════

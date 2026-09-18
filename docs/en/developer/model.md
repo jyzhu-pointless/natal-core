@@ -26,11 +26,13 @@ flowchart TD
 
 The branch is worth noting: **the second compilation of one declaration is not necessarily recomputed**, and a cache hit hands back copies rather than shared references.
 
-## The declaration journal and replayability
+## The declaration journal
 
 Every domain method on the build chain (`setup`, `age_structure`, `competition`, `reproduction`, `survival`, `initial_state`, `custom`, `presets`, `modifiers`, `fitness`, `hooks`, `with_observation`, `record_history`) is marked as a declaration. Each call records a journal entry and is **trial-compiled on a copy**: only a successful trial is adopted, and a failed one leaves the original object untouched.
 
 `ModelDefinition` is a snapshot of that chain: species, journal, presets, manual modifiers, compilation key, fitness baseline, hook calls, observation groups, the compression switch, and any declared types. It also carries `draft` and `registry` as working copies. Publication stores this definition, so rebuilding a variant of an existing model does not require re-running the user's build script.
+
+The journal is the structured declaration record, interpreted by one projector (`builder/_declarations.py`): the chain methods delegate to it for their immediate writes, a dimensional rebuild (`age_structure()`) re-projects every declared call onto the new draft, and the spatial group compiler projects each deme's concrete declarations onto a fresh baseline and hands them straight to `compile_definition`.  No builder method is ever re-executed to rebuild or to generate a group.
 
 ## Normalisation: defaults and shapes
 
@@ -79,7 +81,7 @@ The registry on a compilation product is the **complete catalog**, unpublished: 
 | --- | --- |
 | Edit `ModelDraft` arrays to change the model | The draft is a build-time candidate; edits need a recompile and a publication before the runtime sees them |
 | Keep editing a previous compilation product | A cache hit hands out copies; cross-declaration reuse goes through `ModelDefinition` |
-| Call `age_structure` after `initial_state` | Legal: the distribution is the authoritative declaration and its arrays re-derive on the final dimensions, so nothing is lost (rebuilding after *domain* methods stays forbidden) |
+| Call `age_structure` after `initial_state` or after domain methods | Legal: every declared call is re-projected onto the rebuilt draft, so neither the initial distribution nor competition / reproduction / survival parameters are lost |
 | Read P as `(0, 0, 0)` meaning "cannot reproduce" | It means "not yet derived"; derivation happens at publication |
 | Treat the default `growth_mode` as "no density regulation" | The default is `BEVERTON_HOLT`; disabling it is explicit |
 

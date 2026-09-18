@@ -45,13 +45,6 @@ from natal.frontend.builder._base import normalize_observation_groups
 from natal.frontend.genetics import Species
 from natal.frontend.hooks.types import DemeSelector
 from natal.frontend.model import ModelDraft
-from natal.frontend.model.initial_state import (
-    InitialIndividualCountInput,
-    InitialSpermStorageInput,
-    resolve_age_structured_initial_individual_count,
-    resolve_age_structured_initial_sperm_storage,
-    resolve_discrete_initial_individual_count,
-)
 from natal.frontend.patterns import IndividualSelector
 from natal.frontend.population.age_structured import AgeStructuredPopulation
 from natal.frontend.population.discrete_generation import DiscreteGenerationPopulation
@@ -63,6 +56,7 @@ from natal.frontend.spatial.population import SpatialPopulation
 from natal.frontend.spatial.topology import GridTopology
 
 if TYPE_CHECKING:
+    from natal.frontend.builder._declarations import ProjectedDeclarations
     from natal.frontend.genetics.compile import GameteList, ZygoteList
     from natal.frontend.model.definition import ModelDefinition
     from natal.frontend.model.definition_compiler import CompiledProducts
@@ -354,31 +348,7 @@ def _genetics_route_names() -> frozenset[str]:
     return frozenset(names)
 
 
-def _genetics_batch_names(batch_param_names: List[str]) -> List[str]:
-    """Return the batch parameter names that alter the genetics section.
-
-    Grouping rule: only genetics content decides whether
-    demes need distinct compiled configs (variant bank entries).  Ecology
-    batch values (carrying capacity, survival, initial state, …) are
-    filled per deme into the ecology columns instead of splitting groups.
-
-    Args:
-        batch_param_names: All accumulated batch kwarg names.
-
-    Returns:
-        The subset of names whose per-deme differences are genetic.
-    """
-    route_names = _genetics_route_names()
-    return [
-        name
-        for name in batch_param_names
-        if name in route_names
-        or name in _MODIFIER_KWARGS
-        or name.startswith(_PRESET_KWARG_PREFIX)
-    ]
-
-
-def _float_value(
+def _float_value(  # pyright: ignore[reportUnusedFunction]  # imported by the replay-log type-boundary test
     value: object, *, name: str
 ) -> (
     float
@@ -406,6 +376,45 @@ def _float_value(
 # ---------------------------------------------------------------------------
 # _clone_deme
 # ---------------------------------------------------------------------------
+
+
+def _values_equal(left: object, right: object) -> bool:
+    """Compare two journal values, array-aware."""
+    import numpy as np
+
+    if left is right:
+        return True
+    if isinstance(left, np.ndarray) and isinstance(right, np.ndarray):
+        return bool(np.array_equal(cast("Any", left), cast("Any", right)))
+    try:
+        return bool(left == right)
+    except Exception:
+        return False
+
+
+def _genetics_batch_names(batch_param_names: List[str]) -> List[str]:
+    """Return the batch parameter names that alter the genetics section.
+
+    Grouping rule: only genetics content decides whether
+    demes need distinct compiled configs (variant bank entries).  Ecology
+    batch values (carrying capacity, survival, initial state, …) are
+    filled per deme into the ecology columns instead of splitting groups.
+
+    Args:
+        batch_param_names: All accumulated batch kwarg names.
+
+    Returns:
+        The subset of names whose per-deme differences are genetic.
+    """
+    route_names = _genetics_route_names()
+    return [
+        name
+        for name in batch_param_names
+        if name in route_names
+        or name in _MODIFIER_KWARGS
+        or name.startswith(_PRESET_KWARG_PREFIX)
+    ]
+
 
 
 def _clone_deme(
@@ -448,56 +457,6 @@ def _clone_deme(
 # _replace optimization: builder-kwarg → config-field mappings
 # ---------------------------------------------------------------------------
 #
-# ``_build_heterogeneous`` uses ``ModelDraft._replace`` to share heavy
-# arrays across groups.  Most builder kwargs map directly to a same-named
-# config field; only the exceptions below need explicit mappings.
-#
-# The dispatch in ``_build_variant_config`` works like this:
-#
-#   1. *array kwarg* (individual_count, sperm_storage)
-#      → convert dict → array via the _params resolve_* initial-state
-#        functions, then _replace.
-#   2. *discrete scalar kwarg* (entries of ``_DISCRETE_VECTOR_CELLS``)
-#      → write one cell of a **copied** unified (2, n_ages) vector, then
-#        _replace that vector field.
-#   3. *rename kwarg* (eggs_per_female → eggs_per_female, etc.)
-#      → _replace under the renamed config field.
-#   4. *any other kwarg*
-#      → _replace directly by field name (0-d ndarray fields receive the
-#        scalar wrapped in an ndarray); ``_can_use_replace`` has already
-#        routed unknown names to a full builder replay.
-#
-# This means adding a new batch-able scalar parameter typically requires
-# zero changes here — as long as the builder kwarg and config field share
-# the same name.
-# ---------------------------------------------------------------------------
-
-# Builder kwarg names that require dict → numpy-array conversion.
-# The output array replaces the named config field.
-_ARRAY_KWARGS: frozenset[str] = frozenset({"individual_count", "sperm_storage"})
-
-# Builder kwarg → config field renames.
-# Kwargs not listed here are tried directly with ``hasattr(base_config, name)``.
-_KWARG_RENAMES: dict[str, str] = {
-    "eggs_per_female": "eggs_per_female",
-}
-
-# Discrete-generation builder kwargs → (unified vector field, cell index).
-# The draft schema has no per-scalar discrete fields; each kwarg writes one
-# cell of a **copied** (2, n_ages) vector so variants never alias the base.
-_DISCRETE_VECTOR_CELLS: dict[str, tuple[str, tuple[int, ...]]] = {
-    "female_age0_survival": ("age_based_survival_rates", (0, 0)),
-    "male_age0_survival": ("age_based_survival_rates", (1, 0)),
-    "female_adult_mating_rate": ("age_based_mating_rates", (0, 1)),
-    "male_adult_mating_rate": ("age_based_mating_rates", (1, 1)),
-}
-
-
-def _is_0d_field(config: ModelDraft, name: str) -> bool:
-    """Return True if the config field *name* is a 0-d ndarray."""
-    val = getattr(config, name, None)
-    return isinstance(val, np.ndarray) and val.ndim == 0
-
 
 def _object_sequence(
     value: object, *, name: str
@@ -703,7 +662,7 @@ class SpatialPopulationBuilder:
             Each chainable call does two things simultaneously:
 
             1. **Record** the raw kwargs (including BatchSetting objects) in
-               ``_declaration_log`` — used later by ``_builder_for_group``
+               ``_declaration_log`` — used later by the group projector
                to replay the full builder pipeline for each config group.
             2. **Delegate** a sanitized version to the template builder —
                ``BatchSetting`` values are replaced with their first element
@@ -733,7 +692,7 @@ class SpatialPopulationBuilder:
         self._call_template(method_name, **filtered)
         self._batch_settings.update(staged)
         # Record the original call with BatchSetting objects preserved,
-        # for full replay in _builder_for_group.
+        # for the group declaration projector.
         self._declaration_log.append((method_name, dict(kwargs)))
         return self
 
@@ -1692,6 +1651,106 @@ class SpatialPopulationBuilder:
             demes.append(clone)
         return demes
 
+    def _projected_group(self, values: Mapping[str, object]) -> tuple[list[tuple[str, Dict[str, Any]]], ProjectedDeclarations]:
+        """Project one deme's concrete declarations (no method execution).
+
+        Each deme's config is the projection of its resolved declaration
+        journal through the single interpreter, onto a fresh granularity
+        baseline (§4.4: groups go straight to the model compiler — the
+        template's consumed first values and builder-method replay are
+        both out of the picture).
+        """
+        from natal.frontend.builder._base import PopulationBuilder
+        from natal.frontend.builder._declarations import project_declaration_record
+
+        baseline = (
+            PopulationBuilder.for_age_structured(self._species)
+            if self._pop_type == "age_structured"
+            else PopulationBuilder.for_discrete(self._species)
+        )
+        journal = self._resolved_group_journal(values)
+        projected = project_declaration_record(
+            self._species, journal, base_draft=baseline._config,  # pyright: ignore[reportPrivateUsage]  # fresh local baseline.
+        )
+        return journal, projected
+
+    def _projected_variant_config(
+        self,
+        group_config: ModelDraft,
+        deme_values: Mapping[str, object],
+        group_values: Mapping[str, object],
+    ) -> ModelDraft:
+        """Project one deme's *differing* declarations onto the group config.
+
+        The delta carries each journaled call whose explicit values differ
+        between the two value maps (whole-call kwargs, deme values
+        substituted).  Undiffering calls — including derived-parameter
+        declarations — are already reflected in *group_config* and stay
+        untouched, preserving the variant contract that derived scalars
+        freeze at the group's computation.
+        """
+        from natal.frontend.builder._declarations import project_declaration_record
+
+        group_journal = self._resolved_group_journal(group_values)
+        deme_journal = self._resolved_group_journal(deme_values)
+        delta: list[tuple[str, Dict[str, Any]]] = []
+        for (name, group_kwargs), (_, deme_kwargs) in zip(group_journal, deme_journal):
+            differing = {
+                key for key, value in deme_kwargs.items()
+                if key not in group_kwargs or not _values_equal(group_kwargs[key], value)
+            }
+            if differing:
+                delta.append((name, dict(deme_kwargs)))
+        return project_declaration_record(
+            self._species, delta, base_draft=group_config,
+        ).draft
+
+    def _carrier_from_projection(
+        self,
+        journal: list[tuple[str, Dict[str, Any]]],
+        projected: ProjectedDeclarations,
+        *,
+        inherit_cache_from: PopulationBuilder | None = None,
+    ) -> PopulationBuilder:
+        """Restore an unpublished carrier builder from projected declarations.
+
+        A data restore in the shape of ``_build_from_definition``: fields
+        are assigned from the projection, never re-declared through
+        builder methods.  ``inherit_cache_from`` transfers the template's
+        compile cache when the group's genetics match it, so group-0
+        builds reuse recipe products instead of re-running them.
+        """
+        from natal.frontend.builder._base import PopulationBuilder
+
+        carrier = PopulationBuilder(projected.draft, species=self._species)
+        carrier._spatial_template = True  # pyright: ignore[reportPrivateUsage]  # spatial hook selectors are retained.
+        carrier._presets = list(projected.presets)  # pyright: ignore[reportPrivateUsage]
+        carrier._manual_gamete = list(projected.manual_gamete)  # pyright: ignore[reportPrivateUsage]
+        carrier._manual_zygote = list(projected.manual_zygote)  # pyright: ignore[reportPrivateUsage]
+        carrier._fitness_steps = list(projected.fitness_steps)  # pyright: ignore[reportPrivateUsage]
+        carrier._hook_calls = list(projected.hook_calls)  # pyright: ignore[reportPrivateUsage]
+        carrier._initial_distribution = projected.initial_distribution  # pyright: ignore[reportPrivateUsage]
+        carrier._custom_kwargs = dict(projected.draft.custom)  # pyright: ignore[reportPrivateUsage]
+        carrier._compress = projected.compress  # pyright: ignore[reportPrivateUsage]
+        carrier._declared_zygote_types = projected.declared_zygote_types  # pyright: ignore[reportPrivateUsage]
+        carrier._observation_groups = projected.observation_groups  # pyright: ignore[reportPrivateUsage]
+        carrier._observation_collapse_age = projected.observation_collapse_age  # pyright: ignore[reportPrivateUsage]
+        carrier._record_history_mode = cast('Literal["raw", "observation"]', projected.history_mode)  # pyright: ignore[reportPrivateUsage]
+        carrier._record_history_max_rows = projected.history_max_rows  # pyright: ignore[reportPrivateUsage]
+        carrier._declaration_log = list(journal)  # pyright: ignore[reportPrivateUsage]
+        if inherit_cache_from is not None:
+            # Same declaration identity as the template: transfer the
+            # compile cache AND the compiled modifier lists the cache's
+            # fast path does not rebuild (a plain builder copy carried
+            # them as instance state).
+            carrier._compilation_key = inherit_cache_from._compilation_key  # pyright: ignore[reportPrivateUsage]
+            carrier._compiled_draft = inherit_cache_from._compiled_draft  # pyright: ignore[reportPrivateUsage]
+            carrier._cached_compilation_key = inherit_cache_from._cached_compilation_key  # pyright: ignore[reportPrivateUsage]
+            carrier.gamete_modifiers = list(inherit_cache_from.gamete_modifiers)
+            carrier.zygote_modifiers = list(inherit_cache_from.zygote_modifiers)
+            carrier._registry = inherit_cache_from._registry  # pyright: ignore[reportPrivateUsage]  # unpublished template registry, same species catalog.
+        return carrier
+
     def _build_heterogeneous_demes(self) -> List[PopulationInstance]:
         """Compile complete group candidates before choosing one spatial layout.
 
@@ -1702,9 +1761,6 @@ class SpatialPopulationBuilder:
         """
         from copy import copy
 
-        from natal.frontend.model.definition_compiler import (
-            GENETIC_PRODUCT_FIELDS,
-        )
 
         expanded = {
             name: batch.expand(self._n_demes, self._topology)
@@ -1722,22 +1778,14 @@ class SpatialPopulationBuilder:
         group_products: list[CompiledProducts] = []
         for indices in groups.values():
             first = indices[0]
-            # The template already consumed the first batch values during
-            # declaration; preserve its cached recipes rather than replaying.
-            builder = copy(self._template) if first == 0 else self._builder_for_group(values[first])
-            if first == 0:
-                ecology = {key: value for key, value in values[first].items() if key not in genetic_names}
-                # Normalized controls can differ from template placeholders.
-                # Apply them through their declaring methods so derived and
-                # custom fields retain the ordinary builder semantics.
-                journal = self._resolved_group_journal(values[first])
-                builder._declaration_log = list(builder._declaration_log)  # pyright: ignore[reportPrivateUsage]  # detach before fluent methods append.
-                for method_name, arguments in journal:
-                    if ecology.keys() & arguments.keys():
-                        getattr(builder, method_name)(**{
-                            key: value for key, value in arguments.items() if value is not None
-                        })
-                builder._declaration_log = journal  # pyright: ignore[reportPrivateUsage]  # retain each declaration once.
+            journal, projected = self._projected_group(values[first])
+            # The template consumed the first batch values during
+            # declaration; when this group's genetics match, inherit its
+            # compile cache so recipes never re-run for the same content.
+            builder = self._carrier_from_projection(
+                journal, projected,
+                inherit_cache_from=self._template if first == 0 else None,
+            )
             products = builder._compile_products()  # pyright: ignore[reportPrivateUsage]  # unpublished spatial candidate.
             group_products.append(products)
             candidates[first] = (builder, products)
@@ -1747,21 +1795,19 @@ class SpatialPopulationBuilder:
                 if signature in variants:
                     candidates[i] = variants[signature]
                     continue
-                # Genetics fields are not re-applied by an ecology variant.
-                ecology = {key: value for key, value in values[i].items() if key not in genetic_names}
-                if self._can_use_replace(ecology, products.config):
-                    variant_builder = copy(builder)
-                    variant = self._build_variant_config(
-                        ecology, products.config, species=self._species, pop_type=self._pop_type,
-                    )
-                    variant_builder._config = variant  # pyright: ignore[reportPrivateUsage]  # complete unpublished axes.
-                    variant_builder._declaration_log = self._resolved_group_journal(values[i])  # pyright: ignore[reportPrivateUsage]
-                else:
-                    variant_builder = self._builder_for_group(values[i])
-                    variant = variant_builder.config._replace(
-                        **{field: getattr(products.config, field) for field in GENETIC_PRODUCT_FIELDS}
-                    )
-                    variant_builder._config = variant  # pyright: ignore[reportPrivateUsage]
+                # An ecology variant projects only the declarations that
+                # differ from the group's values, through the same
+                # interpreter, onto the group's compiled config (genetics
+                # within a group are identical by signature).  Derived
+                # scalars (e.g. the Champer egg override) were computed on
+                # the group's declaration and stay frozen unless the user
+                # re-declares them — the established variant contract.
+                variant = self._projected_variant_config(
+                    products.config, values[i], values[first],
+                )
+                variant_builder = copy(builder)
+                variant_builder._config = variant  # pyright: ignore[reportPrivateUsage]  # complete unpublished axes.
+                variant_builder._declaration_log = self._resolved_group_journal(values[i])  # pyright: ignore[reportPrivateUsage]
                 candidates[i] = (variant_builder, products._replace(config=variant))
                 variants[signature] = candidates[i]
 
@@ -1834,144 +1880,6 @@ class SpatialPopulationBuilder:
         ))
         return plan_projection(combined, full_ztype_indices=seeds)
 
-    @staticmethod
-    def _can_use_replace(sig_map: Dict[str, object], base_config: ModelDraft) -> bool:
-        """Return True if every kwarg in *sig_map* can be applied via ``_replace``.
-
-        ``_replace`` is a NamedTuple shallow copy — it creates a new config
-        where only the specified fields differ; all other fields (including
-        heavy ndarrays like genotype maps, fitness tensors, survival vectors)
-        share the same memory as *base_config*.
-
-        This check gates whether a group can use the fast ``_replace`` path
-        or must fall back to a full builder replay.  A kwarg qualifies if it
-        appears in ``_ARRAY_KWARGS``, ``_DISCRETE_VECTOR_CELLS``,
-        ``_KWARG_RENAMES``, or exists as a direct field name on
-        ``ModelDraft``.
-        """
-        for name in sig_map:
-            if name in _ARRAY_KWARGS or name in _DISCRETE_VECTOR_CELLS:
-                continue
-            if name in _KWARG_RENAMES:
-                continue
-            # Dynamic: try direct field name match on the config object
-            if hasattr(base_config, name):
-                continue
-            return False
-        return True
-
-    @staticmethod
-    def _build_variant_config(
-        sig_map: Dict[str, object],
-        base_config: ModelDraft,
-        *,
-        species: Species,
-        pop_type: str = "age_structured",
-    ) -> ModelDraft:
-        """Create a variant config via ``_replace``, sharing all heavy arrays.
-
-        ``ModelDraft`` is a NamedTuple.  ``_replace(**kwargs)`` creates
-        a **shallow copy**: fields named in *kwargs* get new values; every
-        other field keeps its original reference.  This means genotype maps,
-        fitness tensors, survival vectors, and all other unchanging ndarrays
-        are shared between *base_config* and the returned variant — no copy,
-        no extra memory.
-
-        Dispatch order (only fields in *sig_map* are touched):
-
-        1. **Array kwargs** (individual_count, sperm_storage) —
-           convert the per-group dict to a **new ndarray** (this array
-           genuinely differs between groups), then ``_replace`` it.
-        2. **Discrete scalar kwargs** (``_DISCRETE_VECTOR_CELLS``) —
-           write one cell of a **copied** unified ``(2, n_ages)`` vector
-           so variants never alias the base, then ``_replace`` that
-           vector field.
-        3. **Rename kwargs** (eggs_per_female → eggs_per_female) —
-           ``_replace`` under the config-side field name.
-        4. **Any other kwarg** — direct ``_replace`` by field name
-           (pre-validated by ``_can_use_replace``; 0-d ndarray fields
-           receive the scalar wrapped in an ndarray).
-
-        Args:
-            sig_map: Mapping from batch kwarg name to group's concrete value.
-            base_config: The base ``ModelDraft`` to derive from.
-            species: ``Species`` instance, needed for genotype resolution.
-            pop_type: ``"age_structured"`` or ``"discrete_generation"``.
-
-        Returns:
-            A new ``ModelDraft`` sharing all unchanged array references
-            with *base_config*.
-
-        Note:
-            The draft stores no equilibrium metrics — ``ModelDraft``
-            carries a single scalar ``carrying_capacity``, and equilibrium
-            quantities are derived fresh on read via
-            ``pop.params.expected_*``.
-        """
-        replace_kwargs: Dict[
-            str, Any
-        ] = {}  # Any: config field values (int, float, ndarray, bool)
-
-        for kwarg, raw_val in sig_map.items():
-            # sig_map values are genuinely polymorphic (float, int, dict, …);
-            # their correctness is pre-validated by _can_use_replace.
-            val = raw_val
-
-            # --- 1. array-valued: dict → array conversion ---
-            if kwarg == "individual_count":
-                distribution = cast(InitialIndividualCountInput, val)
-                if pop_type == "age_structured":
-                    array = resolve_age_structured_initial_individual_count(
-                        species=species,
-                        distribution=distribution,
-                        n_ages=int(base_config.n_ages),
-                        new_adult_age=int(base_config.new_adult_age),
-                    )
-                else:
-                    array = resolve_discrete_initial_individual_count(
-                        species=species,
-                        distribution=distribution,
-                    )
-                replace_kwargs["initial_individual_count"] = array
-                continue
-
-            if kwarg == "sperm_storage":
-                if pop_type == "age_structured":
-                    sperm_storage = cast(InitialSpermStorageInput, val)
-                    array = resolve_age_structured_initial_sperm_storage(
-                        species=species,
-                        sperm_storage=sperm_storage,
-                        n_ages=int(base_config.n_ages),
-                        new_adult_age=int(base_config.new_adult_age),
-                    )
-                    replace_kwargs["initial_sperm_storage"] = array
-                continue
-
-            # --- 1b. discrete scalars: one cell of a copied unified vector ---
-            if kwarg in _DISCRETE_VECTOR_CELLS:
-                field_name, cell = _DISCRETE_VECTOR_CELLS[kwarg]
-                arr = np.array(replace_kwargs.get(field_name, getattr(base_config, field_name)), dtype=np.float64)
-                # sig_map values are pre-validated scalars (see _can_use_replace).
-                arr[cell] = float(val)  # type: ignore[reportArgumentType]  # BatchSetting already expanded upstream
-                replace_kwargs[field_name] = arr
-                continue
-
-            # --- 2. rename ---
-            config_field = _KWARG_RENAMES.get(kwarg, kwarg)
-            # Wrap scalar values for 0-d ndarray config fields.
-            if _is_0d_field(base_config, config_field) and not isinstance(
-                val, np.ndarray
-            ):
-                replace_kwargs[config_field] = np.array(
-                    _float_value(val, name=config_field)
-                )
-            else:
-                replace_kwargs[config_field] = val
-
-        variant = base_config._replace(**replace_kwargs)
-
-        return variant
-
     def _resolved_group_journal(self, values: Mapping[str, object]) -> list[tuple[str, dict[str, Any]]]:
         """Record concrete group inputs without executing their declarations again."""
         # Any: journal arguments include opaque recipe objects and nested selectors.
@@ -1980,76 +1888,26 @@ class SpatialPopulationBuilder:
             resolved = {key: values.get(key, value) for key, value in kwargs.items()}
             if method in ("presets", "hooks"):
                 source = "preset_list" if method == "presets" else "hook_items"
-                resolved["__args__"] = tuple(_object_sequence(resolved.pop(source, ()), name=source))
+                items = _object_sequence(resolved.pop(source, ()), name=source)
+                # Positional batch values (``presets(batch_setting(...))``)
+                # journal the BatchSetting itself; the per-deme expansion
+                # lives under the ``_preset_<i>`` value keys.
+                journal_items: list[object] = list(cast("list[object]", items)) + list(cast("list[object]", resolved.pop("__args__", ())))
+                expanded_items: list[object] = []
+                for index, item in enumerate(journal_items):
+                    concrete = values.get(f"_preset_{index}")
+                    if isinstance(item, BatchSetting):
+                        first = cast("object", item.first_value())
+                        expanded_items.append(concrete if concrete is not None else first)
+                    elif concrete is not None:
+                        expanded_items.append(concrete)
+                    elif item is not None:
+                        expanded_items.append(item)
+                resolved["__args__"] = tuple(
+                    expanded_items[i] for i in range(len(expanded_items)) if expanded_items[i] is not None
+                )
             result.append((method, resolved))
         return result
-
-    def _builder_for_group(self, sig_map: Dict[str, object]) -> PopulationBuilder:
-        """Replay one group into a complete-axis unpublished builder."""
-        if self._pop_type == "age_structured":
-            template_cfg = PopulationBuilder.for_age_structured(self._species)
-        else:
-            template_cfg = PopulationBuilder.for_discrete(self._species)
-        template_cfg._spatial_template = True  # pyright: ignore[reportPrivateUsage]  # spatial hook selectors are retained.
-
-        for method_name, kwargs in self._declaration_log:
-            method = getattr(template_cfg, method_name, None)
-            if method is None:
-                continue
-
-            resolved: Dict[str, object] = {}
-            for key, value in kwargs.items():
-                if key in sig_map:
-                    resolved[key] = sig_map[key]
-                elif isinstance(value, BatchSetting):
-                    first = cast(BatchSetting[Any], value).first_value()
-                    if first is not None:
-                        resolved[key] = first
-                else:
-                    resolved[key] = value
-
-
-            # Handle positional args (presets, hooks).
-            if method_name == "presets":
-                raw_preset_list = _object_sequence(
-                    resolved.pop("preset_list", ()), name="preset_list"
-                )
-                expanded_presets: list[object] = []
-                for i, item in enumerate(raw_preset_list):
-                    key = f"_preset_{i}"
-                    preset_val = sig_map.get(key)
-                    if preset_val is not None:
-                        expanded_presets.append(preset_val)
-                    elif isinstance(item, BatchSetting):
-                        first = cast(BatchSetting[Any], item).first_value()
-                        if first is not None:
-                            expanded_presets.append(first)
-                    elif item is not None:
-                        expanded_presets.append(item)
-                filtered = {k: v for k, v in resolved.items() if v is not None}
-                method(*expanded_presets, **filtered)
-            elif method_name == "hooks":
-                hook_items = _object_sequence(
-                    resolved.pop("hook_items", ()), name="hook_items"
-                )
-                filtered = {k: v for k, v in resolved.items() if v is not None}
-                # Replay through the undecorated hook declaration: deme
-                # selectors journaled by the spatial chain are already
-                # final and must not be panmictic-normalized again.
-                inner = getattr(method, "__wrapped__", None)
-                if inner is not None:
-                    inner(template_cfg, *hook_items, **filtered)
-                else:
-                    method(*hook_items, **filtered)
-            else:
-                filtered = {k: v for k, v in resolved.items() if v is not None}
-                method(**filtered)
-
-        # Replayed declarations store the initial distribution without
-        # resolving it (resolution waits for final dimensions); the group's
-        # dimensions are final here, so derive the arrays now.
-        template_cfg._resolve_initial_distribution()  # pyright: ignore[reportPrivateUsage]  # controlled replayed group builder.
-        return template_cfg
 
     def _compile_recording_plan(self, spatial: SpatialPopulation) -> None:
         """Compile and freeze the :class:`RecordingPlan` on the spatial population."""

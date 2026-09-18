@@ -26,11 +26,13 @@ flowchart TD
 
 图里的分叉点值得注意：**同一个声明第二次编译时不一定重新计算**，而缓存命中时给出的是数组副本，不是共享引用。
 
-## 声明日志与可重放性
+## 声明日志
 
 构建链上的每个领域方法（`setup`、`age_structure`、`competition`、`reproduction`、`survival`、`initial_state`、`custom`、`presets`、`modifiers`、`fitness`、`hooks`、`with_observation`、`record_history`）都被标记为"声明"。调用时记录一条日志，并且**在副本上**试算：算成功才采纳，算失败原对象不变。
 
 `ModelDefinition` 是这条链的快照：物种、日志、预设、手动修饰器、编译键、fitness 基线、Hook 调用、观测组、压缩开关、声明保留的类型。它同时携带 `draft` 与 `registry` 作为工作副本。发布阶段保存的就是这份定义，因此"从已有模型重建一个变体"不需要重新执行用户的构建脚本。
+
+日志是结构化的声明记录，由唯一的投影器（`builder/_declarations.py`）解释：链式方法把立即写入委托给它；维度重建（`age_structure()`）把已声明的调用重投影到新草稿；空间组编译器把每个 deme 的具体声明投影到全新基线后直接交给 `compile_definition`。重建与生成都不会重新执行 builder 方法。
 
 ## 规范化：默认值和形状
 
@@ -79,7 +81,7 @@ P 的占位形状（0, 0, 0）是一个容易误读的细节：它不是"任何�
 | --- | --- |
 | 直接改 `ModelDraft` 数组来改模型 | 草稿是构建期候选；改它需要经过重新编译与发布，否则运行期看不到 |
 | 复用上一次的编译产物继续改 | 缓存命中给的是副本；跨声明的复用要靠 `ModelDefinition` 重建 |
-| 在 `initial_state` 之后调用 `age_structure` | 合法：初始分布是权威声明，数组按最终维度重新推导，不会丢失（领域方法之后仍禁止重建） |
+| 在 `initial_state` 或领域方法之后调用 `age_structure` | 合法：所有已声明调用会重投影到重建后的草稿，初始分布与 competition / reproduction / survival 参数都不会丢失 |
 | 认为 P 是 `(0, 0, 0)` 表示"不能生育" | 它表示尚未推导；推导发生在发布阶段 |
 | 把默认 `growth_mode` 当作"没有密度调节" | 默认是 `BEVERTON_HOLT`；要关闭需显式选择 |
 

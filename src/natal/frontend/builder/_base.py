@@ -67,11 +67,8 @@ from natal.frontend.builder._routes import (
     lookup_or_none,
 )
 from natal.frontend.builder._runtime import (
-    competition_writes,
     expected_females_eggs,
     fitness_writes,
-    reproduction_writes,
-    survival_writes,
 )
 from natal.frontend.builder._writers import (
     DraftWriter,
@@ -854,15 +851,17 @@ class PopulationBuilder:
             Self for chaining.
 
         Raises:
-            RuntimeError: When no Species is attached, on a discrete-generation draft
-                (fixed at 2 ages by normalization) or after domain
-                methods have already been called.
+            RuntimeError: When no Species is attached or on a
+                discrete-generation draft (fixed at 2 ages by
+                normalization).
             ValueError: When *n_ages*/*new_adult_age* are inconsistent.
 
         Note:
-            Must be called before any domain method (competition,
-            reproduction, survival, etc.).  Calling it after domain
-            methods will raise ``RuntimeError``.
+            Calling this after domain methods is legal: every declared
+            call is re-projected onto the rebuilt draft, so competition /
+            reproduction / survival parameters survive a dimensional
+            rebuild (FRONTEND_REFACTOR_PLAN.md §4.2 — the manual ordering
+            guard is replaced by re-projection).
         """
         if self._species is None:
             raise RuntimeError("age_structure() requires a Species to rebuild genetic dimensions")
@@ -870,12 +869,6 @@ class PopulationBuilder:
             raise RuntimeError(
                 "age_structure() is not applicable to discrete-generation "
                 "populations: their draft is normalized to 2 age classes."
-            )
-        if getattr(self, "_has_domain_params", False):
-            raise RuntimeError(
-                "age_structure() must be called before any domain method "
-                "(competition(), reproduction(), survival(), etc.). "
-                "Domain methods have already been called on this builder."
             )
         if n_ages <= 1:
             raise ValueError(f"n_ages must be at least 2, got {n_ages}")
@@ -923,10 +916,26 @@ class PopulationBuilder:
         self._compiled_draft = None
         self._cached_compilation_key = None
         self._registry = build_registry(self._species)
-        # Dimensions changed: re-derive the initial arrays from the stored
-        # declaration instead of leaving the rebuilt draft's zeros behind
-        # (a declared age outside the new structure fails here).
-        self._resolve_initial_distribution()
+        # Dimensions changed: re-project every declared call onto the new
+        # draft through the single declaration interpreter, so rebuilding
+        # after domain methods neither loses their parameters nor needs a
+        # manual ordering guard (a declared age outside the new structure
+        # fails here with the resolver's own error).
+        from natal.frontend.builder._declarations import project_declaration_record
+
+        projected = project_declaration_record(
+            self._species,
+            [
+                (name, kwargs) for (name, kwargs) in self._declaration_log
+                if name != "age_structure"
+            ],
+            base_draft=self._config,
+            initial_distribution=self._initial_distribution,
+            registry=self._registry,
+        )
+        self._config = projected.draft
+        self._initial_distribution = projected.initial_distribution
+        self._custom_kwargs = dict(self._config.custom)
         return self
 
     @_declared
@@ -973,30 +982,25 @@ class PopulationBuilder:
                 takes effect when ``new_adult_age >= 2`` (build with
                 ``age_structure(..., new_adult_age >= 2)`` first).
         """
-        self._has_domain_params = True
-        # ---- carrying capacity (K) fallback chain ----
-        # Only auto-detect K during initial build (no live Population).
-        writes = competition_writes(
-            carrying_capacity=carrying_capacity,
-            low_density_growth_rate=low_density_growth_rate,
-            juvenile_growth_mode=juvenile_growth_mode,
-            growth_mode=growth_mode,
-            competition_strength=competition_strength,
-            equilibrium_distribution=equilibrium_distribution,
-            age_1_carrying_capacity=age_1_carrying_capacity,
-            old_juvenile_carrying_capacity=old_juvenile_carrying_capacity,
-            # K auto-detection reads the declared initial counts; hand it
-            # the derived copy so a declaration stored before this call is
-            # honoured without mutating the builder's own draft.
-            draft=self._draft_with_initial_resolved(),
-            allow_initial_k_detection=True,
+        from natal.frontend.builder._declarations import apply_competition
+
+        self._config = apply_competition(
+            self._config,
+            {
+                "carrying_capacity": carrying_capacity,
+                "low_density_growth_rate": low_density_growth_rate,
+                "juvenile_growth_mode": juvenile_growth_mode,
+                "growth_mode": growth_mode,
+                "competition_strength": competition_strength,
+                "expected_num_new_adult_females": expected_num_new_adult_females,
+                "equilibrium_distribution": equilibrium_distribution,
+                "age_1_carrying_capacity": age_1_carrying_capacity,
+                "old_juvenile_carrying_capacity": old_juvenile_carrying_capacity,
+            },
+            species=self._species,
+            registry=self._registry,
+            initial=self._initial_distribution,
         )
-        if writes:
-            writer = self._make_writer(writes)
-            writer.apply(writes)
-            self._config = writer.draft
-        if expected_num_new_adult_females is not None:
-            self._declare_expected_females(float(expected_num_new_adult_females))
         return self
 
     def _declare_expected_females(self, target_females: float) -> None:
@@ -1076,24 +1080,25 @@ class PopulationBuilder:
                 discrete-generation draft (use the discrete vocabulary
                 instead).
         """
-        self._has_domain_params = True
-        writes = reproduction_writes(
-            discrete_generation=self._config.discrete_generation,
-            eggs_per_female=eggs_per_female,
-            sex_ratio=sex_ratio,
-            sperm_displacement_rate=sperm_displacement_rate,
-            female_age_based_mating_rate=female_age_based_mating_rate,
-            male_age_based_mating_rate=male_age_based_mating_rate,
-            age_based_reproduction_rate=age_based_reproduction_rate,
-            female_age_based_fertility=female_age_based_fertility,
-            female_adult_mating_rate=female_adult_mating_rate,
-            male_adult_mating_rate=male_adult_mating_rate,
-            fixed_egg_count=fixed_egg_count,
+        from natal.frontend.builder._declarations import apply_reproduction
+
+        self._config = apply_reproduction(
+            self._config,
+            {
+                "eggs_per_female": eggs_per_female,
+                "sex_ratio": sex_ratio,
+                "sperm_displacement_rate": sperm_displacement_rate,
+                "female_age_based_mating_rate": female_age_based_mating_rate,
+                "male_age_based_mating_rate": male_age_based_mating_rate,
+                "age_based_reproduction_rate": age_based_reproduction_rate,
+                "female_age_based_fertility": female_age_based_fertility,
+                "female_adult_mating_rate": female_adult_mating_rate,
+                "male_adult_mating_rate": male_adult_mating_rate,
+                "fixed_egg_count": fixed_egg_count,
+            },
+            species=self._species,
+            registry=self._registry,
         )
-        if writes:
-            writer = self._make_writer(writes)
-            writer.apply(writes)
-            self._config = writer.draft
         return self
 
     @_declared
@@ -1130,17 +1135,19 @@ class PopulationBuilder:
         Returns:
             Self for chaining.
         """
-        self._has_domain_params = True
-        writes = survival_writes(
-            female_age_based_survival=female_age_based_survival,
-            male_age_based_survival=male_age_based_survival,
-            female_age0_survival=female_age0_survival,
-            male_age0_survival=male_age0_survival,
+        from natal.frontend.builder._declarations import apply_survival
+
+        self._config = apply_survival(
+            self._config,
+            {
+                "female_age_based_survival": female_age_based_survival,
+                "male_age_based_survival": male_age_based_survival,
+                "female_age0_survival": female_age0_survival,
+                "male_age0_survival": male_age0_survival,
+            },
+            species=self._species,
+            registry=self._registry,
         )
-        if writes:
-            writer = self._make_writer(writes)
-            writer.apply(writes)
-            self._config = writer.draft
         return self
 
     @_declared
@@ -1274,13 +1281,10 @@ class PopulationBuilder:
         Returns:
             Self for chaining.
         """
-        from natal.frontend.model import build_custom_slots
+        from natal.frontend.builder._declarations import apply_custom
 
-        merged = dict(self._config.custom)
-        merged.update(kwargs)
-        normalized = build_custom_slots(merged)
-        self._custom_kwargs = dict(normalized)
-        self._config = self._config._replace(custom=normalized)
+        self._config = apply_custom(self._config, dict(self._custom_kwargs), kwargs)
+        self._custom_kwargs = dict(self._config.custom)
         return self
 
     # -- presets / modifiers / fitness (immediate — applied directly to config) --

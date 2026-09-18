@@ -25,6 +25,26 @@
 
 ### Changed
 
+- Spatial groups compile from projected declarations, not replayed
+  methods (FRONTEND_REFACTOR_PLAN.md §4.4/§4.5-4, the plan's last open
+  item).  A new pure projector (`builder/_declarations.py`) is the single
+  interpreter of the declaration journal: the chain methods
+  (competition/reproduction/survival/custom) delegate to it for their
+  immediate writes, and every deme's concrete declarations are projected
+  onto a fresh baseline and handed straight to `compile_definition`.
+  `_builder_for_group` (method replay), the `_can_use_replace` fallback
+  and `_build_variant_config` are deleted; a batched build executes no
+  builder method (pinned by a spy test) and each deme's compiled result
+  equals the equivalent single-population declaration.  Derived scalars
+  (e.g. the Champer egg override) stay frozen at the group's computation
+  unless re-declared — the established variant contract.  The template's
+  compile cache is inherited when a group's genetics match it, so recipes
+  never re-run for identical content.
+- `age_structure()` no longer refuses to run after domain methods: the
+  rebuild re-projects every declared call onto the new draft through the
+  same projector, so competition / reproduction / survival parameters
+  survive a dimensional rebuild instead of being silently wiped behind a
+  `RuntimeError` guard.  `_has_domain_params` is retired with the guard.
 - The orphaned `natal.frontend.modifiers.conditions` module (the
   `ztype_has`/`is_maternal`/`is_paternal` Condition DSL) is deleted: the
   modifier system stopped constructing Condition objects in the CR-1
